@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="5a91d1c5dc17695b770cd2643535549f758d93c4671fd51746d9ca8f860d8254">
+<meta name="tsw-source-sha256" content="3db5228c4225ee8e9462e49729da0144582cb9a3bd7e984bdb3f6a2621db2b38">
 <title>DN001 总体架构：TaskSteward 任务编排器（默认宿主 Claude Code）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -78,7 +78,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <ul><li><strong>预启动 + 后投递</strong>：用户要求执行一批任务时，主会话在这个 turn 中为其中已规划的任务（<code>ready</code>，以及在 <code>scheduling.prestart.max_standby</code> 范围内的 <code>waiting_dependency</code>）预启动 worker 会话。前序任务完成、名额可用时，主会话在任何 turn 中给待命会话投递任务书，依次执行一串有依赖的任务不需要用户再次发消息。</li><li><strong>没有待命会话的任务</strong>：在自动 turn 中变为可派发、但没有待命会话的任务（例如新拆出的任务）保持 <code>ready</code> 并标记“待启动”，STATUS 页显示数量；用户下一次发消息时主会话为它们创建会话。</li><li><strong>唤醒</strong>：worker 产生 reportable 事件时，必须同时调用 tsw 工具落账<strong>并</strong>用上面的消息工具向父会话发送一行带事件 ID 的短消息（主唤醒路径，见 §9 时序第 16 步）。这样即使其他 worker 仍在工作，主会话也能被唤醒。由消息触发的 turn 不能创建会话，但可以给待命会话投递任务书，与预启动配合即可推进依赖链。side-sessions-event 作为兜底。</li><li><strong>处理范围</strong>：被唤醒后，主会话只读取 <code>inbox</code> 中未处理的 reportable 事件（按事件 ID 去重并 ack）。普通进度、无回传的 idle、interactive 超时都不触发查询、催办或改账本（沿用用户 2026-10-13 的约定）。</li></ul>
 <h3 id="64-调度租约">6.4 调度租约</h3>
 <p>同一时间只有一个主会话持有调度租约。SessionStart hook 把 Claude 会话 ID 交给 tsw：</p>
-<ul><li>租约空闲或已过期时自动领取；</li><li>仍有效时只读运行，拒绝派发类工具；</li><li>用户确认原主会话已停止后，用 <code>controller_takeover</code> 接管，并逐项处理该主会话启动的子会话。</li></ul>
+<ul><li>租约空闲或已过期时自动领取；</li><li>仍有效时只读运行，拒绝派发类工具；</li><li>用户确认原主会话已停止后，用 <code>controller_takeover</code> 接管，并逐项处理该主会话启动的子会话。</li><li>持有者可以续期（再次领取即续期）；冷迁移或静止复制前用 <code>controller.lease_released</code> 主动释放。租约记录机器标识：另一台机器的租约即使已过期也不会被静默领取，只能在用户确认原机器已停止后接管（DN006 §9.6）。</li></ul>
 <p><strong>子会话只受启动它的主会话控制。</strong> 接管后，新主会话不能向旧主会话的子会话发消息：先核实其停止，再以新 attempt 接手同一执行目录（DN002 §5.5）。</p>
 <h3 id="65-用户直接与-worker-对话">6.5 用户直接与 worker 对话</h3>
 <p>用户在子会话里直接对话时，worker 默认原地答复：不回传主会话，不改 revision，不写 result 报告。只有用户消息带 <code>[report]</code> 时，worker 才：</p>

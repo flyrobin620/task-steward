@@ -20,6 +20,7 @@ class CommitContext:
     storage: StorageBackend
     home: Home
     tail: LedgerTail
+    now: str
 
 
 @dataclass
@@ -35,6 +36,8 @@ class Command:
     input: Mapping[str, Any]
     build: Callable[[CommitContext], Sequence[EventDraft]]
     command_id: str | None = None
+    # Only a lease takeover may run while another machine holds an unreleased lease.
+    foreign_lease_ok: bool = False
 
 
 @dataclass

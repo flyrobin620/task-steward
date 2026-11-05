@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from tsw import lease
 from tsw.errors import rejected
 from tsw.events import Event
 from tsw.projection import Reducer
@@ -50,4 +51,7 @@ def _task_note(conn: sqlite3.Connection, event: Event) -> None:
 REDUCERS: dict[str, Reducer] = {
     "task.registered": _task_registered,
     "task.note": _task_note,
+    "controller.lease_acquired": lease.reduce_acquired,
+    "controller.lease_released": lease.reduce_released,
+    "controller.lease_taken_over": lease.reduce_taken_over,
 }

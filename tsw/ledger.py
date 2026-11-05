@@ -21,6 +21,7 @@ import sqlite3
 from collections.abc import Callable, Generator
 from typing import Any
 
+from tsw import lease
 from tsw.commands import Command, CommitContext, CommitResult
 from tsw.errors import rejected
 from tsw.events import GENESIS, Event, digest, seal, utc_now
@@ -44,11 +45,13 @@ class Ledger:
         *,
         clock: Callable[[], str] = utc_now,
         checkpoint_every: int = DEFAULT_CHECKPOINT_EVERY,
+        machine: str | None = None,
     ) -> None:
         self.home = home
         self.storage: StorageBackend = storage if storage is not None else FsStorage(home)
         self.clock = clock
         self.checkpoint_every = checkpoint_every
+        self.machine = machine if machine is not None else lease.this_machine()
         self.projection = Projection(home, self.storage, REDUCERS)
 
     # ------------------------------------------------------------------ reads
@@ -70,8 +73,13 @@ class Ledger:
             self.projection.connection() as conn,
         ):
             tail = self.projection.reduce_to(conn)
+            if not command.foreign_lease_ok:
+                lease.refuse_foreign_machine(conn, self.machine)
+            now = self.clock()
             # Catch up derived files left behind by an interrupted earlier commit.
-            refresh_views(CommitContext(conn=conn, storage=self.storage, home=self.home, tail=tail))
+            refresh_views(
+                CommitContext(conn=conn, storage=self.storage, home=self.home, tail=tail, now=now)
+            )
             if command.command_id is not None:
                 existing = conn.execute(
                     "SELECT command_digest, first_sequence, last_sequence FROM commands "
@@ -91,17 +99,16 @@ class Ledger:
                         if event.sequence <= existing["last_sequence"]
                     ]
                     return CommitResult(events=events, duplicate=True)
-            ctx = CommitContext(conn=conn, storage=self.storage, home=self.home, tail=tail)
+            ctx = CommitContext(conn=conn, storage=self.storage, home=self.home, tail=tail, now=now)
             drafts = list(command.build(ctx))
             events: list[Event] = []
             prev = tail.checksum
-            time = self.clock()
             for offset, draft in enumerate(drafts):
                 event = seal(
                     draft,
                     sequence=tail.sequence + 1 + offset,
                     prev=prev,
-                    time=time,
+                    time=now,
                     actor=command.actor,
                     command_id=command.command_id,
                     command_digest=command_digest if command.command_id is not None else None,
@@ -128,9 +135,12 @@ class Ledger:
             self.projection.discard()
             with self.projection.connection() as conn:
                 tail = self.projection.reduce_to(conn)
+                lease.refuse_foreign_machine(conn, self.machine)
                 self.projection.checkpoint(conn)
                 refresh_views(
-                    CommitContext(conn=conn, storage=self.storage, home=self.home, tail=tail)
+                    CommitContext(
+                        conn=conn, storage=self.storage, home=self.home, tail=tail, now=self.clock()
+                    )
                 )
                 return tail
 

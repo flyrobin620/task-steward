@@ -264,7 +264,7 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 | attempt | `attempt.start_requested` `attempt.reconciling` `attempt.not_created` `attempt.prestarted` `attempt.brief_delivered` `attempt.late_session` `attempt.bound` `attempt.continued` `attempt.stopped` `attempt.lost` `attempt.replaced` `attempt.closed` `attempt.dispatch_abandoned` |
 | worker | `worker.progress` `worker.question` `worker.submitted` `worker.self_check_failed` `worker.turn_ended` |
 | 评审 | `review.started` `review.failed` `review.unavailable` `review.completed` `review.triaged` `review.decision` `review.budget_exhausted` `review.budget_extended` `review.defer_requested` `review.defer_approved` `review.finding_overruled` |
-| 主控 / 输入 | `orchestrator.feedback` `orchestrator.decision` `input.escalated` `input.resolved` `input.late_response` `controller.lease_acquired` `controller.lease_taken_over` |
+| 主控 / 输入 | `orchestrator.feedback` `orchestrator.decision` `input.escalated` `input.resolved` `input.late_response` `controller.lease_acquired` `controller.lease_released` `controller.lease_taken_over` |
 | 上下文 / 偏好（DN007） | `task.summary_recorded` `context.read` `user.preference_recorded` `user.preference_candidate` `user.preference_confirmed` |
 | 集成 / 产出 | `integration.started` `integration.conflict` `integration.completed` `integration.withdrawn` `output.registered` `pr.registered` |
 | 导入 | `import.started` `import.task_imported` `import.completed` |
