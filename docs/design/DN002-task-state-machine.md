@@ -234,7 +234,7 @@ worker 提问（`worker.question`）、评审预算用完（`review.budget_exhau
 | 确认未创建 | 记录 `attempt.not_created`，当前代次失效（§5.4）；释放预启动额度；下一次用户 turn 可以重试 | `starting` → `planned` |
 | 结果未知 | 按当前代次的会话名对账，绝不再次创建；对账前该任务不能派发，也不能再次预启动 | 保持 `starting` |
 | 迟到会话 | 失效代次的会话按 §5.4 停止，不影响任务状态 | — |
-| 任务被取消（T25） | `starting` 先对账；`standby` 会话按 `sessions.archive_on_archive` 处置 | `closed` 或 `replaced` |
+| 任务被取消（T25） | `starting` 先对账；可控的 `standby` 会话按 `sessions.archive_on_archive` 处置后为 `closed`；会话已不存在或由旧主会话创建时核实停止后为 `replaced` | `closed` 或 `replaced` |
 | 会话丢失或被用户归档 | `get_session` 不存在 / archived 时记为 `replaced`；下一次用户 turn 重新预启动 | `replaced` |
 
 派发时（T07）按 R-ATTEMPT 给待命会话投递任务书；投递前把执行目录更新到最新基线（例如前序任务已合并的结果）。任务书在投递时才生成，因此需求变更不影响待命会话；依赖失效也不影响待命会话。新目录的信任确认在预启动所在的用户 turn 中完成。
@@ -250,8 +250,8 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 | `starting` | 已落账 `attempt.start_requested`（创建代次 +1）并调用 `start_session`；结果未知时按当前代次的会话名对账（`list_sessions {linked:true}`），绝不再次创建 | dispatching；预启动时为 ready、waiting_dependency | 调用工具前 |
 | `live` | 子会话存在且绑定；平台事实 working / idle / awaiting_input 只作观察，不改变任务状态 | in_progress、waiting_user、verifying（续用时也可在 ready、waiting_dependency 中保持） | T08、`attempt.continued` |
 | `stopped` | 子会话被停止但仍存在；可控时可续用 | paused、ready、waiting_dependency | `stop_session` 或用户停止 |
-| `replaced` | 已核实停止，由新 attempt 接手同一执行目录 | — | R-ATTEMPT、T15 |
-| `closed` | 任务验收或归档后按配置处置会话（须有工具回执） | done、accepted、archived | T18 之后、T24 |
+| `replaced` | 已核实停止或已不存在，由新 attempt 接手同一执行目录；也用于待命会话丢失、取消时会话已不存在或不可控 | — | R-ATTEMPT、T15、§5.6（丢失；T25 取消时会话不可控或已不存在） |
+| `closed` | 任务验收、归档或取消后按配置处置会话（须有工具回执）；取消时可控的待命会话按 `sessions.archive_on_archive` 处置后进入此阶段 | done、accepted、archived、cancelled | T18 之后、T24、T25（§5.6） |
 
 ## 7. 事件类型
 
