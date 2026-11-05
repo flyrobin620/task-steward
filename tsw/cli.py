@@ -20,6 +20,8 @@ from tsw.errors import EXIT_CODES, ErrorCode, TswError
 from tsw.events import utc_now
 from tsw.home import Home, init_home, open_home, resolve_home
 from tsw.ledger import Ledger
+from tsw.machine.base import REGISTRY, Caller
+from tsw.machine.runner import run_tool
 from tsw.storage.fs import FsStorage, restore
 from tsw.tasks import KINDS, TaskSpec, list_tasks, note, register, task_row
 
@@ -214,6 +216,31 @@ def _cmd_lease_takeover(args: argparse.Namespace) -> dict[str, Any]:
     return {"session_id": args.session, "expires_at": event.data["expires_at"]}
 
 
+def _cmd_tool_list(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "tools": [
+            {"name": name, "roles": list(spec.roles), "description": spec.description}
+            for name, spec in sorted(REGISTRY.tools.items())
+        ]
+        + [{"name": "sync", "roles": ["orchestrator", "system"], "description": "系统规则"}]
+    }
+
+
+def _cmd_tool_run(args: argparse.Namespace) -> dict[str, Any]:
+    raw = args.input
+    if raw.startswith("@"):
+        raw = Path(raw[1:]).read_text(encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise TswError(ErrorCode.REJECTED, "--input 必须是 JSON 对象") from exc
+    if not isinstance(payload, dict):
+        raise TswError(ErrorCode.REJECTED, "--input 必须是 JSON 对象")
+    ledger, config = _writer(args)
+    caller = Caller(role=args.role, session_id=args.session, machine=args.machine)
+    return run_tool(ledger, config, caller, args.name, payload)  # pyright: ignore[reportUnknownArgumentType]
+
+
 def _cmd_quiesce(args: argparse.Namespace) -> dict[str, Any]:
     manifest = FsStorage(_home(args)).quiesce()
     return {"quiesced": True, "ledger_tail": manifest["ledger_tail"]}
@@ -304,6 +331,17 @@ def build_parser() -> argparse.ArgumentParser:
                 required=True,
                 help='用户确认来源（JSON：{"channel","principal","message_ref","text"}）',
             )
+
+    tool_cmd = sub.add_parser("tool", help="状态机工具（与 MCP 共用实现）").add_subparsers(
+        dest="tool_command", required=True, metavar="<tool command>"
+    )
+    add(tool_cmd, "list", _cmd_tool_list, "列出工具")
+    run = add(tool_cmd, "run", _cmd_tool_run, "运行工具")
+    run.add_argument("name")
+    run.add_argument("--input", required=True, help="JSON 对象，或 @文件路径")
+    run.add_argument("--role", required=True, choices=["orchestrator", "worker", "system"])
+    run.add_argument("--session", help="调用者的会话 ID")
+    run.add_argument("--machine", default=lease.this_machine())
 
     add(sub, "quiesce", _cmd_quiesce, "静止数据目录（之后可直接复制）")
     add(sub, "resume-writes", _cmd_resume_writes, "解除静止")

@@ -6,11 +6,13 @@ A ledger containing an unknown type stops the projection instead of being silent
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from tsw import lease
 from tsw.errors import rejected
 from tsw.events import Event
+from tsw.machine.reducers import REDUCERS as MACHINE_REDUCERS
 from tsw.projection import Reducer
 
 
@@ -23,8 +25,8 @@ def _task_registered(conn: sqlite3.Connection, event: Event) -> None:
         )
     conn.execute(
         "INSERT INTO tasks(task_id, title, repo, kind, status, revision, version, spec_path, "
-        "spec_sha256, registered_seq, last_activity, source_seq) "
-        "VALUES(?, ?, ?, ?, 'intake', ?, 1, ?, ?, ?, ?, ?)",
+        "spec_sha256, registered_seq, last_activity, source_seq, goal, acceptance, "
+        "business_changed_at) VALUES(?, ?, ?, ?, 'intake', ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             event.task_id,
             data["title"],
@@ -36,6 +38,9 @@ def _task_registered(conn: sqlite3.Connection, event: Event) -> None:
             event.sequence,
             event.time,
             event.sequence,
+            data.get("goal", ""),
+            json.dumps(data.get("acceptance", []), ensure_ascii=False, sort_keys=True),
+            event.time,
         ),
     )
 
@@ -54,4 +59,5 @@ REDUCERS: dict[str, Reducer] = {
     "controller.lease_acquired": lease.reduce_acquired,
     "controller.lease_released": lease.reduce_released,
     "controller.lease_taken_over": lease.reduce_taken_over,
+    **MACHINE_REDUCERS,
 }

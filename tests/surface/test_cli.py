@@ -227,5 +227,7 @@ def test_command_inventory_is_known() -> None:
             "task note",
             "task register",
             "task show",
+            "tool list",
+            "tool run",
         ]
     )

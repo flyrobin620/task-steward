@@ -117,6 +117,7 @@ class Ledger:
                 prev = event.checksum
             if not events:
                 return CommitResult()
+            self.projection.trial(conn, events)
             self.storage.append(events, expected_sequence=tail.sequence)
             fault("ledger.commit.after_append")
             new_tail = self.projection.reduce_to(conn)
