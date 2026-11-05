@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -43,13 +44,17 @@ def g_plan(row: Mapping[str, Any], config: EffectiveConfig) -> str:
 
 
 def dependency_problems(
-    conn: sqlite3.Connection, task_id: str, pending_invalid: set[str] | None = None
+    conn: sqlite3.Connection,
+    task_id: str,
+    pending_invalid: Mapping[str, list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     """G-DEP for every dependency of ``task_id``; an empty list means all are satisfied.
 
-    ``pending_invalid`` names upstream tasks that the current batch is about to invalidate, so a
-    single propagation pass reaches every transitive dependent (DN002 §5.2).
+    ``pending_invalid`` maps upstream tasks whose results no longer hold to the root changes
+    that caused it (see :func:`invalidated`), so a single pass reaches every transitive dependent
+    (DN002 §5.2) and an acknowledgement only covers the root changes it actually saw.
     """
+    pending = pending_invalid or {}
     problems: list[dict[str, Any]] = []
     for dep in conn.execute("SELECT * FROM dependencies WHERE task_id = ?", (task_id,)):
         upstream = row_dict(
@@ -66,18 +71,30 @@ def dependency_problems(
             reason = "not_done"
         elif int(upstream["revision"]) != int(dep["bound_revision"]):
             reason = "revision_changed"
-        elif int(upstream["stale"]) or upstream["task_id"] in (pending_invalid or ()):
+        elif int(upstream["stale"]) or upstream["task_id"] in pending:
             reason = "stale"
         if reason is not None:
-            problems.append(
-                {
-                    "dep_id": dep["dep_id"],
-                    "reason": reason,
-                    "upstream_revision": None if upstream is None else int(upstream["revision"]),
-                    "upstream_status": None if upstream is None else upstream["status"],
-                }
-            )
+            problem: dict[str, Any] = {
+                "dep_id": dep["dep_id"],
+                "reason": reason,
+                "upstream_revision": None if upstream is None else int(upstream["revision"]),
+                "upstream_status": None if upstream is None else upstream["status"],
+            }
+            if reason == "stale":
+                problem["cause"] = pending.get(str(dep["dep_id"]), [])
+            problems.append(problem)
     return problems
+
+
+def root_causes(problems: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The root changes behind ``problems``: direct facts, or the causes carried by a stale
+    upstream. Sorted and de-duplicated so equal causes compare equal."""
+    facts: dict[str, dict[str, Any]] = {}
+    for problem in problems:
+        found = problem.get("cause")
+        for fact in found if found else [{k: v for k, v in problem.items() if k != "cause"}]:
+            facts[json.dumps(fact, sort_keys=True, ensure_ascii=False)] = fact
+    return [facts[key] for key in sorted(facts)]
 
 
 def topological(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -103,7 +120,7 @@ def topological(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return ordered
 
 
-def invalidated(conn: sqlite3.Connection) -> set[str]:
+def invalidated(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
     """Tasks whose results no longer hold, followed through the whole dependency chain.
 
     A ready or occupying task with an unsatisfied dependency is invalid; a done task is invalid
@@ -112,15 +129,15 @@ def invalidated(conn: sqlite3.Connection) -> set[str]:
     direct dependencies only, so nothing downstream can be accepted between an upstream change
     and the ``sync`` that records it.
     """
-    invalid: set[str] = set()
+    invalid: dict[str, list[dict[str, Any]]] = {}
     for row in topological(conn):
         task_id, status = str(row["task_id"]), str(row["status"])
         problems = dependency_problems(conn, task_id, invalid)
         if status == "done":
             if int(row["stale"]) or (problems and problems != loads(row["stale_ack"], None)):
-                invalid.add(task_id)
+                invalid[task_id] = root_causes(problems)
         elif problems and status in ("ready", *OCCUPYING):
-            invalid.add(task_id)
+            invalid[task_id] = root_causes(problems)
     return invalid
 
 

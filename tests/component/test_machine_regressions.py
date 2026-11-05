@@ -557,3 +557,48 @@ def test_r16_a_user_extension_after_a_requirement_change_applies_to_the_new_cycl
     assert h.task("T001")["cycle"] == 2
     cycles = h.query("SELECT cycle, user_extension FROM review_cycles")
     assert cycles == [{"cycle": 2, "user_extension": 2}]
+
+
+@mark.use_case("UC-LIFE-001")
+def test_r17_a_kept_result_is_flagged_again_when_the_root_changes_again(h: Harness) -> None:
+    h.complete("T001")
+    h.complete("T002", ["T001"])
+    h.complete("T003", ["T002"])
+    h.run("user_reject", task_id="T001", reason="r", user_source=h.source("T001", 1, "reject"))
+    assert (h.task("T002")["stale"], h.task("T003")["stale"]) == (1, 1)
+    h.run("stale_keep", task_id="T003", user_source=h.source("T003", 1, "keep"))
+    h.run("stale_keep", task_id="T002", user_source=h.source("T002", 1, "keep"))
+    assert (h.task("T002")["stale"], h.task("T003")["stale"]) == (0, 0)
+    h.run(
+        "task_update",
+        task_id="T001",
+        goal="再改",
+        acceptance=["x"],
+        user_source=h.source("T001", 2, "change"),
+    )
+    assert (h.task("T002")["stale"], h.task("T003")["stale"]) == (1, 1)
+    assert (
+        reason_of(
+            lambda: h.run("user_accept", task_id="T003", user_source=h.source("T003", 1, "accept"))
+        )
+        == "stale"
+    )
+
+
+@mark.use_case("UC-LIFE-001")
+@mark.transition("T16")
+def test_r17_a_transitively_invalidated_running_task_can_be_stopped(h: Harness) -> None:
+    h.complete("T001")
+    h.complete("T002", ["T001"])
+    h.register("T003")
+    h.plan("T003", ["T002"])
+    h.dispatch("T003")
+    result = h.run(
+        "task_cancel",
+        task_id="T001",
+        worker_stopped=True,
+        user_source=h.source("T001", 1, "cancel"),
+    )
+    assert [n["task_id"] for n in result["sync"]["needs_stop"]] == ["T003"]
+    h.run("dependency_invalidate", task_id="T003", worker_stopped=True)
+    assert h.status("T003") == "waiting_dependency"

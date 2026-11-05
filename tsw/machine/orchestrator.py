@@ -401,7 +401,9 @@ def stale_keep(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 revision=int(row["revision"]),
                 data={
                     "user_source": source,
-                    "acknowledged": guards.dependency_problems(ctx.conn, task_id),
+                    "acknowledged": guards.dependency_problems(
+                        ctx.conn, task_id, guards.invalidated(ctx.conn)
+                    ),
                 },
             )
         ]
@@ -1413,7 +1415,7 @@ def dependency_invalidate(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     def build(ctx: CommitContext) -> list[EventDraft]:
         row = task(ctx.conn, task_id)
         require_status(row, "dispatching", "in_progress", "waiting_user", "verifying")
-        problems = guards.dependency_problems(ctx.conn, task_id)
+        problems = guards.dependency_problems(ctx.conn, task_id, guards.invalidated(ctx.conn))
         if not problems:
             raise rejected("依赖仍然满足", reason="dependencies_ok")
         current = current_attempt(ctx.conn, task_id)
