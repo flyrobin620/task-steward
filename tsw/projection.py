@@ -21,7 +21,7 @@ from tsw.storage.fs import atomic_write
 
 # Bump when tables or reduction rules change; older projections and checkpoints then need a
 # rebuild (DN007 §3.4).
-REDUCER_VERSION = 2
+REDUCER_VERSION = 3
 KEEP_CHECKPOINTS = 3
 
 SCHEMA_SQL = """
@@ -44,7 +44,141 @@ CREATE TABLE IF NOT EXISTS tasks(
     spec_sha256 TEXT NOT NULL,
     registered_seq INTEGER NOT NULL,
     last_activity TEXT NOT NULL,
-    source_seq INTEGER NOT NULL
+    source_seq INTEGER NOT NULL,
+    goal TEXT NOT NULL DEFAULT '',
+    acceptance TEXT NOT NULL DEFAULT '[]',
+    resources TEXT NOT NULL DEFAULT '[]',
+    substate TEXT,
+    cycle INTEGER NOT NULL DEFAULT 0,
+    stale INTEGER NOT NULL DEFAULT 0,
+    stale_ack TEXT,
+    pause TEXT,
+    submission TEXT,
+    current_attempt TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    previous_status TEXT,
+    done_at TEXT,
+    accepted_at TEXT,
+    business_changed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS dependencies(
+    task_id TEXT NOT NULL,
+    dep_id TEXT NOT NULL,
+    bound_revision INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    PRIMARY KEY(task_id, dep_id)
+);
+CREATE TABLE IF NOT EXISTS attempts(
+    task_id TEXT NOT NULL,
+    attempt TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    session_ref TEXT,
+    session_name TEXT,
+    adapter TEXT,
+    generation INTEGER NOT NULL DEFAULT 0,
+    generation_valid INTEGER NOT NULL DEFAULT 0,
+    invalid_generations TEXT NOT NULL DEFAULT '[]',
+    purpose TEXT,
+    controller TEXT,
+    workdir TEXT,
+    branch TEXT,
+    brief_path TEXT,
+    brief_revision INTEGER,
+    read_set TEXT NOT NULL DEFAULT '[]',
+    receipt TEXT,
+    late_sessions TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY(task_id, attempt)
+);
+CREATE TABLE IF NOT EXISTS review_cycles(
+    task_id TEXT NOT NULL,
+    attempt TEXT NOT NULL,
+    cycle INTEGER NOT NULL,
+    rounds INTEGER NOT NULL DEFAULT 0,
+    orchestrator_extension INTEGER NOT NULL DEFAULT 0,
+    user_extension INTEGER NOT NULL DEFAULT 0,
+    last_round INTEGER,
+    last_reviewed_head TEXT,
+    last_decision TEXT,
+    retries INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(task_id, attempt, cycle)
+);
+CREATE TABLE IF NOT EXISTS review_rounds(
+    task_id TEXT NOT NULL,
+    attempt TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    cycle INTEGER NOT NULL,
+    head TEXT NOT NULL,
+    reviewer TEXT NOT NULL,
+    verdict TEXT,
+    reviewed_head TEXT,
+    decision TEXT,
+    PRIMARY KEY(task_id, attempt, round)
+);
+CREATE TABLE IF NOT EXISTS findings(
+    task_id TEXT NOT NULL,
+    attempt TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    finding_id TEXT NOT NULL,
+    cycle INTEGER NOT NULL,
+    severity TEXT NOT NULL,
+    blocking INTEGER NOT NULL,
+    action TEXT,
+    reason TEXT,
+    verification TEXT,
+    disposition TEXT,
+    decision_ref TEXT,
+    PRIMARY KEY(task_id, attempt, round, finding_id)
+);
+CREATE TABLE IF NOT EXISTS judgments(
+    item_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    status TEXT NOT NULL,
+    data TEXT NOT NULL,
+    decision_ref TEXT
+);
+CREATE TABLE IF NOT EXISTS decisions(
+    decision_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    basis TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    sequence INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS input_requests(
+    request_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    question TEXT NOT NULL,
+    binding TEXT NOT NULL,
+    resolution TEXT
+);
+CREATE TABLE IF NOT EXISTS outputs(
+    task_id TEXT NOT NULL,
+    output_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    role TEXT,
+    delivery TEXT,
+    verified_at TEXT,
+    evidence TEXT NOT NULL,
+    PRIMARY KEY(task_id, output_id)
+);
+CREATE TABLE IF NOT EXISTS resource_claims(
+    resource TEXT NOT NULL,
+    owner_task TEXT NOT NULL,
+    status TEXT NOT NULL,
+    PRIMARY KEY(resource, owner_task)
+);
+CREATE TABLE IF NOT EXISTS integrations(
+    task_id TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    status TEXT NOT NULL,
+    PRIMARY KEY(task_id, repo)
 );
 CREATE TABLE IF NOT EXISTS task_notes(
     task_id TEXT NOT NULL,

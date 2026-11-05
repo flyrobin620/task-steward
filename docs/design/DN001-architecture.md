@@ -185,6 +185,20 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一�
 
 每个写工具都带 `command_id`（幂等）和 `expected_version`（乐观锁）。同一 ID 内容不同则拒绝。CLI `tsw <tool>` 与 MCP 共用同一实现，供人工排查使用。
 
+#### 7.2a 状态机工具（v1 实现）
+
+状态机层提供细粒度工具，每个工具对应 DN002 的一个或一组迁移，由同一个注册表同时供 CLI（`tsw tool run <name>`）与 MCP 使用；上表中更高层的工具由它们组合而成（例如 `review_run` = 调用评审器 + `review_start` / `review_complete` / `review_fail`；`inbox`、`attention`、`operations_*`、`report_back`、`input_response` 在宿主集成与会话适配器中实现）。
+
+| 角色 | 工具 | 迁移 |
+| --- | --- | --- |
+| 主会话 | `task_register` `intake_question` `input_resolve` `task_plan` `task_update` `dependency_rebind` `stale_keep` | T01–T05、T12、需求变更、依赖重绑定、stale 保留 |
+| 主会话 | `task_dispatch` `attempt_start` `attempt_reconcile` `attempt_deliver` `attempt_continue` `attempt_update` | T07–T09、T15、预启动、对账与迟到会话 |
+| 主会话 | `task_pause` `task_resume` `judge` `feedback` `integrate` `output_link` `task_accept` | T10、T11、T14、T17–T21、T27、主会话判断 |
+| 主会话 | `user_accept` `user_reject` `task_cancel` `task_archive` `dependency_invalidate` `resource_release` `sync` | T16、T22–T26、依赖传播 |
+| worker | `progress_note` `question` `review_start` `review_fail` `review_complete` `review_triage` `review_decide` `self_check_failed` `submit` `task_pause` `output_link` | E01–E07、T13、T14 |
+
+主会话的写工具都要求持有调度租约（G-LEASE）；worker 工具要求调用者就是该任务当前 attempt 绑定的会话。
+
 ### 7.3 hooks
 
 | hook | 角色 | 行为 |

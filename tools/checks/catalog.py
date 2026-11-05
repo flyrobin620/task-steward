@@ -6,7 +6,7 @@ The check fails when:
 2. an active transition or guard has no passing test in one of its required tiers that ran;
 3. a test references an unknown or retired use case, or an unknown or planned transition;
 4. an id is duplicated, malformed or missing omitted-tier reasons;
-5. a CLI command is not claimed by an active use case, or a claim names no command;
+5. a CLI command or tool is not claimed by an active use case, or a claim names nothing;
 6. a required test was skipped, not run or failed in this run;
 7. the transition list and the DN002 tables disagree.
 """
@@ -58,6 +58,7 @@ def check(
     results: Iterable[Mapping[str, Any]],
     tiers_run: set[str],
     cli_commands: Iterable[str],
+    tools: Iterable[str] = (),
 ) -> tuple[list[str], list[str]]:
     """Returns ``(problems, not_verified)``."""
     problems: list[str] = []
@@ -143,14 +144,14 @@ def check(
             continue
         for claim in entry.get("claims", []):
             claimed[str(claim)] = uc_id
-    commands = {f"cli:{name}" for name in cli_commands}
+    commands = {f"cli:{name}" for name in cli_commands} | {f"tool:{name}" for name in tools}
     problems += [
-        f"CLI 命令没有被任何 active use case 认领：{c}" for c in sorted(commands - set(claimed))
+        f"对外表面没有被任何 active use case 认领：{c}" for c in sorted(commands - set(claimed))
     ]
     problems += [
         f"{claimed[c]}: 认领的表面不存在 {c}"
         for c in sorted(set(claimed) - commands)
-        if c.startswith("cli:")
+        if c.startswith(("cli:", "tool:"))
     ]
     return problems, not_verified
 

@@ -42,7 +42,8 @@
       "claims": [
         "cli:task register",
         "cli:task list",
-        "cli:task show"
+        "cli:task show",
+        "tool:task_register"
       ],
       "component": "tasks",
       "status": "active",
@@ -242,6 +243,175 @@
       "omittedTiers": {
         "conformance": "不经过插件接口",
         "live": "不依赖宿主与模型"
+      }
+    },
+    {
+      "id": "UC-PLAN-001",
+      "title": "受理与规划（T02–T05、需求变更、依赖重绑定）",
+      "actor": "主会话 / 用户",
+      "acceptance": "受理时提问阻止规划直到用户答复（G-USER）；G-PLAN 要求任务书完整且仓库已配置；依赖不能自依赖或成环；依赖未满足进入等待依赖，上游完成后经 sync 就绪；需求变更 revision+1 并按状态处理；依赖可重新绑定到上游新 revision",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "tool:intake_question",
+        "tool:input_resolve",
+        "tool:task_plan",
+        "tool:task_update",
+        "tool:dependency_rebind",
+        "tool:stale_keep",
+        "cli:tool list",
+        "cli:tool run"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
+        "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
+      }
+    },
+    {
+      "id": "UC-DISPATCH-001",
+      "title": "派发与 attempt（T07–T10、T15、R-ATTEMPT、预启动）",
+      "actor": "主会话",
+      "acceptance": "派发须持有租约、有名额与资源、依赖满足，新建会话还须在用户 turn；按 R-ATTEMPT 选择新建、复用 planned、投递待命会话或续用；会话未创建经 T09 回到就绪且代次失效，迟到会话只记录；执行目录冲突暂停；会话丢失回到就绪并以新 attempt 接手；其他主会话启动的会话不能续用",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "tool:task_dispatch",
+        "tool:attempt_start",
+        "tool:attempt_reconcile",
+        "tool:attempt_deliver",
+        "tool:attempt_continue",
+        "tool:attempt_update"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
+        "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
+      }
+    },
+    {
+      "id": "UC-REVIEW-001",
+      "title": "worker 自评审循环（E01–E07、评审预算、R-ROUND）",
+      "actor": "worker",
+      "acceptance": "评审轮次在 attempt 内递增；本周期轮次受有效预算限制；评审结果须满足输出契约；阻断项只能修复或有据拒绝；修复由后续增量评审或验证说明确认；定稿后 HEAD 变化须再评审；需求变更开启新周期；评审失败重试超限后交主会话判断",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "tool:review_start",
+        "tool:review_fail",
+        "tool:review_complete",
+        "tool:review_triage",
+        "tool:review_decide",
+        "tool:self_check_failed",
+        "tool:question",
+        "tool:progress_note"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
+        "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
+      }
+    },
+    {
+      "id": "UC-JUDGE-001",
+      "title": "主会话判断与交给人类（T11、T12、DN006 §8.3）",
+      "actor": "主会话 / 用户",
+      "acceptance": "worker 提问、预算用完、延后请求、评审器不可用都成为待判断事项；主会话可回答、追加轮次（不超过上限）、认定不成立、批准延后、调整方向或交给人类；每个决定写入 DecisionRecord；交给人类后由用户答复恢复原子状态，迟到答复只记录",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "tool:judge"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
+        "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
+      }
+    },
+    {
+      "id": "UC-VERIFY-001",
+      "title": "提交、核验与技术验收（T13、T17、T18、G-SUBMIT、G-ACCEPT）",
+      "actor": "worker / 主会话",
+      "acceptance": "提交须满足 G-SUBMIT 并把草稿报告复制进 runs；主会话可给出剩余工作退回执行；技术验收须逐项覆盖验收要求、核对 HEAD、有已核验的产出、集成已完成、没有待答输入，并写出 review.md",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "tool:submit",
+        "tool:feedback",
+        "tool:integrate",
+        "tool:output_link",
+        "tool:task_accept"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
+        "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
+      }
+    },
+    {
+      "id": "UC-LIFE-001",
+      "title": "暂停恢复、用户验收退回、取消归档与依赖传播（T14、T16、T19–T27、sync）",
+      "actor": "主会话 / 用户 / 系统",
+      "acceptance": "暂停须写明负责人、下一步、恢复条件与类别；恢复按 §5.3 选择 T27 / T20 / T21；用户验收与退回须有 G-USER 来源；退回与取消使下游失效或标记 stale，用户可保留成果；运行中的下游须先停止 worker 再经 T16 离开；已验收 7 天无变化自动归档；已取消的任务可归档",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "tool:task_pause",
+        "tool:task_resume",
+        "tool:user_accept",
+        "tool:user_reject",
+        "tool:task_cancel",
+        "tool:task_archive",
+        "tool:dependency_invalidate",
+        "tool:resource_release",
+        "tool:sync"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
+        "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
       }
     }
   ]

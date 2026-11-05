@@ -15,177 +15,352 @@
     {
       "id": "T02",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T03",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T04",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T05",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T06",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T07",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T08",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T09",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T10",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T11",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T12",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T13",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T14",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T15",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T16",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T17",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T18",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T19",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T20",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T21",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T22",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T23",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T24",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T25",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T26",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "T27",
       "kind": "transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "E01",
       "kind": "worker_transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "E02",
       "kind": "worker_transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "E03",
       "kind": "worker_transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "E04",
       "kind": "worker_transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "E05",
       "kind": "worker_transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "E06",
       "kind": "worker_transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "E07",
       "kind": "worker_transition",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "G-ACCEPT",
       "kind": "guard",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "G-DEP",
       "kind": "guard",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "G-LEASE",
@@ -200,42 +375,82 @@
     {
       "id": "G-ONE-ATTEMPT",
       "kind": "guard",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "G-PAUSE",
       "kind": "guard",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "G-PLAN",
       "kind": "guard",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "G-RES",
       "kind": "guard",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "G-SLOT",
       "kind": "guard",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "G-SUBMIT",
       "kind": "guard",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "G-USER",
       "kind": "guard",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "G-WINDOW",
       "kind": "guard",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
     },
     {
       "id": "I01",
