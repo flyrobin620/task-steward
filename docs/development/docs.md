@@ -19,6 +19,8 @@
 - 生成的 HTML 记录来源 Markdown 的 SHA-256；`tools/docs.py check` 在两者不一致时失败（报告“已过期”），
   并检查相对链接与锚点有效。
 - 改 Markdown 的同一个 PR 里重新生成 HTML。
+- HTML 中指向其他文档的链接：对方有 HTML 版（README、设计文档）时指向 `.html`，只有 Markdown 的文档
+  （`AGENTS.md`、开发规则、决定记录）保留 `.md` 链接。检查工具核对每个链接的目标存在。
 
 ## 设计文档
 

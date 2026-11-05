@@ -67,7 +67,8 @@ TaskSteward（任务管家）：可插拔宿主的任务编排器。核心库与
 1. 完成的含义：合并提交在 `main` 上的 CI 通过，验收标准逐项核实，要求的 live 场景已在最终 head 上运行
    通过。“测试通过”“CI 绿”“已合并”都不等于完成。
 
-每一步的门禁、证据和失败处理见 [docs/development/workflow.md](docs/development/workflow.md)。
+门禁与 CI 尚未建立期间的过渡规则、每一步的门禁、证据和失败处理见
+[docs/development/workflow.md](docs/development/workflow.md)。
 
 ## 5. 汇报
 
@@ -99,7 +100,9 @@ TaskSteward（任务管家）：可插拔宿主的任务编排器。核心库与
   `<area>: <summary>`，squash 合并。
 - 本仓库公开：不提交工作身份、雇主内部信息、内部主机名、本机路径等私有上下文（检查方法见
   [docs.md](docs/development/docs.md)）。提交用公开的 GitHub noreply 身份。
-- 生成文件与私有文件（`.local/`、测试结果、运行清单）不进入版本库；生成的东西不放在仓库根目录。
+- 临时与私有文件（`.local/`、`.venv/`、测试结果、覆盖报告、live 运行清单）不进入版本库。需要提交的
+  生成文档只有：README 与设计文档的 HTML、设计图的 SVG 与 `validation.json`（由工具生成并与来源
+  同步，见 [docs.md](docs/development/docs.md)）；其他生成物不提交，也不放在仓库根目录。
 - 提交前检查暂存路径，运行 `git diff --cached --check`，并扫描凭据。
 - 文档与行为在同一个 PR 里保持一致；不要写会过时的硬编码数量。
 - 子目录中的 `AGENTS.md` 为该子树追加规则。

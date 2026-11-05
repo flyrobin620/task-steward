@@ -19,6 +19,9 @@ hooks / 插件接口、有持久化数据、不使用云资源、v1 不发布。
 | 开发 PR 由谁决定合并 | agent 合并，敏感改动问用户（推荐）/ 每个 PR 都由用户确认 | agent 合并，敏感改动问用户 |
 | CI 的平台与 Python 版本 | Windows + Ubuntu × 3.10 / 3.13（推荐）/ 再加 macOS / 只跑 Ubuntu | Windows only |
 
+此前（同日，确定 v1 范围时）用户已确认：v1 插件为宿主集成 `claude-code`、会话适配器 `claude` 与
+`codex`、人类渠道 `in-session`、存储后端 `fs`；历史导入（DN005）放到 v2。
+
 ## 决定
 
 1. **规则文档**：中文 Markdown。`AGENTS.md` 写通用规则、开发循环和“先读哪份文档”的表，专题规则在
@@ -36,14 +39,16 @@ hooks / 插件接口、有持久化数据、不使用云资源、v1 不发布。
 7. **合并**：squash 合并；`Gate` 绿、最终 head 评审通过、意见全部解决、（派发的任务）编排者验收后由
    agent 合并；CI、门禁、规则文档、决定记录、设计文档、发布配置、权限与身份校验代码、`LICENSE` 的
    改动须用户明确确认。
-8. **兼容性**：账本只追加；各契约的版本规则以设计文档为准
+8. **v1 范围**：按上面的用户确认实现 v1 插件；DN005 的历史导入与 DN002 §3.4 的导入规则放到 v2，
+   在状态迁移清单中标记为 `planned`，不计入 v1 的覆盖门禁。
+9. **兼容性**：账本只追加；各契约的版本规则以设计文档为准
    （[compatibility.md](../development/compatibility.md)）。
 
 ## 后果
 
 - 门禁与 CI 包装器（`tools/gate.py`、`tools/docs.py`、`tools/live.py`）、`.github/workflows/ci.yml`、
   `requirements-dev.txt`、use-case 目录与状态迁移清单由第一个开发 PR 按这些规则实现；在那之前，引用
-  它们的检查报告为“未验证”。
+  它们的检查报告为“未验证”，合并按 [workflow.md](../development/workflow.md) 的过渡规则执行。
 - 本 PR 合并后，在 GitHub 上为 `main` 设置保护规则（必需检查 `Gate`、必须解决对话、分支须基于最新
   `main`、禁止直接推送）。该设置在 `Gate` 第一次实际运行后启用，启用前须用户确认。
 - 只在 Windows 上运行 CI：Linux 与 macOS 上的文件锁、路径与原子重命名行为不在 CI 覆盖范围内，支持

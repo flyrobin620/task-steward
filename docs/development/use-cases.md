@@ -28,9 +28,10 @@
 
 ## 状态迁移清单
 
-`docs/use-cases/transitions.json`（第一个开发 PR 创建）列出 DN002 §3.2 迁移表中的每个迁移
-（T01–T27、E01–E07）与 §4 的守卫（G-*），以及导入规则（I01–I06，导入在 v2 实现，之前标记为 `planned`）。
-DN002 的表是权威来源，清单是它的机器可读副本：
+`docs/use-cases/transitions.json`（第一个开发 PR 创建）列出 DN002 中的每个编号：§3.2 的迁移
+（T01–T27）、§3.3 的 worker 内部迁移（E01–E07）、§4 的守卫（G-*），以及 §3.4 的导入规则
+（I01–I06）。DN002 的表是权威来源，清单是它的机器可读副本。尚未实现的编号标记为 `planned`（例如导入，
+见 [0001](../decisions/0001-development-process.md)），实现时改为 `active`：
 
 - 检查工具比较 DN002 表中的编号与清单，两边不一致即失败；
 - 每个 `active` 的迁移与守卫至少有一个 unit 测试，涉及文件与并发的迁移还要有 component 测试。
