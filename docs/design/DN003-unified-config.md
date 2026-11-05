@@ -240,7 +240,7 @@
 
 ## 4. 校验规则
 
-tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命令仍可用）：
+tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命令仍可用）。数据目录维护命令（`quiesce`、`resume-writes`、`backup`、`restore`）不读取配置，配置损坏时仍可用于备份与修复。默认值中的字段都是必填的，用 `null` 删除后报错；只有明确可选的字段（如 `roles.reviewer.fallback_session`）可以删除。结构错误（类型不对、缺少必填字段）先报告，语义规则在结构正确后才检查：
 
 1. `version` 必须为 1；未知字段报错（防止拼写错误被静默忽略），但 `roles.comparison` 这一已删除字段只记录警告。
 2. 模型 ID 匹配 `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`；effort 属于 `low|medium|high|xhigh|max`。

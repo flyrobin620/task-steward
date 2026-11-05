@@ -44,6 +44,7 @@ def test_defaults_alone_are_valid_and_derive_input_channels(home: Home) -> None:
     config = load_config(home)
     assert config.valid, config.problems
     assert config.get("input.channels") == ["in-session"]
+    assert config.sources["input.channels"] == "derived"
     assert config.sources["roles.reviewer.model"] == "default"
     assert DEFAULTS["roles"]["reviewer"]["model"] == "gpt-6-astra"
 
@@ -89,9 +90,54 @@ def test_removed_comparison_role_is_only_a_warning(home: Home) -> None:
 
 
 def test_model_ids_and_efforts(home: Home) -> None:
-    problems = _problems(home, {"roles": {"worker": {"model": "bad model", "effort": "huge"}}})
-    assert "roles.worker.model: 模型 ID 格式不正确" in problems
+    problems = _problems(home, {"roles": {"worker": {"model": "bad model"}}})
+    assert problems == ["roles.worker.model: 模型 ID 格式不正确"]
+    problems = _problems(home, {"roles": {"worker": {"effort": "huge"}}})
     assert any(p.startswith("roles.worker.effort: 取值应为") for p in problems)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"plugins": {"sessions": 42}},
+        {"plugins": {"human_channels": [{}]}},
+        {"input": 42},
+        {"repositories": ["app"]},
+        {"roles": {"reviewer": 7}},
+    ],
+)
+def test_wrong_structure_is_reported_without_crashing(home: Home, config: dict[str, Any]) -> None:
+    problems = _problems(home, config)
+    assert problems
+    assert not load_config(home).valid
+
+
+@pytest.mark.parametrize(
+    ("config", "problem"),
+    [
+        ({"ledger": {"checkpoint_every": None}}, "ledger.checkpoint_every: 缺少必填字段"),
+        ({"scheduling": {"lease_minutes": None}}, "scheduling.lease_minutes: 缺少必填字段"),
+        ({"roles": {"reviewer": None}}, "roles.reviewer.session: 缺少必填字段"),
+        (
+            {"roles": {"orchestrator": {"permission_mode": None}}},
+            "roles.orchestrator.permission_mode: 缺少必填字段",
+        ),
+    ],
+)
+def test_required_fields_cannot_be_deleted(
+    home: Home, config: dict[str, Any], problem: str
+) -> None:
+    assert problem in _problems(home, config)
+
+
+def test_optional_fields_can_be_deleted(home: Home) -> None:
+    assert not _problems(home, {"roles": {"reviewer": {"fallback_session": None}}})
+
+
+def test_nested_null_deletes_inside_a_new_object(home: Home) -> None:
+    assert merge({}, {"a": {"b": None, "c": 1}}) == {"a": {"c": 1}}
+    assert merge({"a": 1}, {"a": {"b": None}}) == {"a": {}}
+    assert not _problems(home, {"repositories": {"app": {"path": "~/a", "aliases": None}}})
 
 
 def test_worker_permission_cannot_exceed_orchestrator(home: Home) -> None:

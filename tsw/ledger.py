@@ -21,6 +21,7 @@ import sqlite3
 from collections.abc import Callable, Generator
 from typing import Any
 
+from tsw import lease
 from tsw.commands import Command, CommitContext, CommitResult
 from tsw.errors import rejected
 from tsw.events import GENESIS, Event, digest, seal, utc_now
@@ -44,11 +45,13 @@ class Ledger:
         *,
         clock: Callable[[], str] = utc_now,
         checkpoint_every: int = DEFAULT_CHECKPOINT_EVERY,
+        machine: str | None = None,
     ) -> None:
         self.home = home
         self.storage: StorageBackend = storage if storage is not None else FsStorage(home)
         self.clock = clock
         self.checkpoint_every = checkpoint_every
+        self.machine = machine if machine is not None else lease.this_machine()
         self.projection = Projection(home, self.storage, REDUCERS)
 
     # ------------------------------------------------------------------ reads
@@ -70,6 +73,8 @@ class Ledger:
             self.projection.connection() as conn,
         ):
             tail = self.projection.reduce_to(conn)
+            if not command.foreign_lease_ok:
+                lease.refuse_foreign_machine(conn, self.machine)
             now = self.clock()
             # Catch up derived files left behind by an interrupted earlier commit.
             refresh_views(
@@ -130,6 +135,7 @@ class Ledger:
             self.projection.discard()
             with self.projection.connection() as conn:
                 tail = self.projection.reduce_to(conn)
+                lease.refuse_foreign_machine(conn, self.machine)
                 self.projection.checkpoint(conn)
                 refresh_views(
                     CommitContext(

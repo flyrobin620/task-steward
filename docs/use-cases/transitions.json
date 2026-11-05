@@ -193,8 +193,7 @@
       "status": "active",
       "requiredTiers": [
         "unit",
-        "component",
-        "surface"
+        "component"
       ],
       "milestone": "M2"
     },

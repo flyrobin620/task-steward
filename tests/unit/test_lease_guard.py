@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 
 import pytest
 
@@ -12,7 +13,7 @@ pytestmark = [pytest.mark.use_case("UC-LEASE-001"), pytest.mark.transition("G-LE
 
 
 @pytest.fixture
-def conn() -> sqlite3.Connection:
+def conn() -> Iterator[sqlite3.Connection]:
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
     db.executescript(SCHEMA_SQL)
@@ -20,7 +21,8 @@ def conn() -> sqlite3.Connection:
         "INSERT INTO leases VALUES('scheduler', 's1', 'm1', '2026-11-05T00:00:00Z', "
         "'2026-11-05T01:00:00Z', 1)"
     )
-    return db
+    yield db
+    db.close()
 
 
 @pytest.mark.parametrize(

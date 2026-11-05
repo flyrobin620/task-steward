@@ -151,7 +151,7 @@
       "id": "UC-STORE-001",
       "title": "静止、在线备份与恢复",
       "actor": "用户 / tsw CLI",
-      "acceptance": "静止后写入返回 QUIESCED，读取照常；静止等待已获准的写入完成；在线备份带 manifest（不含文件哈希），恢复后审计通过并重建投影；无 manifest 或 manifest 不一致的副本只有显式允许才能恢复",
+      "acceptance": "静止后写入返回 QUIESCED，读取照常；静止等待已获准的写入完成；在线备份带 manifest（不含文件哈希），恢复后审计通过并重建投影；无 manifest 或 manifest 不一致的副本只有显式允许才能恢复；配置无效时 quiesce、resume-writes、backup、restore 仍可用（数据目录维护不依赖配置）",
       "surfaces": [
         "cli"
       ],
@@ -222,7 +222,7 @@
       "id": "UC-LEASE-001",
       "title": "调度租约的领取、续期、释放与接管（G-LEASE）",
       "actor": "主会话 / 用户",
-      "acceptance": "租约空闲或在本机过期时可领取，持有者可续期；其他会话在有效期内只读；另一台机器的租约即使过期也不能静默领取；接管必须附用户确认来源并核对原持有者，跨机器还需 from_machine；G-LEASE 对非持有者、其他机器和过期租约拒绝",
+      "acceptance": "租约空闲或在本机过期时可领取，持有者可续期；其他会话在有效期内只读；另一台机器的租约即使过期也不能静默领取；接管必须附用户确认来源并核对原持有者，跨机器还需 from_machine；G-LEASE 对非持有者、其他机器和过期租约拒绝；另一台机器持有未释放的租约时，除接管外的所有写命令与 rebuild 都以 lease_other_machine 拒绝，读命令照常",
       "surfaces": [
         "cli"
       ],

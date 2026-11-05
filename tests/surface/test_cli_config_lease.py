@@ -53,7 +53,6 @@ def test_invalid_config_refuses_writes_but_not_reads(initialized: Path) -> None:
 
 
 @pytest.mark.use_case("UC-LEASE-001")
-@pytest.mark.transition("G-LEASE")
 def test_lease_acquire_show_takeover_release(initialized: Path) -> None:
     code, out = run_json("lease", "show")
     assert (code, out["lease"]) == (0, None)
@@ -98,3 +97,37 @@ def test_lease_acquire_show_takeover_release(initialized: Path) -> None:
     assert code == 0
     code, shown = run_json("lease", "show")
     assert shown["lease"] is None
+
+
+@pytest.mark.use_case("UC-LEASE-001")
+def test_a_lease_from_another_machine_blocks_writes(initialized: Path) -> None:
+    code, _ = run_json("lease", "acquire", "--session", "s1", "--machine", "elsewhere")
+    assert code == 0
+    code, err = run_json(
+        "task",
+        "register",
+        "--title",
+        "t",
+        "--repo",
+        "r",
+        "--kind",
+        "code",
+        "--goal",
+        "g",
+        "--acceptance",
+        "a",
+    )
+    assert (code, err["details"]["reason"]) == (3, "lease_other_machine")
+    code, listing = run_json("task", "list")  # reads keep working
+    assert (code, listing["tasks"]) == (0, [])
+
+
+@pytest.mark.use_case("UC-STORE-001")
+def test_maintenance_commands_work_while_the_config_is_invalid(
+    initialized: Path, tmp_path: Path
+) -> None:
+    (initialized / "config" / "task-steward.json").write_text("{broken", encoding="utf-8")
+    assert run_json("quiesce")[0] == 0
+    assert run_json("resume-writes")[0] == 0
+    code, out = run_json("backup", str(tmp_path / "bk"))
+    assert code == 0, out

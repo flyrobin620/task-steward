@@ -34,9 +34,14 @@ def _home(args: argparse.Namespace) -> Home:
     return open_home(root)
 
 
-def _ledger_for(home: Home, config: EffectiveConfig) -> Ledger:
+def _ledger_for(home: Home, config: EffectiveConfig, machine: str | None = None) -> Ledger:
     storage = FsStorage(home, segment_max_bytes=int(config.get("ledger.segment_max_mb")) << 20)
-    return Ledger(home, storage, checkpoint_every=int(config.get("ledger.checkpoint_every")))
+    return Ledger(
+        home,
+        storage,
+        checkpoint_every=int(config.get("ledger.checkpoint_every")),
+        machine=machine,
+    )
 
 
 def _ledger(args: argparse.Namespace) -> Ledger:
@@ -50,7 +55,7 @@ def _writer(args: argparse.Namespace) -> tuple[Ledger, EffectiveConfig]:
     """A ledger for write commands: refused while the configuration is invalid (DN003 §4)."""
     home = _home(args)
     config = load_config(home).require_valid()
-    return _ledger_for(home, config), config
+    return _ledger_for(home, config, getattr(args, "machine", None)), config
 
 
 def _cmd_init(args: argparse.Namespace) -> dict[str, Any]:

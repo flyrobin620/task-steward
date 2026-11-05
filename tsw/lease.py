@@ -147,7 +147,11 @@ def takeover(
     actor: Mapping[str, Any],
     command_id: str | None = None,
 ) -> Command:
-    missing = [key for key in USER_SOURCE_FIELDS if not str(user_source.get(key, "")).strip()]
+    missing = [
+        key
+        for key in USER_SOURCE_FIELDS
+        if not isinstance(user_source.get(key), str) or not str(user_source[key]).strip()
+    ]
     if missing:
         raise rejected(
             "接管需要用户确认原主会话已停止的来源", reason="user_source_missing", missing=missing
@@ -195,7 +199,19 @@ def takeover(
         },
         build=build,
         command_id=command_id,
+        foreign_lease_ok=True,
     )
+
+
+def refuse_foreign_machine(conn: sqlite3.Connection, machine: str) -> None:
+    """DN006 §9.6: writes stop while another machine holds an unreleased lease."""
+    lease = lease_row(conn)
+    if lease is not None and lease["machine"] != machine:
+        raise rejected(
+            "调度租约属于另一台机器且未释放，拒绝写入；确认原机器已停止后接管",
+            reason="lease_other_machine",
+            machine=lease["machine"],
+        )
 
 
 # ---------------------------------------------------------------------- reducers

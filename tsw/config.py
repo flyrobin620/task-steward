@@ -40,6 +40,11 @@ LOCAL_WHITELIST = (
 # Fields that would make review optional; review is an invariant, not a setting (DN003 §3.1).
 FORBIDDEN = ("review.required", "review.require_final_head_reviewed", "review.on_unavailable")
 REMOVED_WITH_WARNING = ("roles.comparison",)
+# Default fields that a configuration may delete with ``null`` (DN003 §5a); every other default
+# field must be present in the effective configuration.
+OPTIONAL = ("roles.reviewer.fallback_session", "input.decision_digest.channel")
+# Map containers whose entries are user data, not required fields.
+MAPS = ("repositories", "accounts", "notifications", "import.sources")
 
 DEFAULTS: dict[str, Any] = {
     "version": VERSION,
@@ -329,8 +334,9 @@ def merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     for key, value in overlay.items():
         if value is None:
             out.pop(key, None)
-        elif isinstance(value, dict) and isinstance(out.get(key), dict):
-            out[key] = merge(out[key], value)
+        elif isinstance(value, dict):
+            current = out.get(key)
+            out[key] = merge(current if isinstance(current, dict) else {}, value)
         else:
             out[key] = copy.deepcopy(value)
     return out
@@ -451,7 +457,17 @@ def _validate(config: EffectiveConfig, home: Home) -> None:
                 container.pop(leaf, None)
     if values.get("version") != VERSION:
         problems.append(f"version: 必须为 {VERSION}")
-    _check(values, SCHEMA, "", problems)
+    structural: list[str] = []
+    _check(values, SCHEMA, "", structural)
+    for dotted in _leaves(DEFAULTS):
+        if dotted in OPTIONAL or any(dotted.startswith(m + ".") for m in MAPS):
+            continue
+        if get(values, dotted) is None:
+            structural.append(f"{dotted}: 缺少必填字段")
+    problems.extend(structural)
+    if structural:
+        # Semantic rules assume the structure is right; report the structure first.
+        return
 
     # Rule 2: model ids and efforts.
     for role in ("orchestrator", "worker", "reviewer"):
@@ -470,7 +486,7 @@ def _validate(config: EffectiveConfig, home: Home) -> None:
         problems.append("roles.worker.permission_mode: 不能高于 roles.orchestrator.permission_mode")
 
     _validate_plugins(values, problems, config.warnings)
-    _validate_input(values, problems)
+    _validate_input(values, problems, config.sources)
     _validate_paths(values, problems, home)
     _validate_repositories(values, problems, home)
 
@@ -537,12 +553,13 @@ def _validate_plugins(values: dict[str, Any], problems: list[str], warnings: lis
         warnings.append("roles.reviewer.model 与 roles.worker.model 相同，评审视角的独立性下降")
 
 
-def _validate_input(values: dict[str, Any], problems: list[str]) -> None:
+def _validate_input(values: dict[str, Any], problems: list[str], sources: dict[str, str]) -> None:
     loaded = [c for c in get(values, "plugins.human_channels", []) or [] if c in CHANNELS]
     answering = [c for c in loaded if CHANNELS[c].request_response]
     channels = get(values, "input.channels")
     if channels is None:
         values.setdefault("input", {})["channels"] = answering
+        sources["input.channels"] = "derived"  # from plugins.human_channels
     elif isinstance(channels, list):
         for name in channels:
             if name not in loaded:

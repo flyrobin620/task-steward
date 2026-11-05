@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 import pytest
 
+from tests.support import register_task
 from tsw import lease
 from tsw.errors import TswError
 from tsw.home import Home
@@ -35,13 +36,20 @@ def clock() -> Clock:
 
 @pytest.fixture
 def timed(home: Home, clock: Clock) -> Ledger:
-    return Ledger(home, clock=clock)
+    return Ledger(home, clock=clock, machine="m1")
+
+
+def _on(ledger: Ledger, machine: str) -> Ledger:
+    """The same data directory as seen from ``machine``."""
+    return Ledger(ledger.home, clock=ledger.clock, machine=machine)
 
 
 def _acquire(ledger: Ledger, session: str, machine: str = "m1") -> str:
-    event = ledger.commit(
-        lease.acquire(session, machine=machine, lease_minutes=60, actor=ACTOR)
-    ).events[-1]
+    event = (
+        _on(ledger, machine)
+        .commit(lease.acquire(session, machine=machine, lease_minutes=60, actor=ACTOR))
+        .events[-1]
+    )
     return str(event.data["expires_at"])
 
 
@@ -94,7 +102,7 @@ def test_another_machine_never_acquires_silently(timed: Ledger, clock: Clock) ->
         _acquire(timed, "s2", machine="m2")
     assert info.value.details["reason"] == "lease_other_machine"
     with pytest.raises(TswError) as info:
-        timed.commit(
+        _on(timed, "m2").commit(
             lease.takeover(
                 "s2",
                 machine="m2",
@@ -106,17 +114,21 @@ def test_another_machine_never_acquires_silently(timed: Ledger, clock: Clock) ->
             )
         )
     assert info.value.details["reason"] == "lease_other_machine"
-    event = timed.commit(
-        lease.takeover(
-            "s2",
-            machine="m2",
-            from_session="s1",
-            user_source=SOURCE,
-            lease_minutes=60,
-            from_machine=True,
-            actor=ACTOR,
+    event = (
+        _on(timed, "m2")
+        .commit(
+            lease.takeover(
+                "s2",
+                machine="m2",
+                from_session="s1",
+                user_source=SOURCE,
+                lease_minutes=60,
+                from_machine=True,
+                actor=ACTOR,
+            )
         )
-    ).events[-1]
+        .events[-1]
+    )
     assert event.type == "controller.lease_taken_over"
     assert event.data["from_machine"] == "m1"
     assert event.data["user_source"] == SOURCE
@@ -136,6 +148,17 @@ def test_takeover_needs_the_users_confirmation_and_the_right_holder(timed: Ledge
             actor=ACTOR,
         )
     assert info.value.details == {"reason": "user_source_missing", "missing": ["text"]}
+    with pytest.raises(TswError) as info:
+        lease.takeover(
+            "s2",
+            machine="m1",
+            from_session="s1",
+            user_source=dict.fromkeys(SOURCE),
+            lease_minutes=60,
+            from_machine=False,
+            actor=ACTOR,
+        )
+    assert info.value.details["missing"] == ["channel", "principal", "message_ref", "text"]
     with pytest.raises(TswError) as info:
         timed.commit(
             lease.takeover(
@@ -166,3 +189,30 @@ def test_lease_survives_a_rebuild(timed: Ledger, clock: Clock) -> None:
     _acquire(timed, "s1")
     timed.rebuild()
     _check(timed, "s1", "m1", clock.now)()
+
+
+def test_writes_stop_while_another_machine_holds_the_lease(timed: Ledger) -> None:
+    _acquire(timed, "s1", machine="m1")
+    other = _on(timed, "m2")
+    with pytest.raises(TswError) as info:
+        register_task(other)
+    assert info.value.details["reason"] == "lease_other_machine"
+    with pytest.raises(TswError) as info:
+        other.rebuild()
+    assert info.value.details["reason"] == "lease_other_machine"
+    register_task(timed)  # the holder's machine keeps writing
+    other.commit(
+        lease.takeover(
+            "s2",
+            machine="m2",
+            from_session="s1",
+            user_source=SOURCE,
+            lease_minutes=60,
+            from_machine=True,
+            actor=ACTOR,
+        )
+    )
+    register_task(other)
+    with pytest.raises(TswError) as info:
+        register_task(timed)  # now the old machine is the foreign one
+    assert info.value.details["reason"] == "lease_other_machine"
