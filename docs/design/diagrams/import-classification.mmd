@@ -1,0 +1,19 @@
+flowchart TD
+    S([orchestrator-agent 任务记录<br/>完整审计后的最终状态]) --> R{已有 retirement<br/>或 archived?}
+    R -- 是 --> A[archived · 只读<br/>保留原 status 与退役原因]
+    R -- 否 --> C{status == cancelled?}
+    C -- 是 --> CR[cancelled · 只读]
+    C -- 否 --> D{status == done?}
+    D -- 是 --> UA{有效 user_acceptance<br/>且 revision 一致?}
+    UA -- 是 --> AC[accepted · 只读<br/>满7天后按新系统规则归档]
+    UA -- 否 --> DN[done · 可 resume<br/>待用户验收]
+    D -- 否 --> P{status == pending / ready?}
+    P -- 是 --> PN[intake · 可 resume<br/>保留依赖与规划理由]
+    P -- 否 --> PA{status == paused / failed?}
+    PA -- 是 --> PP[paused · 可 resume<br/>保留 owner / next_action / resume_condition<br/>failed 归入类别 failure]
+    PA -- 否 --> X[活动状态<br/>starting/running/waiting_user/review/<br/>integrating/conflict]
+    X --> XH[paused · 类别 import_handover<br/>须核实旧 Codex/Copilot worker 已停]
+    DN --> RS[(resume 资料包<br/>任务书 + brief + 已有报告 + 评审 + 产出/PR + 待答问题)]
+    PN --> RS
+    PP --> RS
+    XH --> RS

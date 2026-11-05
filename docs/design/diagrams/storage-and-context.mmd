@@ -1,0 +1,49 @@
+flowchart TB
+    subgraph WRITERS["写入方（都经 tsw 写入口）"]
+        O["主会话<br/>MCP 工具"]
+        W["worker<br/>MCP 工具 · submit"]
+        H["人类渠道回调<br/>后台轮询"]
+    end
+
+    G["写闸 + 守卫校验<br/>expected_version"]
+
+    subgraph L0["L0 事件账本（唯一事实 · 备份）"]
+        EV[("ledger/events<br/>活动分段 + 封存 gz")]
+        IM[("ledger/imported<br/>旧系统原始卷")]
+        RAW[("todo · runs · legacy<br/>原始材料")]
+    end
+
+    subgraph L1["L1 检查点与投影（可重建）"]
+        CP[("checkpoints<br/>内容寻址快照")]
+        ST[("state.sqlite<br/>tasks · attempts · review_cycles<br/>decisions · user_decisions · claims")]
+    end
+
+    subgraph L2["L2 检索索引（可重建）"]
+        CARD[("任务卡片<br/>关键词 · 摘要 · 成果")]
+        FTS[("FTS5 trigram<br/>任务书 · 报告 · 决定")]
+        AL[("别名 · 用户决定")]
+    end
+
+    subgraph READERS["读取方"]
+        GUARD["守卫 · 调度 · 状态页"]
+        CTX["context_catalog · context_read<br/>context_search · context_decisions · context_task"]
+        BRIEF["worker brief 背景节"]
+    end
+
+    O --> G
+    W --> G
+    H --> G
+    G -- 追加事件 --> EV
+    G -- 同一写闸内归约 --> ST
+    EV -. 定期快照 .-> CP
+    CP -. 冷启动恢复 + 增量归约 .-> ST
+    IM -. 导入事件 .-> EV
+    ST -- 更新队列 --> CARD
+    RAW -- 文本抽取 --> FTS
+    ST --> AL
+    ST --> GUARD
+    CARD --> CTX
+    FTS --> CTX
+    AL --> CTX
+    CTX --> BRIEF
+    CTX -- 分层读取 · 写明理由 --> O

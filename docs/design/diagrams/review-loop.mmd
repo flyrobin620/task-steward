@@ -1,0 +1,31 @@
+flowchart TD
+    A([成果就绪<br/>提交 HEAD / 报告草稿]) --> B[tsw review run<br/>轮次编号递增·生成评审包]
+    B --> C{{评审器调用<br/>roles.reviewer.session · 只读<br/>默认 Codex gpt-6-astra · medium}}
+    C -- 成功 --> D[review-rN.json<br/>verdict + findings]
+    C -- 失败或超时 --> R{重试次数 < retry_limit?}
+    R -- 是 --> C
+    R -- 否 --> U[评审不可用<br/>review.unavailable]
+    U --> OJ
+    D --> E[worker 逐条处置<br/>阻断项：fix / reject+理由<br/>非阻断项：也可 defer+理由]
+    E --> F{仍有未处置的阻断项?<br/>severity ∈ block_on}
+    F -- 否 --> G[写 review-decision-rN.json<br/>decision = finalize]
+    F -- 是 --> X{阻断项需要延后<br/>或超出本任务范围?}
+    X -- 是 --> KD[review.defer_requested]
+    KD --> OJ
+    X -- 否 --> H{本周期轮次 < 本周期预算?}
+    H -- 是 --> I[修改并提交新 HEAD<br/>decision = iterate]
+    I --> J[增量评审<br/>resume_thread · diff 上轮 HEAD..新 HEAD]
+    J --> C
+    H -- 否 --> K[review.budget_exhausted<br/>列出未解决阻断项与各轮记录]
+    K --> OJ{{主会话判断<br/>DN006 §8}}
+    OJ -- 追加轮次 --> I
+    OJ -- 认定不成立 / 批准延后 --> G
+    OJ -- 调整方向 --> H
+    OJ -- 交给人类 --> W([T11 · waiting_user])
+    G --> L{终版 HEAD == 最后评审 HEAD?}
+    L -- 是 --> M[tsw submit<br/>报告 md+html + 评审证据]
+    L -- 否 --> Q{本周期轮次 < 本周期预算?}
+    Q -- 否 --> K
+    Q -- 是 --> N[对差异做最终增量评审]
+    N --> C
+    M --> S([verifying · 主控核验])

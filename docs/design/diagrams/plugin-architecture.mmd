@@ -1,0 +1,51 @@
+flowchart TB
+    subgraph HOSTS["宿主中的模型会话"]
+        O["主会话 orchestrator<br/>roles.orchestrator.session"]
+        W["worker 会话<br/>roles.worker.session"]
+        R["一次性评审会话<br/>roles.reviewer.session"]
+    end
+
+    subgraph CORE["tsw core（与宿主无关）"]
+        MCP["tsw 工具面（MCP）+ mcp-gate<br/>按角色暴露工具 · operation_receipt"]
+        SM["状态机与守卫<br/>DN002"]
+        RV["评审协议<br/>评审包 · schema · 轮次与预算"]
+        TR["主会话判断<br/>授权边界 · DecisionRecord"]
+        OPS["委托操作队列<br/>operation → receipt"]
+    end
+
+    subgraph IFACE["插件接口（plugin_api v1）"]
+        P1["P1 宿主集成<br/>流程说明 · 工具注册 · 规则执行"]
+        P2["P2 会话适配器<br/>interactive · oneshot"]
+        P3["P3 人类渠道"]
+        P4["P4 存储后端"]
+    end
+
+    subgraph IMPL["插件实现（示例）"]
+        I1["claude-code · codex · copilot · remote-hub"]
+        I2["claude-app · claude-headless · codex-app-server · codex-exec · copilot-app · remote-hub"]
+        I3["in-session · teams-chat · hub-portal · email-draft"]
+        I4["fs · fs+git"]
+    end
+
+    DATA[("数据目录 TSW_HOME<br/>config · todo · ledger · runs · outbox")]
+
+    O -- tsw 工具 --> MCP
+    W -- tsw 工具 --> MCP
+    MCP --> SM
+    MCP --> RV
+    MCP --> TR
+    SM --> OPS
+    TR --> OPS
+    OPS -- delegated 操作 --> O
+    O -- receipt --> MCP
+    OPS --> P2
+    OPS --> P3
+    RV -- oneshot · direct · 只读 --> P2
+    P2 --> R
+    SM --> P4
+    P4 --> DATA
+    P1 --- I1
+    P2 --- I2
+    P3 --- I3
+    P4 --- I4
+    P1 -. 生成说明 · 工具注册 · hooks / 沙箱 / 权限 .-> HOSTS

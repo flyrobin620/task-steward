@@ -1,0 +1,80 @@
+stateDiagram-v2
+    direction TB
+
+    state "待受理 intake" as intake
+    state "等待依赖 waiting_dependency" as waiting_dependency
+    state "就绪 ready" as ready
+    state "派发中 dispatching" as dispatching
+    state "等待用户 waiting_user" as waiting_user
+    state "暂停 paused" as paused
+    state "主控核验 verifying" as verifying
+    state "完成·待用户验收 done" as done
+    state "已验收 accepted" as accepted
+    state "已取消 cancelled" as cancelled
+    state "已归档 archived" as archived
+
+    state "执行中 in_progress（worker 内部子状态）" as in_progress {
+        state "执行 executing" as executing
+        state "评审中 reviewing" as reviewing
+        state "逐条处置 triaging" as triaging
+        state "迭代修改 revising" as revising
+        [*] --> executing
+        executing --> reviewing: E01 成果就绪·启动下一轮评审
+        reviewing --> reviewing: E02 评审失败·重试
+        reviewing --> triaging: E03 收到结构化意见
+        triaging --> revising: E04 阻断项需修复·本周期未超轮次
+        revising --> reviewing: E05 新 HEAD 增量评审
+        triaging --> executing: E06 自查发现遗漏
+        executing --> executing: E07 需求变更
+        reviewing --> executing: E07
+        triaging --> executing: E07
+        revising --> executing: E07
+    }
+
+    [*] --> intake: T01 登记任务
+
+    intake --> intake: T02 向用户澄清·收到答复
+    intake --> waiting_dependency: T03 规划完成·依赖未满足
+    intake --> ready: T04 规划完成·依赖已满足
+    waiting_dependency --> ready: T05 依赖全部完成
+    ready --> waiting_dependency: T06 依赖失效
+    ready --> dispatching: T07 有名额·资源·租约（窗口外改为提案）
+    dispatching --> in_progress: T08 子会话已绑定或原会话续用
+    dispatching --> ready: T09 确认未创建或提案过期
+    dispatching --> paused: T10 现场冲突需用户决定
+
+    in_progress --> waiting_user: T11 主会话判断后交给人类
+    waiting_user --> in_progress: T12 答复已记录
+    in_progress --> verifying: T13 提交·终版已评审
+    in_progress --> paused: T14 外部等待或失败·worker 已停
+    in_progress --> ready: T15 会话丢失·核实已停
+
+    dispatching --> waiting_dependency: T16 依赖失效·worker 已停
+    in_progress --> waiting_dependency: T16
+    waiting_user --> waiting_dependency: T16
+    verifying --> waiting_dependency: T16
+
+    verifying --> in_progress: T17 剩余工作·集成冲突·需求变更
+    verifying --> done: T18 核验通过·主控验收
+    verifying --> paused: T19 集成或验证受阻
+
+    paused --> in_progress: T20 恢复·原会话可用且有名额
+    paused --> ready: T21 恢复·需重新派发
+    paused --> verifying: T27 恢复核验·提交证据仍有效
+
+    done --> accepted: T22 用户验收
+    done --> intake: T23 用户退回或需求变更·revision+1
+    accepted --> archived: T24 满7天无变化
+
+    intake --> cancelled: T25 用户删除或关闭
+    waiting_dependency --> cancelled: T25
+    ready --> cancelled: T25
+    dispatching --> cancelled: T25
+    in_progress --> cancelled: T25
+    waiting_user --> cancelled: T25
+    paused --> cancelled: T25
+    verifying --> cancelled: T25
+    done --> cancelled: T25
+    cancelled --> archived: T26 退役
+
+    archived --> [*]
