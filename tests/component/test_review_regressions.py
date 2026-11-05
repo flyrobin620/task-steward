@@ -55,41 +55,79 @@ def _event(sequence: int, prev: str, tag: str) -> Any:
 def test_direct_appends_racing_on_one_expected_sequence_never_both_succeed(
     home: Home, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Deterministic: the first appender is held inside its replace until the second has
+    reached the critical section (the append lock, or the replace itself without the lock)."""
     storage = FsStorage(home)
-    first_writing = threading.Event()
+    second_reached = threading.Event()
     real_write = fs_module.atomic_write
-    calls: list[str] = []
+    real_lock = fs_module.FileLock
 
-    def slow_first_write(path: Path, data: bytes) -> None:
-        calls.append(path.name)
-        if len(calls) == 1:
-            first_writing.set()
-            threading.Event().wait(0.3)  # widen the window between check and replace
+    def gated_write(path: Path, data: bytes) -> None:
+        if threading.current_thread().name == "first":
+            assert second_reached.wait(10), "second appender never reached the critical section"
+        else:
+            second_reached.set()
         real_write(path, data)
 
-    monkeypatch.setattr(fs_module, "atomic_write", slow_first_write)
+    class SignallingLock(real_lock):
+        def acquire(self) -> None:
+            if self.path.name == "append.lock" and threading.current_thread().name == "second":
+                second_reached.set()
+            super().acquire()
+
+    monkeypatch.setattr(fs_module, "atomic_write", gated_write)
+    monkeypatch.setattr(fs_module, "FileLock", SignallingLock)
     outcomes: dict[str, object] = {}
+    in_write = threading.Event()
 
     def append(tag: str) -> None:
         try:
+            if tag == "a":
+                in_write.set()
             outcomes[tag] = storage.append([_event(1, GENESIS, tag)], expected_sequence=0)
         except TswError as exc:
             outcomes[tag] = exc
 
-    first = threading.Thread(target=append, args=("a",))
+    first = threading.Thread(target=append, args=("a",), name="first")
     first.start()
-    assert first_writing.wait(10)
-    second = threading.Thread(target=append, args=("b",))
+    assert in_write.wait(10)
+    second = threading.Thread(target=append, args=("b",), name="second")
     second.start()
-    first.join(10)
-    second.join(10)
+    first.join(20)
+    second.join(20)
     assert outcomes["a"] == 1
     error = outcomes["b"]
     assert isinstance(error, TswError)
     assert error.code is ErrorCode.REJECTED
     assert error.details["reason"] == "sequence_conflict"
-    events = list(storage.read())
-    assert [e.data["tag"] for e in events] == ["a"]
+    assert [e.data["tag"] for e in storage.read()] == ["a"]
+
+
+@pytest.mark.use_case("UC-LEDGER-002")
+def test_sealing_waits_for_a_reader_holding_the_segment_open(home: Home) -> None:
+    ledger = Ledger(home, FsStorage(home, segment_max_bytes=600))
+    register_task(ledger)
+    active = FsStorage(home).segments()[-1].path
+    reader = active.open("rb")  # a concurrent reader (e.g. `tsw ledger tail`) keeps it open
+    done: list[object] = []
+
+    def write() -> None:
+        try:
+            done.append(register_task(ledger, title="触发封存" + "x" * 400))
+        except Exception as exc:  # recorded for the assertion below
+            done.append(exc)
+
+    writer = threading.Thread(target=write)
+    writer.start()
+    writer.join(0.3)
+    if sys.platform == "win32":
+        assert writer.is_alive(), "on Windows the seal must wait while the reader holds the file"
+    reader.close()
+    writer.join(20)
+    assert done == ["T002"]
+    names = [seg.path.name for seg in FsStorage(home).segments()]
+    assert names[0].endswith(".jsonl.gz")
+    assert ledger.audit()["ok"]
 
 
 _REGISTER_SCRIPT = """

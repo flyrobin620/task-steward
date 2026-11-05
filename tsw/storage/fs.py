@@ -81,6 +81,21 @@ def atomic_write(path: Path, data: bytes) -> None:
     _fsync_dir(path.parent)
 
 
+def unlink_when_free(path: Path) -> None:
+    """Delete ``path``, waiting while another process briefly has it open (Windows)."""
+    deadline = time.monotonic() + _REPLACE_DEADLINE
+    while True:
+        try:
+            path.unlink()
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
+
+
 def _last_line(data: bytes) -> bytes | None:
     stripped = data.rstrip(b"\n")
     if not stripped:
@@ -264,7 +279,7 @@ class FsStorage:
         sealed = seg.path.with_name(seg.path.name + ".gz")
         atomic_write(sealed, gzip.compress(data, mtime=0))
         fault("fs.seal.before_remove")
-        seg.path.unlink()
+        unlink_when_free(seg.path)
         _fsync_dir(seg.path.parent)
 
     def _recover_seal(self) -> None:
@@ -281,9 +296,9 @@ class FsStorage:
             except (OSError, EOFError):
                 same = False
             if same:
-                entry.unlink()
+                unlink_when_free(entry)
             else:
-                sealed.unlink()
+                unlink_when_free(sealed)
 
     # ------------------------------------------------------------------ artifacts
 
