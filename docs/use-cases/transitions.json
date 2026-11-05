@@ -190,7 +190,13 @@
     {
       "id": "G-LEASE",
       "kind": "guard",
-      "status": "planned"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "milestone": "M2"
     },
     {
       "id": "G-ONE-ATTEMPT",

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="e4dae7fa3403449b53476661c7716388c858d9baee0df2ced0c570d95f8b220c">
+<meta name="tsw-source-sha256" content="b8667e02f8064953c535de9fcd3d9947bfd921600d17f158ba365e1998d752c8">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -47,7 +47,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <h1>TaskSteward（任务管家）</h1>
 <p>一个可插拔宿主的任务编排器，默认宿主是 <strong>Claude Code 桌面 app</strong>，也可以经插件层接入 Codex、GitHub Copilot 或自建的远程会话中枢。</p>
 <ul><li>主会话（orchestrator）是 app 中的一个会话。</li><li>每个任务由主会话启动的关联子会话（worker）执行。</li><li>worker 完成后自己调用评审器（默认 Codex gpt-6-astra · medium）评审成果，并决定是否迭代；评审预算用完或遇到问题时，先由主会话判断，确需人类时再经渠道请求。</li><li>worker 定稿后由主会话技术验收，最后交用户人工验收。</li><li>状态由事件账本驱动，可导入 orchestrator-agent 的全部历史。</li><li>运行数据（配置、任务书、账本、报告）放在与本 repo 分离的数据目录 <code>TSW_HOME</code>，不提交到本 repo；备份该目录即可。</li></ul>
-<p>当前阶段：<strong>v1 开发中</strong>。已实现数据目录、<code>fs</code> 存储、事件账本与投影、<code>tsw</code> 命令行与任务登记；宿主集成、会话与评审等按里程碑实现中。开发流程与规范见下文“参与开发”。</p>
+<p>当前阶段：<strong>v1 开发中</strong>。已实现数据目录、<code>fs</code> 存储、事件账本与投影、统一配置、调度租约、<code>tsw</code> 命令行与任务登记；宿主集成、会话与评审等按里程碑实现中。开发流程与规范见下文“参与开发”。</p>
 <h2 id="设计文档">设计文档</h2>
 <p>每份文档都有 Markdown 与 HTML 两个版本，内容一致；HTML 可离线在浏览器打开并打印。</p>
 <table><thead><tr><th>文档</th><th>Markdown</th><th>HTML</th><th>内容</th></tr></thead><tbody><tr><td>DN001 总体架构</td><td><a href="docs/design/DN001-architecture.html">md</a></td><td><a href="docs/design/DN001-architecture.html">html</a></td><td>目标、组件、会话模型与平台约束、工具面、hooks、存储、关键决策、待 PoC 验证的假设</td></tr><tr><td>DN002 任务状态机</td><td><a href="docs/design/DN002-task-state-machine.html">md</a></td><td><a href="docs/design/DN002-task-state-machine.html">html</a></td><td>按主控视角划分状态的单张状态机（含 worker 内部评审子状态）与导入映射；完整迁移表、守卫条件、attempt 阶段、事件类型、不变量、异常恢复</td></tr><tr><td>DN003 统一配置</td><td><a href="docs/design/DN003-unified-config.html">md</a></td><td><a href="docs/design/DN003-unified-config.html">html</a></td><td><code>config/task-steward.json</code> 完整示例、字段说明、校验与生效规则</td></tr><tr><td>DN004 worker 自评审</td><td><a href="docs/design/DN004-worker-self-review.html">md</a></td><td><a href="docs/design/DN004-worker-self-review.html">html</a></td><td>Codex Astra 评审调用、输出契约、处置规范、迭代决策、主控复核</td></tr><tr><td>DN005 历史导入与 resume</td><td><a href="docs/design/DN005-history-import-and-resume.html">md</a></td><td><a href="docs/design/DN005-history-import-and-resume.html">html</a></td><td>导入来源、分类规则、导入步骤、resume 资料包、验证与回退</td></tr><tr><td>DN006 插件层</td><td><a href="docs/design/DN006-plugin-layer.html">md</a></td><td><a href="docs/design/DN006-plugin-layer.html">html</a></td><td>宿主集成、会话适配器（含一次性评审）、人类渠道、存储后端四类插件的职责与接口；委托操作；主会话判断；数据目录；组合示例</td></tr><tr><td>DN007 账本与上下文检索</td><td><a href="docs/design/DN007-ledger-and-context.html">md</a></td><td><a href="docs/design/DN007-ledger-and-context.html">html</a></td><td>三层存储、写读路径与重建；任务卡片、检索工具、用户决定与偏好；主会话与 worker 的历史读取方式</td></tr></tbody></table>

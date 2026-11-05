@@ -20,6 +20,7 @@ class CommitContext:
     storage: StorageBackend
     home: Home
     tail: LedgerTail
+    now: str
 
 
 @dataclass

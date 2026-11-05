@@ -209,11 +209,17 @@ def test_command_inventory_is_known() -> None:
     assert iter_commands() == sorted(
         [
             "backup",
+            "config show",
+            "config validate",
             "home",
             "init",
             "ledger audit",
             "ledger rebuild",
             "ledger tail",
+            "lease acquire",
+            "lease release",
+            "lease show",
+            "lease takeover",
             "quiesce",
             "restore",
             "resume-writes",

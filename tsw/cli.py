@@ -14,8 +14,10 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from tsw import __version__
+from tsw import __version__, lease
+from tsw.config import EffectiveConfig, load_config
 from tsw.errors import EXIT_CODES, ErrorCode, TswError
+from tsw.events import utc_now
 from tsw.home import Home, init_home, open_home, resolve_home
 from tsw.ledger import Ledger
 from tsw.storage.fs import FsStorage, restore
@@ -32,8 +34,23 @@ def _home(args: argparse.Namespace) -> Home:
     return open_home(root)
 
 
+def _ledger_for(home: Home, config: EffectiveConfig) -> Ledger:
+    storage = FsStorage(home, segment_max_bytes=int(config.get("ledger.segment_max_mb")) << 20)
+    return Ledger(home, storage, checkpoint_every=int(config.get("ledger.checkpoint_every")))
+
+
 def _ledger(args: argparse.Namespace) -> Ledger:
-    return Ledger(_home(args))
+    """A ledger for read commands; an invalid configuration falls back to defaults for reads."""
+    home = _home(args)
+    config = load_config(home)
+    return _ledger_for(home, config) if config.valid else Ledger(home)
+
+
+def _writer(args: argparse.Namespace) -> tuple[Ledger, EffectiveConfig]:
+    """A ledger for write commands: refused while the configuration is invalid (DN003 §4)."""
+    home = _home(args)
+    config = load_config(home).require_valid()
+    return _ledger_for(home, config), config
 
 
 def _cmd_init(args: argparse.Namespace) -> dict[str, Any]:
@@ -56,7 +73,7 @@ def _cmd_task_register(args: argparse.Namespace) -> dict[str, Any]:
         goal=args.goal,
         acceptance=args.acceptance or [],
     )
-    result = _ledger(args).commit(register(spec, actor=CLI_ACTOR, command_id=args.command_id))
+    result = _writer(args)[0].commit(register(spec, actor=CLI_ACTOR, command_id=args.command_id))
     event = result.events[0]
     return {"task_id": event.task_id, "sequence": event.sequence, "duplicate": result.duplicate}
 
@@ -69,7 +86,7 @@ def _cmd_task_note(args: argparse.Namespace) -> dict[str, Any]:
         expected_version=args.expected_version,
         command_id=args.command_id,
     )
-    result = _ledger(args).commit(command)
+    result = _writer(args)[0].commit(command)
     return {
         "task_id": args.task_id,
         "sequence": result.last_sequence,
@@ -97,7 +114,7 @@ def _cmd_ledger_audit(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _cmd_ledger_rebuild(args: argparse.Namespace) -> dict[str, Any]:
-    tail = _ledger(args).rebuild()
+    tail = _writer(args)[0].rebuild()
     return {"projected_seq": tail.sequence}
 
 
@@ -119,6 +136,77 @@ def _cmd_restore(args: argparse.Namespace) -> dict[str, Any]:
         return {"restored": str(dest), "audit": report, "ok": False}
     tail = ledger.rebuild()
     return {"restored": str(dest), "accepted_problems": problems, "projected_seq": tail.sequence}
+
+
+def _cmd_config_show(args: argparse.Namespace) -> dict[str, Any]:
+    config = load_config(_home(args))
+    return {
+        "valid": config.valid,
+        "values": config.values,
+        "sources": config.sources,
+        "problems": config.problems,
+        "warnings": config.warnings,
+    }
+
+
+def _cmd_config_validate(args: argparse.Namespace) -> dict[str, Any]:
+    config = load_config(_home(args))
+    return {"ok": config.valid, "problems": config.problems, "warnings": config.warnings}
+
+
+def _cmd_lease_show(args: argparse.Namespace) -> dict[str, Any]:
+    with _ledger(args).view() as conn:
+        row = lease.lease_row(conn)
+    if row is None:
+        return {"lease": None}
+    return {"lease": {**row, "expired": lease.is_expired(row, utc_now())}}
+
+
+def _cmd_lease_acquire(args: argparse.Namespace) -> dict[str, Any]:
+    ledger, config = _writer(args)
+    command = lease.acquire(
+        args.session,
+        machine=args.machine,
+        lease_minutes=int(config.get("scheduling.lease_minutes")),
+        actor={"role": "orchestrator", "session_id": args.session},
+        command_id=args.command_id,
+    )
+    event = ledger.commit(command).events[-1]
+    return {"session_id": args.session, "expires_at": event.data["expires_at"]}
+
+
+def _cmd_lease_release(args: argparse.Namespace) -> dict[str, Any]:
+    ledger, _ = _writer(args)
+    ledger.commit(
+        lease.release(
+            args.session,
+            machine=args.machine,
+            actor={"role": "orchestrator", "session_id": args.session},
+        )
+    )
+    return {"released": True}
+
+
+def _cmd_lease_takeover(args: argparse.Namespace) -> dict[str, Any]:
+    ledger, config = _writer(args)
+    try:
+        source = json.loads(args.user_source)
+    except json.JSONDecodeError as exc:
+        raise TswError(ErrorCode.REJECTED, "--user-source 必须是 JSON 对象") from exc
+    if not isinstance(source, dict):
+        raise TswError(ErrorCode.REJECTED, "--user-source 必须是 JSON 对象")
+    command = lease.takeover(
+        args.session,
+        machine=args.machine,
+        from_session=args.from_session,
+        user_source=source,  # pyright: ignore[reportUnknownArgumentType]
+        lease_minutes=int(config.get("scheduling.lease_minutes")),
+        from_machine=args.from_machine,
+        actor={"role": "orchestrator", "session_id": args.session},
+        command_id=args.command_id,
+    )
+    event = ledger.commit(command).events[-1]
+    return {"session_id": args.session, "expires_at": event.data["expires_at"]}
 
 
 def _cmd_quiesce(args: argparse.Namespace) -> dict[str, Any]:
@@ -182,6 +270,36 @@ def build_parser() -> argparse.ArgumentParser:
     rest = add(sub, "restore", _cmd_restore, "从备份恢复到空的数据目录")
     rest.add_argument("src")
     rest.add_argument("--allow-unverified", action="store_true")
+    config = sub.add_parser("config", help="统一配置").add_subparsers(
+        dest="config_command", required=True, metavar="<config command>"
+    )
+    show_config = add(config, "show", _cmd_config_show, "显示有效配置及每个值的来源")
+    show_config.add_argument("--effective", action="store_true", help="（默认即为有效配置）")
+    add(config, "validate", _cmd_config_validate, "校验配置")
+
+    lease_cmd = sub.add_parser("lease", help="调度租约").add_subparsers(
+        dest="lease_command", required=True, metavar="<lease command>"
+    )
+    add(lease_cmd, "show", _cmd_lease_show, "显示调度租约")
+    for name, handler, text in (
+        ("acquire", _cmd_lease_acquire, "领取或续期调度租约"),
+        ("release", _cmd_lease_release, "释放调度租约"),
+        ("takeover", _cmd_lease_takeover, "在用户确认后接管调度租约"),
+    ):
+        command = add(lease_cmd, name, handler, text)
+        command.add_argument("--session", required=True, help="主会话 ID")
+        command.add_argument("--machine", default=lease.this_machine())
+        if name != "release":
+            command.add_argument("--command-id")
+        if name == "takeover":
+            command.add_argument("--from-session", required=True)
+            command.add_argument("--from-machine", action="store_true")
+            command.add_argument(
+                "--user-source",
+                required=True,
+                help='用户确认来源（JSON：{"channel","principal","message_ref","text"}）',
+            )
+
     add(sub, "quiesce", _cmd_quiesce, "静止数据目录（之后可直接复制）")
     add(sub, "resume-writes", _cmd_resume_writes, "解除静止")
     return parser
