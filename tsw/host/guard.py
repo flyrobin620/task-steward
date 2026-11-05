@@ -247,7 +247,7 @@ class Guard:
                 "SessionStart",
                 f"你是 TaskSteward 任务 {who.task_id} 的 worker（attempt {who.attempt}）。"
                 f"任务书：{who.brief_path or '等待投递'}。只在可写路径内修改：{roots}。"
-                "完成后用 review_start 等工具做自评审，再 submit；需要主会话判断时用 question，"
+                "完成后用 review_run 做自评审并逐条处置，再 submit；需要主会话判断时用 question，"
                 '并用 mcp__ccd_session_mgmt__send_message(session_id="parent") 唤醒主会话。',
             )
         lines = [f"你是 TaskSteward 主会话（数据目录 {self.home.root}）。"]
@@ -377,8 +377,8 @@ class Guard:
         if row is not None and row["substate"] == "reviewing" and not again:
             return {
                 "decision": "block",
-                "reason": "评审进行中：用 review_complete 或 review_fail "
-                "记录这一轮的结果后再结束。",
+                "reason": "评审进行中：再次调用 review_run 完成这一轮"
+                "（或用 review_complete / review_fail 记录结果）后再结束。",
             }
         return None
 

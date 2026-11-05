@@ -227,6 +227,7 @@ def test_command_inventory_is_known() -> None:
             "quiesce",
             "restore",
             "resume-writes",
+            "review run",
             "task list",
             "task note",
             "task register",

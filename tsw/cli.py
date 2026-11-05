@@ -28,6 +28,7 @@ from tsw.host.mcp import serve
 from tsw.ledger import Ledger
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.runner import run_tool
+from tsw.review.run import run_round
 from tsw.storage.fs import FsStorage, restore
 from tsw.tasks import KINDS, TaskSpec, list_tasks, note, register, task_row
 
@@ -274,6 +275,19 @@ def _cmd_host_install_hint(args: argparse.Namespace) -> dict[str, Any]:
     return {"hint": install_hint(_home(args))}
 
 
+def _cmd_review_run(args: argparse.Namespace) -> dict[str, Any]:
+    notes = args.notes
+    if args.notes_file:
+        notes = Path(args.notes_file).read_text(encoding="utf-8")
+    if not os.environ.get(SESSION_ENV):
+        raise TswError(
+            ErrorCode.REJECTED, "需要在绑定任务的 worker 会话中运行", reason="role_denied"
+        )
+    return run_round(
+        _home(args), os.environ, Path.cwd(), head=args.head, base=args.base, notes=notes
+    )
+
+
 def _cmd_quiesce(args: argparse.Namespace) -> dict[str, Any]:
     manifest = FsStorage(_home(args)).quiesce()
     return {"quiesced": True, "ledger_tail": manifest["ledger_tail"]}
@@ -386,6 +400,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add(host, "render", _cmd_host_render, "在数据目录生成主会话的 CLAUDE.md")
     add(host, "install-hint", _cmd_host_install_hint, "显示插件安装步骤")
+
+    review = sub.add_parser("review", help="worker 自评审").add_subparsers(
+        dest="review_command", required=True, metavar="<review command>"
+    )
+    review_run = add(review, "run", _cmd_review_run, "运行一轮自评审（与 MCP 的 review_run 相同）")
+    review_run.add_argument("--head", help="评审的 HEAD；git 执行目录默认取 HEAD")
+    review_run.add_argument("--base", help="评审范围的起点（base..HEAD）")
+    review_run.add_argument("--notes", help="已执行的验证与结果摘要")
+    review_run.add_argument("--notes-file", help="从文件读取说明")
 
     add(sub, "quiesce", _cmd_quiesce, "静止数据目录（之后可直接复制）")
     add(sub, "resume-writes", _cmd_resume_writes, "解除静止")
