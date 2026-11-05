@@ -153,6 +153,7 @@ def test_worker_writes_are_confined_to_its_roots(h: Harness, tmp_path: Path) -> 
         ("python -X utf8 tools/check.py", True),
         ("cat <<\\EOF\nhello\nEOF\ngit push origin HEAD", False),
         ("echo hello # <<EOF\ngit push origin HEAD", False),
+        ('cmd.exe /d /c "echo # Build step & git push origin HEAD"', False),
         ('powershell -Command "Copy-Item -Path local.txt ../outside.txt"', False),
         ("git status", True),
     ],
@@ -400,3 +401,24 @@ def test_idle_polls_do_not_read_the_ledger_until_it_changes(
         {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
     ]
     assert len(reads) == 1
+
+
+@mark.use_case("UC-HOST-001")
+def test_a_listing_and_its_ledger_marker_are_one_snapshot(
+    h: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = Server(h.home, {SESSION_ENV: "w-1"}, tmp_path / "wt" / "T001")
+    resolve_identity = Server.identity
+    bound: list[bool] = []
+
+    def binding_midway(self: Server) -> Any:
+        if not bound:  # the orchestrator binds the session while the list is being built
+            bound.append(True)
+            worker_task(h, tmp_path)
+        return resolve_identity(self)
+
+    monkeypatch.setattr(Server, "identity", binding_midway)
+    listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert "submit" in {t["name"] for t in listed[0]["result"]["tools"]}
+    assert server.list_changes() == []  # the newer ledger is re-read once, same identity
+    assert server.list_changes() == []

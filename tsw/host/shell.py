@@ -146,7 +146,7 @@ def program_name(word: str) -> str:
     return base
 
 
-def split(command: str, *, literal_backslash: bool = False) -> list[Segment]:
+def split(command: str, *, literal_backslash: bool = False, comments: bool = True) -> list[Segment]:
     """Split a command line into segments of words, honouring quotes and redirections."""
     segments: list[Segment] = []
     current = Segment()
@@ -199,7 +199,7 @@ def split(command: str, *, literal_backslash: bool = False) -> list[Segment]:
             i += 1
         elif c in " \t\r":
             flush()
-        elif c == "#" and not have_word:  # a comment, to end of line
+        elif c == "#" and comments and not have_word:  # a comment (not in cmd)
             end = command.find("\n", i)
             i = n if end < 0 else end
             continue
@@ -320,12 +320,19 @@ def resolve(word: str, cwd: Path) -> Path | None:
     return Path(os.path.normpath(path))
 
 
-def analyze(command: str, cwd: Path, *, literal_backslash: bool = False, depth: int = 0) -> Facts:
+def analyze(
+    command: str,
+    cwd: Path,
+    *,
+    literal_backslash: bool = False,
+    comments: bool = True,
+    depth: int = 0,
+) -> Facts:
     facts = Facts()
     if depth > 3:
         return facts
     here = cwd
-    for segment in split(command, literal_backslash=literal_backslash):
+    for segment in split(command, literal_backslash=literal_backslash, comments=comments):
         _redirects(facts, segment.redirects, here)
         words = _strip_wrappers(segment.words)
         if not words:
@@ -388,7 +395,9 @@ def _nested(facts: Facts, name: str, args: list[str], cwd: Path, depth: int) -> 
                 inner, literal = " ".join(args[i + 1 :]), True
                 break
     if inner:
-        nested = analyze(inner, cwd, literal_backslash=literal, depth=depth + 1)
+        nested = analyze(
+            inner, cwd, literal_backslash=literal, comments=name != "cmd", depth=depth + 1
+        )
         facts.programs.extend(nested.programs)
         facts.writes.extend(nested.writes)
         facts.unresolved.extend(nested.unresolved)

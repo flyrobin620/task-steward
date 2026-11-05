@@ -61,6 +61,7 @@ def test_split_honours_quotes_operators_and_redirections() -> None:
         ("echo hi # <<EOF\ntouch real.txt", ["real.txt"]),
         ("cat <<EOF\ntouch real.txt", ["real.txt"]),
         ("echo a#b > x.txt", ["x.txt"]),
+        ('cmd /d /c "echo # step & copy a.txt b.txt"', ["b.txt"]),  # cmd has no comments
         # PowerShell positional arguments fill the parameters not given by name.
         ('powershell -Command "Copy-Item -Path local.txt ../outside.txt"', ["../outside.txt"]),
         (

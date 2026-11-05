@@ -259,8 +259,9 @@ class Server:
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
-                who = self.identity()
-                with self._listed_lock:
+                with self._listed_lock:  # one snapshot for the list and the poll's marker
+                    self._marker = ledger_marker(self.home)
+                    who = self.identity()
                     self.listed = _list_key(who)
                 result = {"tools": self.tools(who)}
             elif method == "tools/call":
