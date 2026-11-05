@@ -122,3 +122,27 @@ def test_closing_the_server_ends_the_wrapper_and_its_child(
     server.close()
     assert server.proc.poll() is not None
     assert not alive(child)
+
+
+def test_a_child_left_holding_the_pipe_is_ended_without_waiting_for_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid_file = tmp_path / "child.pid"
+    fixtures = REPO_ROOT / "tests" / "fixtures"
+    wrapper = tmp_path / "server.cmd"
+    wrapper.write_text(
+        f'@"{sys.executable}" "{fixtures / "orphaning_server.py"}" '
+        f'"{fixtures / "stubborn_server.py"}" "{pid_file}"\r\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(AppServer, "close_wait", 5.0)
+    server = AppServer(str(wrapper))
+    deadline = time.monotonic() + 30
+    while not pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    child = int(pid_file.read_text(encoding="utf-8"))
+    started = time.monotonic()
+    server.close()  # the wrapper exits at end of input; its grandchild does not
+    assert time.monotonic() - started < 20
+    assert server.proc.poll() is not None
+    assert not alive(child)

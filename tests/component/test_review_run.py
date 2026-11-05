@@ -311,3 +311,25 @@ def test_every_request_carries_the_current_requirements(h: Harness, tmp_path: Pa
         superseded=True,
     )
     assert "需求已变更为 revision 2" in fresh and "新线程" in fresh
+
+
+def test_a_round_opened_directly_is_checked_before_git_sees_its_scope(
+    h: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workdir = tmp_path / "repo"
+    _, head = git_repo(workdir)
+    live_worker(h, tmp_path, workdir)
+    fake = FakeReviewer()
+    monkeypatch.setitem(review_run.REVIEWERS, "codex-app-server", fake)
+    outside = tmp_path / "outside.txt"
+    h.run(
+        "review_start",
+        WORKER,
+        task_id="T001",
+        head=head,
+        base=f"--output={outside}",
+        reviewer={"session": "codex-app-server", "model": "gpt-6-astra"},
+    )
+    out = review(h, workdir)  # retries the open round
+    assert out["outcome"] == "review.failed" and "不调用评审器" in out["error"]
+    assert fake.calls == [] and not outside.exists()

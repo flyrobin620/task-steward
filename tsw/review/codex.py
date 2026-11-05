@@ -14,12 +14,9 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import queue
 import shutil
-import signal
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -27,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from tsw.errors import ErrorCode, TswError
+from tsw.review.process import ProcessTree
 
 
 @dataclass
@@ -42,7 +40,7 @@ class AppServer:
     close_wait = 10.0  # seconds the server gets to exit on end of input
 
     def __init__(self, executable: str) -> None:
-        self.proc = subprocess.Popen(
+        self.tree = ProcessTree(
             [executable, "app-server"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -50,21 +48,30 @@ class AppServer:
             text=True,
             encoding="utf-8",
             errors="replace",
-            start_new_session=sys.platform != "win32",  # a process group to end as a whole
         )
+        self.proc: subprocess.Popen[str] = self.tree.proc
         self.next_id = 0
         self.messages: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self.pending: list[dict[str, Any]] = []
-        threading.Thread(target=self._read, daemon=True).start()
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
 
     def _read(self) -> None:
-        assert self.proc.stdout is not None
-        for line in self.proc.stdout:
-            try:
-                self.messages.put(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-        self.messages.put(None)
+        """Queue every message until end of file; the pipe is closed here, by its only reader."""
+        stdout = self.proc.stdout
+        assert stdout is not None
+        try:
+            for line in stdout:
+                try:
+                    self.messages.put(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        except (OSError, ValueError):  # the pipe broke
+            pass
+        finally:
+            self.messages.put(None)
+            with contextlib.suppress(OSError):
+                stdout.close()
 
     def send(self, message: dict[str, Any]) -> None:
         assert self.proc.stdin is not None
@@ -117,36 +124,19 @@ class AppServer:
         self.send({"jsonrpc": "2.0", "method": method, **({"params": params} if params else {})})
 
     def close(self) -> None:
-        """Let the server exit on end of input; otherwise end its whole process tree."""
+        """Let the server exit on end of input, then end whatever is left of its tree.
+
+        The direct child exiting says nothing about its descendants, which may still hold the
+        output pipe: the tree is always ended, and the pipe is left to the reader thread (a
+        daemon), which sees end of file once no process holds it.
+        """
         with contextlib.suppress(OSError):
             if self.proc.stdin:
                 self.proc.stdin.close()
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired):
             self.proc.wait(timeout=self.close_wait)
-        except subprocess.TimeoutExpired:
-            kill_tree(self.proc)
-        with contextlib.suppress(OSError):
-            if self.proc.stdout:
-                self.proc.stdout.close()
-
-
-def kill_tree(proc: subprocess.Popen[str]) -> None:
-    """End a process and its descendants (a ``.cmd`` wrapper's server, a server's helpers)."""
-    if sys.platform == "win32":
-        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-            subprocess.run(
-                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
-    else:
-        with contextlib.suppress(OSError):
-            os.killpg(proc.pid, signal.SIGKILL)
-    with contextlib.suppress(OSError):
-        proc.kill()
-    with contextlib.suppress(subprocess.TimeoutExpired):
-        proc.wait(timeout=10)
+        self.tree.end()
+        self.reader.join(timeout=5)  # end of file follows once no process holds the pipe
 
 
 def resolve_executable(configured: str | None) -> str:

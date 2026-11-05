@@ -176,6 +176,17 @@ def _run_locked(
                     recorded=kept,
                 )
         head, base = str(retry["head"]), recorded_base
+        # The round may have been opened with review_start directly: the recorded scope gets
+        # the same check as a new one, and only verified commit IDs ever reach git.
+        if is_git and (
+            commit_id(workdir, head) != head or (base and commit_id(workdir, base) != base)
+        ):
+            return _fail(
+                ctx,
+                round_no,
+                f"本轮落账的评审范围不是执行目录中的完整提交（head={head}，base={base}），"
+                "不调用评审器",
+            )
     else:
         head, base = _scope(ctx, row, workdir, is_git, head=head, base=base)
         started = run_tool(
@@ -512,7 +523,7 @@ def render_request(
         ]
     elif is_git and base:
         lines.append(f"本任务的改动：`git diff {base}..{head}`。")
-        stat = git(workdir, "diff", "--stat", base, head, "--")
+        stat = git(workdir, "diff", "--stat", "--end-of-options", base, head, "--")
         if stat:
             lines += ["", "```", stat, "```"]
     else:
