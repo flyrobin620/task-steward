@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="tsw-source-sha256" content="e4dae7fa3403449b53476661c7716388c858d9baee0df2ced0c570d95f8b220c">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -41,12 +42,12 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 </head>
 <body>
 <div class="layout">
-<nav class="toc"><h2>目录</h2><a class="l2" href="#设计文档">设计文档</a><a class="l2" href="#参与开发">参与开发</a><a class="l2" href="#仓库布局规划">仓库布局（规划）</a><a class="l2" href="#许可">许可</a></nav>
+<nav class="toc"><h2>目录</h2><a class="l2" href="#设计文档">设计文档</a><a class="l2" href="#参与开发">参与开发</a><a class="l2" href="#开始使用开发中">开始使用（开发中）</a><a class="l2" href="#仓库布局">仓库布局</a><a class="l2" href="#许可">许可</a></nav>
 <main>
 <h1>TaskSteward（任务管家）</h1>
 <p>一个可插拔宿主的任务编排器，默认宿主是 <strong>Claude Code 桌面 app</strong>，也可以经插件层接入 Codex、GitHub Copilot 或自建的远程会话中枢。</p>
 <ul><li>主会话（orchestrator）是 app 中的一个会话。</li><li>每个任务由主会话启动的关联子会话（worker）执行。</li><li>worker 完成后自己调用评审器（默认 Codex gpt-6-astra · medium）评审成果，并决定是否迭代；评审预算用完或遇到问题时，先由主会话判断，确需人类时再经渠道请求。</li><li>worker 定稿后由主会话技术验收，最后交用户人工验收。</li><li>状态由事件账本驱动，可导入 orchestrator-agent 的全部历史。</li><li>运行数据（配置、任务书、账本、报告）放在与本 repo 分离的数据目录 <code>TSW_HOME</code>，不提交到本 repo；备份该目录即可。</li></ul>
-<p>当前阶段：<strong>v1 开发准备</strong>。设计（DN001–DN007）已确定，开发流程与规范见下文“参与开发”；尚未实现运行代码。</p>
+<p>当前阶段：<strong>v1 开发中</strong>。已实现数据目录、<code>fs</code> 存储、事件账本与投影、<code>tsw</code> 命令行与任务登记；宿主集成、会话与评审等按里程碑实现中。开发流程与规范见下文“参与开发”。</p>
 <h2 id="设计文档">设计文档</h2>
 <p>每份文档都有 Markdown 与 HTML 两个版本，内容一致；HTML 可离线在浏览器打开并打印。</p>
 <table><thead><tr><th>文档</th><th>Markdown</th><th>HTML</th><th>内容</th></tr></thead><tbody><tr><td>DN001 总体架构</td><td><a href="docs/design/DN001-architecture.html">md</a></td><td><a href="docs/design/DN001-architecture.html">html</a></td><td>目标、组件、会话模型与平台约束、工具面、hooks、存储、关键决策、待 PoC 验证的假设</td></tr><tr><td>DN002 任务状态机</td><td><a href="docs/design/DN002-task-state-machine.html">md</a></td><td><a href="docs/design/DN002-task-state-machine.html">html</a></td><td>按主控视角划分状态的单张状态机（含 worker 内部评审子状态）与导入映射；完整迁移表、守卫条件、attempt 阶段、事件类型、不变量、异常恢复</td></tr><tr><td>DN003 统一配置</td><td><a href="docs/design/DN003-unified-config.html">md</a></td><td><a href="docs/design/DN003-unified-config.html">html</a></td><td><code>config/task-steward.json</code> 完整示例、字段说明、校验与生效规则</td></tr><tr><td>DN004 worker 自评审</td><td><a href="docs/design/DN004-worker-self-review.html">md</a></td><td><a href="docs/design/DN004-worker-self-review.html">html</a></td><td>Codex Astra 评审调用、输出契约、处置规范、迭代决策、主控复核</td></tr><tr><td>DN005 历史导入与 resume</td><td><a href="docs/design/DN005-history-import-and-resume.html">md</a></td><td><a href="docs/design/DN005-history-import-and-resume.html">html</a></td><td>导入来源、分类规则、导入步骤、resume 资料包、验证与回退</td></tr><tr><td>DN006 插件层</td><td><a href="docs/design/DN006-plugin-layer.html">md</a></td><td><a href="docs/design/DN006-plugin-layer.html">html</a></td><td>宿主集成、会话适配器（含一次性评审）、人类渠道、存储后端四类插件的职责与接口；委托操作；主会话判断；数据目录；组合示例</td></tr><tr><td>DN007 账本与上下文检索</td><td><a href="docs/design/DN007-ledger-and-context.html">md</a></td><td><a href="docs/design/DN007-ledger-and-context.html">html</a></td><td>三层存储、写读路径与重建；任务卡片、检索工具、用户决定与偏好；主会话与 worker 的历史读取方式</td></tr></tbody></table>
@@ -56,16 +57,23 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <h2 id="参与开发">参与开发</h2>
 <p>所有改动遵循 <a href="AGENTS.md">AGENTS.md</a>：开始前先读它，再按其中的表读对应的专题文档。</p>
 <table><thead><tr><th>文档</th><th>内容</th></tr></thead><tbody><tr><td><a href="docs/development/workflow.md">开发流程</a></td><td>从改代码到合并的每一步：门禁、证据、失败处理</td></tr><tr><td><a href="docs/development/testing-layers.md">测试层级</a></td><td>unit、component、surface、conformance、live 五个层级与 live 场景</td></tr><tr><td><a href="docs/development/test-environments.md">测试环境</a></td><td>临时数据目录、子进程环境隔离、live 运行清单与清理</td></tr><tr><td><a href="docs/development/use-cases.md">use-case 目录</a></td><td>use case 与状态迁移清单、测试标记、目录检查</td></tr><tr><td><a href="docs/development/ci.md">CI</a></td><td>GitHub Actions（Windows）、阶段与汇总检查 <code>Gate</code></td></tr><tr><td><a href="docs/development/review.md">评审与合并</a></td><td>独立评审、PR 模板、合并条件与需要用户确认的范围</td></tr><tr><td><a href="docs/development/code-quality.md">代码质量</a></td><td>警告即错误、只依赖标准库、开发依赖</td></tr><tr><td><a href="docs/development/compatibility.md">兼容性</a></td><td>账本、配置、插件接口等契约的版本规则</td></tr><tr><td><a href="docs/development/docs.md">文档</a></td><td>语言与格式、HTML 生成、设计文档、公开仓库卫生</td></tr><tr><td><a href="docs/development/release.md">发布</a></td><td>版本与发布（v1 开发期间不发布）</td></tr><tr><td><a href="docs/decisions/README.md">决定记录</a></td><td>已确认的决定</td></tr></tbody></table>
-<h2 id="仓库布局规划">仓库布局（规划）</h2>
+<h2 id="开始使用开发中">开始使用（开发中）</h2>
+<p>需要 Python 3.10+ 与 git。运行时只依赖标准库，在仓库根目录即可运行：</p>
+<pre><code class="lang-text">python -m tsw init                 初始化数据目录（默认按 TSW_HOME 定位）
+python -m tsw task register --title &quot;示例&quot; --repo demo --kind code --goal &quot;…&quot; --acceptance &quot;…&quot;
+python -m tsw task list --json
+python -m tsw ledger audit</code></pre>
+<p>开发者另需安装开发工具（<code>pip install -r requirements-dev.txt</code>），并用 <code>python tools/gate.py</code> 运行本地门禁。</p>
+<h2 id="仓库布局">仓库布局</h2>
 <pre><code class="lang-text">task-steward/
   docs/design/            设计文档（md + html）与图
   docs/development/       开发规则
   docs/decisions/         决定记录
-  docs/use-cases/         use-case 目录与状态迁移清单（实现阶段）
-  plugin/                 Claude Code 插件：skills、hooks、MCP 配置（实现阶段）
-  tsw/                    核心库与 CLI：账本、配置、门禁、渲染、导入、评审适配器（实现阶段）
-  tests/                  unit / component / surface / conformance 测试与夹具（实现阶段）
-  tools/                  门禁、文档生成与 live 场景的包装器（实现阶段）</code></pre>
+  docs/use-cases/         use-case 目录与状态迁移清单
+  plugin/                 Claude Code 插件：skills、hooks、MCP 配置（后续里程碑）
+  tsw/                    核心库与 CLI：数据目录、存储、账本、投影、任务（逐步扩展）
+  tests/                  unit / component / surface / conformance 测试
+  tools/                  门禁、文档生成与检查（live 场景在后续里程碑加入）</code></pre>
 <h2 id="许可">许可</h2>
 <p><a href="LICENSE">MIT</a></p>
 <footer>本页由同目录的 <a href="README.md">README.md</a> 生成，内容与 Markdown 版本一致。</footer>

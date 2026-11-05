@@ -6,7 +6,8 @@
 
 - 警告即错误：ruff、pyright 与测试运行中的警告都会让门禁失败（pytest 使用 `-W error`）。
 - 一份共享配置（`pyproject.toml`），同样适用于 `tsw/`、`plugin/`、`tools/` 与 `tests/`。
-- ruff 负责 lint 与格式；pyright 以 strict 模式检查 `tsw/`、`plugin/` 与 `tools/`，`tests/` 用 basic 模式。
+- ruff 负责 lint 与格式；pyright 以 strict 模式检查 `tsw/`、`plugin/`、`tools/` 与 `tests/`，`tests/` 只关闭
+  与未知类型相关的规则（测试大量使用 pytest 夹具与 JSON）。actionlint 检查 `.github/workflows/`。
 - 公共函数与插件接口有完整的类型注解；插件接口用 `typing.Protocol` 定义（DN006）。
 - 不压制警告。确需例外时在行内写明规则、理由与 issue 链接，并在评审中说明。
 - 负向探针：修改质量配置或升级工具时，验证每类规则（lint、格式、类型、警告）确实会让门禁失败。

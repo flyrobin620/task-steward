@@ -1,0 +1,114 @@
+# CI for every pull request and every push to main (docs/development/ci.md).
+# All stages run on Windows; the aggregate `Gate` job is the only required status check.
+# No secrets are used. Changes to this file need the repository owner's confirmation.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHONUTF8: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  lint:
+    name: lint
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install development tools
+        run: python -m pip install -r requirements-dev.txt
+        timeout-minutes: 5
+      - name: Lint, types and runtime imports
+        run: python tools/gate.py --steps lint,stdlib --results-dir results/lint
+        timeout-minutes: 8
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: lint
+          path: results/lint
+          include-hidden-files: true
+
+  docs:
+    name: docs
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Documentation, links, diagrams and privacy scan
+        run: python tools/gate.py --steps docs --results-dir results/docs
+        timeout-minutes: 5
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: docs
+          path: results/docs
+
+  test:
+    name: test (${{ matrix.python }})
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install development tools
+        run: python -m pip install -r requirements-dev.txt
+        timeout-minutes: 5
+      - name: Test tiers and use-case coverage
+        run: python tools/gate.py --steps tests,catalog --results-dir results/test-${{ matrix.python }}
+        timeout-minutes: 15
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: test-${{ matrix.python }}
+          path: results/test-${{ matrix.python }}
+          include-hidden-files: true
+
+  gate:
+    name: Gate
+    if: ${{ always() }}
+    needs: [lint, docs, test]
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+      - name: Verify every stage and its evidence
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python tools/gate.py --verify-ci artifacts

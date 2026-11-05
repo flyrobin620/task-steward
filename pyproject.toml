@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "task-steward"
+dynamic = ["version"]
+description = "TaskSteward: a pluggable-host task orchestrator with an event ledger"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+tsw = "tsw.cli:main"
+
+[tool.setuptools]
+packages = ["tsw", "tsw.storage"]
+
+[tool.setuptools.dynamic]
+version = {attr = "tsw.__version__"}
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PTH", "PL"]
+ignore = [
+    # Chinese user-facing text uses full-width punctuation on purpose.
+    "RUF001", "RUF002", "RUF003",
+    # Command dispatch functions and test helpers legitimately take many arguments or branches.
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR2004",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The embedded stylesheet keeps one rule per line.
+"tools/docs.py" = ["E501"]
+
+[tool.ruff.format]
+line-ending = "lf"
+
+[tool.pyright]
+include = ["tsw", "tools", "tests"]
+exclude = ["docs/design/diagrams", ".venv", ".local"]
+pythonVersion = "3.10"
+typeCheckingMode = "strict"
+reportMissingModuleSource = false
+
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+extraPaths = ["."]
+reportPrivateUsage = false
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportUnknownVariableType = false
+reportUnknownParameterType = false
+reportMissingParameterType = false
+reportMissingTypeArgument = false
+
+[[tool.pyright.executionEnvironments]]
+root = "."
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+filterwarnings = ["error"]
+markers = [
+    "use_case(id): the use case (UC-...) this test covers",
+    "transition(id): the DN002 transition or guard (T.., E.., G-..) this test covers",
+]
+
+[tool.coverage.run]
+source = ["tsw"]
+branch = true
+
+[tool.coverage.report]
+skip_empty = true

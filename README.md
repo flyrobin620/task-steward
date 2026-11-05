@@ -9,7 +9,7 @@
 - 状态由事件账本驱动，可导入 orchestrator-agent 的全部历史。
 - 运行数据（配置、任务书、账本、报告）放在与本 repo 分离的数据目录 `TSW_HOME`，不提交到本 repo；备份该目录即可。
 
-当前阶段：**v1 开发准备**。设计（DN001–DN007）已确定，开发流程与规范见下文“参与开发”；尚未实现运行代码。
+当前阶段：**v1 开发中**。已实现数据目录、`fs` 存储、事件账本与投影、`tsw` 命令行与任务登记；宿主集成、会话与评审等按里程碑实现中。开发流程与规范见下文“参与开发”。
 
 ## 设计文档
 
@@ -51,18 +51,31 @@
 | [发布](docs/development/release.md) | 版本与发布（v1 开发期间不发布） |
 | [决定记录](docs/decisions/README.md) | 已确认的决定 |
 
-## 仓库布局（规划）
+## 开始使用（开发中）
+
+需要 Python 3.10+ 与 git。运行时只依赖标准库，在仓库根目录即可运行：
+
+```text
+python -m tsw init                 初始化数据目录（默认按 TSW_HOME 定位）
+python -m tsw task register --title "示例" --repo demo --kind code --goal "…" --acceptance "…"
+python -m tsw task list --json
+python -m tsw ledger audit
+```
+
+开发者另需安装开发工具（`pip install -r requirements-dev.txt`），并用 `python tools/gate.py` 运行本地门禁。
+
+## 仓库布局
 
 ```text
 task-steward/
   docs/design/            设计文档（md + html）与图
   docs/development/       开发规则
   docs/decisions/         决定记录
-  docs/use-cases/         use-case 目录与状态迁移清单（实现阶段）
-  plugin/                 Claude Code 插件：skills、hooks、MCP 配置（实现阶段）
-  tsw/                    核心库与 CLI：账本、配置、门禁、渲染、导入、评审适配器（实现阶段）
-  tests/                  unit / component / surface / conformance 测试与夹具（实现阶段）
-  tools/                  门禁、文档生成与 live 场景的包装器（实现阶段）
+  docs/use-cases/         use-case 目录与状态迁移清单
+  plugin/                 Claude Code 插件：skills、hooks、MCP 配置（后续里程碑）
+  tsw/                    核心库与 CLI：数据目录、存储、账本、投影、任务（逐步扩展）
+  tests/                  unit / component / surface / conformance 测试
+  tools/                  门禁、文档生成与检查（live 场景在后续里程碑加入）
 ```
 
 ## 许可
