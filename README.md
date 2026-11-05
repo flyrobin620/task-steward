@@ -9,7 +9,7 @@
 - 状态由事件账本驱动，可导入 orchestrator-agent 的全部历史。
 - 运行数据（配置、任务书、账本、报告）放在与本 repo 分离的数据目录 `TSW_HOME`，不提交到本 repo；备份该目录即可。
 
-当前阶段：**产品设计**（T233）。本仓库目前只有设计文档，尚未实现运行代码。
+当前阶段：**v1 开发准备**。设计（DN001–DN007）已确定，开发流程与规范见下文“参与开发”；尚未实现运行代码。
 
 ## 设计文档
 
@@ -33,14 +33,36 @@
 
 修改 `.mmd` 后需要同步调整 `draw.py` 中的布局坐标，再运行两个脚本。
 
+## 参与开发
+
+所有改动遵循 [AGENTS.md](AGENTS.md)：开始前先读它，再按其中的表读对应的专题文档。
+
+| 文档 | 内容 |
+| --- | --- |
+| [开发流程](docs/development/workflow.md) | 从改代码到合并的每一步：门禁、证据、失败处理 |
+| [测试层级](docs/development/testing-layers.md) | unit、component、surface、conformance、live 五个层级与 live 场景 |
+| [测试环境](docs/development/test-environments.md) | 临时数据目录、子进程环境隔离、live 运行清单与清理 |
+| [use-case 目录](docs/development/use-cases.md) | use case 与状态迁移清单、测试标记、目录检查 |
+| [CI](docs/development/ci.md) | GitHub Actions（Windows）、阶段与汇总检查 `Gate` |
+| [评审与合并](docs/development/review.md) | 独立评审、PR 模板、合并条件与需要用户确认的范围 |
+| [代码质量](docs/development/code-quality.md) | 警告即错误、只依赖标准库、开发依赖 |
+| [兼容性](docs/development/compatibility.md) | 账本、配置、插件接口等契约的版本规则 |
+| [文档](docs/development/docs.md) | 语言与格式、HTML 生成、设计文档、公开仓库卫生 |
+| [发布](docs/development/release.md) | 版本与发布（v1 开发期间不发布） |
+| [决定记录](docs/decisions/README.md) | 已确认的决定 |
+
 ## 仓库布局（规划）
 
 ```text
 task-steward/
   docs/design/            设计文档（md + html）与图
+  docs/development/       开发规则
+  docs/decisions/         决定记录
+  docs/use-cases/         use-case 目录与状态迁移清单（实现阶段）
   plugin/                 Claude Code 插件：skills、hooks、MCP 配置（实现阶段）
-  tsw/                    核心库与 CLI：账本、配置、门禁、渲染、导入、Codex 评审适配器（实现阶段）
-  tests/                  使用临时仓库与模拟平台响应的测试（实现阶段）
+  tsw/                    核心库与 CLI：账本、配置、门禁、渲染、导入、评审适配器（实现阶段）
+  tests/                  unit / component / surface / conformance 测试与夹具（实现阶段）
+  tools/                  门禁、文档生成与 live 场景的包装器（实现阶段）
 ```
 
 ## 许可
