@@ -42,8 +42,14 @@ def g_plan(row: Mapping[str, Any], config: EffectiveConfig) -> str:
     return repo
 
 
-def dependency_problems(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
-    """G-DEP for every dependency of ``task_id``; an empty list means all are satisfied."""
+def dependency_problems(
+    conn: sqlite3.Connection, task_id: str, pending_invalid: set[str] | None = None
+) -> list[dict[str, Any]]:
+    """G-DEP for every dependency of ``task_id``; an empty list means all are satisfied.
+
+    ``pending_invalid`` names upstream tasks that the current batch is about to invalidate, so a
+    single propagation pass reaches every transitive dependent (DN002 §5.2).
+    """
     problems: list[dict[str, Any]] = []
     for dep in conn.execute("SELECT * FROM dependencies WHERE task_id = ?", (task_id,)):
         upstream = row_dict(
@@ -60,10 +66,17 @@ def dependency_problems(conn: sqlite3.Connection, task_id: str) -> list[dict[str
             reason = "not_done"
         elif int(upstream["revision"]) != int(dep["bound_revision"]):
             reason = "revision_changed"
-        elif int(upstream["stale"]):
+        elif int(upstream["stale"]) or upstream["task_id"] in (pending_invalid or ()):
             reason = "stale"
         if reason is not None:
-            problems.append({"dep_id": dep["dep_id"], "reason": reason})
+            problems.append(
+                {
+                    "dep_id": dep["dep_id"],
+                    "reason": reason,
+                    "upstream_revision": None if upstream is None else int(upstream["revision"]),
+                    "upstream_status": None if upstream is None else upstream["status"],
+                }
+            )
     return problems
 
 
@@ -182,7 +195,7 @@ def blocking_unresolved(
     """
     latest = conn.execute(
         "SELECT MAX(round) AS r FROM review_rounds WHERE task_id = ? AND attempt = ? AND cycle = ? "
-        "AND verdict IS NOT NULL",
+        "AND verdict IN ('pass', 'changes_requested')",
         (task_id, attempt_id, cycle),
     ).fetchone()["r"]
     unresolved: list[dict[str, Any]] = []
@@ -230,7 +243,7 @@ def g_submit(
         r
         for r in rounds
         if r is not None
-        and r["verdict"] is not None
+        and r["verdict"] in ("pass", "changes_requested")
         and loads(r["reviewer"], {}).get("session") in reviewers
     ]
     if not completed:

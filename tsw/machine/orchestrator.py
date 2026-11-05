@@ -29,6 +29,7 @@ from tsw.machine.base import (
 from tsw.machine.model import (
     attempt,
     current_attempt,
+    dumps,
     loads,
     require_status,
     review_cycle,
@@ -122,6 +123,8 @@ def task_plan(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             dep_id = str(dep["task_id"])
             if dep_id == task_id:
                 raise rejected("任务不能依赖自己", reason="dependency_self")
+            if any(existing["task_id"] == dep_id for existing in deps):
+                raise rejected("依赖重复", reason="dependency_duplicate", dep_id=dep_id)
             upstream = task(ctx.conn, dep_id)
             deps.append(
                 {
@@ -212,6 +215,13 @@ def input_resolve(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         source = guards.g_user(
             source_in, task_id=task_id, revision=int(row["revision"]), kind="answer"
         )
+        if source.get("request_id") != request_id:
+            raise rejected(
+                "用户答复的来源指向别的请求",
+                reason="g_user",
+                request_id=request_id,
+                source_request=source.get("request_id"),
+            )
         if request["status"] != "pending":
             return [
                 EventDraft(
@@ -246,7 +256,9 @@ def input_resolve(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 ]
             data.update(
                 transition="T12",
-                new_cycle=False,
+                # The requirement changed while waiting: old reviews are void, start a new cycle.
+                new_cycle=row["waiting_revision"] is not None
+                and int(row["waiting_revision"]) != int(row["revision"]),
                 resume_substate=binding.get("substate") or "executing",
                 resolves=binding.get("judgments", []),
             )
@@ -314,6 +326,18 @@ def task_update(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             "spec_sha256": spec_sha,
             "user_source": source,
         }
+        current = current_attempt(ctx.conn, task_id)
+        if row["status"] == "dispatching" and current is not None and current["brief_path"]:
+            # DN002 §5.1: the brief is brought to the new revision before binding.
+            updated = {**row, "revision": revision, "goal": goal, "acceptance": dumps(acceptance)}
+            body = _brief(
+                updated,
+                str(current["attempt"]),
+                str(current["workdir"]),
+                loads(current["read_set"], []),
+            )
+            ctx.storage.put_artifact(str(current["brief_path"]), body.encode("utf-8"))
+            data["brief"] = {"attempt": current["attempt"], "revision": revision}
         if transition:
             data["transition"] = transition
         return [
@@ -469,6 +493,18 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return _cmd(env, "task_dispatch", inp, build)
 
 
+def _require_current_brief(row: Mapping[str, Any], attempt_row: Mapping[str, Any]) -> None:
+    if attempt_row["brief_revision"] is not None and int(attempt_row["brief_revision"]) != int(
+        row["revision"]
+    ):
+        raise rejected(
+            "任务书不是当前 revision，先更新任务书",
+            reason="brief_outdated",
+            brief_revision=attempt_row["brief_revision"],
+            revision=row["revision"],
+        )
+
+
 def _session_name(env: ToolEnv, task_id: str, attempt_id: str, generation: int) -> str:
     pattern = str(env.config.get("sessions.name_pattern"))
     return pattern.format(
@@ -600,6 +636,21 @@ def attempt_reconcile(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             return drafts
         if not session_ref:
             raise rejected("创建成功需要会话引用", reason="invalid_input", field="session_ref")
+        if row["status"] in ("cancelled", "archived", "accepted", "done"):
+            # The task no longer wants this session: record it so the caller stops it.
+            return [
+                EventDraft(
+                    type="attempt.late_session",
+                    task_id=task_id,
+                    revision=revision,
+                    attempt=attempt_id,
+                    data={
+                        "attempt": attempt_id,
+                        "generation": generation,
+                        "session_ref": session_ref,
+                    },
+                )
+            ]
         if found["purpose"] == "prestart":
             return [
                 EventDraft(
@@ -615,6 +666,7 @@ def attempt_reconcile(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 )
             ]
         require_status(row, "dispatching")
+        _require_current_brief(row, found)
         if not flag(inp, "brief_delivered"):
             raise rejected("新建会话须确认任务书已送达", reason="brief_not_delivered")
         guards.g_one_attempt(ctx.conn, task_id, allowed=attempt_id)
@@ -651,6 +703,7 @@ def attempt_deliver(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             or not guards.controllable(current, env.caller.session_id)
         ):
             raise rejected("没有由当前主会话控制的待命会话", reason="attempt_uncontrollable")
+        _require_current_brief(row, current)
         return [
             EventDraft(
                 type="attempt.brief_delivered",
@@ -681,6 +734,7 @@ def attempt_continue(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         read_set = sorted({*loads(current["read_set"], []), *extra_reads})
         data: dict[str, Any] = {"attempt": current["attempt"], "read_set": read_set}
         if row["status"] == "dispatching":
+            _require_current_brief(row, current)
             data["transition"] = "T08"
         else:
             require_status(row, "in_progress", "waiting_user", "verifying")
@@ -778,6 +832,8 @@ def task_pause(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         data: dict[str, Any] = {"pause": dict(pause)}
         if env.caller.role == "worker":
             worker_attempt(ctx.conn, env, task_id)
+            if row["status"] != "in_progress":
+                raise rejected("worker 只能暂停自己执行中的任务（T14）", reason="role_denied")
         status = row["status"]
         if status == "dispatching":
             if pause["category"] != "workdir_conflict":
@@ -841,12 +897,12 @@ def task_resume(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 return False
             return True
 
-        data: dict[str, Any] = {"note": note}
-        if (
-            pause.get("resume_target") == "verifying"
-            and _submission_valid(ctx.conn, row)
-            and admissible()
-        ):
+        data: dict[str, Any] = {"note": note, "resources": resources}
+        if pause.get("resume_target") == "verifying" and _submission_valid(ctx.conn, row):
+            # T27 only; when it cannot be admitted now the task stays paused with its evidence.
+            guards.g_slot(ctx.conn, env.config)
+            guards.g_res(ctx.conn, task_id, resources)
+            guards.g_dep(ctx.conn, task_id)
             data["transition"] = "T27"
         elif (
             current is not None
@@ -890,7 +946,20 @@ def judge(inp: Mapping[str, Any], env: ToolEnv) -> Command:
 
     def build(ctx: CommitContext) -> list[EventDraft]:
         row = task(ctx.conn, task_id)
-        require_status(row, "in_progress")
+        reask = row["status"] == "waiting_user"
+        if reask:
+            # DN002 §5.1: requests superseded by a requirement change are asked again for the
+            # new revision; the task stays waiting for the user.
+            pending = ctx.conn.execute(
+                "SELECT 1 FROM input_requests WHERE task_id = ? AND status = 'pending'", (task_id,)
+            ).fetchone()
+            if pending is not None or decision != "escalate":
+                raise rejected(
+                    "等待用户时只能在原请求作废后按新 revision 重新提问",
+                    reason="invalid_state",
+                )
+        else:
+            require_status(row, "in_progress")
         revision, cycle = int(row["revision"]), int(row["cycle"])
         current = current_attempt(ctx.conn, task_id)
         assert current is not None
@@ -993,7 +1062,7 @@ def judge(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 task_id=task_id,
                 revision=revision,
                 data={
-                    "transition": "T11",
+                    **({} if reask else {"transition": "T11"}),
                     "request_id": request_id,
                     "kind": "escalation",
                     "question": text(inp, "question"),
@@ -1002,7 +1071,7 @@ def judge(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                         "attempt": current["attempt"],
                         "generation": int(current["generation"]),
                         "cycle": cycle,
-                        "substate": row["substate"],
+                        "substate": row["substate"] if not reask else "executing",
                         "judgments": item_ids,
                         "decision_id": decision_id,
                     },
@@ -1201,6 +1270,10 @@ def user_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         )
         if int(row["stale"]):
             raise rejected("任务有未解决的 stale 标记", reason="stale")
+        problems = guards.dependency_problems(ctx.conn, task_id)
+        if problems and problems != loads(row["stale_ack"], None):
+            # An upstream change not yet propagated by sync still blocks acceptance.
+            raise rejected("上游依赖已变化，先运行 sync", reason="stale", dependencies=problems)
         if ctx.conn.execute(
             "SELECT 1 FROM input_requests WHERE task_id = ? AND status = 'pending'", (task_id,)
         ).fetchone():
@@ -1269,13 +1342,20 @@ def task_cancel(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         source = guards.g_user(
             source_in, task_id=task_id, revision=int(row["revision"]), kind="cancel"
         )
-        live = [
-            r["attempt"]
+        phases = {
+            str(r["attempt"]): str(r["phase"])
             for r in ctx.conn.execute(
                 "SELECT attempt, phase FROM attempts WHERE task_id = ?", (task_id,)
             )
-            if r["phase"] in ("starting", "live")
-        ]
+        }
+        unsettled = [a for a, p in phases.items() if p in ("starting", "standby")]
+        if unsettled:
+            raise rejected(
+                "创建中的会话须先对账，待命会话须先处置（attempt_update closed / replaced）",
+                reason="attempt_unsettled",
+                attempts=unsettled,
+            )
+        live = [a for a, p in phases.items() if p == "live"]
         if live and not worker_stopped:
             raise rejected("活动的 worker 须先停止", reason="worker_not_stopped", attempts=live)
         if ctx.conn.execute(

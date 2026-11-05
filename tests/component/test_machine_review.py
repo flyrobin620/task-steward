@@ -293,7 +293,7 @@ def test_escalation_to_the_user_and_back(home: Home) -> None:
         task_id="T001",
         request_id=request,
         answer="允许",
-        user_source=h.source("T001", 1, "answer"),
+        user_source=h.source("T001", 1, "answer", request_id=request),
     )
     row = h.task("T001")
     assert (row["status"], row["substate"]) == ("in_progress", "triaging")
@@ -302,7 +302,7 @@ def test_escalation_to_the_user_and_back(home: Home) -> None:
         task_id="T001",
         request_id=request,
         answer="改主意了",
-        user_source=h.source("T001", 1, "answer"),
+        user_source=h.source("T001", 1, "answer", request_id=request),
     )
     assert late["events"][0]["type"] == "input.late_response"
 

@@ -170,6 +170,28 @@ def check_caller(ctx: CommitContext, env: ToolEnv, spec: Tool) -> None:
         require_lease(ctx.conn, caller.session_id, caller.machine, ctx.now)
 
 
+def check_version(ctx: CommitContext, inp: Mapping[str, Any]) -> None:
+    """Optimistic concurrency (DN001 §7.2): refuse a decision made on an older task version."""
+    expected = inp.get("expected_version")
+    if expected is None:
+        return
+    if isinstance(expected, bool) or not isinstance(expected, int):
+        raise rejected(
+            "expected_version 应为整数", reason="invalid_input", field="expected_version"
+        )
+    task_id = inp.get("task_id")
+    if not isinstance(task_id, str):
+        raise rejected("expected_version 需要 task_id", reason="invalid_input", field="task_id")
+    actual = int(task(ctx.conn, task_id)["version"])
+    if actual != expected:
+        raise rejected(
+            "任务已被修改（版本不一致）",
+            reason="version_conflict",
+            expected=expected,
+            actual=actual,
+        )
+
+
 def worker_attempt(conn: sqlite3.Connection, env: ToolEnv, task_id: str) -> dict[str, Any]:
     """The caller must be the live session bound to the task's current attempt."""
     row = current_attempt(conn, task_id)

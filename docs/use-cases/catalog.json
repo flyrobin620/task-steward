@@ -307,7 +307,7 @@
       "id": "UC-REVIEW-001",
       "title": "worker 自评审循环（E01–E07、评审预算、R-ROUND）",
       "actor": "worker",
-      "acceptance": "评审轮次在 attempt 内递增；本周期轮次受有效预算限制；评审结果须满足输出契约；阻断项只能修复或有据拒绝；修复由后续增量评审或验证说明确认；定稿后 HEAD 变化须再评审；需求变更开启新周期；评审失败重试超限后交主会话判断",
+      "acceptance": "评审轮次在 attempt 内递增；本周期轮次受有效预算限制；评审结果须满足输出契约；阻断项只能修复或有据拒绝；修复由后续增量评审或验证说明确认；定稿后 HEAD 变化须再评审；需求变更开启新周期；评审失败重试超限后交主会话判断；评审器因缺材料返回 blocked 时不算有效评审，补齐后以新一轮重跑；自查后预算用完时可直接交主会话判断",
       "surfaces": [
         "cli"
       ],
@@ -319,7 +319,8 @@
         "tool:review_decide",
         "tool:self_check_failed",
         "tool:question",
-        "tool:progress_note"
+        "tool:progress_note",
+        "tool:review_exhausted"
       ],
       "component": "machine",
       "status": "active",

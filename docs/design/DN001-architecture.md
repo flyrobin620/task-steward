@@ -195,7 +195,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一�
 | 主会话 | `task_dispatch` `attempt_start` `attempt_reconcile` `attempt_deliver` `attempt_continue` `attempt_update` | T07–T09、T15、预启动、对账与迟到会话 |
 | 主会话 | `task_pause` `task_resume` `judge` `feedback` `integrate` `output_link` `task_accept` | T10、T11、T14、T17–T21、T27、主会话判断 |
 | 主会话 | `user_accept` `user_reject` `task_cancel` `task_archive` `dependency_invalidate` `resource_release` `sync` | T16、T22–T26、依赖传播 |
-| worker | `progress_note` `question` `review_start` `review_fail` `review_complete` `review_triage` `review_decide` `self_check_failed` `submit` `task_pause` `output_link` | E01–E07、T13、T14 |
+| worker | `progress_note` `question` `review_start` `review_fail` `review_complete` `review_triage` `review_decide` `review_exhausted` `self_check_failed` `submit` `task_pause`（仅 T14）`output_link` | E01–E07、T13、T14 |
 
 主会话的写工具都要求持有调度租约（G-LEASE）；worker 工具要求调用者就是该任务当前 attempt 绑定的会话。
 

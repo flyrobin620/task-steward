@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS tasks(
     cycle INTEGER NOT NULL DEFAULT 0,
     stale INTEGER NOT NULL DEFAULT 0,
     stale_ack TEXT,
+    waiting_revision INTEGER,
     pause TEXT,
     submission TEXT,
     current_attempt TEXT,
@@ -314,6 +315,29 @@ class Projection:
             conn.execute("ROLLBACK")
             raise
         return current
+
+    def trial(self, conn: sqlite3.Connection, events: list[Event]) -> None:
+        """Apply ``events`` in a transaction that is always rolled back.
+
+        The ledger runs this before appending, so an event its reducer would refuse is never
+        written: a stuck ledger (every later read failing on one event) cannot be produced.
+        """
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for event in events:
+                try:
+                    self._apply(conn, event)
+                except TswError:
+                    raise
+                except Exception as exc:  # e.g. a constraint violation in a reducer
+                    raise rejected(
+                        "命令产生的事件无法归约，已拒绝",
+                        reason="reducer_rejected",
+                        type=event.type,
+                        error=str(exc),
+                    ) from exc
+        finally:
+            conn.execute("ROLLBACK")
 
     def _apply(self, conn: sqlite3.Connection, event: Event) -> None:
         reducer = self.reducers.get(event.type)

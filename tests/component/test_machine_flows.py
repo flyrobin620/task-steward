@@ -44,17 +44,28 @@ def test_intake_question_blocks_planning_until_the_user_answers(h: Harness) -> N
                 task_id="T001",
                 request_id=request,
                 answer="全部",
-                user_source=h.source("T001", 1, "reject"),
+                user_source=h.source("T001", 1, "reject", request_id=request),
             )
         )
         == "g_user"
     )
+
+    def wrong_request() -> None:
+        h.run(
+            "input_resolve",
+            task_id="T001",
+            request_id=request,
+            answer="全部",
+            user_source=h.source("T001", 1, "answer", request_id="Q-T001-other"),
+        )
+
+    assert reason_of(wrong_request) == "g_user"
     h.run(
         "input_resolve",
         task_id="T001",
         request_id=request,
         answer="全部",
-        user_source=h.source("T001", 1, "answer"),
+        user_source=h.source("T001", 1, "answer", request_id=request),
     )
     h.plan("T001")
     assert h.status("T001") == "ready"

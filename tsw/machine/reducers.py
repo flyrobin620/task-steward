@@ -112,6 +112,15 @@ def _release_claims(
         )
 
 
+def _claim(conn: sqlite3.Connection, task_id: str, resources: list[str]) -> None:
+    for resource in resources:
+        conn.execute(
+            "INSERT INTO resource_claims(resource, owner_task, status) VALUES(?, ?, 'held') "
+            "ON CONFLICT(resource, owner_task) DO UPDATE SET status = 'held'",
+            (resource, task_id),
+        )
+
+
 def _close_requests(conn: sqlite3.Connection, task_id: str, status: str) -> None:
     conn.execute(
         "UPDATE input_requests SET status = ? WHERE task_id = ? AND status = 'pending'",
@@ -154,6 +163,8 @@ def requirement_changed(conn: sqlite3.Connection, event: Event) -> None:
         _new_cycle(conn, task_id)  # E07 inside in_progress; T17 from verifying
     if tid == "T23":
         _set(conn, task_id, submission=None, done_at=None, substate=None)
+    if "brief" in data:
+        _attempt(conn, task_id, data["brief"]["attempt"], brief_revision=data["brief"]["revision"])
     if status == "paused":
         pause = loads(
             conn.execute("SELECT pause FROM tasks WHERE task_id = ?", (task_id,)).fetchone()[
@@ -184,6 +195,8 @@ def input_requested(conn: sqlite3.Connection, event: Event) -> None:
 
 def input_escalated(conn: sqlite3.Connection, event: Event) -> None:
     input_requested(conn, event)
+    if event.data.get("transition") == "T11":
+        _set(conn, _tid(event), waiting_revision=event.data["binding"]["revision"])
     for item in event.data.get("resolves", []):
         conn.execute("UPDATE judgments SET status = 'escalated' WHERE item_id = ?", (item,))
 
@@ -277,12 +290,7 @@ def dispatch_started(conn: sqlite3.Connection, event: Event) -> None:
             "UPDATE tasks SET attempt_count = attempt_count + 1 WHERE task_id = ?", (task_id,)
         )
     _set(conn, task_id, current_attempt=data["attempt"])
-    for resource in data["resources"]:
-        conn.execute(
-            "INSERT INTO resource_claims(resource, owner_task, status) VALUES(?, ?, 'held') "
-            "ON CONFLICT(resource, owner_task) DO UPDATE SET status = 'held'",
-            (resource, task_id),
-        )
+    _claim(conn, task_id, data["resources"])
     _touch(conn, event)
 
 
@@ -410,6 +418,8 @@ def task_resumed(conn: sqlite3.Connection, event: Event) -> None:
     task_id = _tid(event)
     tid = _move(conn, event)
     _set(conn, task_id, pause=None)
+    if tid in ("T20", "T27"):
+        _claim(conn, task_id, event.data.get("resources") or [])
     if tid == "T20":
         _attempt(conn, task_id, event.data["attempt"], phase="live")
         _new_cycle(conn, task_id)

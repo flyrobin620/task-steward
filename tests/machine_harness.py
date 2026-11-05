@@ -57,8 +57,12 @@ class Harness:
             return [{k: r[k] for k in r.keys()} for r in conn.execute(sql, params)]  # noqa: SIM118
 
     @staticmethod
-    def source(task_id: str, revision: int, kind: str, text: str = "同意") -> dict[str, Any]:
+    def source(
+        task_id: str, revision: int, kind: str, text: str = "同意", request_id: str | None = None
+    ) -> dict[str, Any]:
+        extra = {} if request_id is None else {"request_id": request_id}
         return {
+            **extra,
             "channel": "main-session",
             "principal": "owner",
             "message_ref": f"msg-{task_id}-{kind}",

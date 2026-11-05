@@ -146,7 +146,7 @@ worker 不盲信评审意见，处置时先核实：
 | 有阻断项需要修复，本周期轮次 < 本周期有效预算 | `iterate` |
 | 有阻断项需要修复，本提交周期预算已用完 | `escalate`：提交 `review.budget_exhausted`，列出未解决项、各轮记录与 worker 的建议，交主会话判断 |
 | 阻断项需要延后（超出本任务范围或依赖外部） | `escalate`：提交 `review.defer_requested`，由主会话批准延后（列入已知问题）、要求继续修复或交给人类 |
-| `verdict=blocked` 因缺材料 | 补齐材料后重跑本轮；缺的材料自己拿不到时以 `worker.question` 交主会话判断 |
+| `verdict=blocked` 因缺材料 | 该轮不算有效评审（不满足 G-SUBMIT，也不能确认修复）；补齐材料后经 E06 以新的一轮重跑（计入本周期预算）；缺的材料自己拿不到时以 `worker.question` 交主会话判断 |
 | 非阻断项 | worker 自行决定修复或 defer，不影响 finalize |
 
 ### 5.1 预算用完后由主会话判断

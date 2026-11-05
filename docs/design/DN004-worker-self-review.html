@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="acd108d48685fb4a8541cfb4f48eebc48420aecce1d734f04a9026a2ed45f134">
+<meta name="tsw-source-sha256" content="fda8137e1101dff0f6f44646debb81000bc3ec2d948f16893b4b45125ce822f9">
 <title>DN004 worker 自评审：Codex Astra 评审与迭代决策</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -106,7 +106,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
   &quot;next_head&quot;: &quot;9a0d3e1&quot;
 }</code></pre>
 <p>决策规则：</p>
-<table><thead><tr><th>情况</th><th>决定</th></tr></thead><tbody><tr><td><code>verdict=pass</code>，或每个阻断项都已按 G-SUBMIT 处置（修复并验证、有据拒绝、主会话认定不成立、获批延后）</td><td><code>finalize</code></td></tr><tr><td>有阻断项需要修复，本周期轮次 &lt; 本周期有效预算</td><td><code>iterate</code></td></tr><tr><td>有阻断项需要修复，本提交周期预算已用完</td><td><code>escalate</code>：提交 <code>review.budget_exhausted</code>，列出未解决项、各轮记录与 worker 的建议，交主会话判断</td></tr><tr><td>阻断项需要延后（超出本任务范围或依赖外部）</td><td><code>escalate</code>：提交 <code>review.defer_requested</code>，由主会话批准延后（列入已知问题）、要求继续修复或交给人类</td></tr><tr><td><code>verdict=blocked</code> 因缺材料</td><td>补齐材料后重跑本轮；缺的材料自己拿不到时以 <code>worker.question</code> 交主会话判断</td></tr><tr><td>非阻断项</td><td>worker 自行决定修复或 defer，不影响 finalize</td></tr></tbody></table>
+<table><thead><tr><th>情况</th><th>决定</th></tr></thead><tbody><tr><td><code>verdict=pass</code>，或每个阻断项都已按 G-SUBMIT 处置（修复并验证、有据拒绝、主会话认定不成立、获批延后）</td><td><code>finalize</code></td></tr><tr><td>有阻断项需要修复，本周期轮次 &lt; 本周期有效预算</td><td><code>iterate</code></td></tr><tr><td>有阻断项需要修复，本提交周期预算已用完</td><td><code>escalate</code>：提交 <code>review.budget_exhausted</code>，列出未解决项、各轮记录与 worker 的建议，交主会话判断</td></tr><tr><td>阻断项需要延后（超出本任务范围或依赖外部）</td><td><code>escalate</code>：提交 <code>review.defer_requested</code>，由主会话批准延后（列入已知问题）、要求继续修复或交给人类</td></tr><tr><td><code>verdict=blocked</code> 因缺材料</td><td>该轮不算有效评审（不满足 G-SUBMIT，也不能确认修复）；补齐材料后经 E06 以新的一轮重跑（计入本周期预算）；缺的材料自己拿不到时以 <code>worker.question</code> 交主会话判断</td></tr><tr><td>非阻断项</td><td>worker 自行决定修复或 defer，不影响 finalize</td></tr></tbody></table>
 <h3 id="51-预算用完后由主会话判断">5.1 预算用完后由主会话判断</h3>
 <p>worker 提交 <code>review.budget_exhausted</code> 时附上：未解决的阻断项与各轮处置记录、每轮评审 HEAD、worker 认为最合理的下一步。主会话按 DN006 §8.2 的方式判断，常见做法：</p>
 <table><thead><tr><th>情况</th><th>主会话的典型决定</th></tr></thead><tbody><tr><td>剩余问题清楚、每轮都在收敛</td><td>追加 1–2 轮（<code>review.budget_extended</code>）</td></tr><tr><td>评审器反复提同一条意见，worker 的反驳有据</td><td>核实后认定意见不成立（<code>review.finding_overruled</code>），理由写入报告</td></tr><tr><td>问题真实但超出本任务范围</td><td>批准延后（<code>review.defer_approved</code>），列入已知问题，并建议新建任务</td></tr><tr><td>修复方向错误、来回修改不收敛</td><td>给出新的修复思路或收窄范围（<code>orchestrator.feedback</code>）</td></tr><tr><td>需要改变验收标准、扩大范围，或主会话没有把握</td><td>交给人类（T11）</td></tr></tbody></table>

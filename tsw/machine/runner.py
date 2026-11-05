@@ -13,7 +13,7 @@ from tsw.lease import parse_time
 from tsw.ledger import Ledger
 from tsw.machine import orchestrator as _orchestrator
 from tsw.machine import worker as _worker
-from tsw.machine.base import REGISTRY, Caller, Tool, ToolEnv, check_caller
+from tsw.machine.base import REGISTRY, Caller, Tool, ToolEnv, check_caller, check_version
 from tsw.machine.guards import dependency_problems
 from tsw.machine.model import OCCUPYING, loads
 
@@ -34,13 +34,16 @@ def sync_command(env: ToolEnv, report: dict[str, Any] | None = None) -> Command:
         needs_stop: list[dict[str, Any]] = []
         archive_days = int(env.config.get("policies.auto_archive_days"))
         now = parse_time(ctx.now)
-        for row in ctx.conn.execute("SELECT * FROM tasks ORDER BY registered_seq").fetchall():
+        invalid: set[str] = set()  # tasks this batch invalidates, seen by their dependents
+        for row in _topological(ctx):
             task_id, status, revision = (
                 str(row["task_id"]),
                 str(row["status"]),
                 int(row["revision"]),
             )
-            problems = dependency_problems(ctx.conn, task_id)
+            problems = dependency_problems(ctx.conn, task_id, invalid)
+            if problems and status in ("ready", "done", *OCCUPYING):
+                invalid.add(task_id)
             if (
                 status == "waiting_dependency"
                 and not problems
@@ -116,6 +119,29 @@ def sync_command(env: ToolEnv, report: dict[str, Any] | None = None) -> Command:
     return Command(actor=env.caller.actor(), input={"op": "sync", "at": "now"}, build=build)
 
 
+def _topological(ctx: CommitContext) -> list[Any]:
+    """Tasks with every dependency before its dependents (registration order breaks ties)."""
+    rows = ctx.conn.execute("SELECT * FROM tasks ORDER BY registered_seq").fetchall()
+    deps: dict[str, list[str]] = {}
+    for dep in ctx.conn.execute("SELECT task_id, dep_id FROM dependencies"):
+        deps.setdefault(str(dep["task_id"]), []).append(str(dep["dep_id"]))
+    by_id = {str(row["task_id"]): row for row in rows}
+    ordered: list[Any] = []
+    seen: set[str] = set()
+
+    def visit(task_id: str) -> None:
+        if task_id in seen or task_id not in by_id:
+            return
+        seen.add(task_id)
+        for upstream in deps.get(task_id, []):
+            visit(upstream)
+        ordered.append(by_id[task_id])
+
+    for row in rows:
+        visit(str(row["task_id"]))
+    return ordered
+
+
 def run_tool(
     ledger: Ledger,
     config: EffectiveConfig,
@@ -131,6 +157,7 @@ def run_tool(
 
     def guarded(ctx: CommitContext) -> Any:
         check_caller(ctx, env, spec)
+        check_version(ctx, inp)
         return original(ctx)
 
     command.build = guarded

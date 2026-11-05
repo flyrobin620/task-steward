@@ -160,6 +160,42 @@ def review_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return _cmd(env, "review_start", inp, build)
 
 
+@tool(
+    "review_exhausted", "worker", description="评审预算用完，交主会话判断（executing / revising）"
+)
+def review_exhausted(inp: Mapping[str, Any], env: ToolEnv) -> Command:
+    task_id = text(inp, "task_id")
+    suggestion = text(inp, "suggestion")
+
+    def build(ctx: CommitContext) -> list[EventDraft]:
+        row, current = task_and_attempt(ctx.conn, env, task_id)
+        require_substate(row, "executing", "revising")
+        attempt_id, cycle_no = str(current["attempt"]), int(row["cycle"])
+        cycle = review_cycle(ctx.conn, task_id, attempt_id, cycle_no)
+        if int(cycle["rounds"]) < guards.effective_budget(env.config, cycle):
+            raise rejected("预算尚未用完", reason="budget_available")
+        return [
+            EventDraft(
+                type="review.budget_exhausted",
+                task_id=task_id,
+                revision=int(row["revision"]),
+                attempt=attempt_id,
+                data={
+                    "item_id": _item_id(ctx, task_id, "J"),
+                    "attempt": attempt_id,
+                    "cycle": cycle_no,
+                    "round": cycle["last_round"],
+                    "unresolved": guards.blocking_unresolved(
+                        ctx.conn, task_id, attempt_id, cycle_no
+                    ),
+                    "suggestion": suggestion,
+                },
+            )
+        ]
+
+    return _cmd(env, "review_exhausted", inp, build)
+
+
 def _current_round(
     ctx: CommitContext, row: Mapping[str, Any], attempt_id: str, round_no: int
 ) -> None:
@@ -377,6 +413,15 @@ def review_decide(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 raise rejected(
                     "仍有未处置的阻断项", reason="blocking_unresolved", findings=unresolved
                 )
+            last = ctx.conn.execute(
+                "SELECT verdict FROM review_rounds WHERE task_id = ? AND attempt = ? AND round = ?",
+                (task_id, attempt_id, round_no),
+            ).fetchone()
+            if last is not None and last["verdict"] == "blocked":
+                raise rejected(
+                    "评审器因缺材料无法评审（blocked），补齐后用 self_check_failed 重跑",
+                    reason="blocked_review",
+                )
             if cycle["last_reviewed_head"] != head:
                 raise rejected(
                     "当前 HEAD 晚于最后评审的 HEAD，须对差异再评审（E06）",
@@ -403,7 +448,7 @@ def review_decide(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         ):
             raise rejected("预算尚未用完", reason="budget_available")
         payload = {
-            "item_id": f"J-{task_id}-{round_no}-{kind}",
+            "item_id": _item_id(ctx, task_id, "J"),
             "attempt": attempt_id,
             "cycle": cycle_no,
             "round": round_no,

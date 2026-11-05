@@ -25,8 +25,9 @@ def tool(name: str, caller: list[str], **inp: Any) -> dict[str, Any]:
     return out
 
 
-def source(task_id: str, kind: str) -> dict[str, Any]:
+def source(task_id: str, kind: str, request_id: str | None = None) -> dict[str, Any]:
     return {
+        **({"request_id": request_id} if request_id else {}),
         "channel": "main-session",
         "principal": "owner",
         "message_ref": f"m-{kind}",
@@ -98,7 +99,7 @@ def test_a_task_from_registration_to_user_acceptance(home: Path) -> None:
         task_id="T001",
         request_id="Q-T001-1",
         answer="UTF-8",
-        user_source=source("T001", "answer"),
+        user_source=source("T001", "answer", "Q-T001-1"),
     )
     round_no = tool(
         "review_start",
