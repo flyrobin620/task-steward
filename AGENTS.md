@@ -11,6 +11,7 @@ TaskSteward（任务管家）：可插拔宿主的任务编排器。核心库与
 
 | 用途 | 命令 |
 | --- | --- |
+| 准备开发环境（Windows） | `python -m venv .venv`，再 `.venv\Scripts\python -m pip install -r requirements-dev.txt` |
 | 本地门禁（lint、类型、文档、目录检查、全部 CI 测试层级） | `python tools/gate.py` |
 | 只跑某个层级 | `python tools/gate.py --tier unit`（`component` / `surface` / `conformance`） |
 | live 层级（真实宿主与评审器，只在本机） | `python tools/live.py <scenario>` |

@@ -212,7 +212,7 @@ hooks 是强制边界；skill 和 CLAUDE.md 只写流程与判断准则，不再
   config/task-steward.json        统一配置（DN003）
   config/prompts/                用户覆盖的角色指令、评审模板（可选）
   todo/TODO.md, todo/Txxx.md     任务索引与任务书（用户意图）
-  ledger/events/YYYY-MM.jsonl    活动分段；封存后为 .jsonl.gz，原字节不改
+  ledger/events/YYYY-MM-<首个序号>.jsonl  活动分段；封存后为 .jsonl.gz，原字节不改
   ledger/imported/orchestrator-agent/   导入的原始事件卷与 manifest（DN005）
   runs/Txxx/aN/                  brief、报告（md + html）、评审证据、验收记录
   outbox/                        通知与人类渠道请求的持久队列
@@ -242,8 +242,9 @@ hooks 是强制边界；skill 和 CLAUDE.md 只写流程与判断准则，不再
 }
 ```
 
-- 摘要链只覆盖账本 JSON 文本，用于检测截断和篡改，不涉及可执行文件。
-- 分段按月或按 16 MiB 封存。
+- 每行是事件的规范 JSON（键排序、无空白、UTF-8）；`checksum` 是去掉 `checksum` 字段后的规范 JSON 的 SHA-256，`prev` 是前一条的 `checksum`（第一条为 64 个 0）。摘要链只覆盖账本 JSON 文本，用于检测截断和篡改，不涉及可执行文件。
+- 带 `command_id` 的事件同时记录可选字段 `command_digest`（命令输入规范 JSON 的 SHA-256），使投影重建后仍能识别“同一 `command_id`、内容不同”的重复提交并拒绝。
+- 分段按月或按 16 MiB 封存；同一个月可能有多个分段，文件名带分段中第一个事件的序号。
 - 投影损坏时用 `tsw ledger rebuild` 流式重放。
 - 日常命令只读投影和活动分段。
 

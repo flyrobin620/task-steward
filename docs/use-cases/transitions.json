@@ -1,0 +1,272 @@
+{
+  "source": "docs/design/DN002-task-state-machine.md",
+  "items": [
+    {
+      "id": "T01",
+      "kind": "transition",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "milestone": "M1"
+    },
+    {
+      "id": "T02",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T03",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T04",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T05",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T06",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T07",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T08",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T09",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T10",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T11",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T12",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T13",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T14",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T15",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T16",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T17",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T18",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T19",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T20",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T21",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T22",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T23",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T24",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T25",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T26",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "T27",
+      "kind": "transition",
+      "status": "planned"
+    },
+    {
+      "id": "E01",
+      "kind": "worker_transition",
+      "status": "planned"
+    },
+    {
+      "id": "E02",
+      "kind": "worker_transition",
+      "status": "planned"
+    },
+    {
+      "id": "E03",
+      "kind": "worker_transition",
+      "status": "planned"
+    },
+    {
+      "id": "E04",
+      "kind": "worker_transition",
+      "status": "planned"
+    },
+    {
+      "id": "E05",
+      "kind": "worker_transition",
+      "status": "planned"
+    },
+    {
+      "id": "E06",
+      "kind": "worker_transition",
+      "status": "planned"
+    },
+    {
+      "id": "E07",
+      "kind": "worker_transition",
+      "status": "planned"
+    },
+    {
+      "id": "G-ACCEPT",
+      "kind": "guard",
+      "status": "planned"
+    },
+    {
+      "id": "G-DEP",
+      "kind": "guard",
+      "status": "planned"
+    },
+    {
+      "id": "G-LEASE",
+      "kind": "guard",
+      "status": "planned"
+    },
+    {
+      "id": "G-ONE-ATTEMPT",
+      "kind": "guard",
+      "status": "planned"
+    },
+    {
+      "id": "G-PAUSE",
+      "kind": "guard",
+      "status": "planned"
+    },
+    {
+      "id": "G-PLAN",
+      "kind": "guard",
+      "status": "planned"
+    },
+    {
+      "id": "G-RES",
+      "kind": "guard",
+      "status": "planned"
+    },
+    {
+      "id": "G-SLOT",
+      "kind": "guard",
+      "status": "planned"
+    },
+    {
+      "id": "G-SUBMIT",
+      "kind": "guard",
+      "status": "planned"
+    },
+    {
+      "id": "G-USER",
+      "kind": "guard",
+      "status": "planned"
+    },
+    {
+      "id": "G-WINDOW",
+      "kind": "guard",
+      "status": "planned"
+    },
+    {
+      "id": "I01",
+      "kind": "import_rule",
+      "status": "planned",
+      "note": "历史导入在 v2 实现（docs/decisions/0001）"
+    },
+    {
+      "id": "I02",
+      "kind": "import_rule",
+      "status": "planned",
+      "note": "历史导入在 v2 实现（docs/decisions/0001）"
+    },
+    {
+      "id": "I03",
+      "kind": "import_rule",
+      "status": "planned",
+      "note": "历史导入在 v2 实现（docs/decisions/0001）"
+    },
+    {
+      "id": "I04",
+      "kind": "import_rule",
+      "status": "planned",
+      "note": "历史导入在 v2 实现（docs/decisions/0001）"
+    },
+    {
+      "id": "I05",
+      "kind": "import_rule",
+      "status": "planned",
+      "note": "历史导入在 v2 实现（docs/decisions/0001）"
+    },
+    {
+      "id": "I06",
+      "kind": "import_rule",
+      "status": "planned",
+      "note": "历史导入在 v2 实现（docs/decisions/0001）"
+    }
+  ]
+}

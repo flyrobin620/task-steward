@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="tsw-source-sha256" content="5a91d1c5dc17695b770cd2643535549f758d93c4671fd51746d9ca8f860d8254">
 <title>DN001 总体架构：TaskSteward 任务编排器（默认宿主 Claude Code）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -107,7 +108,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
   config/task-steward.json        统一配置（DN003）
   config/prompts/                用户覆盖的角色指令、评审模板（可选）
   todo/TODO.md, todo/Txxx.md     任务索引与任务书（用户意图）
-  ledger/events/YYYY-MM.jsonl    活动分段；封存后为 .jsonl.gz，原字节不改
+  ledger/events/YYYY-MM-&lt;首个序号&gt;.jsonl  活动分段；封存后为 .jsonl.gz，原字节不改
   ledger/imported/orchestrator-agent/   导入的原始事件卷与 manifest（DN005）
   runs/Txxx/aN/                  brief、报告（md + html）、评审证据、验收记录
   outbox/                        通知与人类渠道请求的持久队列
@@ -131,7 +132,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
   &quot;prev&quot;: &quot;&lt;前一条事件规范 JSON 的 SHA-256&gt;&quot;,
   &quot;checksum&quot;: &quot;&lt;本条事件规范 JSON 的 SHA-256&gt;&quot;
 }</code></pre>
-<ul><li>摘要链只覆盖账本 JSON 文本，用于检测截断和篡改，不涉及可执行文件。</li><li>分段按月或按 16 MiB 封存。</li><li>投影损坏时用 <code>tsw ledger rebuild</code> 流式重放。</li><li>日常命令只读投影和活动分段。</li></ul>
+<ul><li>每行是事件的规范 JSON（键排序、无空白、UTF-8）；<code>checksum</code> 是去掉 <code>checksum</code> 字段后的规范 JSON 的 SHA-256，<code>prev</code> 是前一条的 <code>checksum</code>（第一条为 64 个 0）。摘要链只覆盖账本 JSON 文本，用于检测截断和篡改，不涉及可执行文件。</li><li>带 <code>command_id</code> 的事件同时记录可选字段 <code>command_digest</code>（命令输入规范 JSON 的 SHA-256），使投影重建后仍能识别“同一 <code>command_id</code>、内容不同”的重复提交并拒绝。</li><li>分段按月或按 16 MiB 封存；同一个月可能有多个分段，文件名带分段中第一个事件的序号。</li><li>投影损坏时用 <code>tsw ledger rebuild</code> 流式重放。</li><li>日常命令只读投影和活动分段。</li></ul>
 <h3 id="83-runs-目录">8.3 runs 目录</h3>
 <pre><code class="lang-text">runs/Txxx/aN/
   brief.md / brief.json          任务书快照（revision、执行目录、可写路径、依赖成果）

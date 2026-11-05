@@ -1,5 +1,6 @@
 # Development tools only. The runtime (tsw/) depends on the Python standard library alone.
 # Exact versions; CI installs only from this file. Update with Dependabot or by hand in one PR.
+actionlint-py==1.7.12.25
 colorama==0.4.6
 coverage==7.17.0
 iniconfig==2.3.1

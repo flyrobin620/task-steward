@@ -16,10 +16,14 @@
   "surfaces": ["mcp", "cli"],
   "component": "ledger",
   "status": "active",
+  "claims": ["cli:ledger audit"],
   "requiredTiers": ["unit", "component", "surface"],
   "omittedTiers": {"conformance": "不经过插件接口", "live": "不依赖宿主行为"}
 }
 ```
+
+`claims` 列出该 use case 认领的对外表面（目前为 `cli:<命令>`；MCP 工具、hooks 与插件接口实现后增加
+`mcp:`、`hook:` 等前缀）。
 
 - id 形如 `UC-<AREA>-<NNN>`，稳定且不复用；退役的条目保留并标记 `status: retired`。
 - 层级为 `unit`、`component`、`surface`、`conformance`、`live`。没有列入 `requiredTiers` 的层级必须
@@ -30,7 +34,7 @@
 
 `docs/use-cases/transitions.json`（第一个开发 PR 创建）列出 DN002 中的每个编号：§3.2 的迁移
 （T01–T27）、§3.3 的 worker 内部迁移（E01–E07）、§4 的守卫（G-*），以及 §3.4 的导入规则
-（I01–I06）。DN002 的表是权威来源，清单是它的机器可读副本。尚未实现的编号标记为 `planned`（例如导入，
+（I01–I06）。DN002 的表是权威来源，清单是它的机器可读副本；`active` 的条目用 `requiredTiers` 写明需要的层级。尚未实现的编号标记为 `planned`（例如导入，
 见 [0001](../decisions/0001-development-process.md)），实现时改为 `active`：
 
 - 检查工具比较 DN002 表中的编号与清单，两边不一致即失败；

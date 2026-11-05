@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="tsw-source-sha256" content="052548d9cc0be185d8a72b9b14e3968a9c14349c2ddafaa99ccf5358d43fcd06">
 <title>DN006 插件层：宿主集成、会话、人类渠道与数据存储</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -110,7 +111,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 }</code></pre>
 <p>一个插件包可以提供多种插件类型的实现。</p>
 <h3 id="52-通用规则">5.2 通用规则</h3>
-<ul><li><strong>版本</strong>：<code>plugin_api</code> 为整数，不兼容变更加 1；核心拒绝加载版本不匹配的插件。</li><li><strong>能力声明</strong>：每个实现都返回能力声明，核心据此选择流程，<strong>不按宿主名分支</strong>。</li><li><strong>幂等</strong>：所有写操作带 <code>operation_id</code> 或 <code>command_id</code>，重复调用不产生重复副作用。</li><li><strong>错误码</strong>：统一为 <code>UNAVAILABLE</code>（可重试）、<code>REJECTED</code>（明确拒绝）、<code>UNKNOWN</code>（结果不明，需对账）、<code>UNSUPPORTED</code>（能力不支持）、<code>AUTH</code>（凭据问题）、<code>QUIESCED</code>（数据目录静止中）。</li><li><strong>秘密</strong>：插件只按名称引用凭据（系统凭据库或数据目录外的认证目录），不把秘密写入配置、账本或操作记录。</li><li><strong>一致性测试</strong>：每类插件都有一套基于假实现（fake）的一致性测试，覆盖幂等、结果未知对账和错误码；新插件必须通过对应的测试套件。</li></ul>
+<ul><li><strong>版本</strong>：<code>plugin_api</code> 为整数，不兼容变更加 1；核心拒绝加载版本不匹配的插件。</li><li><strong>能力声明</strong>：每个实现都返回能力声明，核心据此选择流程，<strong>不按宿主名分支</strong>。</li><li><strong>幂等</strong>：所有写操作带 <code>operation_id</code> 或 <code>command_id</code>，重复调用不产生重复副作用。</li><li><strong>错误码</strong>：统一为 <code>UNAVAILABLE</code>（可重试）、<code>REJECTED</code>（明确拒绝）、<code>UNKNOWN</code>（结果不明，需对账）、<code>UNSUPPORTED</code>（能力不支持）、<code>AUTH</code>（凭据问题）、<code>QUIESCED</code>（数据目录静止中）。接口伪代码中的 <code>Result[...]</code> 在 Python 实现中表示为：成功直接返回值，失败抛出携带以上错误码的 <code>TswError</code>。</li><li><strong>秘密</strong>：插件只按名称引用凭据（系统凭据库或数据目录外的认证目录），不把秘密写入配置、账本或操作记录。</li><li><strong>一致性测试</strong>：每类插件都有一套基于假实现（fake）的一致性测试，覆盖幂等、结果未知对账和错误码；新插件必须通过对应的测试套件。</li></ul>
 <h2 id="6-p1-宿主集成host-integration">6. P1 宿主集成（host integration）</h2>
 <h3 id="61-它解决什么问题">6.1 它解决什么问题</h3>
 <p>主会话和 worker 都是某个宿主（Claude Code、Codex、Copilot）里的模型会话。要让它们按这套流程工作，宿主里必须先有三样东西，而每个宿主放这三样东西的方式都不同：</p>

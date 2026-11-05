@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="tsw-source-sha256" content="7e50777590bed4aeddbc59f5a2272feab83e7c91e954bd8038afa589c9e35d74">
 <title>DN007 账本存储、投影与任务上下文检索</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -66,7 +67,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <ol><li>取共享写闸，检查静止标记；</li><li>取提交锁；</li><li>调用统一归约入口 <code>reduce_to(ledger_tail)</code>：在 SQLite 事务（<code>BEGIN IMMEDIATE</code>）内读取 <code>projected_seq</code>，按序归约 <code>(projected_seq, ledger_tail]</code> 的事件，已应用的序号一律跳过，保证每个事件恰好归约一次、且按顺序；</li><li>读取 L1 当前行与 <code>expected_version</code>，按 DN002 守卫校验；</li><li>追加事件到 L0 活动分段（原子写，带前序摘要，<code>expected_sequence = ledger_tail</code>）；</li><li>再次调用 <code>reduce_to</code>，在<strong>同一个 SQLite 事务</strong>中：归约新事件、更新 <code>projected_seq</code>，并把需要更新卡片或全文索引的任务写入 <code>index_queue</code> 表；</li><li>释放提交锁与共享写闸。</li></ol>
 <p>故障窗口：第 5 步成功、第 6 步之前中断时，事件已提交、L1 落后。任何后续读写都会先经第 3 步的 <code>reduce_to</code> 补齐，<code>index_queue</code> 也在同一事务中补齐，不会丢失待索引项。</p>
 <h3 id="33-读路径与新鲜度">3.3 读路径与新鲜度</h3>
-<ul><li>守卫、调度与状态页只读 L1，不读 L0。</li><li>每次读之前比较 L1 的 <code>projected_seq</code> 与 L0 活动分段末端序号；落后时经提交锁调用同一个 <code>reduce_to</code> 补齐（读者不自行归约），超前或链摘要不匹配时拒绝写命令并提示 <code>tsw ledger audit</code>。</li><li>状态页由 L1 渲染；渲染不改变任何业务时间。</li></ul>
+<ul><li>守卫、调度与状态页只读 L1，不读 L0。</li><li>每次读之前比较 L1 的 <code>projected_seq</code> 与 L0 活动分段末端序号；落后时经提交锁调用同一个 <code>reduce_to</code> 补齐（读者不自行归约），超前或链摘要不匹配时拒绝写命令并提示 <code>tsw ledger audit</code>。</li><li>账本中出现当前 tsw 不认识的事件类型（例如数据目录曾被更新版本写入）时，归约在该事件前停止并回滚本次事务，报告 <code>UNSUPPORTED</code> 并提示升级：写命令和依赖投影的读取都拒绝，不会跳过未知事件得出错误的状态；<code>tsw ledger tail</code> / <code>audit</code> 等不依赖投影的命令照常可用。</li><li>状态页由 L1 渲染；渲染不改变任何业务时间。</li></ul>
 <h3 id="34-检查点与重建">3.4 检查点与重建</h3>
 <ul><li>每 <code>ledger.checkpoint_every</code> 个事件（默认 64）或分段封存时，把 L1 的完整快照写为内容寻址的检查点文件，记录 <code>projected_seq</code>、各表行数与快照摘要。</li><li><code>cache/state.sqlite</code> 丢失时，从最近的检查点恢复，再归约其后的事件，不读更早的封存分段。</li><li>检查点也丢失或校验失败时，<code>tsw ledger rebuild</code> 流式读取全部分段（含导入卷的归约结果），重建 L1 并重新生成检查点。</li><li>归约规则或表结构的版本号写入检查点；版本变化后旧检查点作废，需显式 rebuild。</li></ul>
 <h2 id="4-主会话在什么时候需要哪些历史">4. 主会话在什么时候需要哪些历史</h2>

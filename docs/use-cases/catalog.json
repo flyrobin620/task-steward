@@ -1,0 +1,133 @@
+{
+  "tiers": ["unit", "component", "surface", "conformance", "live"],
+  "useCases": [
+    {
+      "id": "UC-HOME-001",
+      "title": "初始化与定位数据目录",
+      "actor": "用户 / tsw CLI",
+      "acceptance": "数据目录按 DN001 §8.1 的布局创建，tsw-home.json 记录版本；重复初始化不改变内容；非空的其他目录被拒绝；版本不受支持时拒绝打开",
+      "surfaces": ["cli"],
+      "claims": ["cli:init", "cli:home"],
+      "component": "home",
+      "status": "active",
+      "requiredTiers": ["unit", "surface"],
+      "omittedTiers": {
+        "component": "只创建目录与标记文件，unit 已在临时目录中覆盖",
+        "conformance": "不经过插件接口",
+        "live": "不依赖宿主与模型"
+      }
+    },
+    {
+      "id": "UC-TASK-001",
+      "title": "登记任务（T01）",
+      "actor": "主会话 / tsw CLI",
+      "acceptance": "task.registered 事件记录任务书路径与摘要；todo/Txxx.md 与 todo/TODO.md 生成；投影中任务为 intake、revision 1；缺项、非法类型、已用 ID 被拒绝",
+      "surfaces": ["cli"],
+      "claims": ["cli:task register", "cli:task list", "cli:task show"],
+      "component": "tasks",
+      "status": "active",
+      "requiredTiers": ["unit", "component", "surface"],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不依赖宿主与模型"
+      }
+    },
+    {
+      "id": "UC-TASK-002",
+      "title": "记录任务备注",
+      "actor": "主会话 / tsw CLI",
+      "acceptance": "task.note 事件追加备注，任务版本加一；expected_version 不一致或任务不存在时拒绝且不写入",
+      "surfaces": ["cli"],
+      "claims": ["cli:task note"],
+      "component": "tasks",
+      "status": "active",
+      "requiredTiers": ["component", "surface"],
+      "omittedTiers": {
+        "unit": "备注没有独立于账本的纯逻辑",
+        "conformance": "不经过插件接口",
+        "live": "不依赖宿主与模型"
+      }
+    },
+    {
+      "id": "UC-LEDGER-001",
+      "title": "写命令原子提交（幂等、乐观并发、并发写者、崩溃窗口）",
+      "actor": "tsw 的所有写入口",
+      "acceptance": "事件按序追加并形成摘要链；同一 command_id 重复提交返回原结果、内容不同则拒绝（投影重建后仍然成立）；守卫失败不写入；多进程并发写入得到连续的链；追加后中断由下一次读写补齐；进程崩溃不留下半条记录",
+      "surfaces": ["cli"],
+      "claims": [],
+      "component": "ledger",
+      "status": "active",
+      "requiredTiers": ["unit", "component"],
+      "omittedTiers": {
+        "surface": "经 CLI 的写命令由 UC-TASK-001 与 UC-TASK-002 的 surface 测试覆盖",
+        "conformance": "存储后端的约定由 UC-STORE-002 覆盖",
+        "live": "不依赖宿主与模型"
+      }
+    },
+    {
+      "id": "UC-LEDGER-002",
+      "title": "账本分段与全量审计",
+      "actor": "用户 / tsw CLI",
+      "acceptance": "分段按月份或大小封存为 .jsonl.gz 且可跨段读取；封存中断可恢复；审计发现篡改、删除的事件与投影不一致并以非零退出码报告；断链时写命令拒绝",
+      "surfaces": ["cli"],
+      "claims": ["cli:ledger audit", "cli:ledger tail"],
+      "component": "ledger",
+      "status": "active",
+      "requiredTiers": ["component", "surface"],
+      "omittedTiers": {
+        "unit": "审计依赖真实的分段文件",
+        "conformance": "不经过插件接口",
+        "live": "不依赖宿主与模型"
+      }
+    },
+    {
+      "id": "UC-LEDGER-003",
+      "title": "投影检查点与重建",
+      "actor": "tsw / 用户",
+      "acceptance": "按 checkpoint_every 写内容寻址的检查点；投影丢失时从最近有效的检查点恢复而不全量重放；检查点损坏时退回更早的检查点或全量重放；归约版本变化或出现未知事件类型时拒绝继续并要求升级或重建；rebuild 得到相同的投影",
+      "surfaces": ["cli"],
+      "claims": ["cli:ledger rebuild"],
+      "component": "projection",
+      "status": "active",
+      "requiredTiers": ["component", "surface"],
+      "omittedTiers": {
+        "unit": "检查点与重建依赖真实的 SQLite 文件",
+        "conformance": "不经过插件接口",
+        "live": "不依赖宿主与模型"
+      }
+    },
+    {
+      "id": "UC-STORE-001",
+      "title": "静止、在线备份与恢复",
+      "actor": "用户 / tsw CLI",
+      "acceptance": "静止后写入返回 QUIESCED，读取照常；静止等待已获准的写入完成；在线备份带 manifest（不含文件哈希），恢复后审计通过并重建投影；无 manifest 或 manifest 不一致的副本只有显式允许才能恢复",
+      "surfaces": ["cli"],
+      "claims": ["cli:backup", "cli:restore", "cli:quiesce", "cli:resume-writes"],
+      "component": "storage",
+      "status": "active",
+      "requiredTiers": ["component", "surface"],
+      "omittedTiers": {
+        "unit": "全部行为依赖真实文件与锁",
+        "conformance": "存储后端的约定由 UC-STORE-002 覆盖",
+        "live": "不依赖宿主与模型"
+      }
+    },
+    {
+      "id": "UC-STORE-002",
+      "title": "存储后端一致性（P4）",
+      "actor": "插件实现者",
+      "acceptance": "每个存储后端通过同一套一致性测试：能力声明、追加与读取、末端冲突与断链拒绝、产物目录限制、锁互斥、静止时返回 QUIESCED、快照记录账本末端",
+      "surfaces": ["plugin"],
+      "claims": [],
+      "component": "storage",
+      "status": "active",
+      "requiredTiers": ["conformance"],
+      "omittedTiers": {
+        "unit": "一致性套件直接测试实现",
+        "component": "fs 后端的组合行为由 UC-LEDGER 与 UC-STORE-001 覆盖",
+        "surface": "插件接口没有进程外表面",
+        "live": "不依赖宿主与模型"
+      }
+    }
+  ]
+}
