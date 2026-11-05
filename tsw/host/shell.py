@@ -199,6 +199,10 @@ def split(command: str, *, literal_backslash: bool = False) -> list[Segment]:
             i += 1
         elif c in " \t\r":
             flush()
+        elif c == "#" and not have_word:  # a comment, to end of line
+            end = command.find("\n", i)
+            i = n if end < 0 else end
+            continue
         elif c == "\n":
             end_segment()
             if heredocs:  # the bodies follow this line: data, not commands
@@ -219,10 +223,8 @@ def split(command: str, *, literal_backslash: bool = False) -> list[Segment]:
             i += 1 if strip_tabs else 0
             while i < n and command[i] in " \t":
                 i += 1
-            start = i
-            while i < n and command[i] not in " \t\n;&|<>":
-                i += 1
-            heredocs.append((command[start:i].strip("'\""), strip_tabs))
+            delimiter, i = _heredoc_word(command, i)
+            heredocs.append((delimiter, strip_tabs))
             continue
         elif c == "&" and nxt == ">":  # &> file
             flush()
@@ -258,15 +260,49 @@ def split(command: str, *, literal_backslash: bool = False) -> list[Segment]:
     return segments
 
 
-def _skip_heredocs(command: str, i: int, heredocs: list[tuple[str, bool]]) -> int:
-    """Index just past the bodies of the pending heredocs, which start at ``i``."""
+def _heredoc_word(command: str, i: int) -> tuple[str, int]:
+    """The heredoc delimiter at ``i`` after quote removal (``'EOF'``, ``\\EOF``, ``E"O"F``)."""
+    out: list[str] = []
+    quote: str | None = None
+    n = len(command)
+    while i < n:
+        c = command[i]
+        if quote:
+            if c == quote:
+                quote = None
+            else:
+                out.append(c)
+        elif c in "'\"":
+            quote = c
+        elif c == "\\" and i + 1 < n:
+            i += 1
+            out.append(command[i])
+        elif c in " \t\r\n;&|<>()":
+            break
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out), i
+
+
+def _skip_heredocs(command: str, start: int, heredocs: list[tuple[str, bool]]) -> int:
+    """Index just past the bodies of the pending heredocs, which begin at ``start``.
+
+    A body whose delimiter never appears is not skipped: the rest is then read as commands, so
+    that a misread delimiter can only cause a refusal, never hide a command.
+    """
+    i = start
     for delimiter, strip_tabs in heredocs:
+        found = False
         while i < len(command):
             end = command.find("\n", i)
             line = command[i:] if end < 0 else command[i:end]
             i = len(command) if end < 0 else end + 1
             if (line.lstrip("\t") if strip_tabs else line).rstrip("\r") == delimiter:
+                found = True
                 break
+        if not found or not delimiter:
+            return start
     return i
 
 
@@ -470,11 +506,16 @@ def _powershell_paths(name: str, args: list[str]) -> list[str]:
         else:
             positional.append(arg.rstrip(","))
         i += 1
-    if name in _PS_COPIES:  # the source is only read
-        return destinations or positional[1:2]
-    if name in _PS_MOVES:
-        return (paths or positional[:1]) + (destinations or positional[1:2])
-    return paths or positional[:1]
+    # Positional arguments fill the parameters not given by name, in order: Path, Destination.
+    unbound = iter(positional)
+    if not paths:
+        paths = [p for p in [next(unbound, None)] if p is not None]
+    if name in _PS_COPIES or name in _PS_MOVES:
+        if not destinations:
+            destinations = [d for d in [next(unbound, None)] if d is not None]
+        # A copy only reads its source; a move removes it.
+        return destinations if name in _PS_COPIES else paths + destinations
+    return paths
 
 
 def git_invocation(

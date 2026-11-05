@@ -149,6 +149,11 @@ def test_worker_writes_are_confined_to_its_roots(h: Harness, tmp_path: Path) -> 
         ("git -C .. clone https://example.invalid/repo.git local", False),
         ("sed -i -e '/^#/d' notes.txt", True),
         ("powershell -Command \"Set-Content paths.txt 'C:/sdk/bin'\"", True),
+        ("python -X utf8 - <<'PY'\nimport tsw.cli\nPY", False),
+        ("python -X utf8 tools/check.py", True),
+        ("cat <<\\EOF\nhello\nEOF\ngit push origin HEAD", False),
+        ("echo hello # <<EOF\ngit push origin HEAD", False),
+        ('powershell -Command "Copy-Item -Path local.txt ../outside.txt"', False),
         ("git status", True),
     ],
 )
@@ -371,3 +376,27 @@ def test_an_idle_client_hears_about_its_new_tools(h: Harness, tmp_path: Path) ->
     done.set()
     thread.join(30)
     assert lines[1:] == [{"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}]
+
+
+@mark.use_case("UC-HOST-001")
+def test_idle_polls_do_not_read_the_ledger_until_it_changes(
+    h: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = Server(h.home, {SESSION_ENV: "w-1"}, tmp_path / "wt" / "T001")
+    server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    reads: list[int] = []
+    resolve_identity = Server.identity
+
+    def counted(self: Server) -> Any:
+        reads.append(1)
+        return resolve_identity(self)
+
+    monkeypatch.setattr(Server, "identity", counted)
+    # tools/list already noted the ledger's state, so idle polls do not read it again.
+    assert server.list_changes() == [] and server.list_changes() == []
+    assert reads == []
+    worker_task(h, tmp_path)
+    assert server.list_changes() == [
+        {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
+    ]
+    assert len(reads) == 1

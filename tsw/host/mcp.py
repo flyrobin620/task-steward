@@ -87,6 +87,7 @@ class Server:
         self.machine = lease.this_machine()
         self.listed: tuple[str, str | None, str | None] | None = None  # identity at tools/list
         self._listed_lock = threading.Lock()
+        self._marker: tuple[tuple[str, int, int], ...] | None = None
 
     # ------------------------------------------------------------------ context
 
@@ -287,10 +288,16 @@ class Server:
         with self._listed_lock:
             if self.listed is None:
                 return []
+            # Identity only changes with the ledger: compare file sizes and times first, so an
+            # idle session neither reads the ledger nor takes the commit lock.
+            marker = ledger_marker(self.home)
+            if marker == self._marker:
+                return []
             try:
                 current = _list_key(self.identity())
             except Exception:  # an unreadable ledger is reported by the next call, not here
                 return []
+            self._marker = marker
             if current == self.listed:
                 return []
             self.listed = current
@@ -364,6 +371,20 @@ def serve(
     finally:
         stop.set()
     return 0
+
+
+def ledger_marker(home: Home) -> tuple[tuple[str, int, int], ...]:
+    """Names, sizes and modification times of the ledger segments: changes with every commit."""
+    found: list[tuple[str, int, int]] = []
+    try:
+        with os.scandir(home.ledger_dir) as entries:
+            for entry in entries:
+                if entry.is_file():
+                    stat = entry.stat()
+                    found.append((entry.name, stat.st_size, stat.st_mtime_ns))
+    except OSError:
+        return ()
+    return tuple(sorted(found))
 
 
 def _valid_id(value: Any) -> bool:

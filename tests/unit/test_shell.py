@@ -55,6 +55,19 @@ def test_split_honours_quotes_operators_and_redirections() -> None:
         ("python - <<'EOF'\nimport os\nrm -rf /\nEOF\ntouch after.txt", ["after.txt"]),
         ("cat <<-END > out.txt\n\trm x\n\tEND", ["out.txt"]),
         ("grep x <<< 'rm -rf y'", []),
+        ("cat <<\\EOF\nrm body\nEOF\ntouch real.txt", ["real.txt"]),
+        ("cat <<\"E\"O'F'\nrm body\nEOF\ntouch real.txt", ["real.txt"]),
+        # A comment is not a heredoc; an unterminated heredoc hides nothing.
+        ("echo hi # <<EOF\ntouch real.txt", ["real.txt"]),
+        ("cat <<EOF\ntouch real.txt", ["real.txt"]),
+        ("echo a#b > x.txt", ["x.txt"]),
+        # PowerShell positional arguments fill the parameters not given by name.
+        ('powershell -Command "Copy-Item -Path local.txt ../outside.txt"', ["../outside.txt"]),
+        (
+            'powershell -Command "Move-Item -Path local.txt ../outside.txt"',
+            ["local.txt", "../outside.txt"],
+        ),
+        ('powershell -Command "Copy-Item -Destination d.txt s.txt"', ["d.txt"]),
     ],
 )
 def test_write_targets_are_resolved_against_the_tracked_directory(

@@ -45,6 +45,7 @@ _WRITE_WORDS = re.compile(
 )
 _IMPORTS_TSW = re.compile(r"\b(import\s+tsw|from\s+tsw[\s.])")
 _PYTHONS = {"python", "python3", "py", "pythonw"}
+_PYTHON_VALUE_OPTIONS = {"-X", "-W", "--check-hash-based-pycs"}
 _TSW_GLOBAL_OPTIONS = {"--home"}  # options of ``tsw`` that take a value
 # gh options that take a value and may come before the command words (``gh -R o/r pr merge``).
 _GH_VALUE_OPTIONS = {
@@ -180,13 +181,29 @@ def bash_problem(
 
 
 def python_code(program: shell.Program, command: str) -> str:
-    """The code Python runs inline: ``-c CODE``, or stdin (a heredoc) when there is no script."""
+    """The code Python runs inline: ``-c CODE``, or stdin (a heredoc) when there is no script.
+
+    Options are read as the interpreter does: they end at ``-c``, ``-m``, ``-`` or the script.
+    """
     args = list(program.args)
-    for i, arg in enumerate(args):
-        if arg == "-c" and i + 1 < len(args):
-            return args[i + 1]
-    operands = [a for a in args if not a.startswith("-")]
-    return command if not operands or operands == ["-"] else ""
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "-c":
+            return args[i + 1] if i + 1 < len(args) else ""
+        if arg.startswith("-c") and not arg.startswith("--"):
+            return arg[2:]
+        if arg == "-m" or (arg.startswith("-m") and not arg.startswith("--")):
+            return ""  # a module; ``-m tsw`` is caught as a tsw command
+        if arg == "-":
+            return command
+        if arg in _PYTHON_VALUE_OPTIONS:
+            i += 2
+            continue
+        if not arg.startswith("-"):
+            return ""  # a script file
+        i += 1
+    return command
 
 
 # ---------------------------------------------------------------------- the hook
