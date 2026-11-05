@@ -478,3 +478,43 @@ def test_a_failed_listing_does_not_swallow_the_next_change(
     assert server.list_changes() == [
         {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
     ]
+
+
+@mark.use_case("UC-HOST-001")
+def test_a_session_created_for_an_attempt_lists_worker_tools_before_binding(
+    h: Harness, tmp_path: Path
+) -> None:
+    h.register("T001")
+    h.plan("T001")
+    workdir = tmp_path / "wt" / "T001"
+    workdir.mkdir(parents=True)
+    h.run("task_dispatch", task_id="T001", workdir=str(workdir), user_turn=True)
+    started = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
+    # The app has created the session; the orchestrator has not bound it yet.
+    server = Server(h.home, {SESSION_ENV: "w-1"}, workdir)
+    listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    names = {t["name"] for t in listed[0]["result"]["tools"]}
+    assert {"whoami", "review_run", "review_triage", "review_decide", "submit"} <= names
+    assert "task_dispatch" not in names
+    early = server.call("whoami", {})
+    assert (early["role"], early["pending"], early["task_id"]) == ("none", True, "T001")
+    with pytest.raises(TswError) as waiting:
+        server.call("progress_note", {"text": "x"})
+    assert waiting.value.details["reason"] == "not_bound"
+    context = guard(h, "w-1", workdir).run("SessionStart")
+    assert context is not None and "whoami" in context["hookSpecificOutput"]["additionalContext"]
+    elsewhere = Server(h.home, {SESSION_ENV: "x-1"}, tmp_path)
+    assert [t["name"] for t in elsewhere.tools(elsewhere.identity())] == ["whoami"]
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=started["events"][0]["data"]["generation"],
+        outcome="created",
+        session_ref="w-1",
+        brief_delivered=True,
+    )
+    assert server.call("whoami", {})["role"] == "worker"
+    # Another session opened in the same directory after the binding is not a candidate.
+    late = Server(h.home, {SESSION_ENV: "w-2"}, workdir)
+    assert [t["name"] for t in late.tools(late.identity())] == ["whoami"]

@@ -444,7 +444,7 @@
       "id": "UC-HOST-001",
       "title": "按会话解析角色的 MCP server",
       "actor": "主会话 / worker / 其他会话",
-      "acceptance": "stdio JSON-RPC：校验请求格式（-32600 / -32602），按支持的协议版本协商，声明 tools.listChanged 并在会话角色变化后通知；tools/list 只列出该角色可用的工具（未知会话与已撤销会话只有 whoami），tools/call 经同一注册表执行，错误以 isError 返回；worker 只能操作本任务与授权读取集合，会话目录与执行目录不一致时拒绝写工具；已绑定数据目录的会话不能用命令行声明角色；派发时执行目录在数据目录 work/ 下的（研究任务）由 MCP server 创建",
+      "acceptance": "stdio JSON-RPC：校验请求格式（-32600 / -32602），按支持的协议版本协商，声明 tools.listChanged 并在会话角色变化后通知；tools/list 只列出该角色可用的工具（未知会话与已撤销会话只有 whoami），tools/call 经同一注册表执行，错误以 isError 返回；worker 只能操作本任务与授权读取集合，会话目录与执行目录不一致时拒绝写工具；已绑定数据目录的会话不能用命令行声明角色；派发时执行目录在数据目录 work/ 下的（研究任务）由 MCP server 创建；在 starting 且未绑定会话的 attempt 执行目录中启动的会话，从第一次 tools/list 起就列出 worker 工具，绑定前除 whoami 外的调用以 not_bound 拒绝",
       "surfaces": [
         "mcp"
       ],

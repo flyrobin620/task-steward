@@ -154,6 +154,7 @@ tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC �
 
 - 会话 ID 等于某个已登记 attempt 绑定的会话 → 该 attempt 的 worker；该 attempt 已被替换或关闭时 → **已撤销**（revoked）：只暴露 `whoami`，hooks 拒绝写入与命令行，且永远不会因为目录在数据目录而回落成主会话；
 - 会话目录是数据目录（`TSW_HOME`）且不是 worker → **主会话角色**。主会话角色可以使用只读工具（`inbox`、`attention`、`context_*` 等）以及租约工具（领取、在用户确认后 `controller_takeover`）；派发、验收等写工具还要求该会话持有调度租约（G-LEASE）；
+- 还没有绑定、但会话目录是某个 `starting` 且尚未绑定会话的 attempt 的执行目录 → **待绑定的 worker**：工具列表从一开始就按 worker 列出，除 `whoami` 外的调用一律以 `not_bound` 拒绝，直到主会话 `attempt_reconcile` 完成绑定。主会话只能在 app 返回会话 ID 之后才绑定，而新会话的 MCP server 在此之前就已列出工具；实测 Claude Code 不会因 `notifications/tools/list_changed` 重新获取列表，所以必须让第一次列表就是 worker 的。
 - 其他 → 只暴露 `whoami` 和只读帮助。
 
 SessionStart hook 先把会话登记为主会话角色或 worker（按会话 ID 与目录），再尝试领取租约（§6.4）；领取失败时该会话保持主会话角色、只读运行。

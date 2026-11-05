@@ -226,6 +226,12 @@ class Guard:
     def run(self, event: str) -> dict[str, Any] | None:
         who = self.identity()
         if who.role == "none":
+            if who.pending and event == "SessionStart":
+                return context(
+                    "SessionStart",
+                    f"这个会话正在为 TaskSteward 任务 {who.task_id}（attempt {who.attempt}）创建，"
+                    "主会话随后会完成绑定。先调用 whoami：返回 role 为 worker 后再开始工作。",
+                )
             return None
         if who.role == "revoked" and event not in ("SessionStart", "PreToolUse"):
             return None
