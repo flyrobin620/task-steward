@@ -33,7 +33,6 @@ HOST_CLI_COMMANDS = frozenset(
         "config show",
         "config validate",
         "tool list",
-        "host render",
         "host install-hint",
         "lease show",
         "ledger audit",

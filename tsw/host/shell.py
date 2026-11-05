@@ -26,8 +26,25 @@ _POWERSHELL = {"powershell", "pwsh"}
 _DEVICES = {"/dev/null", "nul", "$null", "/dev/stdout", "/dev/stderr", "con"}
 # POSIX tools: every operand is written (or removed).
 _TOUCHES_ALL = {"rm", "rmdir", "mkdir", "touch", "unlink", "truncate", "shred", "tee", "del", "rd"}
-# POSIX tools whose last operand is the destination.
-_TOUCHES_LAST = {"cp", "mv", "install", "ln", "rsync", "copy", "move", "xcopy", "robocopy"}
+# Copies write their destination; moves also remove their sources.
+_COPIES = {"cp", "install", "ln", "rsync", "copy"}
+_MOVES = {"mv", "move"}
+_COPY_VALUE_OPTIONS = {
+    "-t",
+    "--target-directory",
+    "-S",
+    "--suffix",
+    "-m",
+    "--mode",
+    "-o",
+    "--owner",
+    "-g",
+    "--group",
+}
+_WINDOWS_COPIES = {"xcopy", "robocopy"}  # source destination [files] /flags
+_WINDOWS_FLAG = re.compile(r"^/[A-Za-z?]{1,10}(:\S*)?$")
+_SED_VALUE_OPTIONS = {"-e", "--expression", "-f", "--file", "-l", "--line-length"}
+_SED_IN_PLACE = re.compile(r"^(-[A-Za-z]*i|--in-place)")
 # PowerShell cmdlets (and their usual aliases) that write the paths they are given.
 _PS_WRITERS = {
     "set-content",
@@ -39,17 +56,66 @@ _PS_WRITERS = {
     "remove-item",
     "ri",
     "erase",
-    "rename-item",
-    "rni",
-    "copy-item",
-    "cpi",
-    "move-item",
-    "mi",
     "md",
     "export-csv",
     "set-itemproperty",
 }
-_PS_PATH_PARAMS = {"-path", "-literalpath", "-filepath", "-destination", "-target", "-lp"}
+_PS_COPIES = {"copy-item", "cpi"}
+_PS_MOVES = {"move-item", "mi", "rename-item", "rni"}
+_PS_PATH_PARAMS = {"-path", "-literalpath", "-filepath", "-lp"}
+_PS_DEST_PARAMS = {"-destination", "-target"}
+_PS_SWITCHES = {
+    "-force",
+    "-recurse",
+    "-nonewline",
+    "-passthru",
+    "-append",
+    "-whatif",
+    "-confirm",
+    "-noclobber",
+    "-asbytestream",
+    "-notypeinformation",
+    "-container",
+}
+_GIT_GLOBAL_VALUE_OPTIONS = {
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--exec-path",
+    "--config-env",
+}
+_GIT_CLONE_VALUE_OPTIONS = {
+    "-b",
+    "--branch",
+    "-o",
+    "--origin",
+    "-u",
+    "--upload-pack",
+    "--template",
+    "--reference",
+    "--reference-if-able",
+    "--separate-git-dir",
+    "--depth",
+    "--shallow-since",
+    "--shallow-exclude",
+    "-c",
+    "--config",
+    "--filter",
+    "-j",
+    "--jobs",
+    "--server-option",
+    "--bundle-uri",
+}
+_GIT_WORKTREE_VALUE_OPTIONS = {"-b", "-B", "--reason"}
+_GIT_INIT_VALUE_OPTIONS = {
+    "-b",
+    "--initial-branch",
+    "--template",
+    "--separate-git-dir",
+    "--object-format",
+    "--ref-format",
+}
 
 
 @dataclass
@@ -88,6 +154,7 @@ def split(command: str, *, literal_backslash: bool = False) -> list[Segment]:
     have_word = False
     redirect_next = False
     skip_next = False  # the operand of an input redirection
+    heredocs: list[tuple[str, bool]] = []  # (delimiter, strip leading tabs) on this line
     quote: str | None = None
     i, n = 0, len(command)
 
@@ -132,8 +199,31 @@ def split(command: str, *, literal_backslash: bool = False) -> list[Segment]:
             i += 1
         elif c in " \t\r":
             flush()
-        elif c in "\n;":
+        elif c == "\n":
             end_segment()
+            if heredocs:  # the bodies follow this line: data, not commands
+                i = _skip_heredocs(command, i + 1, heredocs)
+                heredocs.clear()
+                continue
+        elif c == ";":
+            end_segment()
+        elif c == "<" and command.startswith("<<<", i):  # here-string: a word of data
+            flush()
+            skip_next = True
+            i += 3
+            continue
+        elif c == "<" and nxt == "<":  # heredoc: remember the delimiter
+            flush()
+            i += 2
+            strip_tabs = i < n and command[i] == "-"
+            i += 1 if strip_tabs else 0
+            while i < n and command[i] in " \t":
+                i += 1
+            start = i
+            while i < n and command[i] not in " \t\n;&|<>":
+                i += 1
+            heredocs.append((command[start:i].strip("'\""), strip_tabs))
+            continue
         elif c == "&" and nxt == ">":  # &> file
             flush()
             i += 2 if command[i + 2 : i + 3] != ">" else 3
@@ -166,6 +256,18 @@ def split(command: str, *, literal_backslash: bool = False) -> list[Segment]:
         i += 1
     end_segment()
     return segments
+
+
+def _skip_heredocs(command: str, i: int, heredocs: list[tuple[str, bool]]) -> int:
+    """Index just past the bodies of the pending heredocs, which start at ``i``."""
+    for delimiter, strip_tabs in heredocs:
+        while i < len(command):
+            end = command.find("\n", i)
+            line = command[i:] if end < 0 else command[i:end]
+            i = len(command) if end < 0 else end + 1
+            if (line.lstrip("\t") if strip_tabs else line).rstrip("\r") == delimiter:
+                break
+    return i
 
 
 def resolve(word: str, cwd: Path) -> Path | None:
@@ -201,8 +303,8 @@ def analyze(command: str, cwd: Path, *, literal_backslash: bool = False, depth: 
                 here = moved
             continue
         _nested(facts, name, args, here, depth)
-        for target in _write_operands(name, args):
-            path = resolve(target, here)
+        for target, base in _write_operands(name, args, here):
+            path = resolve(target, base)
             if path is None:
                 facts.unresolved.append(target)
             else:
@@ -256,52 +358,149 @@ def _nested(facts: Facts, name: str, args: list[str], cwd: Path, depth: int) -> 
         facts.unresolved.extend(nested.unresolved)
 
 
-def _operands(args: list[str]) -> list[str]:
-    return [a for a in args if not a.startswith("-") or a == "-"]
+def split_options(
+    args: list[str] | tuple[str, ...], takes_value: set[str]
+) -> tuple[list[str], dict[str, list[str]]]:
+    """Operands and option values, consuming the values of the options in ``takes_value``."""
+    operands: list[str] = []
+    values: dict[str, list[str]] = {}
+    items = list(args)
+    i = 0
+    rest_are_operands = False
+    while i < len(items):
+        arg = items[i]
+        if rest_are_operands or not arg.startswith("-") or arg == "-":
+            operands.append(arg)
+        elif arg == "--":
+            rest_are_operands = True
+        elif arg.startswith("--") and "=" in arg:
+            key, value = arg.split("=", 1)
+            values.setdefault(key, []).append(value)
+        elif arg in takes_value:
+            if i + 1 < len(items):
+                values.setdefault(arg, []).append(items[i + 1])
+            i += 1
+        elif not arg.startswith("--") and len(arg) > 2 and arg[:2] in takes_value:
+            values.setdefault(arg[:2], []).append(arg[2:])  # -tDIR
+        i += 1
+    return operands, values
 
 
-def _write_operands(name: str, args: list[str]) -> Iterator[str]:
+def _write_operands(name: str, args: list[str], here: Path) -> Iterator[tuple[str, Path]]:
+    """(word, directory it is relative to) for every path the program writes or removes."""
     if name in _TOUCHES_ALL:
-        yield from (a for a in _operands(args) if a != "-")
+        operands, _ = split_options(args, set())
+        yield from ((a, here) for a in operands if a != "-")
         return
-    if name in _TOUCHES_LAST:
-        operands = _operands(args)
+    if name in _COPIES or name in _MOVES:
+        operands, values = split_options(args, _COPY_VALUE_OPTIONS)
+        target = values.get("-t", []) + values.get("--target-directory", [])
+        if target:
+            destinations, sources = target, operands
+        elif len(operands) >= 2:
+            destinations, sources = operands[-1:], operands[:-1]
+        else:
+            return
+        yield from ((d, here) for d in destinations)
+        if name in _MOVES:  # a move removes its sources
+            yield from ((src, here) for src in sources)
+        return
+    if name in _WINDOWS_COPIES:
+        operands = [a for a in args if not _WINDOWS_FLAG.match(a)]
         if len(operands) >= 2:
-            yield operands[-1]
+            yield operands[1], here
+            if name == "robocopy" and any(a.lower() in ("/mov", "/move") for a in args):
+                yield operands[0], here
         return
-    if name == "sed" and any(a.startswith("-i") or a.startswith("--in-place") for a in args):
-        operands = _operands(args)
-        has_script_flag = any(a in ("-e", "-f") or a.startswith("--expression") for a in args)
-        yield from operands if has_script_flag else operands[1:]
+    if name == "sed":
+        if not any(_SED_IN_PLACE.match(a) for a in args):
+            return
+        operands, values = split_options(args, _SED_VALUE_OPTIONS)
+        scripted = any(k in values for k in ("-e", "--expression", "-f", "--file"))
+        yield from ((a, here) for a in (operands if scripted else operands[1:]))
         return
     if name == "dd":
-        yield from (a[3:] for a in args if a.startswith("of="))
+        yield from ((a[3:], here) for a in args if a.startswith("of="))
         return
-    if name in _PS_WRITERS:
-        params = [a.lower() for a in args]
-        named = [args[i + 1] for i, a in enumerate(params[:-1]) if a in _PS_PATH_PARAMS]
-        yield from named or _operands(args)
+    if name in _PS_WRITERS or name in _PS_COPIES or name in _PS_MOVES:
+        yield from ((a, here) for a in _powershell_paths(name, args))
         return
     if name == "git":
-        sub, rest = git_subcommand(args)
-        operands = _operands(rest)
-        if sub == "clone" and len(operands) >= 2:
-            yield operands[-1]
-        elif sub == "worktree" and operands[:1] == ["add"] and len(operands) >= 2:
-            yield operands[1]
+        sub, rest, base = git_invocation(args, here)
+        if sub == "clone":
+            operands, _ = split_options(rest, _GIT_CLONE_VALUE_OPTIONS)
+            if len(operands) >= 2:
+                yield operands[1], base
+            elif operands:
+                repo = operands[0].rstrip("/\\").replace("\\", "/").split("/")[-1]
+                yield repo.split(":")[-1].removesuffix(".git"), base
+        elif sub == "worktree" and rest[:1] == ["add"]:
+            operands, _ = split_options(rest[1:], _GIT_WORKTREE_VALUE_OPTIONS)
+            if operands:
+                yield operands[0], base
+        elif sub == "init":
+            operands, _ = split_options(rest, _GIT_INIT_VALUE_OPTIONS)
+            if operands:
+                yield operands[0], base
 
 
-def git_subcommand(args: tuple[str, ...] | list[str]) -> tuple[str | None, list[str]]:
-    """Skip git's global options (``-C dir``, ``-c k=v``, ``--git-dir=...``)."""
+def _powershell_paths(name: str, args: list[str]) -> list[str]:
+    """Path arguments of a PowerShell cmdlet: named path parameters, else the positional ones."""
+    paths: list[str] = []
+    destinations: list[str] = []
+    positional: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        lowered = arg.lower()
+        if lowered.startswith("-") and len(arg) > 1 and not lowered[1:2].isdigit():
+            key, _, attached = lowered.partition(":")
+            value: str | None
+            if attached:
+                value = arg.split(":", 1)[1]
+            elif key in _PS_SWITCHES or i + 1 >= len(args):
+                value = None
+            else:
+                value = args[i + 1]
+                i += 1
+            if value is not None and key in _PS_PATH_PARAMS:
+                paths.append(value)
+            elif value is not None and key in _PS_DEST_PARAMS:
+                destinations.append(value)
+        else:
+            positional.append(arg.rstrip(","))
+        i += 1
+    if name in _PS_COPIES:  # the source is only read
+        return destinations or positional[1:2]
+    if name in _PS_MOVES:
+        return (paths or positional[:1]) + (destinations or positional[1:2])
+    return paths or positional[:1]
+
+
+def git_invocation(
+    args: tuple[str, ...] | list[str], cwd: Path
+) -> tuple[str | None, list[str], Path]:
+    """git's subcommand, its arguments, and the directory it runs in (after ``-C``)."""
     items = list(args)
+    here = cwd
     i = 0
     while i < len(items):
         arg = items[i]
-        if arg in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"):
+        if arg == "-C" and i + 1 < len(items):
+            here = resolve(items[i + 1], here) or here
+            i += 2
+            continue
+        if arg in _GIT_GLOBAL_VALUE_OPTIONS:
             i += 2
             continue
         if arg.startswith("-"):
             i += 1
             continue
-        return arg.lower(), items[i + 1 :]
-    return None, []
+        return arg.lower(), items[i + 1 :], here
+    return None, [], here
+
+
+def git_subcommand(args: tuple[str, ...] | list[str]) -> tuple[str | None, list[str]]:
+    """Skip git's global options (``-C dir``, ``-c k=v``, ``--git-dir=...``)."""
+    sub, rest, _ = git_invocation(args, Path())
+    return sub, rest

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import IO, Any
@@ -38,6 +39,8 @@ from tsw.tasks import task_row
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 EMPTY: dict[str, Any] = {"type": "object", "properties": {}}
 INVALID_REQUEST = -32600
+POLL_ENV = "TSW_MCP_POLL_SECONDS"
+POLL_SECONDS = 2.0  # how often an idle session checks whether its role changed
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
@@ -83,6 +86,7 @@ class Server:
         self.cwd = cwd
         self.machine = lease.this_machine()
         self.listed: tuple[str, str | None, str | None] | None = None  # identity at tools/list
+        self._listed_lock = threading.Lock()
 
     # ------------------------------------------------------------------ context
 
@@ -236,7 +240,7 @@ class Server:
         if "method" not in message:
             return []  # a response to something we never send
         if "id" not in message:
-            return self._list_changes()  # a notification
+            return self.list_changes()  # a notification
         method, mid = message["method"], message["id"]
         params = message.get("params", {})
         try:
@@ -255,7 +259,8 @@ class Server:
                 result = {}
             elif method == "tools/list":
                 who = self.identity()
-                self.listed = _list_key(who)
+                with self._listed_lock:
+                    self.listed = _list_key(who)
                 result = {"tools": self.tools(who)}
             elif method == "tools/call":
                 if (
@@ -271,19 +276,24 @@ class Server:
                 return [_error(mid, METHOD_NOT_FOUND, f"method not found: {method}")]
         except Exception as exc:  # protocol-level failure; tool errors are reported as results
             return [_error(mid, INTERNAL_ERROR, str(exc))]
-        return [{"jsonrpc": "2.0", "id": mid, "result": result}, *self._list_changes()]
+        return [{"jsonrpc": "2.0", "id": mid, "result": result}, *self.list_changes()]
 
-    def _list_changes(self) -> list[dict[str, Any]]:
-        """``notifications/tools/list_changed`` once the caller's role or binding has changed."""
-        if self.listed is None:
-            return []
-        try:
-            current = _list_key(self.identity())
-        except Exception:  # an unreadable ledger is reported by the next call, not here
-            return []
-        if current == self.listed:
-            return []
-        self.listed = current
+    def list_changes(self) -> list[dict[str, Any]]:
+        """``notifications/tools/list_changed`` once the caller's role or binding has changed.
+
+        Called after every message and, by :func:`serve`, periodically while the client is idle:
+        a session is usually bound by the orchestrator while it is waiting, not while it talks.
+        """
+        with self._listed_lock:
+            if self.listed is None:
+                return []
+            try:
+                current = _list_key(self.identity())
+            except Exception:  # an unreadable ledger is reported by the next call, not here
+                return []
+            if current == self.listed:
+                return []
+            self.listed = current
         return [{"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}]
 
     def _tool_result(self, name: str, args: Mapping[str, Any]) -> dict[str, Any]:
@@ -317,23 +327,42 @@ def serve(
     env: Mapping[str, str] | None = None,
     cwd: Path | None = None,
     opener: Callable[[Path], Home] = open_home,
+    poll_seconds: float | None = None,
 ) -> int:
-    server = Server(opener(home_root), env if env is not None else os.environ, cwd or Path.cwd())
+    environ = env if env is not None else os.environ
+    server = Server(opener(home_root), environ, cwd or Path.cwd())
     reader = stdin or sys.stdin
     writer = stdout or sys.stdout
-    for raw in reader:
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
-            outgoing = [_error(None, -32700, "parse error")]
-        else:
-            outgoing = server.handle(message)
-        for item in outgoing:
-            writer.write(json.dumps(item, ensure_ascii=False) + "\n")
-        writer.flush()
+    interval = poll_seconds or float(environ.get(POLL_ENV) or POLL_SECONDS)
+    lock = threading.Lock()
+    stop = threading.Event()
+
+    def emit(items: list[dict[str, Any]]) -> None:
+        if not items:
+            return
+        with lock:
+            for item in items:
+                writer.write(json.dumps(item, ensure_ascii=False) + "\n")
+            writer.flush()
+
+    def watch() -> None:
+        while not stop.wait(interval):
+            emit(server.list_changes())
+
+    threading.Thread(target=watch, name="tsw-mcp-watch", daemon=True).start()
+    try:
+        for raw in reader:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                emit([_error(None, -32700, "parse error")])
+            else:
+                emit(server.handle(message))
+    finally:
+        stop.set()
     return 0
 
 

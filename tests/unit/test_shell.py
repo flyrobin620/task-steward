@@ -34,6 +34,27 @@ def test_split_honours_quotes_operators_and_redirections() -> None:
         ("cmd /c copy a.txt b.txt", ["b.txt"]),
         ("echo x > /dev/null", []),
         ("git status", []),
+        # A move removes its sources; option values are not operands.
+        ("mv ../other/file.txt local.txt", ["local.txt", "../other/file.txt"]),
+        ("cp -t ../other local.txt", ["../other"]),
+        ("cp --target-directory=out a b", ["out"]),
+        ("git worktree add -b feature ../outside main", ["../outside"]),
+        ("git -C ../other clone https://example.invalid/repo.git local", ["../other/local"]),
+        ("git clone -b dev https://example.invalid/repo.git", ["repo"]),
+        ("git init -b main fresh", ["fresh"]),
+        ("sed -i -e '/^#/d' notes.txt", ["notes.txt"]),
+        ("sed -i -f ../scripts/cleanup.sed notes.txt", ["notes.txt"]),
+        ("sed -Ei.bak 's/a/b/' f.py", ["f.py"]),
+        ("sed 's/a/b/' f.py", []),
+        ('powershell -Command "Set-Content paths.txt C:/sdk/bin"', ["paths.txt"]),
+        ('powershell -Command "Set-Content -Value C:/sdk -Path p.txt -Force"', ["p.txt"]),
+        ('powershell -Command "Copy-Item C:/src/a.txt b.txt"', ["b.txt"]),
+        ('powershell -Command "Move-Item ../a.txt -Destination b.txt"', ["../a.txt", "b.txt"]),
+        ("robocopy src dst /MOV /R:1", ["dst", "src"]),
+        # Heredoc bodies and here-strings are data, not commands.
+        ("python - <<'EOF'\nimport os\nrm -rf /\nEOF\ntouch after.txt", ["after.txt"]),
+        ("cat <<-END > out.txt\n\trm x\n\tEND", ["out.txt"]),
+        ("grep x <<< 'rm -rf y'", []),
     ],
 )
 def test_write_targets_are_resolved_against_the_tracked_directory(

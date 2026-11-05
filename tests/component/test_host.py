@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import threading
+import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +17,7 @@ from tsw.home import Home
 from tsw.host import inbox as inbox_mod
 from tsw.host.guard import Guard
 from tsw.host.identity import SESSION_ENV, resolve
-from tsw.host.mcp import Server
+from tsw.host.mcp import Server, serve
 from tsw.ledger import Ledger
 from tsw.machine.base import Caller
 
@@ -136,6 +140,15 @@ def test_worker_writes_are_confined_to_its_roots(h: Harness, tmp_path: Path) -> 
             False,
         ),
         ("python -c 'from tsw.cli import main'", False),
+        ("python - <<'EOF'\nimport tsw.cli\nEOF", False),
+        ("rg 'import tsw' tsw", True),
+        ("git commit -m 'Fix import tsw behavior'", True),
+        ("tsw host render", False),
+        ("mv ../other/file.txt local.txt", False),
+        ("cp -t ../other local.txt", False),
+        ("git -C .. clone https://example.invalid/repo.git local", False),
+        ("sed -i -e '/^#/d' notes.txt", True),
+        ("powershell -Command \"Set-Content paths.txt 'C:/sdk/bin'\"", True),
         ("git status", True),
     ],
 )
@@ -314,3 +327,47 @@ def test_the_server_announces_new_tools_once_a_session_is_bound(h: Harness, tmp_
     }
     assert {"submit", "review_start"} <= names
     assert server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"}) == []
+
+
+@mark.use_case("UC-HOST-001")
+def test_an_idle_client_hears_about_its_new_tools(h: Harness, tmp_path: Path) -> None:
+    workdir = tmp_path / "wt" / "T001"
+    lines: list[dict[str, Any]] = []
+    listed = threading.Event()
+    done = threading.Event()
+
+    class Out:
+        def write(self, text: str) -> None:
+            lines.append(json.loads(text))
+            if lines[-1].get("id") == 1:
+                listed.set()
+
+        def flush(self) -> None:
+            pass
+
+    def incoming() -> Iterator[str]:
+        yield json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}) + "\n"
+        done.wait(30)  # the client sends nothing more until it is told the list changed
+
+    thread = threading.Thread(
+        target=serve,
+        args=(h.home.root,),
+        kwargs={
+            "stdin": incoming(),
+            "stdout": Out(),
+            "env": {SESSION_ENV: "w-1"},
+            "cwd": workdir,
+            "opener": lambda _root: h.home,  # pyright: ignore[reportUnknownLambdaType]
+            "poll_seconds": 0.05,
+        },
+        daemon=True,
+    )
+    thread.start()
+    assert listed.wait(30)
+    worker_task(h, tmp_path)  # bound while the client is idle
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline and len(lines) < 2:
+        time.sleep(0.05)
+    done.set()
+    thread.join(30)
+    assert lines[1:] == [{"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}]

@@ -158,9 +158,9 @@ tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC �
 
 SessionStart hook 先把会话登记为主会话角色或 worker（按会话 ID 与目录），再尝试领取租约（§6.4）；领取失败时该会话保持主会话角色、只读运行。
 
-cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一致时拒绝写工具，hooks 也拒绝写入与命令行（只允许 `cd` 回执行目录）。worker 绑定后 MCP server 发出 `notifications/tools/list_changed`，客户端据此刷新工具列表。
+cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一致时拒绝写工具，hooks 也拒绝写入与命令行（只允许 `cd` 回执行目录）。worker 绑定后 MCP server 发出 `notifications/tools/list_changed`（客户端空闲时也由后台每 2 秒检查一次），客户端据此刷新工具列表。
 
-身份只来自会话本身：在已绑定数据目录的会话里（主会话、worker、已撤销），`tsw` 命令行只开放不需要声明角色的入口（`mcp`、`guard`、`review run` 与只读命令），`tsw tool run --role` 等写入口一律拒绝，必须走 MCP。hooks 拿到同一个会话 ID（环境变量）以及 payload 中的内部会话 ID、cwd、权限模式，做同样的检查。不在 prompt 中放 token 或 capability 文件路径。
+身份只来自会话本身：在已绑定数据目录的会话里（主会话、worker、已撤销），`tsw` 命令行只开放不需要声明角色的入口（`mcp`、`guard`、`review run` 与只读命令；`host render` 等维护命令在会话外运行），`tsw tool run --role` 等写入口一律拒绝，必须走 MCP。hooks 拿到同一个会话 ID（环境变量）以及 payload 中的内部会话 ID、cwd、权限模式，做同样的检查。不在 prompt 中放 token 或 capability 文件路径。
 
 ### 7.2 按角色的 MCP 工具
 

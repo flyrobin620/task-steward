@@ -46,6 +46,28 @@ _WRITE_WORDS = re.compile(
 _IMPORTS_TSW = re.compile(r"\b(import\s+tsw|from\s+tsw[\s.])")
 _PYTHONS = {"python", "python3", "py", "pythonw"}
 _TSW_GLOBAL_OPTIONS = {"--home"}  # options of ``tsw`` that take a value
+# gh options that take a value and may come before the command words (``gh -R o/r pr merge``).
+_GH_VALUE_OPTIONS = {
+    "-R",
+    "--repo",
+    "--hostname",
+    "-X",
+    "--method",
+    "-H",
+    "--header",
+    "-f",
+    "--raw-field",
+    "-F",
+    "--field",
+    "-q",
+    "--jq",
+    "-t",
+    "--template",
+    "--input",
+    "-p",
+    "--preview",
+    "--cache",
+}
 _TSW_GROUPS = {"task", "ledger", "config", "lease", "tool", "host", "review"}
 
 
@@ -133,12 +155,12 @@ def bash_problem(
         for top in TSW_OWNED:
             if f"{home_text}/{top}" in normalized:
                 return f"数据目录的 {top}/ 只由 tsw 写入，请使用 tsw 工具"
-    if _IMPORTS_TSW.search(command):
-        return "宿主会话中不能直接导入 tsw 包；请使用 tsw MCP 工具"
     for program in facts.programs:
         cli = tsw_cli_command(program)
         if cli is not None and cli not in HOST_CLI_COMMANDS:
             return f"宿主会话中不能运行 tsw {cli}；写操作请使用 tsw MCP 工具"
+        if program.name in _PYTHONS and _IMPORTS_TSW.search(python_code(program, command)):
+            return "宿主会话中不能直接导入 tsw 包；请使用 tsw MCP 工具"
         if not worker:
             continue
         if program.name == "git":
@@ -146,14 +168,25 @@ def bash_problem(
             if sub == "push" and not push_allowed:
                 return "该仓库没有推送授权（repositories.*.delivery.push）"
         elif program.name == "gh":
-            words = [a.lower() for a in program.args if not a.startswith("-")]
+            words, _ = shell.split_options(program.args, _GH_VALUE_OPTIONS)
+            words = [w.lower() for w in words]
             if words[:2] == ["pr", "merge"] or (
-                words[:1] == ["api"] and any("merge" in w for w in words[1:])
+                words[:1] == ["api"] and any("merge" in w.lower() for w in program.args)
             ):
                 return "worker 不能合并 PR"
             if words[:2] == ["pr", "create"] and not pr_allowed:
                 return "创建 PR 需要仓库的 delivery.create_pr 授权"
     return None
+
+
+def python_code(program: shell.Program, command: str) -> str:
+    """The code Python runs inline: ``-c CODE``, or stdin (a heredoc) when there is no script."""
+    args = list(program.args)
+    for i, arg in enumerate(args):
+        if arg == "-c" and i + 1 < len(args):
+            return args[i + 1]
+    operands = [a for a in args if not a.startswith("-")]
+    return command if not operands or operands == ["-"] else ""
 
 
 # ---------------------------------------------------------------------- the hook
