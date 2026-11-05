@@ -13,6 +13,7 @@ from tsw.home import Home
 from tsw.host import inbox as inbox_mod
 from tsw.host.guard import Guard
 from tsw.host.identity import SESSION_ENV, resolve
+from tsw.host.mcp import Server
 from tsw.ledger import Ledger
 from tsw.machine.base import Caller
 
@@ -70,6 +71,25 @@ def test_identity_by_session_and_directory(h: Harness, tmp_path: Path) -> None:
         assert resolve(conn, h.home, {}, h.home.root).role == "none"
 
 
+@mark.use_case("UC-HOST-001")
+def test_a_replaced_session_is_revoked_not_the_orchestrator(h: Harness, tmp_path: Path) -> None:
+    session, workdir = worker_task(h, tmp_path)
+    h.run("attempt_update", task_id="T001", attempt="a1", event="closed", evidence="closed")
+    with h.ledger.view() as conn:
+        for cwd in (workdir, h.home.root):
+            who = resolve(conn, h.home, {SESSION_ENV: session}, cwd)
+            assert (who.role, who.task_id, who.phase) == ("revoked", "T001", "closed")
+    write = guard(
+        h, session, workdir, tool_name="Write", tool_input={"file_path": str(workdir / "a.py")}
+    )
+    assert write.run("PreToolUse") is not None
+    bash = guard(h, session, h.home.root, tool_name="Bash", tool_input={"command": "ls"})
+    assert bash.run("PreToolUse") is not None
+    read = guard(h, session, workdir, tool_name="Read", tool_input={"file_path": "a.py"})
+    assert read.run("PreToolUse") is None
+    assert guard(h, session, workdir).run("Stop") is None
+
+
 @mark.use_case("UC-HOST-002")
 def test_worker_writes_are_confined_to_its_roots(h: Harness, tmp_path: Path) -> None:
     session, workdir = worker_task(h, tmp_path)
@@ -92,6 +112,67 @@ def test_worker_writes_are_confined_to_its_roots(h: Harness, tmp_path: Path) -> 
     assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
     push = guard(h, session, workdir, tool_name="Bash", tool_input={"command": "git push"})
     assert push.run("PreToolUse") is not None  # no delivery authorisation configured
+
+
+@mark.use_case("UC-HOST-002")
+@mark.parametrize(
+    ("command", "allowed"),
+    [
+        ("echo x > notes.md", True),
+        ("cd sub && echo x > notes.md", True),
+        ("echo x > ../escape.md", False),
+        ("cd .. && touch escape.md", False),
+        ("cp a.py ../../b.py", False),
+        ("tee -a {outside}/log.txt", False),
+        (r'powershell -Command "Set-Content -Path ..\x.txt -Value 1"', False),
+        ("bash -c 'rm -rf ../other'", False),
+        ("echo x > {draft}", True),
+        ("python -m tsw tool run task_dispatch --role orchestrator --input {{}}", False),
+        ("tsw task list", False),
+        ("tsw config validate", True),
+        (
+            "env -u CLAUDE_CODE_HOST_SESSION_ID python {launcher} tool run x --role system "
+            "--input {{}}",
+            False,
+        ),
+        ("python -c 'from tsw.cli import main'", False),
+        ("git status", True),
+    ],
+)
+def test_worker_shell_writes_are_confined_too(
+    h: Harness, tmp_path: Path, command: str, allowed: bool
+) -> None:
+    session, workdir = worker_task(h, tmp_path)
+    draft = h.home.root / "work" / "T001" / "a1" / "r.md"
+    # Unquoted backslashes are escapes in bash, so sessions write paths with forward slashes.
+    text = command.format(
+        outside=(tmp_path / "elsewhere").as_posix(),
+        draft=draft.as_posix(),
+        launcher="plugin/bin/tsw_launch.py",
+    )
+    decision = guard(h, session, workdir, tool_name="Bash", tool_input={"command": text}).run(
+        "PreToolUse"
+    )
+    assert (decision is None) is allowed, decision
+
+
+@mark.use_case("UC-HOST-002")
+def test_a_worker_away_from_its_workdir_may_only_cd_back(h: Harness, tmp_path: Path) -> None:
+    session, workdir = worker_task(h, tmp_path)
+    away = tmp_path / "away"
+    away.mkdir()
+    for tool, tool_input in (
+        ("Write", {"file_path": str(workdir / "a.py")}),
+        ("Bash", {"command": "git status"}),
+        ("Bash", {"command": f'cd "{tmp_path}"'}),
+    ):
+        decision = guard(h, session, away, tool_name=tool, tool_input=tool_input).run("PreToolUse")
+        assert (
+            decision is not None
+            and "cd" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+        )
+    back = guard(h, session, away, tool_name="Bash", tool_input={"command": f'cd "{workdir}"'})
+    assert back.run("PreToolUse") is None
 
 
 @mark.use_case("UC-HOST-002")
@@ -165,6 +246,16 @@ def test_stop_blocks_on_unhandled_reports_and_unfinished_reviews(
     )
 
 
+def ack(h: Harness, sequences: list[int], session: str = "orch-1") -> Any:
+    return inbox_mod.ack(
+        sequences,
+        actor={"role": "orchestrator", "session_id": session},
+        config=h.config,
+        session_id=session,
+        machine="m1",
+    )
+
+
 @mark.use_case("UC-HOST-003")
 def test_inbox_ack_and_attention(h: Harness, tmp_path: Path) -> None:
     session, _ = worker_task(h, tmp_path)
@@ -175,13 +266,15 @@ def test_inbox_ack_and_attention(h: Harness, tmp_path: Path) -> None:
     assert [p["type"] for p in pending] == ["worker.question"]
     assert items["judgments"][0]["task_id"] == "T001"
     assert items["inbox"] == [{"count": 1}]
-    h.ledger.commit(
-        inbox_mod.ack([pending[0]["sequence"]], actor={"role": "orchestrator"}, config=h.config)
-    )
+    first = [pending[0]["sequence"]]
+    with pytest.raises(TswError) as no_lease:
+        h.ledger.commit(ack(h, first, session="orch-2"))
+    assert no_lease.value.details["reason"] == "lease_held"
+    h.ledger.commit(ack(h, first))
     with h.ledger.view() as conn:
         assert inbox_mod.inbox(conn, h.ledger.storage, h.config) == []
     with pytest.raises(TswError):
-        h.ledger.commit(inbox_mod.ack([1], actor={"role": "orchestrator"}, config=h.config))
+        h.ledger.commit(ack(h, [1]))
     h.ledger.rebuild()
     with h.ledger.view() as conn:
         assert inbox_mod.inbox(conn, h.ledger.storage, h.config) == []
@@ -199,3 +292,25 @@ def test_status_page_follows_every_commit(h: Harness) -> None:
     h.run("task_cancel", task_id="T002", user_source=h.source("T002", 1, "cancel"))
     page = (h.home.root / "views" / "STATUS.html").read_text(encoding="utf-8")
     assert "已取消" in page
+
+
+@mark.use_case("UC-HOST-001")
+def test_the_server_announces_new_tools_once_a_session_is_bound(h: Harness, tmp_path: Path) -> None:
+    workdir = tmp_path / "wt" / "T001"  # created when the task is dispatched below
+    server = Server(h.home, {SESSION_ENV: "w-1"}, workdir)
+    listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert [t["name"] for t in listed[0]["result"]["tools"]] == ["whoami"]
+    assert server.handle({"jsonrpc": "2.0", "id": 2, "method": "ping"}) == [
+        {"jsonrpc": "2.0", "id": 2, "result": {}}
+    ]
+    worker_task(h, tmp_path)  # the orchestrator binds this session to T001/a1
+    replies = server.handle({"jsonrpc": "2.0", "id": 3, "method": "ping"})
+    assert replies[1] == {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
+    names = {
+        t["name"]
+        for t in server.handle({"jsonrpc": "2.0", "id": 4, "method": "tools/list"})[0]["result"][
+            "tools"
+        ]
+    }
+    assert {"submit", "review_start"} <= names
+    assert server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"}) == []

@@ -419,7 +419,7 @@
       "id": "UC-HOST-001",
       "title": "按会话解析角色的 MCP server",
       "actor": "主会话 / worker / 其他会话",
-      "acceptance": "stdio JSON-RPC：initialize 回显协议版本，tools/list 只列出该角色可用的工具（未知会话只有 whoami），tools/call 经同一注册表执行，错误以 isError 返回；worker 只能操作本任务与授权读取集合，会话目录与执行目录不一致时拒绝写工具",
+      "acceptance": "stdio JSON-RPC：校验请求格式（-32600 / -32602），按支持的协议版本协商，声明 tools.listChanged 并在会话角色变化后通知；tools/list 只列出该角色可用的工具（未知会话与已撤销会话只有 whoami），tools/call 经同一注册表执行，错误以 isError 返回；worker 只能操作本任务与授权读取集合，会话目录与执行目录不一致时拒绝写工具；已绑定数据目录的会话不能用命令行声明角色",
       "surfaces": [
         "mcp"
       ],
@@ -447,7 +447,7 @@
       "id": "UC-HOST-002",
       "title": "hooks 规则执行（SessionStart、PreToolUse、UserPromptSubmit、Stop）",
       "actor": "Claude Code 宿主",
-      "acceptance": "SessionStart 为主会话领取租约并注入 attention 摘要、为 worker 注入任务与可写路径；PreToolUse 拒绝写出可写路径、写入 tsw 管理的目录、未授权推送与 PR、对可执行文件求哈希、未落账的 start_session；[report] 注入回传提示；Stop 在有未处理回传或评审未收尾时拦截一次，并记录 worker.turn_ended；钩子内部错误不影响会话",
+      "acceptance": "SessionStart 为主会话领取租约并注入 attention 摘要、为 worker 注入任务与可写路径；PreToolUse 拒绝写出可写路径（编辑工具与可识别的 shell 写入）、写入 tsw 管理的目录、未授权推送与 PR（识别带路径与 .exe 的程序名）、对可执行文件求哈希、未落账的 start_session、在会话里调用 tsw 写命令；worker 离开执行目录时只允许 cd 回去；已撤销会话不能写入；[report] 注入回传提示；Stop 在有未处理回传或评审未收尾时拦截一次，并记录 worker.turn_ended；钩子内部错误不影响会话",
       "surfaces": [
         "mcp",
         "cli"
@@ -471,7 +471,7 @@
       "id": "UC-HOST-003",
       "title": "inbox、attention 与 STATUS 页",
       "actor": "主会话",
-      "acceptance": "可回传事件进入 inbox，确认后以账本事件记录且重建后保持；attention 只读列出待判断、待答复、需对账、需停止、stale、待启动、待核验、暂停；STATUS 页随每次提交重新生成，显示记录时间而非渲染时间",
+      "acceptance": "可回传事件进入 inbox，持有租约的主会话确认后以账本事件记录且重建后保持；attention 只读列出待判断、待答复、需对账、需停止、stale、待启动、待核验、暂停；STATUS 页随每次提交重新生成，显示记录时间而非渲染时间",
       "surfaces": [
         "mcp",
         "cli"
@@ -497,7 +497,7 @@
       "id": "UC-HOST-004",
       "title": "Claude Code 插件包与生成文件",
       "actor": "用户",
-      "acceptance": "插件清单、MCP 注册、hooks 配置都指向插件内的启动器；orchestrate skill 存在；本仓库自带本地插件市场；tsw host render 生成数据目录的 CLAUDE.md，install-hint 给出安装步骤且不修改全局设置",
+      "acceptance": "插件清单、MCP 注册、hooks 配置都指向插件内的启动器；插件复制到产品仓库之外（插件缓存）时按 TSW_REPO、产品仓库、数据目录记录的 product_repo 找到运行时；orchestrate skill 存在；本仓库自带本地插件市场；tsw host render 生成数据目录的 CLAUDE.md，install-hint 给出安装步骤且不修改全局设置",
       "surfaces": [
         "mcp",
         "cli"

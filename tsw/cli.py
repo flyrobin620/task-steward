@@ -19,9 +19,11 @@ from tsw import __version__, lease
 from tsw.config import EffectiveConfig, load_config
 from tsw.errors import EXIT_CODES, ErrorCode, TswError
 from tsw.events import utc_now
-from tsw.home import Home, init_home, open_home, resolve_home
+from tsw.home import Home, init_home, open_home, record_product_repo, resolve_home
 from tsw.host.claude_code import install_hint, render_instructions
 from tsw.host.guard import run as run_guard
+from tsw.host.identity import HOST_CLI_COMMANDS, SESSION_ENV
+from tsw.host.identity import resolve as resolve_identity
 from tsw.host.mcp import serve
 from tsw.ledger import Ledger
 from tsw.machine.base import REGISTRY, Caller
@@ -67,7 +69,8 @@ def _writer(args: argparse.Namespace) -> tuple[Ledger, EffectiveConfig]:
 def _cmd_init(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)
     home, created = init_home(root)
-    return {"home": str(home.root), "created": created}
+    record_product_repo(home, REPO_ROOT)
+    return {"home": str(home.root), "created": created, "product_repo": str(REPO_ROOT)}
 
 
 def _cmd_home(args: argparse.Namespace) -> dict[str, Any]:
@@ -415,6 +418,36 @@ def _print_human(result: dict[str, Any]) -> None:
             print(f"{key}: {value}")
 
 
+def command_path(args: argparse.Namespace) -> str:
+    sub = getattr(args, f"{args.command}_command", None)
+    return f"{args.command} {sub}" if sub else str(args.command)
+
+
+def _check_host_session(args: argparse.Namespace) -> None:
+    """Inside a TaskSteward session the caller is the session: no ``--role`` on the command line.
+
+    A session bound to the data directory (orchestrator, worker, or a revoked worker) is
+    identified by the MCP server and the hooks; a command line that names its own role could
+    claim any of them, so such sessions only get the commands that resolve the caller
+    themselves or only read (DN001 §7.1). Unrelated Claude sessions are not affected.
+    """
+    if not os.environ.get(SESSION_ENV) or command_path(args) in HOST_CLI_COMMANDS:
+        return
+    root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)
+    if not (root / "tsw-home.json").is_file():
+        return
+    home = open_home(root)
+    with Ledger(home).view() as conn:
+        role = resolve_identity(conn, home, os.environ, Path.cwd()).role
+    if role != "none":
+        raise TswError(
+            ErrorCode.REJECTED,
+            "Claude Code 会话中不能用命令行执行该操作，请使用 tsw MCP 工具",
+            reason="host_session_cli",
+            command=command_path(args),
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
@@ -424,6 +457,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     handler: Handler = args.handler
     try:
+        _check_host_session(args)
         result = handler(args)
     except TswError as exc:
         if args.json:

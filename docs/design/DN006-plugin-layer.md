@@ -189,6 +189,10 @@ class HostIntegration(Protocol):
 
 宿主声明为 `advisory` 时，STATUS 页和任务报告标注“规则为提示级”，并要求主会话在 G-ACCEPT 中额外核对写入范围（`git status` 与 diff 范围检查）。
 
+`claude-code` 的 enforced 有边界：编辑类工具（Write、Edit 等）的目标路径可以精确检查；Bash 命令只能尽力解析——识别重定向、`tee`、`cp`/`mv`/`rm`/`mkdir`、`sed -i`、PowerShell 的 `Set-Content`/`Out-File`/`New-Item` 等常见写法，跟踪 `cd`，并递归读取 `bash -c`、`powershell -Command`、`cmd /c`；变量、脚本内部的写入看不到。因此 G-ACCEPT 对 `claude-code` 同样核对 diff 是否落在可写根内。git/gh 的推送、建 PR、合并按程序名识别（忽略路径与 `.exe` 后缀）。
+
+插件由 Claude Code 复制到插件缓存运行，缓存里没有 `tsw` 运行时。启动器按顺序查找：`TSW_REPO` 环境变量、插件所在的产品仓库（源码树或原地使用的本地市场）、`tsw init` 写入数据目录标记文件的 `product_repo`；都找不到时 MCP server 报错退出，hooks 静默放行。
+
 ## 7. P2 会话适配器（session）
 
 ### 7.1 职责与能力

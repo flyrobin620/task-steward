@@ -33,13 +33,23 @@ from tsw.machine.schemas import SCHEMAS
 from tsw.storage.fs import FsStorage
 from tsw.tasks import task_row
 
-PROTOCOL_DEFAULT = "2025-06-18"
+# Protocol revisions this server implements (tools only, no batching), newest first. A client
+# asking for another revision gets the newest one and decides whether to continue.
+PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 EMPTY: dict[str, Any] = {"type": "object", "properties": {}}
+INVALID_REQUEST = -32600
+METHOD_NOT_FOUND = -32601
+INVALID_PARAMS = -32602
+INTERNAL_ERROR = -32603
 
 # Read and lease tools that only the MCP surface offers; the state-machine tools come from the
 # registry. Keys are tool names, values (roles, description, input schema).
 HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
-    "whoami": (("orchestrator", "worker", "none"), "调用者的角色、任务、attempt 与可写路径", EMPTY),
+    "whoami": (
+        ("orchestrator", "worker", "revoked", "none"),
+        "调用者的角色、任务、attempt 与可写路径",
+        EMPTY,
+    ),
     "task_read": (
         ("orchestrator", "worker"),
         "读取任务（worker 只能读本任务）",
@@ -72,6 +82,7 @@ class Server:
         self.env = dict(env)
         self.cwd = cwd
         self.machine = lease.this_machine()
+        self.listed: tuple[str, str | None, str | None] | None = None  # identity at tools/list
 
     # ------------------------------------------------------------------ context
 
@@ -171,6 +182,8 @@ class Server:
                     sequences,
                     actor={"role": "orchestrator", "session_id": who.session_id},
                     config=config.require_valid(),
+                    session_id=who.session_id,
+                    machine=self.machine,
                 )
             )
             return {"acked": [e.data["sequences"] for e in result.events]}
@@ -214,35 +227,64 @@ class Server:
 
     # ------------------------------------------------------------------ protocol
 
-    def handle(self, message: Mapping[str, Any]) -> dict[str, Any] | None:
-        method = message.get("method")
-        mid = message.get("id")
-        if mid is None:
-            return None  # a notification
+    def handle(self, message: Any) -> list[dict[str, Any]]:
+        """What to send back for one incoming message: a response and/or notifications."""
+        problem = envelope_problem(message)
+        if problem is not None:
+            mid = message.get("id") if isinstance(message, dict) else None
+            return [_error(mid if _valid_id(mid) else None, INVALID_REQUEST, problem)]
+        if "method" not in message:
+            return []  # a response to something we never send
+        if "id" not in message:
+            return self._list_changes()  # a notification
+        method, mid = message["method"], message["id"]
+        params = message.get("params", {})
         try:
             if method == "initialize":
-                params = message.get("params") or {}
+                if not isinstance(params, dict):
+                    return [_error(mid, INVALID_PARAMS, "initialize 的 params 必须是对象")]
+                requested = params.get("protocolVersion")
                 result: Any = {
-                    "protocolVersion": params.get("protocolVersion", PROTOCOL_DEFAULT),
-                    "capabilities": {"tools": {}},
+                    "protocolVersion": (
+                        requested if requested in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0]
+                    ),
+                    "capabilities": {"tools": {"listChanged": True}},
                     "serverInfo": {"name": "tsw", "version": __version__},
                 }
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
-                result = {"tools": self.tools(self.identity())}
+                who = self.identity()
+                self.listed = _list_key(who)
+                result = {"tools": self.tools(who)}
             elif method == "tools/call":
-                params = message.get("params") or {}
-                result = self._tool_result(str(params.get("name")), params.get("arguments") or {})
+                if (
+                    not isinstance(params, dict)
+                    or not isinstance(params.get("name"), str)
+                    or not isinstance(params.get("arguments", {}), dict)
+                ):
+                    return [
+                        _error(mid, INVALID_PARAMS, "tools/call 需要字符串 name 与对象 arguments")
+                    ]
+                result = self._tool_result(params["name"], params.get("arguments") or {})
             else:
-                return {
-                    "jsonrpc": "2.0",
-                    "id": mid,
-                    "error": {"code": -32601, "message": f"method not found: {method}"},
-                }
+                return [_error(mid, METHOD_NOT_FOUND, f"method not found: {method}")]
         except Exception as exc:  # protocol-level failure; tool errors are reported as results
-            return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": str(exc)}}
-        return {"jsonrpc": "2.0", "id": mid, "result": result}
+            return [_error(mid, INTERNAL_ERROR, str(exc))]
+        return [{"jsonrpc": "2.0", "id": mid, "result": result}, *self._list_changes()]
+
+    def _list_changes(self) -> list[dict[str, Any]]:
+        """``notifications/tools/list_changed`` once the caller's role or binding has changed."""
+        if self.listed is None:
+            return []
+        try:
+            current = _list_key(self.identity())
+        except Exception:  # an unreadable ledger is reported by the next call, not here
+            return []
+        if current == self.listed:
+            return []
+        self.listed = current
+        return [{"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}]
 
     def _tool_result(self, name: str, args: Mapping[str, Any]) -> dict[str, Any]:
         try:
@@ -286,17 +328,44 @@ def serve(
         try:
             message = json.loads(line)
         except json.JSONDecodeError:
-            response: dict[str, Any] | None = {
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {"code": -32700, "message": "parse error"},
-            }
+            outgoing = [_error(None, -32700, "parse error")]
         else:
-            response = server.handle(message) if isinstance(message, dict) else None
-        if response is not None:
-            writer.write(json.dumps(response, ensure_ascii=False) + "\n")
-            writer.flush()
+            outgoing = server.handle(message)
+        for item in outgoing:
+            writer.write(json.dumps(item, ensure_ascii=False) + "\n")
+        writer.flush()
     return 0
+
+
+def _valid_id(value: Any) -> bool:
+    return isinstance(value, (str, int)) and not isinstance(value, bool)
+
+
+def envelope_problem(message: Any) -> str | None:
+    """Why a message is not a valid JSON-RPC 2.0 request, notification or response."""
+    if not isinstance(message, dict):
+        return "消息必须是 JSON 对象（不支持批量请求）"
+    if message.get("jsonrpc") != "2.0":
+        return 'jsonrpc 必须是 "2.0"'
+    if "method" in message:
+        if not isinstance(message["method"], str):
+            return "method 必须是字符串"
+        if "id" in message and not _valid_id(message["id"]):
+            return "id 必须是字符串或整数"
+        if "params" in message and not isinstance(message["params"], (dict, list)):
+            return "params 必须是对象或数组"
+        return None
+    if _valid_id(message.get("id")) and ("result" in message or "error" in message):
+        return None
+    return "缺少 method"
+
+
+def _error(mid: Any, code: int, text: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": text}}
+
+
+def _list_key(who: Identity) -> tuple[str, str | None, str | None]:
+    return (who.role, who.task_id, who.attempt)
 
 
 def tool_names() -> list[str]:

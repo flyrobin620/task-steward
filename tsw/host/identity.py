@@ -3,7 +3,10 @@
 The app gives every session process its app session ID (``CLAUDE_CODE_HOST_SESSION_ID``), for
 the MCP server and for hooks alike. A session bound to an attempt is that attempt's worker; a
 session opened in the data directory is the orchestrator role; anything else may only ask who
-it is. The working directory is a consistency check, never the identity itself.
+it is. A session that was ever bound to an attempt keeps that binding: once the attempt is
+replaced or closed the session is ``revoked`` (it may only ask who it is and read), and it never
+falls back to the orchestrator role even if it is opened in the data directory. The working
+directory is a consistency check, never the identity itself.
 """
 
 from __future__ import annotations
@@ -18,6 +21,24 @@ from tsw.home import Home
 from tsw.machine.model import row_dict
 
 SESSION_ENV = "CLAUDE_CODE_HOST_SESSION_ID"
+WORKER_PHASES = frozenset({"live", "standby", "stopped"})
+# The only ``tsw`` commands a host session may run on the command line; everything that writes
+# the ledger goes through the MCP server, where the caller is the session itself (DN001 §7.1).
+HOST_CLI_COMMANDS = frozenset(
+    {
+        "mcp",
+        "guard",
+        "review run",
+        "home",
+        "config show",
+        "config validate",
+        "tool list",
+        "host render",
+        "host install-hint",
+        "lease show",
+        "ledger audit",
+    }
+)
 
 
 def _norm(path: Path) -> str:
@@ -31,7 +52,7 @@ def within(path: Path, root: Path) -> bool:
 
 @dataclass(frozen=True)
 class Identity:
-    role: str  # orchestrator | worker | none
+    role: str  # orchestrator | worker | revoked | none
     session_id: str | None
     cwd: Path
     task_id: str | None = None
@@ -60,11 +81,20 @@ def resolve(conn: sqlite3.Connection, home: Home, env: Mapping[str, str], cwd: P
     if session:
         row = row_dict(
             conn.execute(
-                "SELECT * FROM attempts WHERE session_ref = ? AND phase IN "
-                "('live', 'standby', 'stopped') ORDER BY rowid DESC LIMIT 1",
+                "SELECT * FROM attempts WHERE session_ref = ? ORDER BY rowid DESC LIMIT 1",
                 (session,),
             ).fetchone()
         )
+        if row is not None and row["phase"] not in WORKER_PHASES:
+            return Identity(
+                role="revoked",
+                session_id=session,
+                cwd=cwd,
+                task_id=str(row["task_id"]),
+                attempt=str(row["attempt"]),
+                phase=str(row["phase"]),
+                cwd_consistent=False,
+            )
         if row is not None:
             roots = [home.root / "work" / str(row["task_id"]) / str(row["attempt"])]
             if row["workdir"]:

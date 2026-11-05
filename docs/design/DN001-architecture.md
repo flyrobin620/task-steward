@@ -152,13 +152,15 @@ Claude Code 的 `Agent` 子代理（in-process subagent）**不作为业务 work
 
 tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC 实测：MCP server 进程与 hooks 的环境变量都带有调用会话在 app 中的会话 ID（`CLAUDE_CODE_HOST_SESSION_ID`），进程 cwd 与 `CLAUDE_PROJECT_DIR` 都是会话目录。因此角色按会话 ID 精确解析：
 
-- 会话 ID 等于某个已登记 attempt 绑定的会话 → 该 attempt 的 worker；
+- 会话 ID 等于某个已登记 attempt 绑定的会话 → 该 attempt 的 worker；该 attempt 已被替换或关闭时 → **已撤销**（revoked）：只暴露 `whoami`，hooks 拒绝写入与命令行，且永远不会因为目录在数据目录而回落成主会话；
 - 会话目录是数据目录（`TSW_HOME`）且不是 worker → **主会话角色**。主会话角色可以使用只读工具（`inbox`、`attention`、`context_*` 等）以及租约工具（领取、在用户确认后 `controller_takeover`）；派发、验收等写工具还要求该会话持有调度租约（G-LEASE）；
 - 其他 → 只暴露 `whoami` 和只读帮助。
 
 SessionStart hook 先把会话登记为主会话角色或 worker（按会话 ID 与目录），再尝试领取租约（§6.4）；领取失败时该会话保持主会话角色、只读运行。
 
-cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一致时拒绝写工具。hooks 拿到同一个会话 ID（环境变量）以及 payload 中的内部会话 ID、cwd、权限模式，做同样的检查。不在 prompt 中放 token 或 capability 文件路径。
+cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一致时拒绝写工具，hooks 也拒绝写入与命令行（只允许 `cd` 回执行目录）。worker 绑定后 MCP server 发出 `notifications/tools/list_changed`，客户端据此刷新工具列表。
+
+身份只来自会话本身：在已绑定数据目录的会话里（主会话、worker、已撤销），`tsw` 命令行只开放不需要声明角色的入口（`mcp`、`guard`、`review run` 与只读命令），`tsw tool run --role` 等写入口一律拒绝，必须走 MCP。hooks 拿到同一个会话 ID（环境变量）以及 payload 中的内部会话 ID、cwd、权限模式，做同样的检查。不在 prompt 中放 token 或 capability 文件路径。
 
 ### 7.2 按角色的 MCP 工具
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from tests.support import REPO_ROOT, child_env, run_json
+from tests.support import REPO_ROOT, child_env, run_json, run_tsw
 
 PLUGIN = REPO_ROOT / "plugin"
 
@@ -27,9 +28,7 @@ def home() -> Path:
     return root
 
 
-def mcp(
-    home: Path, cwd: Path, session: str | None, *messages: dict[str, Any]
-) -> list[dict[str, Any]]:
+def mcp(home: Path, cwd: Path, session: str | None, *messages: Any) -> list[dict[str, Any]]:
     env = child_env()
     if session:
         env["CLAUDE_CODE_HOST_SESSION_ID"] = session
@@ -179,3 +178,98 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert (home / "CLAUDE.md").read_text(encoding="utf-8").startswith("# TaskSteward 数据目录")
     code, hint = run_json("host", "install-hint")
     assert code == 0 and "/plugin install task-steward@task-steward" in hint["hint"]
+
+
+def launch(
+    launcher: Path, *args: str, env: dict[str, str], cwd: Path, stdin: str = ""
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-X", "utf8", str(launcher), *args],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        cwd=cwd,
+        timeout=120,
+        check=False,
+    )
+
+
+@pytest.mark.use_case("UC-HOST-004")
+def test_the_plugin_runs_from_a_copy_outside_the_repository(home: Path, tmp_path: Path) -> None:
+    cached = tmp_path / "plugin-cache" / "task-steward" / "0.1.0"
+    shutil.copytree(PLUGIN, cached)
+    launcher = cached / "bin" / "tsw_launch.py"
+    env = child_env(CLAUDE_CODE_HOST_SESSION_ID="orch-9")
+    env.pop("PYTHONPATH")
+    request = json.dumps(INIT) + "\n"
+    # tsw init recorded the product repository in the data directory.
+    marker = json.loads((home / "tsw-home.json").read_text(encoding="utf-8"))
+    assert Path(marker["product_repo"]) == REPO_ROOT.resolve()
+    found = launch(launcher, "mcp", env=env, cwd=home, stdin=request)
+    assert found.returncode == 0, found.stderr
+    assert json.loads(found.stdout)["result"]["serverInfo"]["name"] == "tsw"
+    # Without the record the runtime cannot be found: the server says how to fix it, a hook
+    # stays silent, and TSW_REPO names the repository.
+    del marker["product_repo"]
+    (home / "tsw-home.json").write_text(json.dumps(marker), encoding="utf-8")
+    missing = launch(launcher, "mcp", env=env, cwd=home, stdin=request)
+    assert missing.returncode == 1 and "TSW_REPO" in missing.stderr
+    hook = launch(launcher, "guard", "Stop", env=env, cwd=home, stdin="{}")
+    assert (hook.returncode, hook.stdout) == (0, "")
+    named = launch(
+        launcher, "mcp", env={**env, "TSW_REPO": str(REPO_ROOT)}, cwd=home, stdin=request
+    )
+    assert named.returncode == 0 and "serverInfo" in named.stdout
+
+
+@pytest.mark.use_case("UC-HOST-001")
+def test_the_command_line_does_not_take_a_role_inside_a_tsw_session(
+    home: Path, tmp_path: Path
+) -> None:
+    env = child_env(CLAUDE_CODE_HOST_SESSION_ID="orch-9")
+    tool_run = run_tsw(
+        "tool", "run", "task_list", "--role", "system", "--input", "{}", "--json", env=env, cwd=home
+    )
+    assert tool_run.returncode == 3
+    assert json.loads(tool_run.stderr)["details"]["reason"] == "host_session_cli"
+    assert run_tsw("config", "validate", env=env, cwd=home).returncode == 0
+    # A Claude session that is not part of the data directory is not affected.
+    assert run_tsw("task", "list", env=env, cwd=tmp_path).returncode == 0
+
+
+@pytest.mark.use_case("UC-HOST-001")
+def test_protocol_versions_and_invalid_messages(home: Path) -> None:
+    replies = mcp(
+        home,
+        home,
+        "orch-9",
+        {**INIT, "params": {"protocolVersion": "1999-01-01"}},
+        {"id": 2, "method": "ping"},
+        {"jsonrpc": "2.0", "id": True, "method": "ping"},
+        {"jsonrpc": "2.0", "id": 3, "method": "ping", "params": "x"},
+        [{"jsonrpc": "2.0", "id": 4, "method": "ping"}],
+        {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": 3}},
+        {
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {"name": "whoami", "arguments": []},
+        },
+        {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 1}},
+        {"jsonrpc": "2.0", "id": 7, "result": {}},
+        {"jsonrpc": "2.0", "id": 8, "method": "ping"},
+    )
+    assert replies[0]["result"]["protocolVersion"] == "2025-11-25"
+    assert replies[0]["result"]["capabilities"]["tools"]["listChanged"] is True
+    codes = [(r["id"], r["error"]["code"]) for r in replies[1:-1]]
+    assert codes == [
+        (2, -32600),
+        (None, -32600),
+        (3, -32600),
+        (None, -32600),
+        (5, -32602),
+        (6, -32602),
+    ]
+    assert replies[-1] == {"jsonrpc": "2.0", "id": 8, "result": {}}

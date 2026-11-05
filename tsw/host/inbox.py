@@ -10,6 +10,7 @@ from tsw.commands import Command, CommitContext
 from tsw.config import EffectiveConfig
 from tsw.errors import rejected
 from tsw.events import Event, EventDraft
+from tsw.lease import require_lease
 from tsw.machine.guards import invalidated
 from tsw.machine.model import OCCUPYING, loads
 from tsw.storage.base import StorageBackend
@@ -48,11 +49,22 @@ def _summary(event: Event) -> dict[str, Any]:
     }
 
 
-def ack(sequences: Sequence[Any], *, actor: Mapping[str, Any], config: EffectiveConfig) -> Command:
+def ack(
+    sequences: Sequence[Any],
+    *,
+    actor: Mapping[str, Any],
+    config: EffectiveConfig,
+    session_id: str | None,
+    machine: str,
+) -> Command:
+    """Acknowledge reportable events; like every orchestrator write it needs the lease (G-LEASE)."""
     if not sequences or not all(isinstance(s, int) and not isinstance(s, bool) for s in sequences):
         raise rejected("sequences 应为非空整数数组", reason="invalid_input", field="sequences")
 
     def build(ctx: CommitContext) -> list[EventDraft]:
+        if not session_id:
+            raise rejected("主会话工具需要会话 ID", reason="lease_missing")
+        require_lease(ctx.conn, session_id, machine, ctx.now)
         kinds = reportable(config)
         wanted = set(sequences)
         found = {
