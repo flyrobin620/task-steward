@@ -24,6 +24,7 @@ SCHEMA = 1
 GENESIS = "0" * 64
 
 _REQUIRED = ("schema", "sequence", "time", "type", "actor", "prev", "checksum")
+_KNOWN = (*_REQUIRED, "task_id", "revision", "attempt", "command_id", "command_digest", "data")
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -71,10 +72,14 @@ class Event:
     command_id: str | None = None
     command_digest: str | None = None
     data: Mapping[str, Any] = field(default_factory=lambda: {})
+    # Top-level fields added by a newer writer of the same schema; kept so that the event
+    # re-serializes (and verifies) unchanged.
+    extra: Mapping[str, Any] = field(default_factory=lambda: {})
 
     def body(self) -> dict[str, Any]:
         """The event as a dict without ``checksum`` and without empty optional fields."""
-        out: dict[str, Any] = {
+        out: dict[str, Any] = dict(self.extra)
+        out |= {
             "schema": self.schema,
             "sequence": self.sequence,
             "time": self.time,
@@ -115,6 +120,14 @@ class Event:
         missing = [key for key in _REQUIRED if key not in raw]
         if missing:
             raise rejected("事件缺少字段", reason="ledger_corrupt", missing=missing)
+        if raw["schema"] != SCHEMA:
+            raise rejected(
+                "不支持的事件 schema，请升级 tsw", reason="unsupported_schema", schema=raw["schema"]
+            )
+        # Verify against the raw fields so that optional fields this reader does not know about
+        # are covered by the checksum instead of making the event look corrupt.
+        if digest({k: v for k, v in raw.items() if k != "checksum"}) != raw["checksum"]:
+            raise rejected("事件摘要不匹配", reason="ledger_corrupt", sequence=raw.get("sequence"))
         event = Event(
             schema=int(raw["schema"]),
             sequence=int(raw["sequence"]),
@@ -129,13 +142,8 @@ class Event:
             command_id=raw.get("command_id"),
             command_digest=raw.get("command_digest"),
             data=dict(raw.get("data") or {}),
+            extra={k: v for k, v in raw.items() if k not in _KNOWN},
         )
-        if event.schema != SCHEMA:
-            raise rejected(
-                "不支持的事件 schema，请升级 tsw", reason="unsupported_schema", schema=event.schema
-            )
-        if event.computed_checksum() != event.checksum:
-            raise rejected("事件摘要不匹配", reason="ledger_corrupt", sequence=event.sequence)
         return event
 
 

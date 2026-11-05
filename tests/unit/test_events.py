@@ -83,3 +83,16 @@ def test_optional_fields_are_omitted_from_the_body() -> None:
     body = event.body()
     for key in ("task_id", "revision", "attempt", "command_id", "command_digest"):
         assert key not in body
+
+
+def test_unknown_optional_fields_from_a_newer_writer_are_kept_and_verified() -> None:
+    body = _sealed().body()
+    body["added_by_a_newer_writer"] = {"x": 1}
+    raw = {**body, "checksum": digest(body)}
+    event = Event.from_dict(raw)
+    assert event.extra == {"added_by_a_newer_writer": {"x": 1}}
+    assert json.loads(event.to_line()) == raw
+    raw["added_by_a_newer_writer"] = {"x": 2}
+    with pytest.raises(TswError) as info:
+        Event.from_dict(raw)
+    assert info.value.details["reason"] == "ledger_corrupt"

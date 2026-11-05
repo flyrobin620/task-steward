@@ -158,16 +158,18 @@ class Gate:
                 f"    {tier}: {summary['collected']} collected, {summary['passed']} passed, "
                 f"{summary['failed']} failed, {summary['skipped']} skipped"
             )
-        self._coverage(tiers)
+        problems += self._coverage(tiers)
         self.record("tests", not problems, problems)
 
-    def _coverage(self, tiers: list[str]) -> None:
-        data_files = [str(self.results_dir / f".coverage.{tier}") for tier in tiers]
+    def _coverage(self, tiers: list[str]) -> list[str]:
+        """Combine and report line coverage. The number is not a gate; missing evidence is."""
+        data_files = [self.results_dir / f".coverage.{tier}" for tier in tiers]
+        missing = [path.name for path in data_files if not path.is_file()]
+        if missing:
+            return [f"缺少覆盖数据：{missing}"]
         combined = self.results_dir / ".coverage"
-        existing = [f for f in data_files if Path(f).is_file()]
-        if not existing:
-            return
-        _run(
+        combined.unlink(missing_ok=True)
+        code, output = _run(
             [
                 sys.executable,
                 "-m",
@@ -175,14 +177,18 @@ class Gate:
                 "combine",
                 "--keep",
                 f"--data-file={combined}",
-                *existing,
+                *map(str, data_files),
             ]
         )
+        if code != 0:
+            return [f"coverage combine 失败：{output.splitlines()[-1:]}"]
         code, report = _run([sys.executable, "-m", "coverage", "report", f"--data-file={combined}"])
-        (self.results_dir / "coverage.txt").write_text(report, encoding="utf-8")
         totals = [line for line in report.splitlines() if line.startswith("TOTAL")]
-        total = totals[0] if code == 0 and totals else "coverage unavailable"
-        print(f"    行覆盖率（只报告，不作门禁）：{total}")
+        if code != 0 or not totals:
+            return [f"coverage report 失败：{report.splitlines()[-1:]}"]
+        (self.results_dir / "coverage.txt").write_text(report, encoding="utf-8")
+        print(f"    行覆盖率（只报告，不作门禁）：{totals[0]}")
+        return []
 
     def catalog(self, tiers_run: set[str]) -> None:
         problems, not_verified = catalog_check.check(
@@ -236,8 +242,17 @@ def verify_ci(artifacts: Path, needs_json: str, expected: list[str]) -> int:
         for tier, counts in summary.get("tiers", {}).items():
             if counts.get("collected", 0) == 0:
                 problems.append(f"{name}: {tier} 层级没有发现测试")
-        if name.startswith("test-") and set(summary.get("tiers", {})) != set(CI_TIERS):
-            problems.append(f"{name}: 测试层级不完整 {sorted(summary.get('tiers', {}))}")
+        if name.startswith("test-"):
+            if set(summary.get("tiers", {})) != set(CI_TIERS):
+                problems.append(f"{name}: 测试层级不完整 {sorted(summary.get('tiers', {}))}")
+            evidence = [f"{tier}.json" for tier in CI_TIERS] + ["coverage.txt"]
+            problems.extend(
+                f"{name}: 缺少证据文件 {file}"
+                for file in evidence
+                if not (artifacts / name / file).is_file()
+            )
+            if summary.get("steps", {}).get("catalog", {}).get("status") != "passed":
+                problems.append(f"{name}: 目录检查没有通过")
     for problem in problems:
         print(problem)
     print("Gate: " + ("OK" if not problems else "FAILED"))

@@ -69,12 +69,12 @@ def connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _meta(conn: sqlite3.Connection, key: str) -> str | None:
+def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
     row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
     return None if row is None else str(row["value"])
 
 
-def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
     conn.execute(
         "INSERT INTO meta(key, value) VALUES(?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -83,8 +83,8 @@ def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 
 def projected_tail(conn: sqlite3.Connection) -> LedgerTail:
-    seq = _meta(conn, "projected_seq")
-    checksum = _meta(conn, "projected_checksum")
+    seq = get_meta(conn, "projected_seq")
+    checksum = get_meta(conn, "projected_checksum")
     if seq is None or checksum is None:
         return LedgerTail.empty()
     return LedgerTail(int(seq), checksum)
@@ -118,9 +118,9 @@ class Projection:
         conn = connect(self.path)
         try:
             conn.executescript(SCHEMA_SQL)
-            version = _meta(conn, "reducer_version")
+            version = get_meta(conn, "reducer_version")
             if version is None:
-                _set_meta(conn, "reducer_version", str(REDUCER_VERSION))
+                set_meta(conn, "reducer_version", str(REDUCER_VERSION))
             elif int(version) != REDUCER_VERSION:
                 raise rejected(
                     "投影版本与当前 tsw 不一致，需要运行 tsw ledger rebuild",
@@ -147,6 +147,12 @@ class Projection:
                     projected=current.sequence,
                     ledger=ledger.sequence,
                 )
+            if current.sequence == ledger.sequence and current.checksum != ledger.checksum:
+                raise rejected(
+                    "投影与账本属于不同的历史，请运行 tsw ledger audit",
+                    reason="chain_mismatch",
+                    sequence=current.sequence,
+                )
             if current.sequence < ledger.sequence:
                 prev = current.checksum
                 for event in self.storage.read(since=current.sequence):
@@ -159,8 +165,8 @@ class Projection:
                     self._apply(conn, event)
                     prev = event.checksum
                     current = LedgerTail(event.sequence, event.checksum)
-                _set_meta(conn, "projected_seq", str(current.sequence))
-                _set_meta(conn, "projected_checksum", current.checksum)
+                set_meta(conn, "projected_seq", str(current.sequence))
+                set_meta(conn, "projected_checksum", current.checksum)
             conn.execute("COMMIT")
         except BaseException:
             conn.execute("ROLLBACK")
@@ -242,7 +248,7 @@ class Projection:
         conn = sqlite3.connect(path)
         try:
             conn.row_factory = sqlite3.Row
-            version = _meta(conn, "reducer_version")
+            version = get_meta(conn, "reducer_version")
             tail = projected_tail(conn)
         except sqlite3.DatabaseError:
             return False

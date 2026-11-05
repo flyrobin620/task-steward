@@ -38,6 +38,7 @@ QUIESCE_MARKER = "quiesced.json"
 ARTIFACT_ROOTS = ("runs", "todo", "outbox", "legacy", "config", "views")
 _SEGMENT = re.compile(r"^(?P<month>\d{4}-\d{2})-(?P<first>\d{10})\.jsonl(?P<gz>\.gz)?$")
 _REPLACE_DEADLINE = 5.0
+_READ_RETRIES = 5
 
 
 @dataclass(frozen=True)
@@ -158,16 +159,36 @@ class FsStorage:
         return gzip.decompress(data) if seg.compressed else data
 
     def tail(self) -> LedgerTail:
-        for seg in reversed(self.segments()):
-            line = _last_line(self._segment_bytes(seg))
-            if line is not None:
-                event = Event.from_line(line)
-                return LedgerTail(event.sequence, event.checksum)
+        for attempt in range(_READ_RETRIES):
+            try:
+                for seg in reversed(self.segments()):
+                    line = _last_line(self._segment_bytes(seg))
+                    if line is not None:
+                        event = Event.from_line(line)
+                        return LedgerTail(event.sequence, event.checksum)
+                return LedgerTail.empty()
+            except FileNotFoundError:
+                # A concurrent append sealed and removed a segment we had listed; list again.
+                if attempt == _READ_RETRIES - 1:
+                    raise
         return LedgerTail.empty()
 
     # ------------------------------------------------------------------ ledger
 
     def read(self, since: int = 0) -> Iterator[Event]:
+        """Yield events after ``since``; retries when a concurrent seal moves a segment."""
+        last = since
+        for attempt in range(_READ_RETRIES):
+            try:
+                for event in self._read_once(last):
+                    last = event.sequence
+                    yield event
+                return
+            except FileNotFoundError:
+                if attempt == _READ_RETRIES - 1:
+                    raise
+
+    def _read_once(self, since: int) -> Iterator[Event]:
         segments = self.segments()
         start = 0
         for index, seg in enumerate(segments):
@@ -179,6 +200,13 @@ class FsStorage:
                 if not line:
                     continue
                 event = Event.from_line(line)
+                if expected is None and event.sequence > since + 1:
+                    raise rejected(
+                        "账本序号不连续",
+                        reason="ledger_corrupt",
+                        expected=since + 1,
+                        found=event.sequence,
+                    )
                 if expected is not None and event.sequence != expected:
                     raise rejected(
                         "账本序号不连续",
@@ -191,8 +219,14 @@ class FsStorage:
                     yield event
 
     def append(self, events: Sequence[Event], *, expected_sequence: int) -> int:
+        """Atomic optimistic append. The append lock makes check-and-replace one step even for
+        callers that do not hold the ledger's commit lock."""
         if not events:
             return expected_sequence
+        with FileLock(self.home.locks_dir / "append.lock", timeout=self.lock_timeout):
+            return self._append_locked(events, expected_sequence)
+
+    def _append_locked(self, events: Sequence[Event], expected_sequence: int) -> int:
         self._recover_seal()
         tail = self.tail()
         if tail.sequence != expected_sequence:

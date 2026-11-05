@@ -18,50 +18,22 @@ from __future__ import annotations
 
 import contextlib
 import sqlite3
-from collections.abc import Callable, Generator, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Generator
 from typing import Any
 
+from tsw.commands import Command, CommitContext, CommitResult
 from tsw.errors import rejected
-from tsw.events import GENESIS, Event, EventDraft, digest, seal, utc_now
+from tsw.events import GENESIS, Event, digest, seal, utc_now
 from tsw.faults import fault
 from tsw.home import Home
 from tsw.projection import Projection, projected_tail
 from tsw.reducers import REDUCERS
 from tsw.storage.base import LedgerTail, StorageBackend
 from tsw.storage.fs import FsStorage
+from tsw.views import refresh as refresh_views
 
 COMMIT_LOCK = "commit"
 DEFAULT_CHECKPOINT_EVERY = 64
-
-
-@dataclass
-class CommitContext:
-    conn: sqlite3.Connection
-    storage: StorageBackend
-    home: Home
-    tail: LedgerTail
-
-
-@dataclass
-class Command:
-    """A write command. ``build`` checks guards and returns the events to append."""
-
-    actor: Mapping[str, Any]
-    input: Mapping[str, Any]
-    build: Callable[[CommitContext], Sequence[EventDraft]]
-    command_id: str | None = None
-    after: Callable[[CommitContext], None] | None = None
-
-
-@dataclass
-class CommitResult:
-    events: list[Event] = field(default_factory=lambda: [])
-    duplicate: bool = False
-
-    @property
-    def last_sequence(self) -> int | None:
-        return self.events[-1].sequence if self.events else None
 
 
 class Ledger:
@@ -98,6 +70,8 @@ class Ledger:
             self.projection.connection() as conn,
         ):
             tail = self.projection.reduce_to(conn)
+            # Catch up derived files left behind by an interrupted earlier commit.
+            refresh_views(CommitContext(conn=conn, storage=self.storage, home=self.home, tail=tail))
             if command.command_id is not None:
                 existing = conn.execute(
                     "SELECT command_digest, first_sequence, last_sequence FROM commands "
@@ -140,8 +114,7 @@ class Ledger:
             fault("ledger.commit.after_append")
             new_tail = self.projection.reduce_to(conn)
             ctx.tail = new_tail
-            if command.after is not None:
-                command.after(ctx)
+            refresh_views(ctx)
             if new_tail.sequence // self.checkpoint_every > tail.sequence // self.checkpoint_every:
                 self.projection.checkpoint(conn)
             return CommitResult(events=events)
@@ -149,16 +122,27 @@ class Ledger:
     # ------------------------------------------------------------------ maintenance
 
     def rebuild(self) -> LedgerTail:
-        """Discard the projection and checkpoints and reduce the whole ledger again."""
-        with self.storage.lock(COMMIT_LOCK, ttl=600):
+        """Discard the projection and checkpoints, reduce the whole ledger again and regenerate
+        the derived files (a write: refused while the data directory is quiesced)."""
+        with self.storage.writer(), self.storage.lock(COMMIT_LOCK, ttl=600):
             self.projection.discard()
             with self.projection.connection() as conn:
                 tail = self.projection.reduce_to(conn)
                 self.projection.checkpoint(conn)
+                refresh_views(
+                    CommitContext(conn=conn, storage=self.storage, home=self.home, tail=tail)
+                )
                 return tail
 
     def audit(self) -> dict[str, Any]:
-        """Verify the whole digest chain and compare the projection with the ledger."""
+        """Verify the whole digest chain and compare the projection with the ledger.
+
+        Runs under the commit lock so that the ledger and the projection are read at one point.
+        """
+        with self.storage.lock(COMMIT_LOCK, ttl=600):
+            return self._audit()
+
+    def _audit(self) -> dict[str, Any]:
         problems: list[str] = []
         count = 0
         prev = GENESIS

@@ -13,9 +13,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from tsw.commands import Command, CommitContext
 from tsw.errors import rejected
 from tsw.events import EventDraft
-from tsw.ledger import Command, CommitContext
 
 KINDS = {"research": "研究", "design": "设计", "code": "代码"}
 STATUS_LABELS = {
@@ -158,7 +158,6 @@ def register(spec: TaskSpec, *, actor: Mapping[str, Any], command_id: str | None
         input={"op": "task.register", **spec.to_input()},
         build=build,
         command_id=command_id,
-        after=write_index,
     )
 
 
