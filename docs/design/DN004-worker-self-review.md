@@ -1,6 +1,6 @@
 # DN004 worker 自评审：Codex Astra 评审与迭代决策
 
-- 状态：设计草案（T233 r3）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订）
 - 日期：2026-11-05
 - 相关：[DN002 任务状态机 §3.3](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md)
 
@@ -41,7 +41,7 @@ worker 完成任务成果后，**由 worker 自己**启动 Codex（`gpt-6-astra`
 7. **终版一致性**：`finalize` 时如果当前 HEAD 晚于最后评审的 HEAD（例如定稿后改了报告链接），必须对差异再做一轮增量评审；这一轮同样计入本周期预算，预算耗尽时 `escalate`。
 8. **提交**：调用 `submit`，tsw 执行 G-SUBMIT（DN002 §4）。
 
-## 3. Codex 调用
+## 3. 评审器调用
 
 评审器不是单独的插件类型，而是由 `roles.reviewer.session` 选用一个具备 `oneshot`、`direct`、`read_only_enforced` 能力的会话适配器（DN006 §7.4），可以与主会话、worker 使用的适配器不同。评审包渲染、输出 schema 校验、轮次计数与增量范围属于 tsw 核心。下文描述默认的 `codex-app-server` 与回退 `codex-exec`；没有 Codex 的配置可改用 `claude-headless` 等实现，评审输出契约（§4）与处置规则（§5）不变。
 
@@ -61,7 +61,17 @@ worker 完成任务成果后，**由 worker 自己**启动 Codex（`gpt-6-astra`
 
 App Server 无法启动时，用 `codex exec` 非交互执行同一评审包（指定模型、effort、`--sandbox read-only`），输出同样按 schema 解析。回退本身记录在 `review.completed.data.transport` 中。回退也失败时记录 `review.unavailable` 交主会话判断（可稍后重试或交给人类）：**不能跳过评审，也不能改用 Claude 子代理冒充 Codex 评审**。
 
-### 3.3 只读与隔离
+### 3.3 无 Codex 时：`claude-headless`
+
+用 Claude Code 命令行一次性评审（PoC 2026-11-05 实测的调用约定）：
+
+- **清除继承的宿主环境变量**：tsw 在桌面 app 的会话里运行，进程继承了 `CLAUDE_*` / `ANTHROPIC_*` 等宿主变量，命令行会因此以为认证由宿主提供而报“未登录”。启动评审进程前删除这些变量，让命令行读取用户设置中的认证或网关配置。
+- **严格只读**：`--allowedTools Read,Grep,Glob`，`--disallowedTools Write,Edit,Bash,NotebookEdit,ExitPlanMode,Agent,Workflow,Skill`（子代理与工作流工具可能间接写入，也要禁用），`--permission-mode dontAsk`。不使用 plan 模式：它不写目标文件，但会把计划文件写入用户目录。
+- **设置来源**：`--setting-sources user`，以便读取用户的认证或网关配置；这也会加载用户级 hooks，评审结果只以 JSON 输出为准，hooks 的报错不影响评审。
+- **显式模型**：总是传 `--model roles.reviewer.model`，不依赖用户的默认模型。
+- **输出与续用**：`--output-format json`，从 `result` 字段解析评审 JSON；增量评审用 `--resume <session_id>` 续用同一会话。
+
+### 3.4 只读与隔离
 
 - reviewer 线程只读，不能修改 worktree，不能 push，不能访问凭据目录。
 - 评审包和结果由 tsw 写入该 attempt 的 `runs/Txxx/aN/review/`（worker 不直接写 `runs/`，见 DN006 §9.4）。

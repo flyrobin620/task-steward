@@ -1,6 +1,6 @@
 # DN006 插件层：宿主集成、会话、人类渠道与数据存储
 
-- 状态：设计草案（T233 r3）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md)
 
@@ -32,14 +32,14 @@
 | 主会话与 worker 的指令、skill、工具注册 | `CLAUDE.md`、`.claude-plugin`、skills、`.mcp.json` | P1 |
 | 写入范围、危险命令拦截、结束前检查 | Claude Code hooks | P1 |
 | 创建、续用、停止、观察 worker 会话 | `start_session`、`SendMessage`、`list_sessions`、`get_session`、`stop_session` | P2 |
-| 唤醒主会话 | worker→父会话 SendMessage、side-sessions-event | P2（唤醒能力） |
-| 派发窗口与提案卡片（G-WINDOW、attempt `proposed`） | app 拒绝在自动事件 turn 中启动会话 | P2（能力声明） |
+| 唤醒主会话 | worker→父会话 `send_message(session_id="parent")`、side-sessions-event | P2（唤醒能力） |
+| 派发窗口与预启动（G-WINDOW、attempt `standby`） | 只有用户本人的 turn 能在任务目录创建会话；任何 turn 都能给已有会话发消息 | P2（能力声明） |
 | 权限模式名称 | `default` / `acceptEdits` / `auto` / `bypassPermissions` | P2（映射表） |
 | 评审器 | Codex App Server 一次性线程 | P2 的 oneshot 能力 + `roles.reviewer.session` |
 | 待答问题的投递与回收 | 用户在子会话直接答复 | P3 |
 | 控制根 = 私有 Git 仓库 | ledger、runs 随仓库提交 | P4 + 数据目录 |
 
-不变的部分：状态集合与迁移（DN002）、守卫语义、评审必经与提交周期（DN004）、导入规则（DN005）、事件格式。DN002 中只有 G-WINDOW 与 attempt 的 `proposed` 阶段依赖宿主能力：会话适配器声明不支持时，它们永远不会出现。
+不变的部分：状态集合与迁移（DN002）、守卫语义、评审必经与提交周期（DN004）、导入规则（DN005）、事件格式。DN002 中只有 G-WINDOW 与预启动（attempt `standby`）依赖宿主能力：会话适配器声明 `dispatch_window=false` 时 G-WINDOW 永远满足，声明 `prestart=false` 时不做预启动。
 
 ## 3. 分层
 
@@ -118,7 +118,9 @@
 
 T08（`attempt.bound`）要求两个阶段都有完成证据：**会话存在不等于启动完成**。
 
-关联标记：承载 worker 的会话适配器**必须**声明一种“只凭代次就能找回会话”的方式（能力 `find_by_name` 或 `correlation_tag`），这是 `interactive` 能力的准入条件。Claude app 与 Copilot app 用会话名；Codex App Server 需在创建时写入可检索的线程标题或元数据（假设 B7，不成立时 `codex-app-server` 需改为先由 tsw 登记再创建的封装，否则不能承载 worker）。因此创建结果未知时总能对账，并按 DN002 的 T09 / attempt 阶段规则收口。
+关联标记：承载 worker 的会话适配器**必须**声明一种“只凭代次就能找回会话”的方式（能力 `find_by_name` 或 `correlation_tag`），这是 `interactive` 能力的准入条件。Claude app 与 Copilot app 用会话名。Codex App Server 的线程名可以写入，但 PoC 发现未归档线程不能及时按名称或目录列出（B7），所以 `codex-app-server` 暂不承载 worker。因此创建结果未知时总能对账，并按 DN002 的 T09 / attempt 阶段规则收口。
+
+预启动（DN002 §5.6）是同一个两阶段流程的提前执行：在用户 turn 中只完成“创建”（以待命说明启动会话），“投递 brief”推迟到派发时，可以在任何 turn 中进行。
 
 ## 5. 公共约定
 
@@ -207,7 +209,7 @@ class SessionCaps:
     user_direct_chat: bool          # 用户能否在会话里直接对话
     wake: Literal["push", "poll", "none"]
     dispatch_window: bool           # 是否存在“当前 turn 不能启动会话”的限制（G-WINDOW）
-    proposals: bool                 # 能否生成用户点击启动的提案
+    prestart: bool                  # 能否先创建会话、之后再投递任务书（两阶段启动）
     reuse_session: bool             # 停止后能否续用同一会话
     open_existing_dir: bool         # 能否在已有目录（tsw 创建的 worktree）启动会话
 ```
@@ -240,9 +242,9 @@ class SessionAdapter(Protocol):
 
 | 实现 | 方式 | interactive | oneshot（只读方式） | 增量续用 | 用户直接对话 | dispatch_window |
 | --- | --- | --- | --- | --- | --- | --- |
-| `claude-app` | delegated | 是：`start_session` / `SendMessage` / `get_session` / `stop_session`，按会话名对账 | 否（只能由模型调用，tsw 无法同步等结果） | — | 是（侧栏子会话） | 是 |
-| `claude-headless` | direct | 待验证（Agent SDK 会话） | 是：`claude -p`，只读权限模式 | 是（`--resume`） | 否 | 否 |
-| `codex-app-server` | direct | 是：`thread/start` + `turn/start`，关联标记见 B7 | 是：一次性线程，`sandbox=read-only` | 是（keep / resume thread） | 是（受管独立线程） | 否 |
+| `claude-app` | delegated | 是：`start_session` / `SendMessage` / `get_session` / `stop_session`，按会话名对账；支持预启动 | 否（只能由模型调用，tsw 无法同步等结果） | — | 是（侧栏子会话） | 是 |
+| `claude-headless` | direct | 待验证（Agent SDK 会话） | 是：`claude -p`，严格只读工具白名单（调用约定见 DN004 §3.3） | 是（`--resume`） | 否 | 否 |
+| `codex-app-server` | direct | 暂不承载 worker（B7：不能按名称或目录及时找回线程） | 是：一次性线程，`sandbox=read-only` | 是（keep / resume thread） | 是（受管独立线程） | 否 |
 | `codex-exec` | direct | 否 | 是：`codex exec`，`--sandbox read-only` | 否（每轮全量 + 上轮意见） | 否 | 否 |
 | `copilot-app` | delegated | 是：`create_session` / `send_session_message`（interactive），按会话名对账 | 否 | — | 是（app 独立会话） | 待验证 |
 | `copilot-cli` | direct | 否 | 待验证（B2） | 待验证 | 否 | 否 |
@@ -252,13 +254,13 @@ interactive 动作映射（承载 worker 的实现）：
 
 | 动作 | `claude-app` | `codex-app-server` | `copilot-app` | `remote-hub` |
 | --- | --- | --- | --- | --- |
-| create | `start_session`（fresh、cwd、use_worktree=false，prompt 即 brief，两阶段合一） | `thread/start`（写入关联标记） | `create_session`（name = 会话名） | 创建 native session（intentId） |
-| deliver_brief | 同上（工具结果即两阶段回执） | `turn/start` | `send_session_message` | 会话消息 API |
+| create | `start_session`（fresh、cwd、use_worktree=false；预启动时 prompt 为待命说明） | `thread/start`（写入关联标记） | `create_session`（name = 会话名） | 创建 native session（intentId） |
+| deliver_brief | `SendMessage`（任何 turn 都可以；直接启动时任务书可放在 prompt 中，两阶段合一） | `turn/start` | `send_session_message` | 会话消息 API |
 | send | `SendMessage` | `turn/start` | `send_session_message` | 会话消息 API |
 | stop | `stop_session` | 中断当前 turn（interrupt） | 会话停止 | 会话中断 |
 | observe | `get_session` | `thread/read` | `get_session` / `get_sessions_status` | 会话状态 / 事件 |
 | find | `list_sessions {linked:true}` 按名称 | 按关联标记检索（B7） | 按会话名列出 | 按 intentId 读取 |
-| 唤醒主会话 | push：worker SendMessage(parent)；兜底 side-sessions-event | push：turn completed 事件（tsw 监听进程） | push：跨会话消息、idle 通知 | push：会话停止事件 |
+| 唤醒主会话 | push：worker `mcp__ccd_session_mgmt__send_message(session_id="parent")`；兜底 side-sessions-event | push：turn completed 事件（tsw 监听进程） | push：跨会话消息、idle 通知 | push：会话停止事件 |
 
 ### 7.4 三个角色各自选用会话适配器
 
@@ -573,14 +575,14 @@ worker 用 direct 的 remote-hub 会话，主会话可以在任何宿主：
 | --- | --- | --- |
 | worker 会话无 `user_direct_chat` | 用户不能在 worker 会话直接回答 | `in-session` 渠道不可用；改由其他渠道投递，答复由主会话转达 |
 | `wake=poll` 或 `none` | worker 提交后主会话不能被即时唤醒 | 主会话在每个用户 turn 和定时唤醒时读取 inbox；STATUS 页显示“待主会话处理” |
-| `dispatch_window=true` | 自动事件 turn 中不能启动会话 | DN002 G-WINDOW 与 `proposed` 阶段生效 |
+| `dispatch_window=true` | 自动 turn 中不能在任务目录创建会话 | DN002 G-WINDOW 与预启动（§5.6）生效：在用户 turn 中预启动，之后任何 turn 都可投递任务书 |
 | P1 规则为 `advisory` | 写入范围等规则只是提示 | G-ACCEPT 增加范围核对；报告标注提示级 |
 | 没有满足 oneshot + direct + 只读的会话适配器 | 无法评审，不能满足 G-SUBMIT | 配置校验失败，不能派发 |
 
 ## 12. 对其他文档的影响
 
 - DN001：控制根改称数据目录（§9），产品 repo 与数据分离；工具表增加 `operation_receipt`、`input_triage`、`input_response`。
-- DN002：T11 / T12 的触发与主会话判断（§8）；评审预算用完与阻断项延后由主会话决定（E04、G-SUBMIT）；G-WINDOW 与 `proposed` 依赖会话适配器能力。
+- DN002：T11 / T12 的触发与主会话判断（§8）；评审预算用完与阻断项延后由主会话决定（E04、G-SUBMIT）；G-WINDOW 与预启动依赖会话适配器能力（PoC 后修订：取消 worker 的提案卡片路径）。
 - DN003：`plugins`（`host_integration`、`sessions`、`human_channels`、`storage`）、`roles.*.session`、`input`、`review.orchestrator_extension_limit`、`policies.reserved_for_user`。
 - DN004：评审器经 `roles.reviewer.session` 选用会话适配器；预算用完与延后请求交主会话判断。
 - DN005：导入目标为数据目录；旧控制仓库中的只读 runs 复制到数据目录 `legacy/` 下。
@@ -595,5 +597,5 @@ worker 用 direct 的 remote-hub 会话，主会话可以在任何宿主：
 | B4 | Hub 门户能调用 tsw 的本机端点，或由 tsw 主动拉取答复 | tsw 定时拉取 Portal 答复（poll） |
 | B5 | Codex App Server 的 `workspace-write` 可写根足以作为 worker 写入边界 | 降级为 advisory，并在 G-ACCEPT 核对 |
 | B6 | Claude Code 会话内的定时唤醒可用于 Teams 轮询 | 只在主会话被事件或用户唤醒时轮询 |
-| B7 | Codex App Server 创建线程时可写入可检索的标题或元数据 | tsw 先登记再创建的封装；否则 `codex-app-server` 只做评审，不承载 worker |
-| B8 | `claude -p` 的只读权限模式能可靠阻止写入，并可用 `--resume` 续用 | 每轮全量评审；只读降级时不能作为评审器 |
+| B7 | Codex App Server 创建线程时可写入可检索的标题或元数据 | **PoC 部分成立**：`thread/name/set` 可写可读，但未归档线程在 30 秒以上都不能按名称或目录列出（线程来源记为 `vscode`）。`codex-app-server` 暂只做评审，tsw 以 `thread/start` 的同步返回值登记线程 ID |
+| B8 | `claude -p` 能只读、非交互地运行，并可用 `--resume` 续用 | **PoC 成立，需特定参数**：清除宿主环境变量、严格工具白名单、显式模型（DN004 §3.3） |

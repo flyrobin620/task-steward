@@ -38,9 +38,9 @@ stateDiagram-v2
     intake --> ready: T04 规划完成·依赖已满足
     waiting_dependency --> ready: T05 依赖全部完成
     ready --> waiting_dependency: T06 依赖失效
-    ready --> dispatching: T07 有名额·资源·租约（窗口外改为提案）
+    ready --> dispatching: T07 有名额·资源·租约（新建会话须在用户 turn）
     dispatching --> in_progress: T08 子会话已绑定或原会话续用
-    dispatching --> ready: T09 确认未创建或提案过期
+    dispatching --> ready: T09 确认会话未创建
     dispatching --> paused: T10 现场冲突需用户决定
 
     in_progress --> waiting_user: T11 主会话判断后交给人类

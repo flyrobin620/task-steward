@@ -1,13 +1,13 @@
 # DN003 统一配置
 
-- 状态：设计草案（T233 r3）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN004 worker 自评审](DN004-worker-self-review.md)
 
 ## 1. 原则
 
 1. **一个文件**：所有可调参数都在数据目录（`TSW_HOME`，DN006 §9）的 `config/task-steward.json` 中，包括各角色的模型、effort、权限模式、评审器、调度、仓库、账号引用、通知和策略。不再分散在 `model-settings.json`、`repositories.json`、`.codex/config.toml`、平台参考文档等多处。
-2. **请求值与回执分开**：配置是“请求值”；子会话实际的模型、effort、权限以平台回执（`get_session`）为准，并记录在 attempt 事件中。拿不到回执时记为“未知”，不反复追问子会话。
+2. **请求值与回执分开**：配置是“请求值”；子会话实际的模型、effort、权限以平台回执（`get_session`）为准，并记录在 attempt 事件中。拿不到回执时记为“未知”，不反复追问子会话。比较请求值与回执时先规范化模型 ID：平台可能追加上下文后缀（例如请求 `claude-sonnet-5-5`，回执为 `claude-sonnet-5-5[1m]`）。
 3. **不含秘密**：凭据、令牌只按名称引用系统凭据库或 `.local` 中的认证目录，配置里不出现秘密值。
 4. **本机覆盖受限**：数据目录中的 `config/task-steward.local.json` 只能覆盖白名单中的本机路径类字段（§5），不能改模型、策略、交付授权。
 5. **显式生效**：修改配置后只影响新创建的会话和新调用；已有子会话不自动切换模型。需要切换时由主会话调用 `set_session_model` / `set_session_effort`，并记录事件。
@@ -81,7 +81,7 @@
   "scheduling": {
     "max_workers": 5,
     "lease_minutes": 120,
-    "dispatch_outside_user_turn": "propose",
+    "prestart": {"enabled": true, "max_standby": 10},
     "wake": {"worker_message_parent": true, "reportable_events": ["worker.submitted", "worker.question", "review.budget_exhausted", "review.defer_requested", "review.unavailable", "task.paused", "report_back"]}
   },
   "sessions": {
@@ -218,7 +218,7 @@
 ### 3.3 `scheduling` 与 `sessions`
 
 - `max_workers`：活动任务上限（DN002 G-SLOT）。实际并发取它与平台可用额度的较小值。
-- `dispatch_outside_user_turn`：`propose`（生成提案卡片）或 `defer`（只在 STATUS 页标记待启动）。
+- `prestart.enabled` / `prestart.max_standby`：是否在用户 turn 中为已规划任务预启动 worker 会话，以及同时待命的会话上限（DN002 §5.6）。关闭预启动时，自动 turn 中变为可派发的任务都要等用户下一次发消息才能创建会话。
 - `wake.worker_message_parent`：reportable 事件发生时，worker 是否同时 SendMessage 给父会话（DN001 §6.3）。
 - `sessions.archive_on_accept`：验收后是否归档子会话。默认 `false`，保留以便用户回看；归档时须有工具回执。
 
