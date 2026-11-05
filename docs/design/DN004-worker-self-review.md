@@ -73,8 +73,10 @@ App Server 无法启动时，用 `codex exec` 非交互执行同一评审包（�
 
 ### 3.4 v1 实现范围
 
-- `review_run`（MCP，worker）与 `tsw review run`（命令行）是同一实现：先落账 `review_start`，渲染 `runs/Txxx/aN/review/rK-request.md`，调用评审器，结果写入 `rK.json`、调用信息写入 `rK-run.json`（线程 ID、模型、effort、是否续用），然后记录 `review_complete`；评审器报错、超时、输出不是 JSON 或不满足契约时，保存原始输出 `rK-raw.txt` 并记录 `review_fail`。任务处于 `reviewing`（E02）时再次调用即在同一轮、同一 HEAD 上重试。
-- `codex-app-server` 通过 stdio 与 `codex app-server` 通信（不另开端口）。线程在各轮之间保留，下一轮按 `review.incremental = resume_thread` 续用上一轮的线程。归档留给 attempt 结束后的清理。
+- `review_run`（MCP，worker）与 `tsw review run`（命令行）是同一实现。开轮之前先检查能检查的：调用者是 live 且目录一致的 worker；评审器命令存在；Git 执行目录中 `head`、`base` 必须是真实提交（只把解析出的提交 ID 交给 git，选项形式的输入直接拒绝）；没有给 `base` 时取 `repositories.<repo>.base_ref`、`origin/HEAD`、`main` 等与 HEAD 的分叉点，取不到就要求显式指定。同一 attempt 同时只运行一轮（`locks/` 中的文件锁）。
+- 开轮（`review_start`）后渲染 `runs/Txxx/aN/review/rK-request.md`，调用评审器，结果写入 `rK.json`、调用信息写入 `rK-run.json`（范围、线程 ID、模型、effort、是否续用），然后记录 `review_complete`。评审器报错、启动失败、超时、输出不是 JSON、不满足契约，或 `reviewed_head` 与本轮 HEAD 不一致（Git 缩写须解析为同一提交，非 Git 成果标识须完全相同）时，保存原始输出 `rK-raw.txt` 并记录 `review_fail`；开轮后的任何异常都以失败收尾。任务处于 `reviewing`（E02）时再次调用即在同一轮、按落账的 `head` 与 `base` 重试。
+- 每轮请求都带当前 revision 的目标与验收原文；需求变更（E07）开启新周期后不续用旧线程，按新需求完整评审。
+- `codex-app-server` 通过 stdio 与 `codex app-server` 通信（不另开端口）。线程在同一周期的各轮之间保留，下一轮按 `review.incremental = resume_thread` 续用上一轮的线程；归档留给 attempt 结束后的清理。超时中断后关闭输入，服务器不退出时结束整个进程树。
 - `codex-exec` 与 `claude-headless` 尚未实现：配置为评审会话时 `review_run` 返回 `UNSUPPORTED`，不落账新的一轮。
 
 ### 3.5 只读与隔离

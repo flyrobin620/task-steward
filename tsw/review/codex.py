@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import queue
 import shutil
+import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -36,6 +39,8 @@ class ReviewRun:
 
 
 class AppServer:
+    close_wait = 10.0  # seconds the server gets to exit on end of input
+
     def __init__(self, executable: str) -> None:
         self.proc = subprocess.Popen(
             [executable, "app-server"],
@@ -45,6 +50,7 @@ class AppServer:
             text=True,
             encoding="utf-8",
             errors="replace",
+            start_new_session=sys.platform != "win32",  # a process group to end as a whole
         )
         self.next_id = 0
         self.messages: queue.Queue[dict[str, Any] | None] = queue.Queue()
@@ -111,12 +117,51 @@ class AppServer:
         self.send({"jsonrpc": "2.0", "method": method, **({"params": params} if params else {})})
 
     def close(self) -> None:
-        try:
+        """Let the server exit on end of input; otherwise end its whole process tree."""
+        with contextlib.suppress(OSError):
             if self.proc.stdin:
                 self.proc.stdin.close()
-            self.proc.wait(timeout=10)
-        except (OSError, subprocess.TimeoutExpired):
-            self.proc.kill()
+        try:
+            self.proc.wait(timeout=self.close_wait)
+        except subprocess.TimeoutExpired:
+            kill_tree(self.proc)
+        with contextlib.suppress(OSError):
+            if self.proc.stdout:
+                self.proc.stdout.close()
+
+
+def kill_tree(proc: subprocess.Popen[str]) -> None:
+    """End a process and its descendants (a ``.cmd`` wrapper's server, a server's helpers)."""
+    if sys.platform == "win32":
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+    else:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        proc.kill()
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=10)
+
+
+def resolve_executable(configured: str | None) -> str:
+    """The reviewer command to start, checked before a round is opened."""
+    found = shutil.which(configured or "codex")
+    if found is None and configured and Path(configured).is_file():
+        found = configured
+    if found is None:
+        raise TswError(
+            ErrorCode.UNAVAILABLE,
+            "找不到评审器命令（roles.reviewer.executable 或 PATH 中的 codex）",
+            reason="reviewer_unavailable",
+            executable=configured or "codex",
+        )
+    return found
 
 
 def run_review(
@@ -132,10 +177,7 @@ def run_review(
     context_window: int | None = None,
 ) -> ReviewRun:
     """One review turn on a read-only thread; ``resume_thread`` continues an earlier round."""
-    codex = executable or shutil.which("codex")
-    if not codex:
-        raise TswError(ErrorCode.UNAVAILABLE, "找不到 codex 命令行", reason="reviewer_unavailable")
-    server = AppServer(codex)
+    server = AppServer(resolve_executable(executable))
     thread_id: str | None = None
     try:
         server.call(
@@ -235,10 +277,10 @@ def run_review(
 
 def archive_thread(thread_id: str, *, executable: str | None = None) -> bool:
     """Archive a kept review thread once the attempt is done with it."""
-    codex = executable or shutil.which("codex")
-    if not codex:
+    try:
+        server = AppServer(resolve_executable(executable))
+    except (TswError, OSError):
         return False
-    server = AppServer(codex)
     try:
         server.call(
             "initialize",

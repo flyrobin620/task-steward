@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from tests.machine_harness import ORCH, Harness
 from tests.support import REPO_ROOT, child_env, run_tsw
 from tsw import lease
 from tsw.home import Home
+from tsw.review.codex import AppServer
 
 pytestmark = pytest.mark.use_case("UC-REVIEW-002")
 
@@ -94,3 +96,29 @@ def test_a_failed_round_over_mcp_is_retried_from_the_command_line(
     review = home.root / "runs" / "T001" / "a1" / "review"
     assert json.loads((review / "r1.json").read_text(encoding="utf-8"))["verdict"] == "pass"
     assert (review / "r1-raw.txt").read_text(encoding="utf-8") == "我觉得可以"
+
+
+def alive(pid: int) -> bool:
+    listing = subprocess.run(
+        ["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, check=False
+    )
+    return str(pid) in listing.stdout
+
+
+def test_closing_the_server_ends_the_wrapper_and_its_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid_file = tmp_path / "child.pid"
+    stubborn = REPO_ROOT / "tests" / "fixtures" / "stubborn_server.py"
+    wrapper = tmp_path / "server.cmd"
+    wrapper.write_text(f'@"{sys.executable}" "{stubborn}" "{pid_file}"\r\n', encoding="utf-8")
+    monkeypatch.setattr(AppServer, "close_wait", 0.5)
+    server = AppServer(str(wrapper))
+    deadline = time.monotonic() + 30
+    while not pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    child = int(pid_file.read_text(encoding="utf-8"))
+    assert alive(child)
+    server.close()
+    assert server.proc.poll() is not None
+    assert not alive(child)

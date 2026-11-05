@@ -338,7 +338,7 @@
       "id": "UC-REVIEW-002",
       "title": "运行配置的评审器（review_run / tsw review run）",
       "actor": "worker",
-      "acceptance": "只有绑定任务、处于运行状态且在执行目录中的 worker 能运行；先落账 review_start，评审请求与结果由 tsw 写入 runs/ 下本 attempt 的 review/；评审器以只读线程、配置的模型与 effort 运行，后续轮次续用上一轮线程并附上 worker 的处置；输出满足契约时记录 review_complete（短 HEAD 补全为完整 HEAD），报错、超时、非 JSON 或不满足契约时保存原始输出并记录 review_fail，再次调用在同一轮同一 HEAD 上重试，超出重试次数时记录 review.unavailable；未实现的评审会话返回 UNSUPPORTED 且不开新一轮",
+      "acceptance": "只有绑定任务、处于运行状态且在执行目录中的 worker 能运行，同一 attempt 同时只运行一轮；开轮前校验评审器命令与评审范围（Git 的 head/base 必须是真实提交，缺省 base 取分叉点，选项形式的输入被拒绝），校验失败不开新一轮；请求与结果由 tsw 写入 runs/ 下本 attempt 的 review/，每轮请求都带当前需求；评审器以只读线程、配置的模型与 effort 运行，同一需求周期内续用上一轮线程并附上 worker 的处置；输出满足契约且 reviewed_head 与本轮 HEAD 一致（Git 缩写解析为同一提交）时记录 review_complete，否则以及任何开轮后的异常都保存原始输出并记录 review_fail；再次调用按落账的范围在同一轮重试，超出重试次数时记录 review.unavailable；关闭评审器时结束整个进程树；未实现的评审会话返回 UNSUPPORTED",
       "surfaces": [
         "cli",
         "mcp"
