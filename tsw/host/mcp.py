@@ -25,12 +25,13 @@ from tsw.errors import ErrorCode, TswError, rejected
 from tsw.events import utc_now
 from tsw.home import Home, open_home
 from tsw.host import inbox as inbox_mod
-from tsw.host.identity import Identity, resolve
+from tsw.host.identity import Identity, resolve, within
 from tsw.ledger import Ledger
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.model import loads, row_dict, task
 from tsw.machine.runner import run_tool
 from tsw.machine.schemas import SCHEMAS
+from tsw.review.run import run_round
 from tsw.storage.fs import FsStorage
 from tsw.tasks import task_row
 
@@ -76,6 +77,19 @@ HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
     ),
     "lease_status": (("orchestrator",), "调度租约状态", EMPTY),
     "lease_acquire": (("orchestrator",), "领取或续期调度租约（本会话）", EMPTY),
+    "review_run": (
+        ("worker",),
+        "运行一轮自评审（DN004）：记录 review_start，调用配置的评审器，"
+        "按输出契约记录 review_complete 或 review_fail；可能需要数分钟到半小时",
+        {
+            "type": "object",
+            "properties": {
+                "head": {"type": "string", "description": "评审的 HEAD；git 执行目录默认取 HEAD"},
+                "base": {"type": "string", "description": "评审范围的起点（base..HEAD）"},
+                "notes": {"type": "string", "description": "已执行的验证命令与结果摘要等说明"},
+            },
+        },
+    ),
 }
 
 
@@ -147,6 +161,16 @@ class Server:
             return who.to_dict()
         config = self._config()
         ledger = self._ledger(config)
+        if name == "review_run":
+            return run_round(
+                self.home,
+                self.env,
+                self.cwd,
+                head=_opt_str(args, "head"),
+                base=_opt_str(args, "base"),
+                notes=_opt_str(args, "notes"),
+                machine=self.machine,
+            )
         if name in HOST_TOOLS:
             return self._host_tool(name, args, who, config, ledger)
         if who.role == "worker":
@@ -160,7 +184,18 @@ class Server:
                     "worker 只能操作自己的任务", reason="task_scope", task_id=args["task_id"]
                 )
         caller = Caller(role=who.role, session_id=who.session_id, machine=self.machine)
-        return run_tool(ledger, config.require_valid(), caller, name, dict(args))
+        out = run_tool(ledger, config.require_valid(), caller, name, dict(args))
+        if name == "task_dispatch":
+            self._prepare_workdir(args)
+        return out
+
+    def _prepare_workdir(self, args: Mapping[str, Any]) -> None:
+        """A research task's execution directory lives under ``work/`` and is created here."""
+        workdir = Path(str(args.get("workdir") or "")).expanduser()
+        if not workdir.is_absolute():
+            workdir = self.home.root / workdir
+        if within(workdir, self.home.root / "work"):
+            workdir.mkdir(parents=True, exist_ok=True)
 
     def _host_tool(
         self,
@@ -386,6 +421,15 @@ def ledger_marker(home: Home) -> tuple[tuple[str, int, int], ...]:
     except OSError:
         return ()
     return tuple(sorted(found))
+
+
+def _opt_str(args: Mapping[str, Any], key: str) -> str | None:
+    value = args.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise rejected(f"{key} 应为字符串", reason="invalid_input", field=key)
+    return value or None
 
 
 def _valid_id(value: Any) -> bool:

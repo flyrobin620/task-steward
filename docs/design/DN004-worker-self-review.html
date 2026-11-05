@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="fda8137e1101dff0f6f44646debb81000bc3ec2d948f16893b4b45125ce822f9">
+<meta name="tsw-source-sha256" content="33a1e23d80fb47631e9cd42022c4176cd395e917cd2789e1fa66e1893426cf40">
 <title>DN004 worker 自评审：Codex Astra 评审与迭代决策</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -42,7 +42,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 </head>
 <body>
 <div class="layout">
-<nav class="toc"><h2>目录</h2><a class="l2" href="#1-目标与变化">1. 目标与变化</a><a class="l2" href="#2-流程">2. 流程</a><a class="l2" href="#3-评审器调用">3. 评审器调用</a><a class="l3" href="#31-主路径app-server-一次性线程">3.1 主路径：App Server 一次性线程</a><a class="l3" href="#32-回退codex-exec">3.2 回退：codex exec</a><a class="l3" href="#33-无-codex-时claude-headless">3.3 无 Codex 时：claude-headless</a><a class="l3" href="#34-只读与隔离">3.4 只读与隔离</a><a class="l2" href="#4-输出契约">4. 输出契约</a><a class="l2" href="#5-worker-处置规范">5. worker 处置规范</a><a class="l3" href="#51-预算用完后由主会话判断">5.1 预算用完后由主会话判断</a><a class="l2" href="#6-主会话的复核">6. 主会话的复核</a><a class="l2" href="#7-报告中的呈现">7. 报告中的呈现</a><a class="l2" href="#8-成本与时间">8. 成本与时间</a></nav>
+<nav class="toc"><h2>目录</h2><a class="l2" href="#1-目标与变化">1. 目标与变化</a><a class="l2" href="#2-流程">2. 流程</a><a class="l2" href="#3-评审器调用">3. 评审器调用</a><a class="l3" href="#31-主路径app-server-一次性线程">3.1 主路径：App Server 一次性线程</a><a class="l3" href="#32-回退codex-exec">3.2 回退：codex exec</a><a class="l3" href="#33-无-codex-时claude-headless">3.3 无 Codex 时：claude-headless</a><a class="l3" href="#34-v1-实现范围">3.4 v1 实现范围</a><a class="l3" href="#35-只读与隔离">3.5 只读与隔离</a><a class="l2" href="#4-输出契约">4. 输出契约</a><a class="l2" href="#5-worker-处置规范">5. worker 处置规范</a><a class="l3" href="#51-预算用完后由主会话判断">5.1 预算用完后由主会话判断</a><a class="l2" href="#6-主会话的复核">6. 主会话的复核</a><a class="l2" href="#7-报告中的呈现">7. 报告中的呈现</a><a class="l2" href="#8-成本与时间">8. 成本与时间</a></nav>
 <main>
 <h1>DN004 worker 自评审：Codex Astra 评审与迭代决策</h1>
 <ul><li>状态：设计草案（T233 r5，已按 PoC 结果修订）</li><li>日期：2026-11-05</li><li>相关：<a href="DN002-task-state-machine.html">DN002 任务状态机 §3.3</a> · <a href="DN003-unified-config.html">DN003 统一配置</a></li></ul>
@@ -65,7 +65,9 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <h3 id="33-无-codex-时claude-headless">3.3 无 Codex 时：<code>claude-headless</code></h3>
 <p>用 Claude Code 命令行一次性评审（PoC 2026-11-05 实测的调用约定）：</p>
 <ul><li><strong>清除继承的宿主环境变量</strong>：tsw 在桌面 app 的会话里运行，进程继承了 <code>CLAUDE_*</code> / <code>ANTHROPIC_*</code> 等宿主变量，命令行会因此以为认证由宿主提供而报“未登录”。启动评审进程前删除这些变量，让命令行读取用户设置中的认证或网关配置。</li><li><strong>严格只读</strong>：<code>--allowedTools Read,Grep,Glob</code>，<code>--disallowedTools Write,Edit,Bash,NotebookEdit,ExitPlanMode,Agent,Workflow,Skill</code>（子代理与工作流工具可能间接写入，也要禁用），<code>--permission-mode dontAsk</code>。不使用 plan 模式：它不写目标文件，但会把计划文件写入用户目录。</li><li><strong>设置来源</strong>：<code>--setting-sources user</code>，以便读取用户的认证或网关配置；这也会加载用户级 hooks，评审结果只以 JSON 输出为准，hooks 的报错不影响评审。</li><li><strong>显式模型</strong>：总是传 <code>--model roles.reviewer.model</code>，不依赖用户的默认模型。</li><li><strong>输出与续用</strong>：<code>--output-format json</code>，从 <code>result</code> 字段解析评审 JSON；增量评审用 <code>--resume &lt;session_id&gt;</code> 续用同一会话。</li></ul>
-<h3 id="34-只读与隔离">3.4 只读与隔离</h3>
+<h3 id="34-v1-实现范围">3.4 v1 实现范围</h3>
+<ul><li><code>review_run</code>（MCP，worker）与 <code>tsw review run</code>（命令行）是同一实现：先落账 <code>review_start</code>，渲染 <code>runs/Txxx/aN/review/rK-request.md</code>，调用评审器，结果写入 <code>rK.json</code>、调用信息写入 <code>rK-run.json</code>（线程 ID、模型、effort、是否续用），然后记录 <code>review_complete</code>；评审器报错、超时、输出不是 JSON 或不满足契约时，保存原始输出 <code>rK-raw.txt</code> 并记录 <code>review_fail</code>。任务处于 <code>reviewing</code>（E02）时再次调用即在同一轮、同一 HEAD 上重试。</li><li><code>codex-app-server</code> 通过 stdio 与 <code>codex app-server</code> 通信（不另开端口）。线程在各轮之间保留，下一轮按 <code>review.incremental = resume_thread</code> 续用上一轮的线程。归档留给 attempt 结束后的清理。</li><li><code>codex-exec</code> 与 <code>claude-headless</code> 尚未实现：配置为评审会话时 <code>review_run</code> 返回 <code>UNSUPPORTED</code>，不落账新的一轮。</li></ul>
+<h3 id="35-只读与隔离">3.5 只读与隔离</h3>
 <ul><li>reviewer 线程只读，不能修改 worktree，不能 push，不能访问凭据目录。</li><li>评审包和结果由 tsw 写入该 attempt 的 <code>runs/Txxx/aN/review/</code>（worker 不直接写 <code>runs/</code>，见 DN006 §9.4）。</li><li>一次性线程不进入调度、不绑定任务、不占用 <code>max_workers</code> 名额。每个 attempt 的 reviewer 线程只服务于该 attempt，不跨任务复用。</li></ul>
 <h2 id="4-输出契约">4. 输出契约</h2>
 <p><code>config/schemas/review-result.schema.json</code> 约定 Codex 必须只输出如下 JSON：</p>

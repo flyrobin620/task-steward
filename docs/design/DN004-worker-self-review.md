@@ -71,7 +71,13 @@ App Server 无法启动时，用 `codex exec` 非交互执行同一评审包（�
 - **显式模型**：总是传 `--model roles.reviewer.model`，不依赖用户的默认模型。
 - **输出与续用**：`--output-format json`，从 `result` 字段解析评审 JSON；增量评审用 `--resume <session_id>` 续用同一会话。
 
-### 3.4 只读与隔离
+### 3.4 v1 实现范围
+
+- `review_run`（MCP，worker）与 `tsw review run`（命令行）是同一实现：先落账 `review_start`，渲染 `runs/Txxx/aN/review/rK-request.md`，调用评审器，结果写入 `rK.json`、调用信息写入 `rK-run.json`（线程 ID、模型、effort、是否续用），然后记录 `review_complete`；评审器报错、超时、输出不是 JSON 或不满足契约时，保存原始输出 `rK-raw.txt` 并记录 `review_fail`。任务处于 `reviewing`（E02）时再次调用即在同一轮、同一 HEAD 上重试。
+- `codex-app-server` 通过 stdio 与 `codex app-server` 通信（不另开端口）。线程在各轮之间保留，下一轮按 `review.incremental = resume_thread` 续用上一轮的线程。归档留给 attempt 结束后的清理。
+- `codex-exec` 与 `claude-headless` 尚未实现：配置为评审会话时 `review_run` 返回 `UNSUPPORTED`，不落账新的一轮。
+
+### 3.5 只读与隔离
 
 - reviewer 线程只读，不能修改 worktree，不能 push，不能访问凭据目录。
 - 评审包和结果由 tsw 写入该 attempt 的 `runs/Txxx/aN/review/`（worker 不直接写 `runs/`，见 DN006 §9.4）。
