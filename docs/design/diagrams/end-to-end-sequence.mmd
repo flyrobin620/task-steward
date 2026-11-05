@@ -1,0 +1,37 @@
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant O as 主会话 orchestrator
+    participant C as tsw（MCP + 账本）
+    participant A as Claude app
+    participant W as worker 子会话
+    participant X as Codex reviewer
+
+    U->>O: 新任务 / 执行待办
+    O->>C: task_register · task_plan
+    C-->>O: ready（依赖、资源、名额已核对）
+    O->>C: task_dispatch（worktree / 研究目录 + brief.md）
+    O->>A: start_session(fresh, cwd=worktree, model/effort 来自配置)
+    A-->>O: session_id
+    O->>C: attempt_bind(session_id)
+    A->>W: 启动并执行任务书
+    W->>C: progress_note（可选，不唤醒主控）
+    W->>X: tsw review run（round 1）
+    X-->>W: verdict + findings
+    W->>W: 逐条处置·迭代修改
+    W->>X: 增量评审（round 2，resume_thread）
+    X-->>W: pass
+    W->>C: review_decision(finalize) · submit(报告 md+html)
+    W->>O: send_message(session_id=parent)：事件 ID（主唤醒路径）
+    A-->>O: side-sessions-event（兜底：全部子会话空闲时）
+    O->>C: inbox（按事件 ID 读取并 ack）
+    O->>O: 逐项核验验收标准、评审证据、Git/PR 事实
+    alt 仍有剩余工作
+        O->>C: feedback
+        O->>W: SendMessage（具体剩余工作）
+    else 核验通过
+        O->>C: accept → done
+        O->>U: 完成·待用户验收（Teams 通知）
+        U->>O: 验收当前 revision
+        O->>C: user_accept(来源 = 用户消息)
+    end

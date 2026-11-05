@@ -1,0 +1,45 @@
+flowchart LR
+    U((用户))
+
+    subgraph APP["Claude Code 桌面 app"]
+        O["主会话 orchestrator<br/>cwd = 控制根<br/>skill: orchestrate"]
+        W1["worker 子会话 T241-a1<br/>cwd = 任务 worktree"]
+        W2["worker 子会话 T242-a1<br/>cwd = 研究目录"]
+    end
+
+    subgraph PLUGIN["TaskSteward 插件（用户级安装）"]
+        MCP["tsw MCP server<br/>按 cwd 解析角色·按角色暴露工具"]
+        HOOKS["hooks<br/>SessionStart / PreToolUse / Stop"]
+        SK["skills<br/>orchestrate / worker / self-review"]
+    end
+
+    subgraph CORE["tsw core（Python 标准库）"]
+        L[("事件账本<br/>ledger/events/*.jsonl")]
+        PJ[(".local 投影<br/>state.sqlite（可重建）")]
+        CFG["统一配置<br/>config/task-steward.json"]
+        RD["渲染器<br/>STATUS.html / ARCHIVE.html"]
+        IMP["导入器<br/>orchestrator-agent 历史"]
+    end
+
+    CX{{"Codex reviewer<br/>gpt-6-astra · medium · read-only"}}
+    GH["GitHub / ADO<br/>PR · CI"]
+    TM["Teams self chat<br/>Teams MCP 工具"]
+
+    U -- 需求 / 验收 --> O
+    U -- 直接对话 / [report] --> W1
+    O -- start_session / SendMessage --> W1
+    O -- start_session / SendMessage --> W2
+    W1 -- reportable 事件 → send_message(parent) --> O
+    W1 -. 兜底：全部子会话空闲 → side-sessions-event .-> O
+    O --- MCP
+    W1 --- MCP
+    W2 --- MCP
+    HOOKS --- MCP
+    MCP --> L
+    L --> PJ
+    PJ --> RD
+    CFG --> MCP
+    IMP --> L
+    W1 -- tsw review run --> CX
+    W1 -- push / PR --> GH
+    O -- 完成·失败·待答通知 --> TM

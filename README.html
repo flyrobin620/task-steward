@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TaskSteward（任务管家）</title>
+<style>
+:root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.7 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--fg);background:#fff}
+.layout{display:grid;grid-template-columns:260px minmax(0,1fr);max-width:1400px;margin:0 auto}
+nav.toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:28px 18px;border-right:1px solid var(--line);font-size:13px}
+nav.toc h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
+nav.toc a{display:block;color:var(--fg);text-decoration:none;padding:2px 0}
+nav.toc a.l3{padding-left:14px;color:var(--muted)}
+nav.toc a:hover{color:var(--accent)}
+main{padding:32px 48px 64px;min-width:0}
+h1{font-size:28px;margin:0 0 16px;border-bottom:3px solid var(--accent);padding-bottom:10px}
+h2{font-size:21px;margin:36px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:17px;margin:26px 0 10px}
+h4{font-size:15px;margin:20px 0 8px}
+a{color:var(--accent)}
+code{font-family:Consolas,"Cascadia Mono",monospace;font-size:13px;background:var(--code);padding:1px 5px;border-radius:4px}
+pre{background:#1e2230;color:#e8eaf2;padding:14px 16px;border-radius:8px;overflow:auto;line-height:1.5}
+pre code{background:none;padding:0;color:inherit}
+table{border-collapse:collapse;width:100%;margin:12px 0 18px;font-size:13.5px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:var(--bg-soft);white-space:nowrap}
+tr:nth-child(even) td{background:#fbfcfe}
+blockquote{margin:12px 0;padding:8px 16px;border-left:4px solid var(--accent);background:var(--bg-soft)}
+figure{margin:18px 0 8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff}
+figure svg{display:block;width:100%;height:auto;max-height:none}
+figcaption{font-size:13px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between;gap:12px}
+.meta{color:var(--muted);font-size:13px}
+footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:10px}
+@media (max-width:900px){.layout{grid-template-columns:1fr}nav.toc{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line)}main{padding:20px}}
+@media print{nav.toc{display:none}.layout{display:block}main{padding:0}a{color:inherit;text-decoration:none}
+ pre{white-space:pre-wrap;background:#f3f4f8;color:#111}figure,table,pre{break-inside:avoid}h2,h3{break-after:avoid}
+ body{font-size:11pt}@page{margin:16mm 14mm}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc"><h2>目录</h2><a class="l2" href="#设计文档">设计文档</a><a class="l2" href="#仓库布局规划">仓库布局（规划）</a><a class="l2" href="#许可">许可</a></nav>
+<main>
+<h1>TaskSteward（任务管家）</h1>
+<p>一个可插拔宿主的任务编排器，默认宿主是 <strong>Claude Code 桌面 app</strong>，也可以经插件层接入 Codex、GitHub Copilot 或自建的远程会话中枢。</p>
+<ul><li>主会话（orchestrator）是 app 中的一个会话。</li><li>每个任务由主会话启动的关联子会话（worker）执行。</li><li>worker 完成后自己调用评审器（默认 Codex gpt-6-astra · medium）评审成果，并决定是否迭代；评审预算用完或遇到问题时，先由主会话判断，确需人类时再经渠道请求。</li><li>worker 定稿后由主会话技术验收，最后交用户人工验收。</li><li>状态由事件账本驱动，可导入 orchestrator-agent 的全部历史。</li><li>运行数据（配置、任务书、账本、报告）放在与本 repo 分离的数据目录 <code>TSW_HOME</code>，不提交到本 repo；备份该目录即可。</li></ul>
+<p>当前阶段：<strong>产品设计</strong>（T233）。本仓库目前只有设计文档，尚未实现运行代码。</p>
+<h2 id="设计文档">设计文档</h2>
+<p>每份文档都有 Markdown 与 HTML 两个版本，内容一致；HTML 可离线在浏览器打开并打印。</p>
+<table><thead><tr><th>文档</th><th>Markdown</th><th>HTML</th><th>内容</th></tr></thead><tbody><tr><td>DN001 总体架构</td><td><a href="docs/design/DN001-architecture.html">md</a></td><td><a href="docs/design/DN001-architecture.html">html</a></td><td>目标、组件、会话模型与平台约束、工具面、hooks、存储、关键决策、待 PoC 验证的假设</td></tr><tr><td>DN002 任务状态机</td><td><a href="docs/design/DN002-task-state-machine.html">md</a></td><td><a href="docs/design/DN002-task-state-machine.html">html</a></td><td>按主控视角划分状态的单张状态机（含 worker 内部评审子状态）与导入映射；完整迁移表、守卫条件、attempt 阶段、事件类型、不变量、异常恢复</td></tr><tr><td>DN003 统一配置</td><td><a href="docs/design/DN003-unified-config.html">md</a></td><td><a href="docs/design/DN003-unified-config.html">html</a></td><td><code>config/task-steward.json</code> 完整示例、字段说明、校验与生效规则</td></tr><tr><td>DN004 worker 自评审</td><td><a href="docs/design/DN004-worker-self-review.html">md</a></td><td><a href="docs/design/DN004-worker-self-review.html">html</a></td><td>Codex Astra 评审调用、输出契约、处置规范、迭代决策、主控复核</td></tr><tr><td>DN005 历史导入与 resume</td><td><a href="docs/design/DN005-history-import-and-resume.html">md</a></td><td><a href="docs/design/DN005-history-import-and-resume.html">html</a></td><td>导入来源、分类规则、导入步骤、resume 资料包、验证与回退</td></tr><tr><td>DN006 插件层</td><td><a href="docs/design/DN006-plugin-layer.html">md</a></td><td><a href="docs/design/DN006-plugin-layer.html">html</a></td><td>宿主集成、会话适配器（含一次性评审）、人类渠道、存储后端四类插件的职责与接口；委托操作；主会话判断；数据目录；组合示例</td></tr><tr><td>DN007 账本与上下文检索</td><td><a href="docs/design/DN007-ledger-and-context.html">md</a></td><td><a href="docs/design/DN007-ledger-and-context.html">html</a></td><td>三层存储、写读路径与重建；任务卡片、检索工具、用户决定与偏好；主会话与 worker 的历史读取方式</td></tr></tbody></table>
+<p>图的结构来源是 <code>docs/design/diagrams/*.mmd</code>（状态、迁移编号与标签的权威来源），文档引用同名 <code>.svg</code>：</p>
+<ul><li>彩色 SVG 由 <code>docs/design/diagrams/draw.py</code> 按手工布局生成（读取 <code>.mmd</code> 的标签），运行 <code>python -X utf8 docs/design/diagrams/draw.py</code>；</li><li><code>docs/design/diagrams/check.py</code> 校验 XML 合法性，以及每条迁移、节点、编号是否都在 SVG 中可见，结果写入 <code>validation.json</code>；</li><li><code>docs/design/diagrams/auto/</code> 下是 Mermaid 自动布局的全量拓扑图，仅作结构核对。</li></ul>
+<p>修改 <code>.mmd</code> 后需要同步调整 <code>draw.py</code> 中的布局坐标，再运行两个脚本。</p>
+<h2 id="仓库布局规划">仓库布局（规划）</h2>
+<pre><code class="lang-text">task-steward/
+  docs/design/            设计文档（md + html）与图
+  plugin/                 Claude Code 插件：skills、hooks、MCP 配置（实现阶段）
+  tsw/                    核心库与 CLI：账本、配置、门禁、渲染、导入、Codex 评审适配器（实现阶段）
+  tests/                  使用临时仓库与模拟平台响应的测试（实现阶段）</code></pre>
+<h2 id="许可">许可</h2>
+<p><a href="LICENSE">MIT</a></p>
+<footer>本页由同目录的 <a href="README.md">README.md</a> 生成，内容与 Markdown 版本一致。</footer>
+</main>
+</div>
+</body>
+</html>

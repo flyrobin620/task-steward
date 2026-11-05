@@ -1,0 +1,121 @@
+{
+  "status": "PASS",
+  "svg_coverage": {
+    "status": "PASS",
+    "differences": []
+  },
+  "files": 8,
+  "total_edges": 207,
+  "results": [
+    {
+      "file": "architecture.svg",
+      "xml": "PASS",
+      "nodes": 15,
+      "edges": 18,
+      "unique_transition_ids": 0,
+      "visible_labels": "PASS",
+      "ids_and_portability": "PASS",
+      "viewBox": "0 0 1200 2920"
+    },
+    {
+      "file": "end-to-end-sequence.svg",
+      "xml": "PASS",
+      "nodes": 6,
+      "edges": 25,
+      "unique_transition_ids": 0,
+      "visible_labels": "PASS",
+      "ids_and_portability": "PASS",
+      "viewBox": "0 0 1200 3150"
+    },
+    {
+      "file": "import-classification.svg",
+      "xml": "PASS",
+      "nodes": 16,
+      "edges": 18,
+      "unique_transition_ids": 0,
+      "visible_labels": "PASS",
+      "ids_and_portability": "PASS",
+      "viewBox": "0 0 1200 2160"
+    },
+    {
+      "file": "input-routing.svg",
+      "xml": "PASS",
+      "nodes": 22,
+      "edges": 29,
+      "unique_transition_ids": 2,
+      "visible_labels": "PASS",
+      "ids_and_portability": "PASS",
+      "viewBox": "0 0 1200 2640",
+      "node_labels": "PASS",
+      "edge_geometry": "PASS",
+      "label_clearance": "PASS",
+      "text_clearance": "PASS"
+    },
+    {
+      "file": "plugin-architecture.svg",
+      "xml": "PASS",
+      "nodes": 18,
+      "edges": 20,
+      "unique_transition_ids": 0,
+      "visible_labels": "PASS",
+      "ids_and_portability": "PASS",
+      "viewBox": "0 0 1200 1930",
+      "node_labels": "PASS",
+      "edge_geometry": "PASS",
+      "label_clearance": "PASS",
+      "text_clearance": "PASS"
+    },
+    {
+      "file": "review-loop.svg",
+      "xml": "PASS",
+      "nodes": 22,
+      "edges": 30,
+      "unique_transition_ids": 1,
+      "visible_labels": "PASS",
+      "ids_and_portability": "PASS",
+      "viewBox": "0 0 1200 3120",
+      "node_labels": "PASS",
+      "edge_geometry": "PASS",
+      "label_clearance": "PASS",
+      "text_clearance": "PASS"
+    },
+    {
+      "file": "storage-and-context.svg",
+      "xml": "PASS",
+      "nodes": 15,
+      "edges": 17,
+      "unique_transition_ids": 0,
+      "visible_labels": "PASS",
+      "ids_and_portability": "PASS",
+      "viewBox": "0 0 1200 1880",
+      "node_labels": "PASS",
+      "edge_geometry": "PASS",
+      "label_clearance": "PASS",
+      "text_clearance": "PASS"
+    },
+    {
+      "file": "task-state-machine.svg",
+      "xml": "PASS",
+      "nodes": 16,
+      "edges": 50,
+      "unique_transition_ids": 34,
+      "visible_labels": "PASS",
+      "ids_and_portability": "PASS",
+      "viewBox": "0 0 1200 3170",
+      "state_uniqueness": "PASS",
+      "edge_geometry_and_buses": "PASS",
+      "label_clearance": "PASS"
+    }
+  ],
+  "dn002_consistency": {
+    "status": "PASS",
+    "file": "../DN002-task-state-machine.md",
+    "transition_ids": 34,
+    "exact_ids": 34,
+    "canonical_edges": 48,
+    "notes": [
+      "只校验 §3.2 T、§3.3 E；全部对应 task-state-machine.mmd。§3.4 导入映射不在状态图中。"
+    ],
+    "differences": []
+  }
+}
