@@ -422,3 +422,24 @@ def test_a_listing_and_its_ledger_marker_are_one_snapshot(
     assert "submit" in {t["name"] for t in listed[0]["result"]["tools"]}
     assert server.list_changes() == []  # the newer ledger is re-read once, same identity
     assert server.list_changes() == []
+
+
+@mark.use_case("UC-HOST-001")
+def test_a_failed_listing_does_not_swallow_the_next_change(
+    h: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = Server(h.home, {SESSION_ENV: "w-1"}, tmp_path / "wt" / "T001")
+    server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    worker_task(h, tmp_path)
+    resolve_identity = Server.identity
+
+    def broken(self: Server) -> Any:
+        raise OSError("ledger busy")
+
+    monkeypatch.setattr(Server, "identity", broken)
+    failed = server.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    assert failed[0]["error"]["code"] == -32603
+    monkeypatch.setattr(Server, "identity", resolve_identity)
+    assert server.list_changes() == [
+        {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
+    ]

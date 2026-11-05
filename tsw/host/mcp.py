@@ -260,9 +260,9 @@ class Server:
                 result = {}
             elif method == "tools/list":
                 with self._listed_lock:  # one snapshot for the list and the poll's marker
-                    self._marker = ledger_marker(self.home)
-                    who = self.identity()
-                    self.listed = _list_key(who)
+                    marker = ledger_marker(self.home)
+                    who = self.identity()  # on failure neither the list nor the marker moves
+                    self.listed, self._marker = _list_key(who), marker
                 result = {"tools": self.tools(who)}
             elif method == "tools/call":
                 if (
