@@ -263,7 +263,8 @@ def input_resolve(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 resolves=binding.get("judgments", []),
             )
             if extend:
-                cycle = int(row["cycle"])
+                # T12 across revisions opens a new cycle; the extension belongs to that cycle.
+                cycle = int(row["cycle"]) + (1 if data["new_cycle"] else 0)
                 drafts.append(
                     EventDraft(
                         type="review.budget_extended",
@@ -1270,10 +1271,15 @@ def user_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         )
         if int(row["stale"]):
             raise rejected("任务有未解决的 stale 标记", reason="stale")
-        problems = guards.dependency_problems(ctx.conn, task_id)
-        if problems and problems != loads(row["stale_ack"], None):
-            # An upstream change not yet propagated by sync still blocks acceptance.
-            raise rejected("上游依赖已变化，先运行 sync", reason="stale", dependencies=problems)
+        if task_id in guards.invalidated(ctx.conn):
+            # An upstream change anywhere in the chain, even before sync records it, blocks it.
+            raise rejected(
+                "上游依赖已变化，先运行 sync",
+                reason="stale",
+                dependencies=guards.dependency_problems(
+                    ctx.conn, task_id, guards.invalidated(ctx.conn)
+                ),
+            )
         if ctx.conn.execute(
             "SELECT 1 FROM input_requests WHERE task_id = ? AND status = 'pending'", (task_id,)
         ).fetchone():

@@ -80,8 +80,52 @@ def dependency_problems(
     return problems
 
 
+def topological(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Tasks with every dependency before its dependents (registration order breaks ties)."""
+    rows = conn.execute("SELECT * FROM tasks ORDER BY registered_seq").fetchall()
+    deps: dict[str, list[str]] = {}
+    for dep in conn.execute("SELECT task_id, dep_id FROM dependencies"):
+        deps.setdefault(str(dep["task_id"]), []).append(str(dep["dep_id"]))
+    by_id = {str(row["task_id"]): row for row in rows}
+    ordered: list[sqlite3.Row] = []
+    seen: set[str] = set()
+
+    def visit(task_id: str) -> None:
+        if task_id in seen or task_id not in by_id:
+            return
+        seen.add(task_id)
+        for upstream in deps.get(task_id, []):
+            visit(upstream)
+        ordered.append(by_id[task_id])
+
+    for row in rows:
+        visit(str(row["task_id"]))
+    return ordered
+
+
+def invalidated(conn: sqlite3.Connection) -> set[str]:
+    """Tasks whose results no longer hold, followed through the whole dependency chain.
+
+    A ready or occupying task with an unsatisfied dependency is invalid; a done task is invalid
+    when it is marked stale or has a dependency problem the user has not acknowledged. A kept
+    (acknowledged) result stops the propagation (DN002 §5.2). Guards use this instead of the
+    direct dependencies only, so nothing downstream can be accepted between an upstream change
+    and the ``sync`` that records it.
+    """
+    invalid: set[str] = set()
+    for row in topological(conn):
+        task_id, status = str(row["task_id"]), str(row["status"])
+        problems = dependency_problems(conn, task_id, invalid)
+        if status == "done":
+            if int(row["stale"]) or (problems and problems != loads(row["stale_ack"], None)):
+                invalid.add(task_id)
+        elif problems and status in ("ready", *OCCUPYING):
+            invalid.add(task_id)
+    return invalid
+
+
 def g_dep(conn: sqlite3.Connection, task_id: str) -> None:
-    problems = dependency_problems(conn, task_id)
+    problems = dependency_problems(conn, task_id, invalidated(conn))
     if problems:
         raise rejected("依赖未满足", reason="g_dep", dependencies=problems)
 
@@ -251,6 +295,14 @@ def g_submit(
             "本提交周期没有由配置的评审器完成的评审", reason="g_submit", missing="review"
         )
     last = completed[-1]
+    latest = rounds[-1]
+    if latest is None or latest["round"] != last["round"] or latest["decision"] != "finalize":
+        raise rejected(
+            "本周期最后一轮必须是有效评审并已 finalize",
+            reason="g_submit",
+            last_round=None if latest is None else latest["round"],
+            decision=None if latest is None else latest["decision"],
+        )
     if cycle["last_decision"] != "finalize":
         raise rejected(
             "最后的评审决定不是 finalize", reason="g_submit", decision=cycle["last_decision"]

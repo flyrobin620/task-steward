@@ -456,7 +456,8 @@ def review_started(conn: sqlite3.Connection, event: Event) -> None:
     _substate(conn, event, data["worker_transition"])
     _cycle_row(conn, task_id, data["attempt"], data["cycle"])
     conn.execute(
-        "UPDATE review_cycles SET rounds = rounds + 1, last_round = ?, retries = 0 "
+        "UPDATE review_cycles SET rounds = rounds + 1, last_round = ?, retries = 0, "
+        "last_decision = NULL "
         "WHERE task_id = ? AND attempt = ? AND cycle = ?",
         (data["round"], task_id, data["attempt"], data["cycle"]),
     )
@@ -599,6 +600,12 @@ def finding_disposition(disposition: str) -> Reducer:
 
 def self_check_failed(conn: sqlite3.Connection, event: Event) -> None:
     _substate(conn, event, "E06")
+    # A self-check reopens the work: an earlier finalize no longer stands.
+    conn.execute(
+        "UPDATE review_cycles SET last_decision = NULL WHERE task_id = ? AND cycle = "
+        "(SELECT cycle FROM tasks WHERE task_id = ?)",
+        (_tid(event), _tid(event)),
+    )
     _touch(conn, event)
 
 

@@ -11,7 +11,7 @@ from tsw.commands import Command
 from tsw.errors import TswError
 from tsw.events import EventDraft
 from tsw.home import Home
-from tsw.machine.base import Caller
+from tsw.machine.base import REGISTRY, Caller, ToolEnv
 from tsw.storage.fs import FsStorage
 
 mark = pytest.mark
@@ -438,3 +438,122 @@ def test_r14_cancel_settles_creations_first_and_late_sessions_are_not_adopted(h:
         )
         == "invalid_state"
     )
+
+
+def _commit_without_sync(h: Harness, name: str, **inp: Any) -> None:
+    """Commit a tool's events but not the sync that normally follows (the gap R5 is about)."""
+    env = ToolEnv(config=h.config, caller=ORCH)
+    h.ledger.commit(REGISTRY.get(name).handler(inp, env))
+
+
+@mark.use_case("UC-LIFE-001")
+@mark.transition("G-DEP")
+def test_r5_transitive_invalidation_blocks_acceptance_before_sync(h: Harness) -> None:
+    h.complete("T001")
+    h.complete("T002", ["T001"])
+    h.complete("T003", ["T002"])
+    _commit_without_sync(
+        h,
+        "task_cancel",
+        task_id="T001",
+        worker_stopped=True,
+        user_source=h.source("T001", 1, "cancel"),
+    )
+    assert h.task("T002")["stale"] == 0  # sync has not run yet
+    assert (
+        reason_of(
+            lambda: h.run("user_accept", task_id="T003", user_source=h.source("T003", 1, "accept"))
+        )
+        == "stale"
+    )
+
+
+@mark.use_case("UC-LIFE-001")
+def test_r15_a_kept_result_does_not_block_its_dependents(h: Harness) -> None:
+    h.complete("T001")
+    h.complete("T002", ["T001"])
+    h.run(
+        "task_cancel",
+        task_id="T001",
+        worker_stopped=True,
+        user_source=h.source("T001", 1, "cancel"),
+    )
+    h.run("stale_keep", task_id="T002", user_source=h.source("T002", 1, "keep"))
+    h.register("T003")
+    h.plan("T003", ["T002"])
+    assert h.status("T003") == "ready"
+    h.run("sync")
+    h.run("sync")
+    assert h.status("T003") == "ready"
+    h.dispatch("T003")
+
+
+@mark.use_case("UC-REVIEW-001")
+@mark.transition("G-SUBMIT")
+def test_r6_a_later_blocked_round_voids_an_earlier_finalize(home: Home) -> None:
+    h, w = started(home)
+    h.finalize(w, "T001")
+    h.run("self_check_failed", w, task_id="T001", reason="补材料")
+    r = h.run(
+        "review_start",
+        w,
+        task_id="T001",
+        head="h1",
+        reviewer={"session": "codex-app-server", "model": "gpt-6-astra"},
+    )["events"][0]["data"]["round"]
+    h.run(
+        "review_complete",
+        w,
+        task_id="T001",
+        round=r,
+        result_path="r.json",
+        result={"verdict": "blocked", "summary": "缺材料", "reviewed_head": "h1", "findings": []},
+    )
+    assert reason_of(lambda: h.submit(w, "T001")) == "g_submit"
+
+
+@mark.use_case("UC-JUDGE-001")
+def test_r16_a_user_extension_after_a_requirement_change_applies_to_the_new_cycle(
+    home: Home,
+) -> None:
+    h, w = started(home)
+    h.run("question", w, task_id="T001", text="q")
+    h.run(
+        "judge",
+        task_id="T001",
+        items=["J-T001-1"],
+        decision="escalate",
+        question="q",
+        rationale="r",
+        basis=["b"],
+        confidence="low",
+    )
+    h.run(
+        "task_update",
+        task_id="T001",
+        goal="g2",
+        acceptance=["a2"],
+        user_source=h.source("T001", 1, "change"),
+    )
+    asked = h.run(
+        "judge",
+        task_id="T001",
+        items=[],
+        decision="escalate",
+        question="q2",
+        rationale="r",
+        basis=["b"],
+        confidence="low",
+    )
+    request = asked["events"][1]["data"]["request_id"]
+    h.run(
+        "input_resolve",
+        task_id="T001",
+        request_id=request,
+        answer="好",
+        extend_rounds=2,
+        user_source=h.source("T001", 2, "answer", request_id=request),
+    )
+    assert h.task("T001")["cycle"] == 2
+    cycles = h.query("SELECT cycle, user_extension FROM review_cycles")
+    assert cycles == [{"cycle": 2, "user_extension": 2}]
