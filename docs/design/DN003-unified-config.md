@@ -219,7 +219,7 @@
 
 - `max_workers`：活动任务上限（DN002 G-SLOT）。实际并发取它与平台可用额度的较小值。
 - `prestart.enabled` / `prestart.max_standby`：是否在用户 turn 中为已规划任务预启动 worker 会话，以及同时待命的会话上限（DN002 §5.6）。关闭预启动时，自动 turn 中变为可派发的任务都要等用户下一次发消息才能创建会话。
-- `wake.worker_message_parent`：reportable 事件发生时，worker 是否同时 SendMessage 给父会话（DN001 §6.3）。
+- `wake.worker_message_parent`：reportable 事件发生时，worker 是否同时用 `mcp__ccd_session_mgmt__send_message(session_id="parent")` 给父会话发消息（DN001 §6.3）。
 - `sessions.archive_on_accept`：验收后是否归档子会话。默认 `false`，保留以便用户回看；归档时须有工具回执。
 
 ### 3.4 `repositories` 与 `accounts`

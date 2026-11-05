@@ -252,7 +252,7 @@ class SessionAdapter(Protocol):
 
 interactive 动作映射（承载 worker 的实现）：
 
-| 动作 | `claude-app` | `codex-app-server` | `copilot-app` | `remote-hub` |
+| 动作 | `claude-app` | `codex-app-server`（暂不承载 worker，B7 解决后启用） | `copilot-app` | `remote-hub` |
 | --- | --- | --- | --- | --- |
 | create | `start_session`（fresh、cwd、use_worktree=false；预启动时 prompt 为待命说明） | `thread/start`（写入关联标记） | `create_session`（name = 会话名） | 创建 native session（intentId） |
 | deliver_brief | `SendMessage`（任何 turn 都可以；直接启动时任务书可放在 prompt 中，两阶段合一） | `turn/start` | `send_session_message` | 会话消息 API |
@@ -523,7 +523,9 @@ worker 在 Claude app，评审用 Codex：
 }
 ```
 
-### 10.3 只有 Codex
+### 10.3 只有 Codex（当前不支持）
+
+`codex-app-server` 暂不承载 worker（B7），所以这个组合目前不能通过配置校验。它展示的是 B7 解决（例如 Codex App Server 提供可及时检索的线程标识）之后的形态：
 
 ```json
 {
@@ -537,7 +539,7 @@ worker 在 Claude app，评审用 Codex：
 }
 ```
 
-Codex App Server 是 direct 方式：没有派发窗口限制，唤醒来自 tsw 监听 turn 完成事件。
+恢复支持的前提：`codex-app-server` 能凭创建代次及时找回线程，满足 §4.1 的关联标记要求。届时它是 direct 方式，没有派发窗口限制，唤醒来自 tsw 监听 turn 完成事件。
 
 ### 10.4 GitHub Copilot app + remote-hub Portal
 

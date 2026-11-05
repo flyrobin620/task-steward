@@ -137,7 +137,7 @@ worker 会话分两步启动（DN006 §4.1）：先**创建**会话，再**投�
 用户在子会话里直接对话时，worker 默认原地答复：不回传主会话，不改 revision，不写 result 报告。只有用户消息带 `[report]` 时，worker 才：
 
 1. 调用 `report_back` 落账（任务 ID、用户决定、已做动作、影响范围）；
-2. 再 `SendMessage` 通知父会话。
+2. 再用 `mcp__ccd_session_mgmt__send_message(session_id="parent")` 通知父会话。
 
 原地答复不放宽可写范围、账本与远端交付约束。改动已验收产物时，worker 须告诉用户“尚未回传、尚未重新验收”。
 
@@ -151,9 +151,11 @@ Claude Code 的 `Agent` 子代理（in-process subagent）**不作为业务 work
 
 tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC 实测：MCP server 进程与 hooks 的环境变量都带有调用会话在 app 中的会话 ID（`CLAUDE_CODE_HOST_SESSION_ID`），进程 cwd 与 `CLAUDE_PROJECT_DIR` 都是会话目录。因此角色按会话 ID 精确解析：
 
-- 会话 ID 等于持有调度租约的主会话 → orchestrator；
 - 会话 ID 等于某个已登记 attempt 绑定的会话 → 该 attempt 的 worker；
+- 会话目录是数据目录（`TSW_HOME`）且不是 worker → **主会话角色**。主会话角色可以使用只读工具（`inbox`、`attention`、`context_*` 等）以及租约工具（领取、在用户确认后 `controller_takeover`）；派发、验收等写工具还要求该会话持有调度租约（G-LEASE）；
 - 其他 → 只暴露 `whoami` 和只读帮助。
+
+SessionStart hook 先把会话登记为主会话角色或 worker（按会话 ID 与目录），再尝试领取租约（§6.4）；领取失败时该会话保持主会话角色、只读运行。
 
 cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一致时拒绝写工具。hooks 拿到同一个会话 ID（环境变量）以及 payload 中的内部会话 ID、cwd、权限模式，做同样的检查。不在 prompt 中放 token 或 capability 文件路径。
 
@@ -272,7 +274,7 @@ runs/Txxx/aN/
 | worker | 原生子代理或独立会话（4 种通道） | 会话适配器承载的关联子会话（默认 Claude app） |
 | 工具调用 | shell 调 `python -m orchestrator` | 按角色的 MCP 工具，身份由 cwd + hook 校验 |
 | 规则执行 | 主要靠 AGENTS.md / skill 文本 | 程序门禁 + 宿主强制机制 + 精简 skill |
-| 唤醒 | 平台通知、inbox 监听 | 仅 reportable 事件（SendMessage + 兜底事件） |
+| 唤醒 | 平台通知、inbox 监听 | 仅 reportable 事件（worker 向父会话发消息 + 兜底事件） |
 | 评审 | 主控 / worker 选用 Astra reviewer；另有 Astra 对照版 | worker 调用配置指定的只读评审器（默认 Codex Astra），自主迭代；无对照版 |
 | 状态存储 | JSONL 事件 + 检查点 | JSONL 事件 + 可重建 SQLite 投影与检索索引 |
 | 并发 | `max_workers` | `scheduling.max_workers` 门禁 |

@@ -29,7 +29,7 @@ flowchart LR
     U -- 直接对话 / [report] --> W1
     O -- start_session / SendMessage --> W1
     O -- start_session / SendMessage --> W2
-    W1 -- reportable 事件 → SendMessage(parent) --> O
+    W1 -- reportable 事件 → send_message(parent) --> O
     W1 -. 兜底：全部子会话空闲 → side-sessions-event .-> O
     O --- MCP
     W1 --- MCP
