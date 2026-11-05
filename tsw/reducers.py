@@ -12,6 +12,7 @@ import sqlite3
 from tsw import lease
 from tsw.errors import rejected
 from tsw.events import Event
+from tsw.host.inbox import reduce_acked
 from tsw.machine.reducers import REDUCERS as MACHINE_REDUCERS
 from tsw.projection import Reducer
 
@@ -60,4 +61,5 @@ REDUCERS: dict[str, Reducer] = {
     "controller.lease_released": lease.reduce_released,
     "controller.lease_taken_over": lease.reduce_taken_over,
     **MACHINE_REDUCERS,
+    "orchestrator.inbox_acked": reduce_acked,
 }

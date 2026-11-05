@@ -26,7 +26,7 @@ TIERS = ("unit", "component", "surface", "conformance")
 @pytest.fixture(autouse=True)
 def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for key in list(os.environ):
-        if key.upper().startswith(SCRUBBED_PREFIXES) or key == "TSW_TEST_FAULTS":
+        if key.upper().startswith(SCRUBBED_PREFIXES) or key in ("TSW_TEST_FAULTS", "TSW_REPO"):
             monkeypatch.delenv(key, raising=False)
     user = tmp_path / "user"
     user.mkdir()

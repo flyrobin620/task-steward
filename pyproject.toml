@@ -37,6 +37,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # The embedded stylesheet keeps one rule per line.
 "tools/docs.py" = ["E501"]
+# The status page template keeps one HTML element per line.
+"tsw/host/status.py" = ["E501"]
 
 [tool.ruff.format]
 line-ending = "lf"

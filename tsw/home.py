@@ -115,7 +115,21 @@ def init_home(root: Path) -> tuple[Home, bool]:
         "created_at": utc_now(),
         "created_by": f"tsw {__version__}",
     }
+    _write_marker(root, marker)
+    return Home(root), True
+
+
+def record_product_repo(home: Home, repo: Path) -> None:
+    """Remember where the product repository is, for a plugin launched from Claude's cache."""
+    path = home.root / MARKER
+    marker: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    value = str(repo.resolve())
+    if marker.get("product_repo") != value:
+        marker["product_repo"] = value
+        _write_marker(home.root, marker)
+
+
+def _write_marker(root: Path, marker: dict[str, Any]) -> None:
     tmp = root / (MARKER + ".tmp")
     tmp.write_text(json.dumps(marker, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.replace(root / MARKER)
-    return Home(root), True

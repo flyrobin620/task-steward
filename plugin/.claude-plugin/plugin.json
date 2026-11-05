@@ -1,0 +1,7 @@
+{
+  "name": "task-steward",
+  "version": "0.1.0-dev",
+  "description": "TaskSteward（任务管家）：主会话编排、worker 子会话执行与自评审、账本驱动的任务状态机",
+  "author": {"name": "flyrobin620"},
+  "license": "MIT"
+}

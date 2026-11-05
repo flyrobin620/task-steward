@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -18,7 +19,12 @@ from tsw import __version__, lease
 from tsw.config import EffectiveConfig, load_config
 from tsw.errors import EXIT_CODES, ErrorCode, TswError
 from tsw.events import utc_now
-from tsw.home import Home, init_home, open_home, resolve_home
+from tsw.home import Home, init_home, open_home, record_product_repo, resolve_home
+from tsw.host.claude_code import install_hint, render_instructions
+from tsw.host.guard import run as run_guard
+from tsw.host.identity import HOST_CLI_COMMANDS, SESSION_ENV
+from tsw.host.identity import resolve as resolve_identity
+from tsw.host.mcp import serve
 from tsw.ledger import Ledger
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.runner import run_tool
@@ -63,7 +69,8 @@ def _writer(args: argparse.Namespace) -> tuple[Ledger, EffectiveConfig]:
 def _cmd_init(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)
     home, created = init_home(root)
-    return {"home": str(home.root), "created": created}
+    record_product_repo(home, REPO_ROOT)
+    return {"home": str(home.root), "created": created, "product_repo": str(REPO_ROOT)}
 
 
 def _cmd_home(args: argparse.Namespace) -> dict[str, Any]:
@@ -241,6 +248,32 @@ def _cmd_tool_run(args: argparse.Namespace) -> dict[str, Any]:
     return run_tool(ledger, config, caller, args.name, payload)  # pyright: ignore[reportUnknownArgumentType]
 
 
+def _cmd_mcp(args: argparse.Namespace) -> dict[str, Any]:
+    serve(_home(args).root)
+    return {"_silent": True}
+
+
+def _cmd_guard(args: argparse.Namespace) -> dict[str, Any]:
+    root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)
+    if not (root / "tsw-home.json").is_file():
+        return {"_silent": True}  # the plugin is installed but this machine has no data directory
+    output = run_guard(args.event, open_home(root), dict(os.environ), sys.stdin.read())
+    if output:
+        print(output)
+    return {"_silent": True}
+
+
+def _cmd_host_render(args: argparse.Namespace) -> dict[str, Any]:
+    home = _home(args)
+    with FsStorage(home).writer():
+        written = render_instructions(home)
+    return {"written": [str(p) for p in written]}
+
+
+def _cmd_host_install_hint(args: argparse.Namespace) -> dict[str, Any]:
+    return {"hint": install_hint(_home(args))}
+
+
 def _cmd_quiesce(args: argparse.Namespace) -> dict[str, Any]:
     manifest = FsStorage(_home(args)).quiesce()
     return {"quiesced": True, "ledger_tail": manifest["ledger_tail"]}
@@ -343,6 +376,17 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--session", help="调用者的会话 ID")
     run.add_argument("--machine", default=lease.this_machine())
 
+    add(sub, "mcp", _cmd_mcp, "以 stdio 运行 tsw MCP server（由插件启动）")
+    guard = add(
+        sub, "guard", _cmd_guard, "Claude Code hooks 入口（由插件调用，从 stdin 读取 payload）"
+    )
+    guard.add_argument("event", choices=["SessionStart", "PreToolUse", "UserPromptSubmit", "Stop"])
+    host = sub.add_parser("host", help="宿主集成").add_subparsers(
+        dest="host_command", required=True, metavar="<host command>"
+    )
+    add(host, "render", _cmd_host_render, "在数据目录生成主会话的 CLAUDE.md")
+    add(host, "install-hint", _cmd_host_install_hint, "显示插件安装步骤")
+
     add(sub, "quiesce", _cmd_quiesce, "静止数据目录（之后可直接复制）")
     add(sub, "resume-writes", _cmd_resume_writes, "解除静止")
     return parser
@@ -374,6 +418,36 @@ def _print_human(result: dict[str, Any]) -> None:
             print(f"{key}: {value}")
 
 
+def command_path(args: argparse.Namespace) -> str:
+    sub = getattr(args, f"{args.command}_command", None)
+    return f"{args.command} {sub}" if sub else str(args.command)
+
+
+def _check_host_session(args: argparse.Namespace) -> None:
+    """Inside a TaskSteward session the caller is the session: no ``--role`` on the command line.
+
+    A session bound to the data directory (orchestrator, worker, or a revoked worker) is
+    identified by the MCP server and the hooks; a command line that names its own role could
+    claim any of them, so such sessions only get the commands that resolve the caller
+    themselves or only read (DN001 §7.1). Unrelated Claude sessions are not affected.
+    """
+    if not os.environ.get(SESSION_ENV) or command_path(args) in HOST_CLI_COMMANDS:
+        return
+    root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)
+    if not (root / "tsw-home.json").is_file():
+        return
+    home = open_home(root)
+    with Ledger(home).view() as conn:
+        role = resolve_identity(conn, home, os.environ, Path.cwd()).role
+    if role != "none":
+        raise TswError(
+            ErrorCode.REJECTED,
+            "Claude Code 会话中不能用命令行执行该操作，请使用 tsw MCP 工具",
+            reason="host_session_cli",
+            command=command_path(args),
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
@@ -383,6 +457,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     handler: Handler = args.handler
     try:
+        _check_host_session(args)
         result = handler(args)
     except TswError as exc:
         if args.json:
@@ -391,6 +466,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             detail = f" {json.dumps(exc.details, ensure_ascii=False)}" if exc.details else ""
             print(f"错误 [{exc.code.value}] {exc.message}{detail}", file=sys.stderr)
         return EXIT_CODES[exc.code]
+    if result.pop("_silent", False):
+        return 0
     ok = bool(result.pop("ok", True))
     if args.json:
         print(json.dumps({"ok": ok, **result}, ensure_ascii=False))

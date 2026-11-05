@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tsw": {
+      "command": "python",
+      "args": ["-X", "utf8", "-u", "${CLAUDE_PLUGIN_ROOT}/bin/tsw_launch.py", "mcp"]
+    }
+  }
+}

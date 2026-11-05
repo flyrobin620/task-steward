@@ -1,0 +1,11 @@
+{
+  "name": "task-steward",
+  "owner": {"name": "flyrobin620"},
+  "plugins": [
+    {
+      "name": "task-steward",
+      "source": "./plugin",
+      "description": "TaskSteward 开发期插件（从本仓库检出目录安装）"
+    }
+  ]
+}
