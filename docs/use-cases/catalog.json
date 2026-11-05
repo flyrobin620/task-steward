@@ -414,6 +414,109 @@
         "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
         "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
       }
+    },
+    {
+      "id": "UC-HOST-001",
+      "title": "按会话解析角色的 MCP server",
+      "actor": "主会话 / worker / 其他会话",
+      "acceptance": "stdio JSON-RPC：initialize 回显协议版本，tools/list 只列出该角色可用的工具（未知会话只有 whoami），tools/call 经同一注册表执行，错误以 isError 返回；worker 只能操作本任务与授权读取集合，会话目录与执行目录不一致时拒绝写工具",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "cli:mcp",
+        "mcp:whoami",
+        "mcp:task_read",
+        "mcp:task_list",
+        "mcp:lease_status",
+        "mcp:lease_acquire"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "unit": "身份解析依赖投影，由 component 覆盖",
+        "live": "真实宿主中的端到端运行由 v1 验收任务验证（docs/development/testing-layers.md 的 host-e2e），本 PR 未运行"
+      }
+    },
+    {
+      "id": "UC-HOST-002",
+      "title": "hooks 规则执行（SessionStart、PreToolUse、UserPromptSubmit、Stop）",
+      "actor": "Claude Code 宿主",
+      "acceptance": "SessionStart 为主会话领取租约并注入 attention 摘要、为 worker 注入任务与可写路径；PreToolUse 拒绝写出可写路径、写入 tsw 管理的目录、未授权推送与 PR、对可执行文件求哈希、未落账的 start_session；[report] 注入回传提示；Stop 在有未处理回传或评审未收尾时拦截一次，并记录 worker.turn_ended；钩子内部错误不影响会话",
+      "surfaces": [
+        "mcp",
+        "cli"
+      ],
+      "claims": [
+        "cli:guard"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "真实宿主中的端到端运行由 v1 验收任务验证（docs/development/testing-layers.md 的 host-e2e），本 PR 未运行"
+      }
+    },
+    {
+      "id": "UC-HOST-003",
+      "title": "inbox、attention 与 STATUS 页",
+      "actor": "主会话",
+      "acceptance": "可回传事件进入 inbox，确认后以账本事件记录且重建后保持；attention 只读列出待判断、待答复、需对账、需停止、stale、待启动、待核验、暂停；STATUS 页随每次提交重新生成，显示记录时间而非渲染时间",
+      "surfaces": [
+        "mcp",
+        "cli"
+      ],
+      "claims": [
+        "mcp:inbox",
+        "mcp:inbox_ack",
+        "mcp:attention"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "unit": "依赖账本与投影",
+        "live": "真实宿主中的端到端运行由 v1 验收任务验证（docs/development/testing-layers.md 的 host-e2e），本 PR 未运行"
+      }
+    },
+    {
+      "id": "UC-HOST-004",
+      "title": "Claude Code 插件包与生成文件",
+      "actor": "用户",
+      "acceptance": "插件清单、MCP 注册、hooks 配置都指向插件内的启动器；orchestrate skill 存在；本仓库自带本地插件市场；tsw host render 生成数据目录的 CLAUDE.md，install-hint 给出安装步骤且不修改全局设置",
+      "surfaces": [
+        "mcp",
+        "cli"
+      ],
+      "claims": [
+        "cli:host render",
+        "cli:host install-hint"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "unit": "只有文件与命令行行为",
+        "component": "由 surface 直接覆盖",
+        "live": "真实宿主中的端到端运行由 v1 验收任务验证（docs/development/testing-layers.md 的 host-e2e），本 PR 未运行"
+      }
     }
   ]
 }

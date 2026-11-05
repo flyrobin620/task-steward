@@ -33,6 +33,7 @@ from tools.checks import catalog as catalog_check  # noqa: E402
 from tools.checks import stdlib_only  # noqa: E402
 from tools.checks.repo import utf8_stdio  # noqa: E402
 from tsw.cli import iter_commands  # noqa: E402
+from tsw.host.mcp import tool_names as mcp_tool_names  # noqa: E402
 from tsw.machine.runner import tool_names  # noqa: E402
 
 STEPS = ("lint", "stdlib", "docs", "tests", "catalog")
@@ -193,7 +194,12 @@ class Gate:
 
     def catalog(self, tiers_run: set[str]) -> None:
         problems, not_verified = catalog_check.check(
-            ROOT, self.test_results, tiers_run, iter_commands(), tool_names()
+            ROOT,
+            self.test_results,
+            tiers_run,
+            iter_commands(),
+            tools=tool_names(),
+            mcp_tools=mcp_tool_names(),
         )
         self.record("catalog", not problems, problems + [f"未验证：{n}" for n in not_verified])
 

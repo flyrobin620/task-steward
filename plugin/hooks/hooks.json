@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "python -X utf8 \"${CLAUDE_PLUGIN_ROOT}/bin/tsw_launch.py\" guard SessionStart"}]}
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__ccd_session__start_session",
+        "hooks": [{"type": "command", "command": "python -X utf8 \"${CLAUDE_PLUGIN_ROOT}/bin/tsw_launch.py\" guard PreToolUse"}]
+      }
+    ],
+    "UserPromptSubmit": [
+      {"hooks": [{"type": "command", "command": "python -X utf8 \"${CLAUDE_PLUGIN_ROOT}/bin/tsw_launch.py\" guard UserPromptSubmit"}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "python -X utf8 \"${CLAUDE_PLUGIN_ROOT}/bin/tsw_launch.py\" guard Stop"}]}
+    ]
+  }
+}

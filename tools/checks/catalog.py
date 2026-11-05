@@ -58,7 +58,9 @@ def check(
     results: Iterable[Mapping[str, Any]],
     tiers_run: set[str],
     cli_commands: Iterable[str],
+    *,
     tools: Iterable[str] = (),
+    mcp_tools: Iterable[str] = (),
 ) -> tuple[list[str], list[str]]:
     """Returns ``(problems, not_verified)``."""
     problems: list[str] = []
@@ -144,14 +146,18 @@ def check(
             continue
         for claim in entry.get("claims", []):
             claimed[str(claim)] = uc_id
-    commands = {f"cli:{name}" for name in cli_commands} | {f"tool:{name}" for name in tools}
+    commands = (
+        {f"cli:{name}" for name in cli_commands}
+        | {f"tool:{name}" for name in tools}
+        | {f"mcp:{name}" for name in mcp_tools}
+    )
     problems += [
         f"对外表面没有被任何 active use case 认领：{c}" for c in sorted(commands - set(claimed))
     ]
     problems += [
         f"{claimed[c]}: 认领的表面不存在 {c}"
         for c in sorted(set(claimed) - commands)
-        if c.startswith(("cli:", "tool:"))
+        if c.startswith(("cli:", "tool:", "mcp:"))
     ]
     return problems, not_verified
 

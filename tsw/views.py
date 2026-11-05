@@ -10,12 +10,16 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from tsw.commands import CommitContext
+from tsw.host.status import write_status
 from tsw.projection import get_meta, projected_tail, set_meta
 from tsw.tasks import write_index
 
 DerivedView = Callable[[CommitContext], None]
 
-DERIVED_VIEWS: tuple[tuple[str, DerivedView], ...] = (("todo_index", write_index),)
+DERIVED_VIEWS: tuple[tuple[str, DerivedView], ...] = (
+    ("todo_index", write_index),
+    ("status_page", write_status),
+)
 
 
 def refresh(ctx: CommitContext) -> list[str]:

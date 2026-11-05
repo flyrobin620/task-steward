@@ -21,7 +21,7 @@ from tsw.storage.fs import atomic_write
 
 # Bump when tables or reduction rules change; older projections and checkpoints then need a
 # rebuild (DN007 §3.4).
-REDUCER_VERSION = 3
+REDUCER_VERSION = 4
 KEEP_CHECKPOINTS = 3
 
 SCHEMA_SQL = """
@@ -194,6 +194,9 @@ CREATE TABLE IF NOT EXISTS leases(
     acquired_at TEXT,
     expires_at TEXT,
     source_seq INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS inbox_acks(
+    sequence INTEGER PRIMARY KEY
 );
 CREATE TABLE IF NOT EXISTS index_queue(
     task_id TEXT NOT NULL,
