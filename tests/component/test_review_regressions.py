@@ -59,11 +59,13 @@ def test_direct_appends_racing_on_one_expected_sequence_never_both_succeed(
     reached the critical section (the append lock, or the replace itself without the lock)."""
     storage = FsStorage(home)
     second_reached = threading.Event()
+    first_replacing = threading.Event()
     real_write = fs_module.atomic_write
     real_lock = fs_module.FileLock
 
     def gated_write(path: Path, data: bytes) -> None:
         if threading.current_thread().name == "first":
+            first_replacing.set()  # A holds the append path and is about to replace
             assert second_reached.wait(10), "second appender never reached the critical section"
         else:
             second_reached.set()
@@ -78,19 +80,16 @@ def test_direct_appends_racing_on_one_expected_sequence_never_both_succeed(
     monkeypatch.setattr(fs_module, "atomic_write", gated_write)
     monkeypatch.setattr(fs_module, "FileLock", SignallingLock)
     outcomes: dict[str, object] = {}
-    in_write = threading.Event()
 
     def append(tag: str) -> None:
         try:
-            if tag == "a":
-                in_write.set()
             outcomes[tag] = storage.append([_event(1, GENESIS, tag)], expected_sequence=0)
         except TswError as exc:
             outcomes[tag] = exc
 
     first = threading.Thread(target=append, args=("a",), name="first")
     first.start()
-    assert in_write.wait(10)
+    assert first_replacing.wait(10)
     second = threading.Thread(target=append, args=("b",), name="second")
     second.start()
     first.join(20)
@@ -104,11 +103,26 @@ def test_direct_appends_racing_on_one_expected_sequence_never_both_succeed(
 
 
 @pytest.mark.use_case("UC-LEDGER-002")
-def test_sealing_waits_for_a_reader_holding_the_segment_open(home: Home) -> None:
+def test_sealing_waits_for_a_reader_holding_the_segment_open(
+    home: Home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On Windows an open reader makes the seal's delete fail with a sharing violation; the
+    writer must retry until the reader closes instead of failing the command."""
     ledger = Ledger(home, FsStorage(home, segment_max_bytes=600))
     register_task(ledger)
     active = FsStorage(home).segments()[-1].path
-    reader = active.open("rb")  # a concurrent reader (e.g. `tsw ledger tail`) keeps it open
+    conflict_seen = threading.Event()
+    real_sleep = fs_module.time.sleep
+
+    class ObservedTime:
+        monotonic = staticmethod(fs_module.time.monotonic)
+
+        @staticmethod
+        def sleep(seconds: float) -> None:
+            conflict_seen.set()  # only reached after a PermissionError from a real delete
+            real_sleep(seconds)
+
+    monkeypatch.setattr(fs_module, "time", ObservedTime)
     done: list[object] = []
 
     def write() -> None:
@@ -117,13 +131,16 @@ def test_sealing_waits_for_a_reader_holding_the_segment_open(home: Home) -> None
         except Exception as exc:  # recorded for the assertion below
             done.append(exc)
 
+    reader = active.open("rb")  # a concurrent reader (e.g. `tsw ledger tail`) keeps it open
     writer = threading.Thread(target=write)
-    writer.start()
-    writer.join(0.3)
-    if sys.platform == "win32":
-        assert writer.is_alive(), "on Windows the seal must wait while the reader holds the file"
-    reader.close()
-    writer.join(20)
+    try:
+        writer.start()
+        if sys.platform == "win32":
+            assert conflict_seen.wait(10), "the seal never hit the reader's sharing violation"
+            assert writer.is_alive()
+    finally:
+        reader.close()
+        writer.join(20)
     assert done == ["T002"]
     names = [seg.path.name for seg in FsStorage(home).segments()]
     assert names[0].endswith(".jsonl.gz")
