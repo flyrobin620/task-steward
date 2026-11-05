@@ -14,7 +14,9 @@ import pytest
 from tests.machine_harness import ORCH, Harness
 from tests.support import REPO_ROOT, child_env, run_tsw
 from tsw import lease
+from tsw.errors import TswError
 from tsw.home import Home
+from tsw.review import process
 from tsw.review.codex import AppServer
 
 pytestmark = pytest.mark.use_case("UC-REVIEW-002")
@@ -146,3 +148,16 @@ def test_a_child_left_holding_the_pipe_is_ended_without_waiting_for_it(
     assert time.monotonic() - started < 20
     assert server.proc.poll() is not None
     assert not alive(child)
+
+
+def test_without_a_job_the_reviewer_never_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid_file = tmp_path / "child.pid"
+    stubborn = REPO_ROOT / "tests" / "fixtures" / "stubborn_server.py"
+    monkeypatch.setattr(process._kernel32, "AssignProcessToJobObject", lambda *_: 0)  # pyright: ignore[reportUnknownLambdaType]
+    with pytest.raises(TswError) as refused:
+        process.ProcessTree([sys.executable, str(stubborn), str(pid_file)])
+    assert refused.value.details["reason"] == "reviewer_unavailable"
+    time.sleep(2)
+    assert not pid_file.exists()  # ended while still suspended

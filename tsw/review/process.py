@@ -1,7 +1,8 @@
 """A child process whose whole tree can be ended, even after the child itself has exited.
 
 On Windows the child is started suspended, put into a Job Object that kills its members when
-the job is closed, and then resumed, so every descendant belongs to the job from the start. On
+the job is closed, and then resumed, so every descendant belongs to the job from the start; if
+the job cannot be set up the child is ended before it ever runs (UNAVAILABLE). On
 other platforms the child leads a new process group. :meth:`ProcessTree.end` ends whatever is
 left of the tree; a direct child that has already exited does not mean its descendants have.
 """
@@ -19,6 +20,8 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from typing import Any
+
+from tsw.errors import ErrorCode, TswError
 
 if sys.platform == "win32":
     import ctypes
@@ -93,7 +96,23 @@ class ProcessTree:
             flags = int(popen.pop("creationflags", 0)) | _CREATE_SUSPENDED
             self.proc = subprocess.Popen(list(argv), creationflags=flags, **popen)
             # Popen's own process handle has full access; it stays valid while proc lives.
-            self._job = _job_for(int(getattr(self.proc, "_handle")))  # noqa: B009
+            handle = int(getattr(self.proc, "_handle"))  # noqa: B009
+            self._job = _job_for(handle)
+            if not self._job:  # no reliable ownership: end it before any of its code runs
+                with contextlib.suppress(OSError):
+                    self.proc.kill()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    self.proc.wait(timeout=10)
+                for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+                    with contextlib.suppress(OSError):
+                        if stream:
+                            stream.close()
+                raise TswError(
+                    ErrorCode.UNAVAILABLE,
+                    "无法把评审器进程放入可整体结束的作业，未启动评审器",
+                    reason="reviewer_unavailable",
+                )
+            _ntdll.NtResumeProcess(handle)
         else:
             self.proc = subprocess.Popen(list(argv), start_new_session=True, **popen)
 
@@ -104,14 +123,6 @@ class ProcessTree:
                 _kernel32.TerminateJobObject(self._job, 1)
                 _kernel32.CloseHandle(self._job)
                 self._job = None
-            else:  # not in a job (assignment refused): the best remaining effort
-                with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-                    subprocess.run(
-                        ["taskkill", "/T", "/F", "/PID", str(self.proc.pid)],
-                        capture_output=True,
-                        timeout=30,
-                        check=False,
-                    )
         else:
             with contextlib.suppress(OSError):
                 os.killpg(self.proc.pid, signal.SIGKILL)
@@ -122,7 +133,7 @@ class ProcessTree:
 
 
 def _job_for(process: int) -> Any:
-    """Put the suspended process into a kill-on-close job and resume it; None if refused."""
+    """Put the (still suspended) process into a kill-on-close job; None if that is refused."""
     job = _kernel32.CreateJobObjectW(None, None)
     try:
         if not job:
@@ -140,6 +151,5 @@ def _job_for(process: int) -> Any:
             return owned
         return None
     finally:
-        _ntdll.NtResumeProcess(process)  # always: never leave it suspended
         if job:
             _kernel32.CloseHandle(job)
