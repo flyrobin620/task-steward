@@ -232,6 +232,13 @@ class Guard:
                     f"这个会话正在为 TaskSteward 任务 {who.task_id}（attempt {who.attempt}）创建，"
                     "主会话随后会完成绑定。先调用 whoami：返回 role 为 worker 后再开始工作。",
                 )
+            if who.pending and event == "PreToolUse":
+                tool = str(self.payload.get("tool_name") or "")
+                if tool in WRITE_TOOLS or tool in ("Bash", "PowerShell", START_SESSION):
+                    return deny(
+                        "PreToolUse",
+                        "本会话还没有绑定到 attempt：等主会话完成绑定、whoami 返回 worker 后再操作",
+                    )
             return None
         if who.role == "revoked" and event not in ("SessionStart", "PreToolUse"):
             return None

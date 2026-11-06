@@ -472,7 +472,7 @@
       "id": "UC-HOST-002",
       "title": "hooks 规则执行（SessionStart、PreToolUse、UserPromptSubmit、Stop）",
       "actor": "Claude Code 宿主",
-      "acceptance": "SessionStart 为主会话领取租约并注入 attention 摘要、为 worker 注入任务与可写路径；PreToolUse 拒绝写出可写路径（编辑工具与可识别的 shell 写入）、写入 tsw 管理的目录、未授权推送与 PR（识别带路径与 .exe 的程序名）、对可执行文件求哈希、未落账的 start_session、在会话里调用 tsw 写命令；worker 离开执行目录时只允许 cd 回去；已撤销会话不能写入；[report] 注入回传提示；Stop 在有未处理回传或评审未收尾时拦截一次，并记录 worker.turn_ended；钩子内部错误不影响会话",
+      "acceptance": "SessionStart 为主会话领取租约并注入 attention 摘要、为 worker 注入任务与可写路径；PreToolUse 拒绝写出可写路径（编辑工具与可识别的 shell 写入）、写入 tsw 管理的目录、未授权推送与 PR（识别带路径与 .exe 的程序名）、对可执行文件求哈希、未落账的 start_session、在会话里调用 tsw 写命令；worker 离开执行目录时只允许 cd 回去；已撤销会话不能写入；[report] 注入回传提示；Stop 在有未处理回传或评审未收尾时拦截一次，并记录 worker.turn_ended；钩子内部错误不影响会话；待绑定的会话在绑定前只能读，编辑、命令行与建会话都被拒绝",
       "surfaces": [
         "mcp",
         "cli"

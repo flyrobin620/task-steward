@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="dc1aaf0d007a413a80d1401664f3c34dae8d0cfd431f18a64c70a170a26c5c63">
+<meta name="tsw-source-sha256" content="b41ef35f9267220c501ce58f1e8fd7dfdc561cbd51d0beba37511642b06f3f9e">
 <title>DN001 总体架构：TaskSteward 任务编排器（默认宿主 Claude Code）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -89,7 +89,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <h2 id="7-工具面">7. 工具面</h2>
 <h3 id="71-角色解析">7.1 角色解析</h3>
 <p>tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC 实测：MCP server 进程与 hooks 的环境变量都带有调用会话在 app 中的会话 ID（<code>CLAUDE_CODE_HOST_SESSION_ID</code>），进程 cwd 与 <code>CLAUDE_PROJECT_DIR</code> 都是会话目录。因此角色按会话 ID 精确解析：</p>
-<ul><li>会话 ID 等于某个已登记 attempt 绑定的会话 → 该 attempt 的 worker；该 attempt 已被替换或关闭时 → <strong>已撤销</strong>（revoked）：只暴露 <code>whoami</code>，hooks 拒绝写入与命令行，且永远不会因为目录在数据目录而回落成主会话；</li><li>会话目录是数据目录（<code>TSW_HOME</code>）且不是 worker → <strong>主会话角色</strong>。主会话角色可以使用只读工具（<code>inbox</code>、<code>attention</code>、<code>context_*</code> 等）以及租约工具（领取、在用户确认后 <code>controller_takeover</code>）；派发、验收等写工具还要求该会话持有调度租约（G-LEASE）；</li><li>还没有绑定、但会话目录是某个 <code>starting</code> 且尚未绑定会话的 attempt 的执行目录 → <strong>待绑定的 worker</strong>：工具列表从一开始就按 worker 列出，除 <code>whoami</code> 外的调用一律以 <code>not_bound</code> 拒绝，直到主会话 <code>attempt_reconcile</code> 完成绑定。主会话只能在 app 返回会话 ID 之后才绑定，而新会话的 MCP server 在此之前就已列出工具；实测 Claude Code 不会因 <code>notifications/tools/list_changed</code> 重新获取列表，所以必须让第一次列表就是 worker 的。</li><li>其他 → 只暴露 <code>whoami</code> 和只读帮助。</li></ul>
+<ul><li>会话 ID 等于某个已登记 attempt 绑定的会话 → 该 attempt 的 worker；该 attempt 已被替换或关闭时 → <strong>已撤销</strong>（revoked）：只暴露 <code>whoami</code>，hooks 拒绝写入与命令行，且永远不会因为目录在数据目录而回落成主会话；</li><li>会话目录是数据目录（<code>TSW_HOME</code>）且不是 worker → <strong>主会话角色</strong>。主会话角色可以使用只读工具（<code>inbox</code>、<code>attention</code>、<code>context_*</code> 等）以及租约工具（领取、在用户确认后 <code>controller_takeover</code>）；派发、验收等写工具还要求该会话持有调度租约（G-LEASE）；</li><li>还没有绑定、但会话目录是某个 <code>starting</code> 且尚未绑定会话的 attempt 的执行目录 → <strong>待绑定的 worker</strong>：工具列表从一开始就按 worker 列出，除 <code>whoami</code> 外的调用一律以 <code>not_bound</code> 拒绝；hooks 拒绝它的编辑、命令行与建会话，<code>tsw</code> 命令行也按已绑定会话限制，直到主会话 <code>attempt_reconcile</code> 完成绑定。预启动（<code>attempt_start</code> 的 <code>prestart</code>）必须给出会话将要创建在的执行目录，之后派发沿用该目录。主会话只能在 app 返回会话 ID 之后才绑定，而新会话的 MCP server 在此之前就已列出工具；实测 Claude Code 不会因 <code>notifications/tools/list_changed</code> 重新获取列表，所以必须让第一次列表就是 worker 的。</li><li>其他 → 只暴露 <code>whoami</code> 和只读帮助。</li></ul>
 <p>SessionStart hook 先把会话登记为主会话角色或 worker（按会话 ID 与目录），再尝试领取租约（§6.4）；领取失败时该会话保持主会话角色、只读运行。</p>
 <p>cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一致时拒绝写工具，hooks 也拒绝写入与命令行（只允许 <code>cd</code> 回执行目录）。worker 绑定后 MCP server 发出 <code>notifications/tools/list_changed</code>（客户端空闲时也由后台每 2 秒检查一次），客户端据此刷新工具列表。</p>
 <p>实测 Claude Code 桌面 app 不采纳这条通知：worker 会话整段对话都沿用启动时的第一份工具列表。而 worker 会话是在 <code>attempt_start</code> 之后、<code>attempt_reconcile</code> 绑定之前创建的，第一次 <code>tools/list</code> 时还没有绑定。因此列工具时，未绑定会话的 cwd 若位于某个 <code>starting</code>（当前有效代次）attempt 的执行目录内（登记的执行目录或 <code>work/&lt;任务&gt;/&lt;attempt&gt;</code>），就先列出 worker 工具。列表不授予任何权限：每次调用都重新解析身份，按真实角色检查，绑定前调用 worker 工具一律以 <code>role_denied</code> 拒绝。</p>

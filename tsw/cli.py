@@ -461,8 +461,8 @@ def _check_host_session(args: argparse.Namespace) -> None:
         return
     home = open_home(root)
     with Ledger(home).view() as conn:
-        role = resolve_identity(conn, home, os.environ, Path.cwd()).role
-    if role != "none":
+        who = resolve_identity(conn, home, os.environ, Path.cwd())
+    if who.role != "none" or who.pending:
         raise TswError(
             ErrorCode.REJECTED,
             "Claude Code 会话中不能用命令行执行该操作，请使用 tsw MCP 工具",

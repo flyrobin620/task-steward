@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from tests.machine_harness import Harness
+from tsw.cli import main as cli_main
 from tsw.errors import TswError
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
@@ -518,3 +519,64 @@ def test_a_session_created_for_an_attempt_lists_worker_tools_before_binding(
     # Another session opened in the same directory after the binding is not a candidate.
     late = Server(h.home, {SESSION_ENV: "w-2"}, workdir)
     assert [t["name"] for t in late.tools(late.identity())] == ["whoami"]
+
+
+@mark.use_case("UC-HOST-002")
+def test_a_pending_session_can_only_read_until_it_is_bound(
+    h: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    h.register("T001")
+    h.plan("T001")
+    workdir = tmp_path / "wt" / "T001"
+    workdir.mkdir(parents=True)
+    h.run("task_dispatch", task_id="T001", workdir=str(workdir), user_turn=True)
+    h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
+    for tool, tool_input in (
+        ("Write", {"file_path": str(workdir / "a.py")}),
+        ("Bash", {"command": "git status"}),
+        ("mcp__ccd_session__start_session", {"name": "x"}),
+    ):
+        decision = guard(h, "w-1", workdir, tool_name=tool, tool_input=tool_input).run("PreToolUse")
+        assert (
+            decision is not None
+            and "绑定" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+        )
+    read = guard(h, "w-1", workdir, tool_name="Read", tool_input={"file_path": "a.py"})
+    assert read.run("PreToolUse") is None
+    monkeypatch.setenv(SESSION_ENV, "w-1")
+    monkeypatch.chdir(workdir)
+    assert cli_main(["--home", str(h.home.root), "task", "show", "T001", "--json"]) == 3
+    assert "host_session_cli" in capsys.readouterr().err
+
+
+@mark.use_case("UC-HOST-001")
+def test_a_prestarted_session_is_a_worker_from_its_first_listing(
+    h: Harness, tmp_path: Path
+) -> None:
+    h.register("T001")
+    h.plan("T001")
+    workdir = tmp_path / "wt" / "T001"
+    workdir.mkdir(parents=True)
+    with pytest.raises(TswError) as nowhere:
+        h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    assert nowhere.value.details["field"] == "workdir"
+    started = h.run(
+        "attempt_start", task_id="T001", purpose="prestart", user_turn=True, workdir=str(workdir)
+    )
+    server = Server(h.home, {SESSION_ENV: "w-1"}, workdir)
+    listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert "submit" in {t["name"] for t in listed[0]["result"]["tools"]}
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=started["events"][0]["data"]["generation"],
+        outcome="created",
+        session_ref="w-1",
+    )
+    assert server.call("whoami", {})["phase"] == "standby"
+    with pytest.raises(TswError) as moved:
+        h.run("task_dispatch", task_id="T001", workdir=str(tmp_path / "other"))
+    assert moved.value.details["reason"] == "workdir_mismatch"
+    h.run("task_dispatch", task_id="T001", workdir=str(workdir))
+    assert server.call("whoami", {})["role"] == "worker"

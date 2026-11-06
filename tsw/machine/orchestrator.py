@@ -6,6 +6,7 @@ acceptance and cancellation (DN002 §3.2, §5; DN006 §8.3)."""
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from collections.abc import Mapping
 from typing import Any
@@ -457,6 +458,12 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 )
             attempt_id = str(previous["attempt"])
             mode = "standby" if previous["phase"] == "standby" else "continue"
+            if previous["workdir"] and not _same_dir(workdir, str(previous["workdir"])):
+                raise rejected(
+                    "已有会话在另一个执行目录中，派发要沿用该目录",
+                    reason="workdir_mismatch",
+                    workdir=previous["workdir"],
+                )
         else:
             raise rejected("未知的 attempt 阶段", reason="invalid_attempt", phase=previous["phase"])
         if mode in ("new", "reuse_planned"):
@@ -522,6 +529,7 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
     purpose = text(inp, "purpose")
     user_turn = flag(inp, "user_turn")
+    workdir = opt_text(inp, "workdir")  # where the session is created (required for prestart)
     if purpose not in ("dispatch", "prestart"):
         raise rejected(
             "purpose 必须是 dispatch 或 prestart", reason="invalid_input", field="purpose"
@@ -536,8 +544,18 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             if current is None or current["phase"] != "planned":
                 raise rejected("派发中的 attempt 必须处于 planned", reason="invalid_attempt")
             attempt_id = str(current["attempt"])
+            if workdir and current["workdir"] and not _same_dir(workdir, str(current["workdir"])):
+                raise rejected(
+                    "会话目录必须是派发时记录的执行目录",
+                    reason="workdir_mismatch",
+                    workdir=current["workdir"],
+                )
         else:
             require_status(row, "ready", "waiting_dependency")
+            if not workdir:
+                raise rejected(
+                    "预启动要给出会话将要创建在的执行目录", reason="invalid_input", field="workdir"
+                )
             if not env.config.get("scheduling.prestart.enabled"):
                 raise rejected("配置关闭了预启动", reason="prestart_disabled")
             standby = ctx.conn.execute(
@@ -571,11 +589,16 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     "purpose": purpose,
                     "controller": env.caller.session_id,
                     "adapter": str(env.config.get("roles.worker.session")),
+                    **({"workdir": workdir} if purpose == "prestart" else {}),
                 },
             )
         ]
 
     return _cmd(env, "attempt_start", inp, build)
+
+
+def _same_dir(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
 @tool("attempt_reconcile", "orchestrator", description="会话创建结果对账（T08 / T09 / 迟到会话）")

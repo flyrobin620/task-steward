@@ -92,6 +92,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         task_id=S,
         purpose={"enum": ["dispatch", "prestart"]},
         user_turn=B,
+        workdir=S,
     ),
     "attempt_reconcile": schema(
         ["task_id", "attempt", "generation", "outcome"],
