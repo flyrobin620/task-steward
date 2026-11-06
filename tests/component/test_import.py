@@ -139,6 +139,9 @@ def test_a_later_snapshot_updates_untouched_tasks_only(home: Home, tmp_path: Pat
     summary = run_import(home, ledger, second)
     assert [c["task_id"] for c in summary["conflicts"]] == ["T006"]
     assert summary["imported"] == 8
+    report = (home.root / LEGACY / "import" / "report.md").read_text(encoding="utf-8")
+    assert "| 1 | 任务总数与各分类数与旧审计一致 | 未通过 |" in report
+    assert "已在新系统中变化、未按本快照更新：T006" in report
     seq = rows(ledger, "SELECT source_sequence FROM imported_tasks WHERE task_id = 'T005'")
     assert seq == [{"source_sequence": 5}]
 
@@ -462,6 +465,15 @@ def test_the_recorded_execution_scene_is_compared_with_the_disk(
     monkeypatch.setattr(verify, "_git", status_fails)
     unknown = verify.scene({"worktree": str(repo), "branch": "work", "base_commit": head})
     assert unknown == [f"无法核实：{repo} 的未提交改动（timed out）"]
+
+    def lookup_fails(directory: Path, *args: str) -> tuple[int, str, str]:
+        if args[0] == "cat-file":
+            return 128, "", "error: unable to read object: Permission denied"
+        return real_git(directory, *args)
+
+    monkeypatch.setattr(verify, "_git", lookup_fails)
+    unknown = verify.scene({"worktree": str(repo), "base_commit": head})
+    assert unknown[0].startswith(f"无法核实：{repo} 的 base {head[:12]}")
     assert verify.scene({"worktree": str(tmp_path / "gone")}) == [
         f"执行目录不存在：{tmp_path / 'gone'}"
     ]

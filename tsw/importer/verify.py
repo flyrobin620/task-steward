@@ -56,8 +56,11 @@ def _counts(
     )
     counts: dict[str, int] = {}
     for tid in expected & set(imported):
-        counts[classes.get(tid, "?")] = counts.get(classes.get(tid, "?"), 0) + 1
-    check = Check(1, "任务总数与各分类数与旧审计一致", not missing and not misclassed)
+        label = classes.get(tid, "?") if tid not in conflicts else "未更新"
+        counts[label] = counts.get(label, 0) + 1
+    check = Check(
+        1, "任务总数与各分类数与旧审计一致", not missing and not misclassed and not conflicts
+    )
     check.details.append(
         f"旧账本 {len(expected)} 个任务；已导入 {len(set(imported) & expected)}；分类 "
         + "、".join(f"{k} {v}" for k, v in sorted(counts.items()))
@@ -65,6 +68,9 @@ def _counts(
     pending = [t for t in missing if t in conflicts]
     if pending:
         check.details.append("编号冲突、尚未导入：" + "、".join(pending))
+    kept = sorted(set(conflicts) & set(imported))
+    if kept:  # imported before, changed here since: this snapshot's class was not applied
+        check.details.append("已在新系统中变化、未按本快照更新：" + "、".join(kept))
     if set(missing) - set(pending):
         check.details.append(
             "既未导入也不是冲突：" + "、".join(sorted(set(missing) - set(pending)))
@@ -154,8 +160,11 @@ def scene(attempt: Mapping[str, Any]) -> list[str]:
     elif branch and current != branch:
         out.append(f"分支为 {current}，记录为 {branch}：{place}")
     base = attempt.get("base_commit")
-    if base and _git(directory, "cat-file", "-e", f"{base}^{{commit}}")[0] != 0:
+    found = _git(directory, "cat-file", "-e", str(base)) if base else (0, "", "")
+    if found[0] == 1 or (found[0] == 128 and "not a valid object name" in found[2].lower()):
         out.append(f"记录的 base {str(base)[:12]} 在该仓库中不存在：{place}")
+    elif found[0] != 0:
+        out.append(f"{UNVERIFIED}：{place} 的 base {str(base)[:12]}（{found[2] or found[0]}）")
     elif base:
         code, _, err = _git(directory, "merge-base", "--is-ancestor", str(base), "HEAD")
         if code == 1:
