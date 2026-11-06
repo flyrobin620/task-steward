@@ -215,6 +215,7 @@ def test_command_inventory_is_known() -> None:
             "home",
             "host install-hint",
             "host render",
+            "import orchestrator-agent",
             "init",
             "ledger audit",
             "ledger rebuild",

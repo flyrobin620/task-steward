@@ -25,6 +25,7 @@ from tsw.host.guard import run as run_guard
 from tsw.host.identity import HOST_CLI_COMMANDS, SESSION_ENV
 from tsw.host.identity import resolve as resolve_identity
 from tsw.host.mcp import serve
+from tsw.importer.orchestrator_agent import run_import as run_import_orchestrator_agent
 from tsw.ledger import Ledger
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.runner import run_tool
@@ -288,6 +289,13 @@ def _cmd_review_run(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _cmd_import_orchestrator_agent(args: argparse.Namespace) -> dict[str, Any]:
+    ledger, _ = _writer(args)
+    return run_import_orchestrator_agent(
+        ledger.home, ledger, Path(args.snapshot), dry_run=args.dry_run
+    )
+
+
 def _cmd_quiesce(args: argparse.Namespace) -> dict[str, Any]:
     manifest = FsStorage(_home(args)).quiesce()
     return {"quiesced": True, "ledger_tail": manifest["ledger_tail"]}
@@ -409,6 +417,18 @@ def build_parser() -> argparse.ArgumentParser:
     review_run.add_argument("--base", help="评审范围的起点（base..HEAD）")
     review_run.add_argument("--notes", help="已执行的验证与结果摘要")
     review_run.add_argument("--notes-file", help="从文件读取说明")
+
+    importing = sub.add_parser("import", help="导入其他任务系统的历史（DN005）").add_subparsers(
+        dest="import_command", required=True, metavar="<import source>"
+    )
+    oa = add(
+        importing,
+        "orchestrator-agent",
+        _cmd_import_orchestrator_agent,
+        "导入 orchestrator-agent 的历史（先在来源运行 python -m orchestrator export-snapshot）",
+    )
+    oa.add_argument("--snapshot", required=True, help="export-snapshot 写出的快照目录")
+    oa.add_argument("--dry-run", action="store_true", help="只核对与分类，不写入")
 
     add(sub, "quiesce", _cmd_quiesce, "静止数据目录（之后可直接复制）")
     add(sub, "resume-writes", _cmd_resume_writes, "解除静止")

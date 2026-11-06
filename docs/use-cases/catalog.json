@@ -542,6 +542,29 @@
         "component": "由 surface 直接覆盖",
         "live": "真实宿主中的端到端运行由 v1 验收任务验证（docs/development/testing-layers.md 的 host-e2e），本 PR 未运行"
       }
+    },
+    {
+      "id": "UC-IMPORT-001",
+      "title": "导入 orchestrator-agent 历史（DN005）",
+      "actor": "用户 / 维护者",
+      "acceptance": "读取来源导出的快照，核对事件卷未变化（变化则拒绝），按 DN005 §3 分类全部任务：已归档、已取消、已验收只读导入，待用户验收、待规划、暂停（含原执行中改为 import_handover、失败改为 failure）可 resume；事件卷按原字节复制并写 manifest；任务书进 todo/，只读任务成果进 legacy/orchestrator-agent/runs/，可 resume 任务成果进 runs/；导入事件保留原业务时间（统一为 UTC），原 attempt 数延续 attempt 编号；PR 与产出进入产出表，依赖保留；与数据目录中非导入的同 ID 任务冲突时不覆盖并列出；重复导入不追加事件，较新的快照只更新导入后未被新系统改动的任务；只在任务书中存在的任务列入报告；导入报告 md 与 html 写入 legacy/orchestrator-agent/import/；导入后的任务能继续走状态机（用户验收、恢复、按新编号派发），只读任务拒绝派发",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:import orchestrator-agent"
+      ],
+      "component": "importer",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "unit": "分类与时间转换经 component 覆盖完整导入路径",
+        "conformance": "不经过插件接口",
+        "live": "真实 orchestrator-agent 数据的导入在 v2 切换时执行并核对导入报告"
+      }
     }
   ]
 }

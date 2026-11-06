@@ -21,7 +21,8 @@ from tsw.storage.fs import atomic_write
 
 # Bump when tables or reduction rules change; older projections and checkpoints then need a
 # rebuild (DN007 §3.4).
-REDUCER_VERSION = 4
+REDUCER_VERSION = 5
+IMPORTS = frozenset({"import.task_imported"})  # events that carry their own times
 KEEP_CHECKPOINTS = 3
 
 SCHEMA_SQL = """
@@ -198,6 +199,16 @@ CREATE TABLE IF NOT EXISTS leases(
 CREATE TABLE IF NOT EXISTS inbox_acks(
     sequence INTEGER PRIMARY KEY
 );
+CREATE TABLE IF NOT EXISTS imported_tasks(
+    task_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    event_seq INTEGER NOT NULL,
+    source_sequence INTEGER NOT NULL,
+    old_status TEXT,
+    resumable INTEGER NOT NULL,
+    runs TEXT,
+    legacy TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS index_queue(
     task_id TEXT NOT NULL,
     sequence INTEGER NOT NULL,
@@ -361,9 +372,11 @@ class Projection:
             )
         reducer(conn, event)
         if event.task_id is not None:
+            # An imported task keeps the business time it had in its source system (DN005 §4.3).
             conn.execute(
-                "UPDATE tasks SET last_activity = ?, source_seq = ? WHERE task_id = ?",
-                (event.time, event.sequence, event.task_id),
+                "UPDATE tasks SET last_activity = CASE WHEN ? THEN last_activity ELSE ? END, "
+                "source_seq = ? WHERE task_id = ?",
+                (event.type in IMPORTS, event.time, event.sequence, event.task_id),
             )
             conn.execute(
                 "INSERT OR IGNORE INTO index_queue(task_id, sequence) VALUES(?, ?)",

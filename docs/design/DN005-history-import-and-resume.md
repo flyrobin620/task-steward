@@ -73,23 +73,23 @@
 
 | 步骤 | 动作 | 产物 |
 | --- | --- | --- |
-| 1 | 用旧系统的 reader 流式重放全部事件，得到每个任务的最终状态和历史摘要 | 导入快照 `import/snapshot.json`（不提交大字段，只保留引用） |
+| 1 | 在旧控制根运行 `python -m orchestrator export-snapshot --output <控制根之外的空目录>`：用旧系统自己的 reader 只读重放全部事件（不写检查点），写出每个任务的最终状态、旧系统自己的生命周期判断（phase、用户验收是否有效、活动时间）、事件卷清单（字节数、序号范围、账本文本摘要）与需要复制的文件清单。`tsw import orchestrator-agent --snapshot <目录>` 只读这个快照与原文件，不解析旧账本格式；导入前核对事件卷仍与快照一致，不一致则拒绝 | 快照副本 `legacy/orchestrator-agent/import/snapshot.json` |
 | 2 | **按原字节**复制全部事件卷到数据目录的 `ledger/imported/orchestrator-agent/`，写 manifest：文件名、字节数、序号范围、内容摘要（账本文本，非可执行文件） | 原始历史永久保留，可再次审计 |
 | 3 | 复制 `TODO.md`、`todo/*.md` 到数据目录 `todo/`，保持 ID 与内容；新任务 ID 从最大导入 ID + 1 开始 | 用户意图延续 |
-| 4 | 转换仓库、账号、缩写配置到统一配置的 `repositories` / `accounts` / `aliases`（DN003 §3.4）；`model-settings.json` 不转换 | 配置迁移报告 |
+| 4 | 仓库、账号、缩写配置原样复制到 `legacy/orchestrator-agent/config/`，不自动并入统一配置（统一配置是用户编辑的文件）；需要时按 DN003 §3.4 手工转换，导入报告列出这一项；`model-settings.json` 不转换 | 原配置存档 |
 | 5 | 按 §3 分类，为每个任务写一条 `import.task_imported` 事件，含原状态、新状态、`resumable`、来源事件序号、原 revision、定义摘要、采用的关键词与项目映射（来自旧 `metadata/task-keywords`，原记录复制到 `legacy/orchestrator-agent/metadata/`，见 DN007 §8）、原 attempt 列表（worker 通道、句柄、执行目录、分支、base commit）、PR、产出、用户验收 / 拒绝记录、业务时间 | 新账本中的任务 |
 | 6 | runs 处理：只读任务的成果**复制**到数据目录 `legacy/orchestrator-agent/runs/`（只读），引用写为 `legacy://orchestrator-agent/runs/...`，在数据目录内解析；可 resume 任务把 `runs/Txxx/` 复制到数据目录 `runs/`，新 attempt 从 `aN+1` 开始 | 备份数据目录即包含全部历史成果；可 resume 任务的成果可被新 worker 读写 |
-| 7 | 写 `import.completed`：任务计数、各分类数、未触及项、校验结果 | 导入报告 `import/report.md` + `.html` |
+| 7 | 写 `import.completed`：任务计数、各分类数、冲突、只有任务书而旧账本未登记的任务、无法解析的成果引用、校验结果 | 导入报告 `legacy/orchestrator-agent/import/report.md` + `.html` |
 
 ### 4.3 时间与身份
 
-- 导入事件的 `time` 是实际导入时间；任务的 `last_activity`、`accepted_at`、`archived_at` 保留原值，不刷新。
+- 导入事件的 `time` 是实际导入时间；任务的 `last_activity`、`done_at`、`accepted_at`、`archived_at` 保留原值（统一转换为本系统的 UTC 秒级 `Z` 格式），投影不会因导入事件刷新 `last_activity`。原 attempt 数延续为新任务的 attempt 计数，resume 时新 attempt 从 `aN+1` 开始。
 - 原 worker 句柄（`codex-native:…`、`copilot-session:…`）只作历史记录。新系统无法控制这些会话，导入后不会向它们发消息。
 
 ### 4.4 幂等与增量
 
 - 每条导入事件的 `command_id` = `import:orchestrator-agent:<task_id>:<来源末端序号>`。重复执行时，相同命令被识别为已应用，不产生新事件。
-- 切换前允许多次增量导入：只处理来源序号大于上次导入末端的事件所影响的任务。已在新系统中产生新事件的任务不再被覆盖，冲突列入导入报告，由用户决定。
+- 切换前允许多次增量导入：较新的快照重新导入导入后没有在新系统中产生任何事件的任务（以投影中任务版本仍为导入时的 1 判断）；已有新事件的任务不再被覆盖，与数据目录中非导入的同 ID 任务也不覆盖，冲突列入导入报告，由用户决定。
 - 正式切换后，旧控制根改为只读（在其 TODO 说明中注明，并保留旧账本供审计）。
 
 ## 5. resume
