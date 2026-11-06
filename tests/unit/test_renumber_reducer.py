@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 
 import pytest
 
@@ -16,11 +17,13 @@ from tsw.projection import SCHEMA_SQL
 pytestmark = pytest.mark.use_case("UC-IMPORT-001")
 
 
-def _conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.executescript(SCHEMA_SQL)
-    return conn
+@pytest.fixture
+def conn() -> Iterator[sqlite3.Connection]:
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.executescript(SCHEMA_SQL)
+    yield db
+    db.close()
 
 
 def _task(conn: sqlite3.Connection, task_id: str, **extra: str) -> None:
@@ -47,8 +50,9 @@ def _task(conn: sqlite3.Connection, task_id: str, **extra: str) -> None:
     conn.execute(f"INSERT INTO tasks({names}) VALUES({marks})", tuple(columns.values()))
 
 
-def test_submissions_read_sets_and_dependencies_of_local_tasks_follow() -> None:
-    conn = _conn()
+def test_submissions_read_sets_and_dependencies_of_local_tasks_follow(
+    conn: sqlite3.Connection,
+) -> None:
     _task(conn, "T001")
     submission = {"revision": 1, "dependencies": {"T001": 1}}
     _task(conn, "T002", status="verifying", submission=json.dumps(submission))
@@ -108,8 +112,7 @@ def test_submissions_read_sets_and_dependencies_of_local_tasks_follow() -> None:
     ]
 
 
-def test_new_item_ids_skip_ids_a_renumbered_task_kept() -> None:
-    conn = _conn()
+def test_new_item_ids_skip_ids_a_renumbered_task_kept(conn: sqlite3.Connection) -> None:
     conn.execute(
         "INSERT INTO input_requests(request_id, task_id, kind, status, question, binding) "
         "VALUES('Q-T001-1', 'T011', 'question', 'resolved', 'q', '{}')"
