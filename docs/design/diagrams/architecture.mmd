@@ -2,7 +2,7 @@ flowchart LR
     U((用户))
 
     subgraph APP["Claude Code 桌面 app"]
-        O["主会话 orchestrator<br/>cwd = 控制根<br/>skill: orchestrate"]
+        O["主会话 orchestrator<br/>cwd = 控制根<br/>skill: orchestrate（数据目录）"]
         W1["worker 子会话 T241-a1<br/>cwd = 任务 worktree"]
         W2["worker 子会话 T242-a1<br/>cwd = 研究目录"]
     end
@@ -10,7 +10,7 @@ flowchart LR
     subgraph PLUGIN["TaskSteward 插件（用户级安装）"]
         MCP["tsw MCP server<br/>按 cwd 解析角色·按角色暴露工具"]
         HOOKS["hooks<br/>SessionStart / PreToolUse / Stop"]
-        SK["skills<br/>orchestrate / worker / self-review"]
+        SK["skills<br/>worker / self-review"]
     end
 
     subgraph CORE["tsw core（Python 标准库）"]

@@ -59,7 +59,7 @@
 | worker 子会话 | Claude app，cwd = 执行目录 | 调查、实现、验证、写报告、调用 Codex 自评审并决定迭代、提交 |
 | tsw MCP server | 插件提供，stdio | 按会话角色暴露工具（§7），所有写操作都经它进入账本 |
 | hooks | 插件提供 | 角色识别、写入范围与危险命令拦截、主会话结束前的待办检查（§7.3） |
-| skills | 插件提供 | `orchestrate`（主会话流程）、`worker`（执行协议）、`self-review`（评审处置规范） |
+| skills | `orchestrate`：宿主集成生成在数据目录的 `.claude/skills/`；其余由插件提供 | `orchestrate`（主会话流程，只有在数据目录打开的会话加载）、`worker`（执行协议）、`self-review`（评审处置规范） |
 | tsw core | 产品仓库 Python 包 | 账本、配置、门禁、渲染、导入、插件加载（评审器等插件见 DN006） |
 | 事件账本 | 数据目录 `ledger/` | 唯一事实来源，JSONL 追加写，带序号和前序摘要链 |
 | 投影与检索索引 | 数据目录 `cache/state.sqlite`、`cache/context.sqlite` | 可随时由账本重建的状态投影与任务卡片 / 全文索引（DN007） |
@@ -83,7 +83,7 @@
 
 ### 6.1 主会话
 
-主会话是在数据目录打开的普通 Claude app 会话，加载数据目录的 `CLAUDE.md` 和插件 skill `orchestrate`。用户要求执行、继续、恢复或调整待办时，主会话按 skill 流程工作。普通仓库维护、解释问题不会开始执行真实待办。
+主会话是在数据目录打开的普通 Claude app 会话，加载数据目录的 `CLAUDE.md` 和项目 skill `orchestrate`（`.claude/skills/orchestrate/SKILL.md`）。两者都由宿主集成生成（`tsw host render`）。插件按用户级启用，任何目录的会话都会加载它，所以插件不携带主会话 skill。用户要求执行、继续、恢复或调整待办时，主会话按 skill 流程工作。普通仓库维护、解释问题不会开始执行真实待办。
 
 ### 6.2 worker 子会话的创建
 
@@ -227,6 +227,7 @@ hooks 是强制边界；skill 和 CLAUDE.md 只写流程与判断准则，不再
 <TSW_HOME>/
   tsw-home.json                  数据目录版本与产品兼容版本
   CLAUDE.md / AGENTS.md          主会话常驻规则（由宿主集成 P1 生成，精简；流程在 skill）
+  .claude/skills/orchestrate/    主会话 skill（由宿主集成 P1 生成）
   config/task-steward.json        统一配置（DN003）
   config/prompts/                用户覆盖的角色指令、评审模板（可选）
   todo/TODO.md, todo/Txxx.md     任务索引与任务书（用户意图）
