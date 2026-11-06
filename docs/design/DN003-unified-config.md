@@ -300,7 +300,7 @@ tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命�
 
 事件先落账再写文件。两步之间中断时，下一次任何提交（或 `ledger rebuild`）发现最近一次修改尚未写入，且文件仍是该修改记录的“修改前”内容，就补写新内容；文件已是其他内容（用户在此期间手改过）时不覆盖。“已经处理到哪一次修改”记在 `cache/config-applied.json`，不在投影里，所以 `ledger rebuild` 不会把早已写入的修改再次写到用户之后手工恢复的内容上；从备份恢复后（`cache/` 不备份）只按文件内容判断。配置不含秘密（§1），所以事件保存全文，任何一次修改都能精确回退。
 
-当前配置无效时（例如手工编辑后不是合法 JSON），其他写工具都被拒绝，但 `config_change` 与 `config_revert` 仍可用：它们只要求修改**后**的配置有效。修复需要调度租约，所以配置无效时主会话仍按默认租期领取或续期租约（SessionStart 与 `lease_acquire`）。当前文件不能解析时，只能用空路径的 `set` 替换整个文件。命令行 `tsw tool run config_change` 在会话外同样可以修复。
+当前配置无效时（例如手工编辑后不是合法 JSON），其他写工具都被拒绝，但 `config_change` 与 `config_revert` 仍可用：它们只要求修改**后**的配置有效。修复需要调度租约，所以配置无效时仍按默认租期领取、续期、释放或接管租约（主会话的 SessionStart 与 `lease_acquire`，命令行的 `tsw lease`）。当前文件不能解析时，只能用空路径的 `set` 替换整个文件。命令行 `tsw tool run config_change` 在会话外同样可以修复。
 
 这两个工具只修改 `config/task-steward.json`。本机覆盖 `config/task-steward.local.json` 只含路径类字段（§5），仍由用户编辑。
 

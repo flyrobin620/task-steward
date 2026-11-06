@@ -213,3 +213,39 @@ def test_a_broken_configuration_is_repaired_over_mcp_and_the_cli(home: Path) -> 
     assert code == 0, out
     assert out["events"][0]["data"]["change_id"] == "C002"
     assert json.loads(config_file.read_text(encoding="utf-8")) == good
+
+
+@pytest.mark.use_case("UC-CONFIG-002")
+@pytest.mark.use_case("UC-LEASE-001")
+def test_the_cli_repairs_a_broken_configuration_without_an_earlier_lease(home: Path) -> None:
+    config_file = home / "config" / "task-steward.json"
+    config_file.write_text("[]", encoding="utf-8")
+    me = ["--session", "orch-cli", "--machine", "m1"]
+    code, out = run_json("lease", "acquire", *me)
+    assert code == 0, out
+    good = {"version": 1, "repositories": {"demo": {"path": "~/src/demo"}}}
+    words = {
+        "channel": "main-session",
+        "principal": "owner",
+        "message_ref": "cli:msg-1",
+        "text": "修好配置",
+        "target": ["config", hashlib.sha256(b"[]").hexdigest(), "authorize"],
+    }
+    inp = {
+        "ops": [{"op": "set", "path": "", "value": good}],
+        "reason": "修复",
+        "user_source": words,
+    }
+    code, out = run_json(
+        "tool",
+        "run",
+        "config_change",
+        "--input",
+        json.dumps(inp, ensure_ascii=False),
+        "--role",
+        "orchestrator",
+        *me,
+    )
+    assert code == 0, out
+    assert run_json("config", "validate")[1]["ok"] is True
+    assert run_json("lease", "release", *me)[0] == 0

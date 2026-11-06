@@ -8,7 +8,8 @@ and a dry run with the same arguments. ``restore``, ``quiesce`` / ``resume-write
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+import contextlib
+from collections.abc import Callable, Generator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -21,12 +22,13 @@ from tsw.host.identity import within
 from tsw.importer import renumber
 from tsw.importer.orchestrator_agent import run_import
 from tsw.lease import require_lease
-from tsw.ledger import Ledger
+from tsw.ledger import COMMIT_LOCK, Ledger
 from tsw.machine.config_tools import CONFIG_CHANNELS
 from tsw.machine.guards import verified_source
 from tsw.storage.fs import FsStorage
 
 EVENT = "maintenance.performed"
+FILE_LOCK_SECONDS = 3600  # copying a large history may take minutes
 IMPORT_SOURCE = "orchestrator-agent"
 
 
@@ -147,7 +149,23 @@ class Maintenance:
             renumber_local=pairs,
             exclude=exclude,
             on_locked=authorize,
+            file_guard=self._files_under_lease,
         )
+
+    @contextlib.contextmanager
+    def _files_under_lease(self) -> Generator[None, None, None]:
+        """Hold the commit lock around the importer's direct file writes and check the lease
+        under it: no other orchestrator can take the lease while the files are written."""
+        ledger = self.ledger
+        with (
+            ledger.storage.lock(COMMIT_LOCK, ttl=FILE_LOCK_SECONDS),
+            ledger.projection.connection() as conn,
+        ):
+            ledger.projection.reduce_to(conn)
+            if not self.session_id:
+                raise rejected("主会话工具需要会话 ID", reason="lease_missing")
+            require_lease(conn, self.session_id, self.machine, utc_now())
+            yield
 
     def _lease_guard(self, ctx: CommitContext) -> None:
         if not self.session_id:

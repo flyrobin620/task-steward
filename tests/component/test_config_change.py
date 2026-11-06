@@ -11,12 +11,13 @@ import pytest
 
 from tests.import_fixture import build
 from tests.machine_harness import MACHINE, Harness
-from tsw import confedit
+from tsw import confedit, lease
 from tsw.config import load_config
 from tsw.errors import TswError
 from tsw.faults import ENV as FAULTS_ENV
 from tsw.faults import FaultInjected
 from tsw.home import Home
+from tsw.host import maintenance as maintenance_mod
 from tsw.host.maintenance import Maintenance
 from tsw.machine.base import Caller
 
@@ -373,3 +374,39 @@ def test_an_import_rechecks_the_lease_under_the_import_lock(
         late.import_orchestrator_agent({"snapshot": str(snapshot), "user_source": words})
     assert rejection(exc) == "lease_held"
     assert not any(e.type.startswith("import.") for e in h.ledger.storage.read())
+
+
+@pytest.mark.use_case("UC-STORE-003")
+def test_files_are_not_copied_after_the_lease_moved(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lease moves after the import was authorized, before the history files are copied."""
+    h = Harness(home)
+    _, snapshot = build(tmp_path)
+    tools = Maintenance(home, h.ledger, "orch-1", MACHINE)
+    tools.import_orchestrator_agent({"snapshot": str(snapshot), "dry_run": True})
+    real = maintenance_mod.run_import
+
+    def lease_moves(*args: Any, on_locked: Any, **kwargs: Any) -> Any:
+        on_locked()
+        h.ledger.commit(lease.release("orch-1", machine=MACHINE, actor={"role": "orchestrator"}))
+        h.ledger.commit(
+            lease.acquire(
+                "orch-2", machine=MACHINE, lease_minutes=60, actor={"role": "orchestrator"}
+            )
+        )
+        return real(*args, on_locked=None, **kwargs)
+
+    monkeypatch.setattr(maintenance_mod, "run_import", lease_moves)
+    words = {
+        "channel": "main-session",
+        "principal": "owner",
+        "message_ref": "orch-1:msg-late",
+        "text": "导入",
+        "target": ["import", "orchestrator-agent", "authorize"],
+    }
+    with pytest.raises(TswError) as exc:
+        tools.import_orchestrator_agent({"snapshot": str(snapshot), "user_source": words})
+    assert rejection(exc) == "lease_held"
+    assert not home.path("legacy").exists() or not any(home.path("legacy").iterdir())
+    assert not any(e.type == "import.started" for e in h.ledger.storage.read())

@@ -24,6 +24,7 @@ changed in the source, unless the task has had events of its own in the new syst
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import html
 import json
@@ -31,6 +32,7 @@ import os
 import re
 import shutil
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -521,11 +523,14 @@ def run_import(
     renumber_local: list[tuple[str, str]] | None = None,
     exclude: list[str] | None = None,
     on_locked: Callable[[], None] | None = None,
+    file_guard: Callable[[], AbstractContextManager[None]] = contextlib.nullcontext,
 ) -> dict[str, Any]:
     """One import at a time: the event volumes, manifest and legacy files are shared targets.
 
     ``on_locked`` runs once the import lock is held, before anything is written (a real run
-    only): the place to check and record the authorization of this run.
+    only): the place to check and record the authorization of this run. ``file_guard`` wraps
+    each direct file write outside a ledger commit (event volumes, legacy files, the report),
+    so that a caller can keep its own checks, such as the scheduling lease, around them.
     """
     if dry_run:
         return _run_import(
@@ -548,6 +553,7 @@ def run_import(
             dry_run=False,
             renumber_local=renumber_local,
             exclude=exclude,
+            file_guard=file_guard,
         )
     finally:
         lock.release()
@@ -561,6 +567,7 @@ def _run_import(
     dry_run: bool,
     renumber_local: list[tuple[str, str]] | None,
     exclude: list[str] | None,
+    file_guard: Callable[[], AbstractContextManager[None]] = contextlib.nullcontext,
 ) -> dict[str, Any]:
     snapshot, snapshot_sha = load_snapshot(snapshot_dir)
     source = Path(snapshot["source"]["root"])
@@ -670,10 +677,10 @@ def _run_import(
     if not todo and batch == "completed":  # nothing new: no events at all (DN005 §6 item 6)
         report.missing_files = _unresolved_refs(home, report.planned)
         _verify(home, ledger, report)
-        with storage.writer():
+        with storage.writer(), file_guard():
             _write_report(home, report)
         return report.summary()
-    with storage.writer():
+    with storage.writer(), file_guard():
         _copy_volumes(home, source, snapshot)
         _copy_legacy(home, source, snapshot, snapshot_dir)
     report.count(
@@ -699,7 +706,7 @@ def _run_import(
     report.missing_files = _unresolved_refs(home, report.planned)
     report.count(_commit_completed(ledger, report, last_seq))
     _verify(home, ledger, report)
-    with storage.writer():
+    with storage.writer(), file_guard():
         _write_report(home, report)
     return report.summary()
 

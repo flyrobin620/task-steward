@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="5f5d077d57cd8627f0bc1475125243e1fc51ced316202cbeba695073c8fe3881">
+<meta name="tsw-source-sha256" content="8bf9ead29b05f68644b8b37a8eb608f844fdec06206a5b4c50449efe73026471">
 <title>DN003 统一配置</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -217,7 +217,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p>两个写工具在账本提交锁内按以下顺序执行：</p>
 <ol><li>读取当前文件，计算摘要；给了 <code>expected_sha256</code> 而不一致时以 <code>config_conflict</code> 拒绝。</li><li>应用修改，得到新的文件内容；与默认值、本机覆盖合并后按 §4 完整校验。**无效时以 <code>config_invalid</code> 拒绝，文件不动，不记账。**</li><li>比较修改前后的叶子字段，得到改动的键；其中有权限类键（§7.2）时检查 <code>user_source</code>。</li><li>记录 <code>config.changed</code> 事件：修改编号（<code>C001</code> 起）、类型（<code>change</code> / <code>revert</code>）、<code>ops</code> 或被恢复的修改编号、改动的键、权限类键、理由、用户来源、修改前后的全文与摘要。</li><li>写入文件（临时文件加原子替换）。</li></ol>
 <p>事件先落账再写文件。两步之间中断时，下一次任何提交（或 <code>ledger rebuild</code>）发现最近一次修改尚未写入，且文件仍是该修改记录的“修改前”内容，就补写新内容；文件已是其他内容（用户在此期间手改过）时不覆盖。“已经处理到哪一次修改”记在 <code>cache/config-applied.json</code>，不在投影里，所以 <code>ledger rebuild</code> 不会把早已写入的修改再次写到用户之后手工恢复的内容上；从备份恢复后（<code>cache/</code> 不备份）只按文件内容判断。配置不含秘密（§1），所以事件保存全文，任何一次修改都能精确回退。</p>
-<p>当前配置无效时（例如手工编辑后不是合法 JSON），其他写工具都被拒绝，但 <code>config_change</code> 与 <code>config_revert</code> 仍可用：它们只要求修改<strong>后</strong>的配置有效。修复需要调度租约，所以配置无效时主会话仍按默认租期领取或续期租约（SessionStart 与 <code>lease_acquire</code>）。当前文件不能解析时，只能用空路径的 <code>set</code> 替换整个文件。命令行 <code>tsw tool run config_change</code> 在会话外同样可以修复。</p>
+<p>当前配置无效时（例如手工编辑后不是合法 JSON），其他写工具都被拒绝，但 <code>config_change</code> 与 <code>config_revert</code> 仍可用：它们只要求修改<strong>后</strong>的配置有效。修复需要调度租约，所以配置无效时仍按默认租期领取、续期、释放或接管租约（主会话的 SessionStart 与 <code>lease_acquire</code>，命令行的 <code>tsw lease</code>）。当前文件不能解析时，只能用空路径的 <code>set</code> 替换整个文件。命令行 <code>tsw tool run config_change</code> 在会话外同样可以修复。</p>
 <p>这两个工具只修改 <code>config/task-steward.json</code>。本机覆盖 <code>config/task-steward.local.json</code> 只含路径类字段（§5），仍由用户编辑。</p>
 <h3 id="72-权限类键">7.2 权限类键</h3>
 <p>改动下列键（新增、删除或修改，<strong>不区分扩大还是收窄</strong>）时，必须附用户原话：</p>
