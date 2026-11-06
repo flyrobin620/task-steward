@@ -355,7 +355,7 @@ def test_a_session_starting_in_an_execution_directory_is_listed_the_worker_tools
     assert "task_list" not in names
     with pytest.raises(TswError) as denied:
         server.call("task_read", {"task_id": "T001"})
-    assert denied.value.to_dict()["details"]["reason"] == "role_denied"
+    assert denied.value.to_dict()["details"]["reason"] == "not_bound"
     elsewhere = Server(h.home, {SESSION_ENV: "x-1"}, tmp_path / "elsewhere")
     other = elsewhere.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     assert [t["name"] for t in other[0]["result"]["tools"]] == ["whoami"]
@@ -557,9 +557,6 @@ def test_a_prestarted_session_is_a_worker_from_its_first_listing(
     h.plan("T001")
     workdir = tmp_path / "wt" / "T001"
     workdir.mkdir(parents=True)
-    with pytest.raises(TswError) as nowhere:
-        h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
-    assert nowhere.value.details["field"] == "workdir"
     started = h.run(
         "attempt_start", task_id="T001", purpose="prestart", user_turn=True, workdir=str(workdir)
     )
@@ -580,3 +577,23 @@ def test_a_prestarted_session_is_a_worker_from_its_first_listing(
     assert moved.value.details["reason"] == "workdir_mismatch"
     h.run("task_dispatch", task_id="T001", workdir=str(workdir))
     assert server.call("whoami", {})["role"] == "worker"
+
+
+@mark.use_case("UC-HOST-001")
+def test_default_and_home_relative_execution_directories_are_recognised(h: Harness) -> None:
+    h.register("T001")
+    h.plan("T001")
+    h.register("T002")
+    h.plan("T002")
+    # A prestart without a directory creates the session in work/<task>/<attempt>.
+    h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    default = h.home.root / "work" / "T001" / "a1"
+    default.mkdir(parents=True)
+    assert Server(h.home, {SESSION_ENV: "w-1"}, default).identity().pending
+    # A dispatch may record its directory relative to the data directory.
+    h.run("task_dispatch", task_id="T002", workdir="work/T002-wt", user_turn=True)
+    h.run("attempt_start", task_id="T002", purpose="dispatch", user_turn=True)
+    relative = h.home.root / "work" / "T002-wt"
+    relative.mkdir(parents=True)
+    who = Server(h.home, {SESSION_ENV: "w-2"}, relative).identity()
+    assert (who.pending, who.task_id) == (True, "T002")

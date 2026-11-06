@@ -25,7 +25,7 @@ from tsw.errors import ErrorCode, TswError, rejected
 from tsw.events import utc_now
 from tsw.home import Home, open_home
 from tsw.host import inbox as inbox_mod
-from tsw.host.identity import Identity, resolve, within
+from tsw.host.identity import Identity, resolve, within, workdir_path
 from tsw.ledger import Ledger
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.model import loads, row_dict, task
@@ -39,6 +39,8 @@ from tsw.tasks import task_row
 # asking for another revision gets the newest one and decides whether to continue.
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 EMPTY: dict[str, Any] = {"type": "object", "properties": {}}
+# What a listing depends on: role, pending worker, task, attempt.
+ListKey = tuple[str, bool, str | None, str | None]
 INVALID_REQUEST = -32600
 POLL_ENV = "TSW_MCP_POLL_SECONDS"
 POLL_SECONDS = 2.0  # how often an idle session checks whether its role changed
@@ -99,7 +101,7 @@ class Server:
         self.env = dict(env)
         self.cwd = cwd
         self.machine = lease.this_machine()
-        self.listed: tuple[str, str | None, str | None] | None = None  # identity at tools/list
+        self.listed: ListKey | None = None  # identity at tools/list
         self._listed_lock = threading.Lock()
         self._marker: tuple[tuple[str, int, int], ...] | None = None
 
@@ -201,9 +203,7 @@ class Server:
 
     def _prepare_workdir(self, args: Mapping[str, Any]) -> None:
         """A research task's execution directory lives under ``work/`` and is created here."""
-        workdir = Path(str(args.get("workdir") or "")).expanduser()
-        if not workdir.is_absolute():
-            workdir = self.home.root / workdir
+        workdir = workdir_path(self.home, str(args.get("workdir") or ""))
         if within(workdir, self.home.root / "work"):
             workdir.mkdir(parents=True, exist_ok=True)
 
@@ -469,8 +469,9 @@ def _error(mid: Any, code: int, text: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": text}}
 
 
-def _list_key(who: Identity) -> tuple[str, str | None, str | None]:
-    return (who.role, who.task_id, who.attempt)
+def _list_key(who: Identity) -> ListKey:
+    """What the listed tools depend on: the role, whether it is a pending worker, the attempt."""
+    return (who.role, who.pending, who.task_id, who.attempt)
 
 
 def tool_names() -> list[str]:

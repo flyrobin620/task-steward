@@ -45,6 +45,12 @@ def _norm(path: Path) -> str:
     return os.path.normcase(str(path.expanduser().resolve()))
 
 
+def workdir_path(home: Home, recorded: str) -> Path:
+    """An execution directory as recorded in the ledger; relative ones are in the data directory."""
+    path = Path(recorded).expanduser()
+    return path if path.is_absolute() else home.root / path
+
+
 def within(path: Path, root: Path) -> bool:
     target, base = _norm(path), _norm(root)
     return target == base or target.startswith(base.rstrip("\\/") + os.sep)
@@ -100,7 +106,7 @@ def resolve(conn: sqlite3.Connection, home: Home, env: Mapping[str, str], cwd: P
         if row is not None:
             roots = [home.root / "work" / str(row["task_id"]) / str(row["attempt"])]
             if row["workdir"]:
-                roots.insert(0, Path(str(row["workdir"])).expanduser())
+                roots.insert(0, workdir_path(home, str(row["workdir"])))
             consistent = any(within(cwd, root) for root in roots)
             return Identity(
                 role="worker",
@@ -146,7 +152,7 @@ def _awaiting_session(conn: sqlite3.Connection, home: Home, cwd: Path) -> dict[s
         assert found is not None
         roots = [home.root / "work" / str(found["task_id"]) / str(found["attempt"])]
         if found["workdir"]:
-            roots.append(Path(str(found["workdir"])).expanduser())
+            roots.append(workdir_path(home, str(found["workdir"])))
         if any(within(cwd, root) for root in roots):
             return found
     return None

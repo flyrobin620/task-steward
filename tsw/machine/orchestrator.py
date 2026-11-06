@@ -552,10 +552,6 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 )
         else:
             require_status(row, "ready", "waiting_dependency")
-            if not workdir:
-                raise rejected(
-                    "预启动要给出会话将要创建在的执行目录", reason="invalid_input", field="workdir"
-                )
             if not env.config.get("scheduling.prestart.enabled"):
                 raise rejected("配置关闭了预启动", reason="prestart_disabled")
             standby = ctx.conn.execute(

@@ -23,7 +23,7 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
 
 只有用户本人的 turn 能在任务目录创建会话；任何 turn 都能给已有会话发消息。
 
-1. 用户要求执行一批任务时，在这个 turn 里为就绪的任务和排在前面的等待依赖任务预启动：`attempt_start`（`purpose: prestart`，`user_turn: true`，`workdir` 为会话将要创建在的执行目录；之后派发要沿用同一目录），再调用 `mcp__ccd_session__start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为执行目录、`use_worktree: false`、`name` 为返回的 `session_name`，`model` / `effort` / `permission_mode` 取配置的 `roles.worker`，`prompt` 为待命说明。随后 `attempt_reconcile`（`outcome: created`，`session_ref` 为返回的会话 ID）。
+1. 用户要求执行一批任务时，在这个 turn 里为就绪的任务和排在前面的等待依赖任务预启动：`attempt_start`（`purpose: prestart`，`user_turn: true`，`workdir` 为会话将要创建在的执行目录，不给时为 `work/<任务>/<attempt>`；之后派发要沿用同一目录），再调用 `mcp__ccd_session__start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为执行目录、`use_worktree: false`、`name` 为返回的 `session_name`，`model` / `effort` / `permission_mode` 取配置的 `roles.worker`，`prompt` 为待命说明。随后 `attempt_reconcile`（`outcome: created`，`session_ref` 为返回的会话 ID）。
 2. 任务可以派发时：`task_dispatch`。有待命会话就 `attempt_deliver`，并用消息把任务书（`runs/<任务>/<attempt>/brief.md`）发给它；没有待命会话且是用户的 turn，就 `attempt_start`（`purpose: dispatch`）→ `start_session` → `attempt_reconcile`（`brief_delivered: true`）。
 3. 创建结果不明时，按会话名 `list_sessions {linked: true}` 对账，绝不再次创建；确认没有创建时 `attempt_reconcile`（`outcome: not_created`）。
 4. 不在用户 turn 时不能新建会话：任务保持就绪并在 STATUS 页显示“待启动”。
