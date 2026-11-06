@@ -522,9 +522,13 @@ def test_an_active_lease_of_the_source_stops_the_import(home: Home, tmp_path: Pa
     ledger = Ledger(home)
     assert run_import(home, ledger, snapshot_dir, dry_run=True)["source_lease"]["state"] == "active"
     with pytest.raises(TswError) as active:
-        run_import(home, ledger, snapshot_dir)
+        run_import(home, ledger, snapshot_dir, renumber_local=[("T001", "T011")])
     assert active.value.details["reason"] == "source_lease_active"
     assert types(ledger) == []
+    assert not (home.root / "ledger" / "imported").exists() or not any(
+        (home.root / "ledger" / "imported").iterdir()
+    )
+    assert not (home.root / LEGACY).exists()
     snapshot["controller"] = {"holder": None}  # released
     path.write_text(json.dumps(snapshot), encoding="utf-8")
     run_import(home, ledger, snapshot_dir)

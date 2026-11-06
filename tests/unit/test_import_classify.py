@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tsw.errors import TswError
-from tsw.importer.orchestrator_agent import classify, load_snapshot
+from tsw.importer.orchestrator_agent import classify, load_snapshot, source_lease
 
 pytestmark = pytest.mark.use_case("UC-IMPORT-001")
 
@@ -46,3 +47,27 @@ def test_a_snapshot_of_the_wrong_shape_is_refused_cleanly(tmp_path: Path, payloa
     with pytest.raises(TswError) as caught:
         load_snapshot(tmp_path)
     assert caught.value.details["reason"] == "snapshot_schema"
+
+
+NOW = datetime(2026, 11, 6, 12, 0, 0, 100_000, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("controller", "state"),
+    [
+        (None, "released"),
+        ({"holder": None, "expires_at": "2026-11-06T13:00:00Z"}, "released"),
+        ({"holder": "codex:x", "expires_at": "2026-11-04T15:27:24+00:00"}, "expired"),
+        ({"session": "x", "expires_at": "2026-11-06T11:59:59Z"}, "expired"),  # session only
+        ({"holder": "codex:x", "expires_at": "2026-11-06T12:00:00.100Z"}, "expired"),  # equal
+        ({"holder": "codex:x", "expires_at": "2026-11-06T12:00:00.900Z"}, "active"),  # same second
+        ({"holder": "codex:x", "expires_at": "2026-11-06T19:30:00+08:00"}, "expired"),  # offset
+        ({"holder": "codex:x", "expires_at": "2026-11-06T21:00:00+08:00"}, "active"),
+        ({"holder": "codex:x"}, "active"),  # no expiry: assume it may still dispatch
+        ({"holder": "codex:x", "expires_at": "soon"}, "active"),
+    ],
+)
+def test_the_source_lease_is_judged_with_full_precision(
+    controller: dict[str, Any] | None, state: str
+) -> None:
+    assert source_lease({"controller": controller}, NOW)["state"] == state

@@ -128,18 +128,39 @@ def check_volumes(source: Path, snapshot: Mapping[str, Any]) -> list[str]:
     return problems
 
 
-def source_lease(snapshot: Mapping[str, Any], now: str) -> dict[str, Any]:
-    """The source's scheduling lease at import time (DN005 §4.1): released, expired or active."""
+def _moment(value: Any) -> datetime | None:
+    """An ISO 8601 time with its full precision, in UTC (no offset means UTC)."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)).astimezone(
+        timezone.utc
+    )
+
+
+def source_lease(snapshot: Mapping[str, Any], now: datetime) -> dict[str, Any]:
+    """The source's scheduling lease at import time (DN005 §4.1): released, expired or active.
+
+    A holder whose expiry is missing or unreadable counts as active.
+    """
     lease = snapshot.get("controller") or {}
     holder = lease.get("holder") or lease.get("session")
-    expires = _time(lease.get("expires_at"))
+    expires = _moment(lease.get("expires_at"))
     if not holder:
         state = "released"
     elif expires is not None and expires <= now:
         state = "expired"
     else:
         state = "active"
-    return {"state": state, "holder": holder, "expires_at": expires, "checked_at": now}
+    return {
+        "state": state,
+        "holder": holder,
+        "expires_at": lease.get("expires_at"),
+        "checked_at": now.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
 
 
 # ---------------------------------------------------------------------- classification
@@ -500,7 +521,7 @@ def run_import(
             reason="snapshot_stale",
             problems=report.volume_problems,
         )
-    report.lease = source_lease(snapshot, utc_now())
+    report.lease = source_lease(snapshot, datetime.now(timezone.utc))
     if report.lease["state"] == "active" and not dry_run:
         raise rejected(
             "旧系统的调度租约仍有效，先停止旧系统调度，等租约过期或释放后重新导出",
