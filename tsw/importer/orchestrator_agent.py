@@ -43,6 +43,7 @@ from tsw.home import Home
 from tsw.importer import renumber, verify
 from tsw.importer.files import make_writable, remove_tree
 from tsw.ledger import Ledger
+from tsw.locks import FileLock
 from tsw.storage.fs import FsStorage
 
 SYSTEM = "orchestrator-agent"
@@ -302,15 +303,19 @@ def resolve_ref(home: Home, ref: str) -> Path | None:
     return None
 
 
-def _open_request(task: Mapping[str, Any]) -> dict[str, Any] | None:
+def _request(task: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The source's question: pending, or resolved with the user's answer kept."""
     request = task.get("input_request")
-    if not isinstance(request, dict) or request.get("status") in ("resolved", "cancelled"):
+    if not isinstance(request, dict) or request.get("status") == "cancelled":
         return None
     if not request.get("id") or not request.get("question"):
         return None
+    resolved = request.get("status") == "resolved"
     return {
         "request_id": f"{SYSTEM}:{request['id']}",
         "question": str(request["question"]),
+        "status": "resolved" if resolved else "pending",
+        "answer": request.get("answer") if resolved else None,
         "source": dict(request),
     }
 
@@ -376,7 +381,7 @@ def plan_task(
                 else set()
             )
         ),
-        "input_request": None if read_only else _open_request(task),
+        "input_request": None if read_only else _request(task),
         "outputs": [
             {**out, "ref": _local_ref(task_id, out["ref"], read_only)} for out in _outputs(task)
         ],
@@ -469,6 +474,7 @@ class Report:
     renumbered: list[dict[str, str]] = field(default_factory=lambda: [])
     checks: list[verify.Check] = field(default_factory=lambda: [])
     lease: dict[str, Any] = field(default_factory=lambda: {})
+    floor: int = 0  # the highest task number the source used
     appended: int = 0  # events this run appended
     rerun: bool = False
     dry_run: bool = False
@@ -503,6 +509,9 @@ class Report:
         }
 
 
+IMPORT_LOCK_TIMEOUT = 5.0
+
+
 def run_import(
     home: Home,
     ledger: Ledger,
@@ -511,6 +520,40 @@ def run_import(
     dry_run: bool = False,
     renumber_local: list[tuple[str, str]] | None = None,
     exclude: list[str] | None = None,
+) -> dict[str, Any]:
+    """One import at a time: the event volumes, manifest and legacy files are shared targets."""
+    if dry_run:
+        return _run_import(
+            home, ledger, snapshot_dir, dry_run=True, renumber_local=renumber_local, exclude=exclude
+        )
+    lock = FileLock(home.locks_dir / "import.lock", timeout=IMPORT_LOCK_TIMEOUT)
+    try:
+        lock.acquire()
+    except TswError as exc:
+        raise TswError(
+            ErrorCode.UNAVAILABLE, "另一个导入正在进行，等它结束后再运行", reason="import_running"
+        ) from exc
+    try:
+        return _run_import(
+            home,
+            ledger,
+            snapshot_dir,
+            dry_run=False,
+            renumber_local=renumber_local,
+            exclude=exclude,
+        )
+    finally:
+        lock.release()
+
+
+def _run_import(
+    home: Home,
+    ledger: Ledger,
+    snapshot_dir: Path,
+    *,
+    dry_run: bool,
+    renumber_local: list[tuple[str, str]] | None,
+    exclude: list[str] | None,
 ) -> dict[str, Any]:
     snapshot, snapshot_sha = load_snapshot(snapshot_dir)
     source = Path(snapshot["source"]["root"])
@@ -572,6 +615,7 @@ def run_import(
         + [_task_number(t) for t in report.todo_only]
         + [0]
     )
+    report.floor = floor
     report.todo_only = [t for t in report.todo_only if t not in report.excluded]
     for old, new in renumber_local or []:
         if dry_run:
@@ -625,7 +669,11 @@ def run_import(
     with storage.writer():
         _copy_volumes(home, source, snapshot)
         _copy_legacy(home, source, snapshot, snapshot_dir)
-    report.count(_commit_started(ledger, snapshot, snapshot_sha, last_seq, report.lease))
+    report.count(
+        _commit_started(
+            ledger, snapshot, snapshot_sha, last_seq, lease=report.lease, floor=report.floor
+        )
+    )
     for plan in todo:
         files = prepare(plan, source)
         try:
@@ -759,7 +807,13 @@ def _unresolved_refs(home: Home, planned: list[Planned]) -> list[str]:
 
 
 def _commit_started(
-    ledger: Ledger, snapshot: Mapping[str, Any], sha: str, last_seq: int, lease: dict[str, Any]
+    ledger: Ledger,
+    snapshot: Mapping[str, Any],
+    sha: str,
+    last_seq: int,
+    *,
+    lease: dict[str, Any],
+    floor: int,
 ) -> CommitResult:
     def build(ctx: CommitContext) -> list[EventDraft]:
         return [
@@ -772,6 +826,8 @@ def _commit_started(
                     "controller": snapshot.get("controller"),
                     # Recorded before anything is imported: the old system had stopped.
                     "source_lease": lease,
+                    # Every number the source used, specs only included: never handed out again.
+                    "id_floor": floor,
                 },
             )
         ]

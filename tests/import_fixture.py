@@ -69,7 +69,16 @@ def tasks() -> dict[str, dict[str, Any]]:
             "last_feedback": "补测试后再交",
             "dependencies": ["T004", "T001"],
         },
-        "T008": {"status": "failed", "dependencies": ["T001"]},
+        "T008": {
+            "status": "failed",
+            "dependencies": ["T001"],
+            "input_request": {
+                "id": "req-2",
+                "question": "换方案吗？",
+                "status": "resolved",
+                "answer": "换",
+            },
+        },
         "T010": {
             "status": "paused",
             "retirement": {"archived_at": "2026-10-11T00:00:00+00:00", "reason": "用户关闭"},

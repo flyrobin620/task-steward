@@ -149,7 +149,9 @@ def scene(attempt: Mapping[str, Any]) -> list[str]:
         return [f"执行目录不存在：{place}"]
     code, _, err = _git(directory, "rev-parse", "--git-dir")
     if code != 0:
-        if "not a git repository" in err.lower():
+        if "not a git repository" in err.lower() and not (
+            attempt.get("branch") or attempt.get("base_commit")
+        ):
             return []  # a research directory, not a git checkout
         return [f"{UNVERIFIED}：{place}（{err or code}）"]
     out: list[str] = []

@@ -33,6 +33,7 @@ from tsw.machine.model import (
     current_attempt,
     dumps,
     loads,
+    next_item_id,
     require_status,
     review_cycle,
     row_dict,
@@ -51,17 +52,11 @@ def _cmd(env: ToolEnv, op: str, inp: Mapping[str, Any], build: Any) -> Command:
 
 
 def _next_request_id(conn: sqlite3.Connection, task_id: str, prefix: str = "Q") -> str:
-    count = conn.execute(
-        "SELECT COUNT(*) AS n FROM input_requests WHERE task_id = ?", (task_id,)
-    ).fetchone()["n"]
-    return f"{prefix}-{task_id}-{int(count) + 1}"
+    return next_item_id(conn, "input_requests", "request_id", prefix, task_id)
 
 
 def _decision_id(conn: sqlite3.Connection, task_id: str) -> str:
-    count = conn.execute(
-        "SELECT COUNT(*) AS n FROM decisions WHERE task_id = ?", (task_id,)
-    ).fetchone()["n"]
-    return f"D-{task_id}-{int(count) + 1}"
+    return next_item_id(conn, "decisions", "decision_id", "D", task_id)
 
 
 # ---------------------------------------------------------------------- registration and planning

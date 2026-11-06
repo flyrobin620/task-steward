@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import sqlite3
 from typing import Any
+from urllib.parse import quote
 
 from tsw.commands import CommitContext
 from tsw.machine.guards import invalidated
@@ -51,9 +52,9 @@ def _href(ref: str) -> str | None:
     if ref.startswith(("https://", "http://")):
         return ref
     if ref.startswith("legacy://"):
-        return "../legacy/" + ref[len("legacy://") :]
+        return "../legacy/" + quote(ref[len("legacy://") :], safe="/")
     if ref.startswith("runs/"):
-        return "../" + ref
+        return "../" + quote(ref, safe="/")
     return None
 
 

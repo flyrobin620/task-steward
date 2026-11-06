@@ -18,6 +18,7 @@ from tsw.home import Home
 from tsw.importer import orchestrator_agent as importer
 from tsw.importer import renumber, verify
 from tsw.importer.orchestrator_agent import run_import
+from tsw.importer.resume import resume_package
 from tsw.ledger import Ledger
 from tsw.machine import guards
 from tsw.tasks import TaskSpec, next_task_id, note, register
@@ -250,6 +251,17 @@ def test_resources_dependencies_requests_and_references_carry_over(
         ("res-paused", "T006"),
     }
     assert json.loads(h.task("T006")["resources"]) == ["res-paused"]
+    # A question the user already answered in the source stays answered, with its answer.
+    answered = rows(
+        h.ledger,
+        "SELECT status, resolution FROM input_requests WHERE task_id = 'T008'",
+    )
+    assert answered[0]["status"] == "resolved"
+    assert json.loads(answered[0]["resolution"])["answer"] == "换"
+    with h.ledger.view() as conn:
+        assert "orchestrator-agent:req-2：换方案吗？（resolved，答复：换）" in resume_package(
+            conn, "T008"
+        )
     bound = rows(h.ledger, "SELECT bound_revision FROM dependencies WHERE task_id = 'T006'")
     assert bound == [{"bound_revision": 1}]
     with h.ledger.view() as conn:
@@ -265,7 +277,9 @@ def test_resources_dependencies_requests_and_references_carry_over(
     ref = rows(h.ledger, "SELECT ref FROM outputs WHERE task_id = 'T001'")[0]["ref"]
     assert ref == "legacy://orchestrator-agent/runs/T001/a1/result.html"
     assert (home.root / LEGACY / "runs" / "T001" / "a1" / "result.html").is_file()
-    requests = rows(h.ledger, "SELECT request_id, kind, status FROM input_requests")
+    requests = rows(
+        h.ledger, "SELECT request_id, kind, status FROM input_requests WHERE task_id = 'T006'"
+    )
     assert requests == [
         {"request_id": "orchestrator-agent:req-1", "kind": "imported", "status": "pending"}
     ]
@@ -277,7 +291,9 @@ def test_resources_dependencies_requests_and_references_carry_over(
         answer="继续",
         user_source=source,
     )
-    assert rows(h.ledger, "SELECT status FROM input_requests") == [{"status": "resolved"}]
+    assert rows(h.ledger, "SELECT status FROM input_requests WHERE task_id = 'T006'") == [
+        {"status": "resolved"}
+    ]
     assert h.status("T006") == "paused"
 
 
@@ -395,7 +411,7 @@ def test_a_finished_local_task_is_renumbered_to_make_room(home: Home, tmp_path: 
     assert (rows(ledger, query), rows(ledger, "SELECT * FROM attempts ORDER BY 1, 2")) == projected
 
 
-def test_an_import_that_lost_a_race_to_another_import_updates(
+def test_imports_are_serialized_and_a_lost_race_updates(
     home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, older = build(tmp_path / "one")
@@ -408,7 +424,14 @@ def test_an_import_that_lost_a_race_to_another_import_updates(
         if not raced:  # the older snapshot's import gets in after this run looked
             raced.append(True)
             monkeypatch.setattr(importer, "prepare", preparing)
-            run_import(home, ledger, older)
+            # A second import is held off by the import lock ...
+            with pytest.raises(TswError) as running:
+                run_import(home, ledger, older)
+            assert running.value.details["reason"] == "import_running"
+            # ... and one that got past it anyway still cannot make this run fail.
+            importer._run_import(  # pyright: ignore[reportPrivateUsage]
+                home, ledger, older, dry_run=False, renumber_local=None, exclude=None
+            )
             monkeypatch.setattr(importer, "prepare", older_import_first)
         return preparing(plan, source)
 
@@ -476,6 +499,11 @@ def test_the_recorded_execution_scene_is_compared_with_the_disk(
     monkeypatch.setattr(verify, "_git", lookup_fails)
     unknown = verify.scene({"worktree": str(repo), "base_commit": head})
     assert unknown[0].startswith(f"无法核实：{repo} 的 base {head[:12]}")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert verify.scene({"worktree": str(plain)}) == []  # a research directory
+    lost = verify.scene({"worktree": str(plain), "branch": "work"})
+    assert lost[0].startswith(f"无法核实：{plain}")  # a recorded git scene that is gone
     assert verify.scene({"worktree": str(tmp_path / "gone")}) == [
         f"执行目录不存在：{tmp_path / 'gone'}"
     ]
@@ -573,3 +601,10 @@ def test_an_excluded_number_still_bounds_the_renumbering(home: Home, tmp_path: P
         home, ledger, snapshot_dir, exclude=["T012"], renumber_local=[("T001", "T013")]
     )
     assert summary["excluded_todo_only"] == ["T012"]
+    # New tasks never take a number the source used, even one that was only a spec.
+    with ledger.view() as conn:
+        assert next_task_id(conn) == "T014"
+    snapshot["controller"] = None
+    ledger.rebuild()
+    with ledger.view() as conn:
+        assert next_task_id(conn) == "T014"

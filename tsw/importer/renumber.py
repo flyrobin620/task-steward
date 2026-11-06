@@ -187,7 +187,8 @@ def reduce(conn: sqlite3.Connection, event: Any) -> None:
         (new, old),
     )
     for task_id, attempt, read_set in conn.execute(
-        "SELECT task_id, attempt, read_set FROM attempts WHERE read_set LIKE ?",
+        "SELECT task_id, attempt, read_set FROM attempts WHERE read_set LIKE ? "
+        "AND task_id NOT IN (SELECT task_id FROM imported_tasks)",
         (f'%"{old}"%',),
     ).fetchall():
         names = [new if r == old else r for r in json.loads(read_set or "[]")]
@@ -195,6 +196,21 @@ def reduce(conn: sqlite3.Connection, event: Any) -> None:
             "UPDATE attempts SET read_set = ? WHERE task_id = ? AND attempt = ?",
             (json.dumps(sorted(set(names)), ensure_ascii=False), task_id, attempt),
         )
+    # A submission records the dependency bindings it was made against; a pure renumbering
+    # must not invalidate it (g_accept compares them with the dependency table).
+    for task_id, submission in conn.execute(
+        "SELECT task_id, submission FROM tasks WHERE submission LIKE ? "
+        "AND task_id NOT IN (SELECT task_id FROM imported_tasks)",
+        (f'%"{old}"%',),
+    ).fetchall():
+        value: dict[str, Any] = json.loads(submission)
+        deps: dict[str, Any] = value.get("dependencies") or {}
+        if old in deps:
+            deps[new] = deps.pop(old)
+            conn.execute(
+                "UPDATE tasks SET submission = ? WHERE task_id = ?",
+                (json.dumps(value, ensure_ascii=False, sort_keys=True), task_id),
+            )
     conn.execute(
         "UPDATE tasks SET spec_path = ?, spec_sha256 = COALESCE(?, spec_sha256), "
         "version = version + 1 WHERE task_id = ?",

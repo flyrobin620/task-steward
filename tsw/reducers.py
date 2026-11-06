@@ -101,18 +101,27 @@ def _task_imported(conn: sqlite3.Connection, event: Event) -> None:
         )
     request: dict[str, Any] | None = data.get("input_request")
     if request:
+        resolved = request.get("status") == "resolved"
         conn.execute(
             "INSERT OR REPLACE INTO input_requests(request_id, task_id, kind, status, question, "
-            "binding) VALUES(?, ?, 'imported', 'pending', ?, ?)",
+            "binding, resolution) VALUES(?, ?, 'imported', ?, ?, ?, ?)",
             (
                 request["request_id"],
                 task_id,
+                "resolved" if resolved else "pending",
                 request["question"],
                 json.dumps(
                     {"revision": event.revision or 1, "source": request.get("source")},
                     ensure_ascii=False,
                     sort_keys=True,
                 ),
+                json.dumps(
+                    {"source": "orchestrator-agent", "answer": request.get("answer")},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                if resolved
+                else None,
             ),
         )
     deps: list[dict[str, Any]] = data.get("dependencies") or []
@@ -163,6 +172,16 @@ def _json_or_none(value: Any) -> str | None:
     return json.dumps(value, ensure_ascii=False, sort_keys=True) if value else None
 
 
+def _import_started(conn: sqlite3.Connection, event: Event) -> None:
+    """New task ids continue after every number the source used, specs only included."""
+    floor = int(event.data.get("id_floor") or 0)
+    current = conn.execute("SELECT value FROM meta WHERE key = 'task_id_floor'").fetchone()
+    if current is None or int(current["value"]) < floor:
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES('task_id_floor', ?)", (str(floor),)
+        )
+
+
 def _import_marker(conn: sqlite3.Connection, event: Event) -> None:
     """import.started / import.completed: the facts live in the event; nothing to project."""
 
@@ -178,7 +197,7 @@ def _task_note(conn: sqlite3.Connection, event: Event) -> None:
 REDUCERS: dict[str, Reducer] = {
     "task.registered": _task_registered,
     "task.note": _task_note,
-    "import.started": _import_marker,
+    "import.started": _import_started,
     "import.task_imported": _task_imported,
     "import.completed": _import_marker,
     "task.renumbered": renumber.reduce,
