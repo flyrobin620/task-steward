@@ -10,7 +10,8 @@ import pytest
 
 from tests.machine_harness import Harness
 from tsw.errors import TswError
-from tsw.home import Home
+from tsw.home import Home, workdir_path
+from tsw.host.guard import Guard
 from tsw.machine.base import Caller
 
 pytestmark = pytest.mark.use_case("UC-MERGE-001")
@@ -25,7 +26,8 @@ def reason_of(call: Callable[[], Any]) -> tuple[str, str | None]:
 
 def harness(home: Home, merge: bool, kind: str = "code") -> tuple[Harness, Caller]:
     delivery = {"push": True, "create_pr": True, **({"merge": True} if merge else {})}
-    h = Harness(home, {"repositories": {"demo": {"path": "~/src/demo", "delivery": delivery}}})
+    repo = {"path": "~/src/demo", "repository": "example/demo", "delivery": delivery}
+    h = Harness(home, {"repositories": {"demo": repo}})
     h.register("T001", kind=kind)
     h.plan("T001")
     worker = h.dispatch("T001")
@@ -126,3 +128,30 @@ def test_only_development_tasks_merge(home: Home) -> None:
     h, w = harness(home, merge=True, kind="research")
     submit(h, w)
     assert h.status("T001") == "verifying"
+
+
+def bash(h: Harness, worker: Caller, command: str) -> dict[str, Any] | None:
+    """The real PreToolUse hook for the worker's shell command."""
+    env = {"CLAUDE_CODE_HOST_SESSION_ID": str(worker.session_id)}
+    payload = {
+        "cwd": str(workdir_path(h.home, "~/wt/T001")),
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    }
+    return Guard(h.home, env, payload).run("PreToolUse")
+
+
+@pytest.mark.parametrize("kind", ["research", "design"])
+def test_the_hook_refuses_merging_for_other_task_kinds(home: Home, kind: str) -> None:
+    h, w = harness(home, merge=True, kind=kind)
+    out = bash(h, w, "gh pr merge 3 --squash")
+    assert out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_the_hook_lets_a_development_worker_merge_only_its_repository(home: Home) -> None:
+    h, w = harness(home, merge=True)
+    assert bash(h, w, "gh pr merge 3 --squash") is None
+    out = bash(h, w, "gh -R example/other pr merge 3 --squash")
+    assert (
+        out is not None and "example/other" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    )

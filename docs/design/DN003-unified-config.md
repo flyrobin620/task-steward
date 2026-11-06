@@ -226,7 +226,7 @@
 
 ### 3.4 `repositories` 与 `accounts`
 
-结构沿用 orchestrator-agent 的 `config/repositories.json` 与 `config/accounts.json`，合并为两个小节（账号只记录名称与认证目录引用，凭据本身不进数据目录），并新增 `aliases`（原 `repositories.md` 中的缩写表）。导入时自动转换（DN005 §4.4）。`delivery.push` / `create_pr` / `merge` 是该仓库的默认交付授权，具体任务仍以用户当次指令为准。`merge`（默认关闭）为 `true` 时，该仓库的开发任务由 worker 在门禁、评审与意见都解决后自行合并 PR，再提交（DN002 §3.5）。三者都是权限类键（§7.2）。
+结构沿用 orchestrator-agent 的 `config/repositories.json` 与 `config/accounts.json`，合并为两个小节（账号只记录名称与认证目录引用，凭据本身不进数据目录），并新增 `aliases`（原 `repositories.md` 中的缩写表）。导入时自动转换（DN005 §4.4）。`delivery.push` / `create_pr` / `merge` 是该仓库的默认交付授权，具体任务仍以用户当次指令为准。`merge`（默认关闭）为 `true` 时，该仓库的开发任务由 worker 在门禁、评审与意见都解决后自行合并 PR，再提交（DN002 §3.5）；此时必须写明 `repository`（`owner/name`），hooks 据此只放行合并本仓库的 PR。三者都是权限类键（§7.2）。
 
 ### 3.5 `policies`
 
@@ -250,7 +250,7 @@ tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命�
 4. `roles.*.session` 与 `fallback_session` 必须是 `plugins.sessions` 中已加载的实现，并满足 DN006 §7.4 的能力要求：worker 需 `interactive`（delegated 时与主会话同宿主）；评审器需 `oneshot`、`direct`、`read_only_enforced`。不满足时校验失败，不能派发。
 5. 路径字段为绝对路径或相对数据目录的路径；模板与 schema 文件必须存在。
 6. 每个仓库的 `auth_profile` 必须在 `accounts` 中存在，且 provider / host 一致；`accounts.*.auth.config_dir` 解析后必须位于数据目录之外（凭据不进入 `TSW_HOME`，也就不会被备份）。
-7. 别名全局唯一，不能与其他仓库 ID 冲突。
+7. 别名全局唯一，不能与其他仓库 ID 冲突。`delivery.merge` 为 `true` 的仓库必须写明 `repository`（`owner/name`）。
 8. `input.channels` 中的每个渠道都必须已在 `plugins.human_channels` 中加载，且能力为 `request_response`；未显式设置时取已加载的全部 `request_response` 渠道。
 9. `input.decision_digest.enabled=true` 时，`channel` 必须为 `"local"`（只写入 STATUS 页与验收报告，不经任何渠道通知），或是已加载且支持 `notify` 的渠道；合并后缺少 `channel` 视为配置错误。`null` 只用于合并时删除字段（§5a），不作为业务取值。
 10. 校验针对合并后的有效配置（默认值 + 数据目录配置 + 本机覆盖），`tsw config show --effective` 可查看结果。
