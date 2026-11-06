@@ -11,15 +11,15 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import sqlite3
+import time
 from typing import Any
 
 from tsw.commands import Command, CommitContext
-from tsw.errors import rejected
+from tsw.errors import ErrorCode, TswError, rejected
 from tsw.events import EventDraft, sha256_hex
 from tsw.home import Home
-from tsw.importer.files import make_writable, remove_tree
+from tsw.importer.files import make_writable
 
 MOVABLE = frozenset({"done", "accepted", "archived", "cancelled"})
 RUNNING = frozenset({"starting", "standby", "live"})
@@ -96,18 +96,23 @@ def _plan_moves(home: Home, old: str, new: str) -> list[tuple[str, str]]:
 
 
 def _move(home: Home, old_rel: str, new_rel: str) -> None:
+    """A rename, retried while Windows scanners hold the files; never a partial copy."""
     source, target = home.root / old_rel, home.root / new_rel
     target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        source.replace(target)
-    except OSError:  # a directory held open (Windows): copy, then remove the original
-        if source.is_dir():
-            shutil.copytree(source, target, symlinks=True)
-            remove_tree(source)
-        else:
-            shutil.copy2(source, target)
-            make_writable(source)
-            source.unlink()
+    for wait in (0.5, 1, 2, 4, 0):
+        try:
+            source.replace(target)
+            return
+        except OSError as exc:
+            if not wait:
+                raise TswError(
+                    ErrorCode.UNAVAILABLE,
+                    "改号时移动文件失败；关闭占用这些文件的程序后重新运行",
+                    reason="renumber_move",
+                    path=old_rel,
+                    error=str(exc),
+                ) from exc
+            time.sleep(wait)
 
 
 def _renamed_spec(text: str, old: str, new: str) -> str:

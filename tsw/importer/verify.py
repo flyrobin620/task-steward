@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import filecmp
 import json
+import os
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -34,24 +35,41 @@ class Check:
         return {True: "通过", False: "未通过", None: "需人工"}[self.ok]
 
 
-def _counts(ledger: Ledger, snapshot: Mapping[str, Any], conflicts: list[str]) -> Check:
+def _counts(
+    ledger: Ledger, snapshot: Mapping[str, Any], classes: Mapping[str, str], conflicts: list[str]
+) -> Check:
     expected = set(snapshot.get("tasks") or {})
     with ledger.view() as conn:
         imported = {
-            str(r["task_id"]): str(r["status"])
+            str(r["task_id"]): (str(r["status"]), int(r["version"]))
             for r in conn.execute(
-                "SELECT t.task_id, t.status FROM imported_tasks i "
+                "SELECT t.task_id, t.status, t.version FROM imported_tasks i "
                 "JOIN tasks t ON t.task_id = i.task_id WHERE i.source = 'orchestrator-agent'"
             )
         }
-    missing = sorted(expected - set(imported) - set(conflicts))
-    check = Check(1, "任务总数与旧审计一致", not missing)
-    check.details.append(
-        f"旧账本 {len(expected)} 个任务；已导入 {len(set(imported) & expected)}，"
-        f"冲突未导入 {len(set(conflicts) & expected)}"
+    missing = sorted(expected - set(imported))
+    # A task untouched since its import still has the class the import gave it.
+    misclassed = sorted(
+        f"{tid}：{status}，应为 {classes[tid]}"
+        for tid, (status, version) in imported.items()
+        if version == 1 and tid in classes and status != classes[tid]
     )
-    if missing:
-        check.details.append("既未导入也不是冲突：" + "、".join(missing))
+    counts: dict[str, int] = {}
+    for tid in expected & set(imported):
+        counts[classes.get(tid, "?")] = counts.get(classes.get(tid, "?"), 0) + 1
+    check = Check(1, "任务总数与各分类数与旧审计一致", not missing and not misclassed)
+    check.details.append(
+        f"旧账本 {len(expected)} 个任务；已导入 {len(set(imported) & expected)}；分类 "
+        + "、".join(f"{k} {v}" for k, v in sorted(counts.items()))
+    )
+    pending = [t for t in missing if t in conflicts]
+    if pending:
+        check.details.append("编号冲突、尚未导入：" + "、".join(pending))
+    if set(missing) - set(pending):
+        check.details.append(
+            "既未导入也不是冲突：" + "、".join(sorted(set(missing) - set(pending)))
+        )
+    check.details += [f"分类不一致：{m}" for m in misclassed]
     return check
 
 
@@ -88,41 +106,66 @@ def _refs(missing: list[str], source: Path) -> Check:
     return check
 
 
-def _git(directory: Path, *args: str) -> str | None:
+GIT = ["git", "--no-optional-locks", "-c", "core.fsmonitor=false"]
+
+
+def _git(directory: Path, *args: str) -> tuple[int, str, str]:
+    """Read-only git: no optional locks, no fsmonitor hook, no lazy fetch of objects."""
     try:
         proc = subprocess.run(
-            ["git", "--no-optional-locks", "-C", str(directory), *args],
+            [*GIT, "-C", str(directory), *args],
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
             timeout=30,
             check=False,
+            env={**os.environ, "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"},
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return proc.stdout.strip() if proc.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return -1, "", str(exc)
+    return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+
+UNVERIFIED = "无法核实"
 
 
 def scene(attempt: Mapping[str, Any]) -> list[str]:
-    """Differences between an old attempt's recorded execution scene and the disk now."""
+    """Differences between an old attempt's recorded execution scene and the disk now.
+
+    A failed git query is reported as ``无法核实：…``, never as agreement.
+    """
     place = attempt.get("worktree") or attempt.get("working_directory")
     if not place:
         return []
     directory = Path(str(place))
     if not directory.is_dir():
         return [f"执行目录不存在：{place}"]
-    if _git(directory, "rev-parse", "--git-dir") is None:
-        return []  # a research directory, not a git checkout
+    code, _, err = _git(directory, "rev-parse", "--git-dir")
+    if code != 0:
+        if "not a git repository" in err.lower():
+            return []  # a research directory, not a git checkout
+        return [f"{UNVERIFIED}：{place}（{err or code}）"]
     out: list[str] = []
     branch = attempt.get("branch")
-    current = _git(directory, "rev-parse", "--abbrev-ref", "HEAD")
-    if branch and current != branch:
+    code, current, err = _git(directory, "rev-parse", "--abbrev-ref", "HEAD")
+    if code != 0:
+        out.append(f"{UNVERIFIED}：{place} 的分支（{err or code}）")
+    elif branch and current != branch:
         out.append(f"分支为 {current}，记录为 {branch}：{place}")
     base = attempt.get("base_commit")
-    if base and _git(directory, "merge-base", "--is-ancestor", str(base), "HEAD") is None:
-        out.append(f"记录的 base {str(base)[:12]} 不在当前 HEAD 的历史中：{place}")
-    if _git(directory, "status", "--porcelain"):
+    if base and _git(directory, "cat-file", "-e", f"{base}^{{commit}}")[0] != 0:
+        out.append(f"记录的 base {str(base)[:12]} 在该仓库中不存在：{place}")
+    elif base:
+        code, _, err = _git(directory, "merge-base", "--is-ancestor", str(base), "HEAD")
+        if code == 1:
+            out.append(f"记录的 base {str(base)[:12]} 不在当前 HEAD 的历史中：{place}")
+        elif code != 0:
+            out.append(f"{UNVERIFIED}：{place} 的 base {str(base)[:12]}（{err or code}）")
+    code, status, err = _git(directory, "status", "--porcelain")
+    if code != 0:
+        out.append(f"{UNVERIFIED}：{place} 的未提交改动（{err or code}）")
+    elif status:
         out.append(f"有未提交改动：{place}")
     return out
 
@@ -138,7 +181,9 @@ def _scenes(ledger: Ledger) -> Check:
         attempts = legacy.get("attempts") or []
         if attempts:
             found += [f"{task_id}：{d}" for d in scene(attempts[-1])]
-    check = Check(4, "可 resume 任务的执行现场与记录一致", not found)
+    differences = [f for f in found if UNVERIFIED not in f]
+    ok: bool | None = False if differences else (None if found else True)
+    check = Check(4, "可 resume 任务的执行现场与记录一致", ok)
     check.details.append(f"核对 {len(resumable)} 个可 resume 任务的最后一个 attempt")
     check.details += found
     return check
@@ -149,6 +194,7 @@ def checks(
     ledger: Ledger,
     snapshot: Mapping[str, Any],
     *,
+    classes: Mapping[str, str],
     conflicts: list[str],
     missing: list[str],
     volume_problems: list[str],
@@ -161,10 +207,14 @@ def checks(
         "重复执行导入不产生新事件",
         (new_events == 0) if rerun else None,
         [f"本次运行追加 {new_events} 条事件"]
-        + ([] if rerun else ["本次是首次（或增量）导入；用同一快照再运行一次即得出结论"]),
+        + (
+            []
+            if rerun
+            else ["本次有要写入的内容（首次、增量或补导）；用同样的参数再运行一次即得出结论"]
+        ),
     )
     return [
-        _counts(ledger, snapshot, conflicts),
+        _counts(ledger, snapshot, classes, conflicts),
         _volumes(home, source, volume_problems),
         _refs(missing, source),
         _scenes(ledger),

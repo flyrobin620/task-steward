@@ -36,14 +36,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tsw.commands import Command, CommitContext
+from tsw.commands import Command, CommitContext, CommitResult
 from tsw.errors import ErrorCode, TswError, rejected
 from tsw.events import EventDraft, sha256_hex, utc_now
 from tsw.home import Home
 from tsw.importer import renumber, verify
 from tsw.importer.files import make_writable, remove_tree
 from tsw.ledger import Ledger
-from tsw.projection import projected_tail
 from tsw.storage.fs import FsStorage
 
 SYSTEM = "orchestrator-agent"
@@ -433,9 +432,14 @@ class Report:
     invalid: list[str] = field(default_factory=lambda: [])
     renumbered: list[dict[str, str]] = field(default_factory=lambda: [])
     checks: list[verify.Check] = field(default_factory=lambda: [])
-    start_sequence: int = 0
+    appended: int = 0  # events this run appended
     rerun: bool = False
     dry_run: bool = False
+
+    def count(self, result: CommitResult) -> CommitResult:
+        if not result.duplicate:
+            self.appended += len(result.events)
+        return result
 
     def counts(self) -> dict[str, int]:
         out: dict[str, int] = {}
@@ -520,7 +524,7 @@ def run_import(
                 if done is None:
                     renumber.check(conn, old, new, floor=floor)
         else:
-            ledger.commit(renumber.command(home, old, new, floor=floor))
+            report.count(ledger.commit(renumber.command(home, old, new, floor=floor)))
         report.renumbered.append({"from": old, "to": new})
     with ledger.view() as conn:
         existing = {
@@ -552,8 +556,8 @@ def run_import(
     storage = ledger.storage
     assert isinstance(storage, FsStorage)
     batch = _batch(ledger, last_seq)
-    report.start_sequence = _tail(ledger)
-    report.rerun = batch == "completed"
+    # A repeat of a finished import with nothing left to write decides DN005 §6 item 6.
+    report.rerun = not todo and batch == "completed" and report.appended == 0
     if not todo and batch == "completed":  # nothing new: no events at all (DN005 §6 item 6)
         report.missing_files = _unresolved_refs(home, report.planned)
         _verify(home, ledger, report)
@@ -563,11 +567,11 @@ def run_import(
     with storage.writer():
         _copy_volumes(home, source, snapshot)
         _copy_legacy(home, source, snapshot, snapshot_dir)
-    _commit_started(ledger, snapshot, snapshot_sha, last_seq)
+    report.count(_commit_started(ledger, snapshot, snapshot_sha, last_seq))
     for plan in todo:
         files = prepare(plan, source)
         try:
-            result = ledger.commit(_task_imported(home, plan, files, last_seq))
+            result = report.count(ledger.commit(_task_imported(home, plan, files, last_seq)))
         except TswError as exc:
             if exc.details.get("reason") != "import_conflict":
                 raise
@@ -580,16 +584,11 @@ def run_import(
         else:
             report.imported.append(plan.task_id)
     report.missing_files = _unresolved_refs(home, report.planned)
-    _commit_completed(ledger, report, last_seq)
+    report.count(_commit_completed(ledger, report, last_seq))
     _verify(home, ledger, report)
     with storage.writer():
         _write_report(home, report)
     return report.summary()
-
-
-def _tail(ledger: Ledger) -> int:
-    with ledger.view() as conn:
-        return projected_tail(conn).sequence
 
 
 def _verify(home: Home, ledger: Ledger, report: Report) -> None:
@@ -598,10 +597,11 @@ def _verify(home: Home, ledger: Ledger, report: Report) -> None:
         home,
         ledger,
         report.snapshot,
+        classes={p.task_id: p.new_status for p in report.planned},
         conflicts=[str(c["task_id"]) for c in report.conflicts],
         missing=report.missing_files,
         volume_problems=check_volumes(Path(report.snapshot["source"]["root"]), report.snapshot),
-        new_events=_tail(ledger) - report.start_sequence,
+        new_events=report.appended,
         rerun=report.rerun,
     )
 
@@ -700,7 +700,9 @@ def _unresolved_refs(home: Home, planned: list[Planned]) -> list[str]:
 # ---------------------------------------------------------------------- events
 
 
-def _commit_started(ledger: Ledger, snapshot: Mapping[str, Any], sha: str, last_seq: int) -> None:
+def _commit_started(
+    ledger: Ledger, snapshot: Mapping[str, Any], sha: str, last_seq: int
+) -> CommitResult:
     def build(ctx: CommitContext) -> list[EventDraft]:
         return [
             EventDraft(
@@ -714,7 +716,7 @@ def _commit_started(ledger: Ledger, snapshot: Mapping[str, Any], sha: str, last_
             )
         ]
 
-    ledger.commit(
+    return ledger.commit(
         Command(
             actor=ACTOR,
             input={"op": "import.started", "source_sequence": last_seq, "snapshot": sha},
@@ -764,13 +766,13 @@ def _digest(value: Any) -> str:
     return sha256_hex(json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8"))
 
 
-def _commit_completed(ledger: Ledger, report: Report, last_seq: int) -> None:
+def _commit_completed(ledger: Ledger, report: Report, last_seq: int) -> CommitResult:
     summary = report.summary()
 
     def build(ctx: CommitContext) -> list[EventDraft]:
         return [EventDraft(type="import.completed", data=summary)]
 
-    ledger.commit(
+    return ledger.commit(
         Command(
             actor=ACTOR,
             input={"op": "import.completed", "summary": summary},

@@ -16,7 +16,7 @@ from tsw.errors import TswError
 from tsw.events import sha256_hex
 from tsw.home import Home
 from tsw.importer import orchestrator_agent as importer
-from tsw.importer import verify
+from tsw.importer import renumber, verify
 from tsw.importer.orchestrator_agent import run_import
 from tsw.ledger import Ledger
 from tsw.machine import guards
@@ -90,7 +90,7 @@ def test_every_class_is_imported_with_its_history(home: Home, tmp_path: Path) ->
     assert "T009" in report and "| T004 | done | done |" in report
     # The DN005 §6 checks the import can compute; item 6 needs a second run.
     for line in (
-        "| 1 | 任务总数与旧审计一致 | 通过 |",
+        "| 1 | 任务总数与各分类数与旧审计一致 | 通过 |",
         "| 2 | 事件卷按原字节复制，来源未改动 | 通过 |",
         "| 3 | 成果引用在数据目录内可解析 | 通过 |",
         "| 4 | 可 resume 任务的执行现场与记录一致 | 未通过 |",
@@ -337,6 +337,10 @@ def test_a_finished_local_task_is_renumbered_to_make_room(home: Home, tmp_path: 
     # A first import leaves both ids to the local tasks; T008 depends on the source's T001.
     first = run_import(home, ledger, snapshot)
     assert [c["task_id"] for c in first["conflicts"]] == ["T001", "T002"]
+    report_path = home.root / LEGACY / "import" / "report.md"
+    report = report_path.read_text(encoding="utf-8")
+    assert "| 1 | 任务总数与各分类数与旧审计一致 | 未通过 |" in report
+    assert "编号冲突、尚未导入：T001、T002" in report
     # The task still running cannot move; a new id must come after every imported id.
     with pytest.raises(TswError) as refused:
         run_import(home, ledger, snapshot, renumber_local=[("T002", "T012")])
@@ -373,11 +377,13 @@ def test_a_finished_local_task_is_renumbered_to_make_room(home: Home, tmp_path: 
     assert json.loads(read_set[0]["read_set"]) == ["T002", "T011"]
     deps = rows(ledger, "SELECT dep_id FROM dependencies WHERE task_id = 'T008'")
     assert deps == [{"dep_id": "T001"}]
-    # Running it again (renumbering included) appends nothing, and a rebuild agrees.
+    # The catch-up run wrote events, so it cannot itself show item 6; repeating it can.
+    assert "| 6 | 重复执行导入不产生新事件 | 需人工 |" in report_path.read_text(encoding="utf-8")
     after = types(ledger)
     assert after[before] == "task.renumbered"
     run_import(home, ledger, snapshot, renumber_local=[("T001", "T011")])
     assert types(ledger) == after
+    assert "| 6 | 重复执行导入不产生新事件 | 通过 |" in report_path.read_text(encoding="utf-8")
     query = "SELECT task_id, status, spec_path, version FROM tasks ORDER BY 1"
     projected = rows(ledger, query), rows(ledger, "SELECT * FROM attempts ORDER BY 1, 2")
     ledger.rebuild()
@@ -408,7 +414,9 @@ def test_an_import_that_lost_a_race_to_another_import_updates(
     assert seqs == [{"source_sequence": 5}]
 
 
-def test_the_recorded_execution_scene_is_compared_with_the_disk(tmp_path: Path) -> None:
+def test_the_recorded_execution_scene_is_compared_with_the_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = tmp_path / "wt"
     repo.mkdir()
 
@@ -442,9 +450,50 @@ def test_the_recorded_execution_scene_is_compared_with_the_disk(tmp_path: Path) 
     found = verify.scene({"worktree": str(repo), "branch": "other", "base_commit": "0" * 40})
     assert [f.split("：")[0] for f in found] == [
         "分支为 work，记录为 other",
-        f"记录的 base {'0' * 12} 不在当前 HEAD 的历史中",
+        f"记录的 base {'0' * 12} 在该仓库中不存在",
         "有未提交改动",
     ]
+    # A query git cannot answer is reported as unverified, never as agreement.
+    real_git = verify._git
+
+    def status_fails(directory: Path, *args: str) -> tuple[int, str, str]:
+        return (-1, "", "timed out") if args[0] == "status" else real_git(directory, *args)
+
+    monkeypatch.setattr(verify, "_git", status_fails)
+    unknown = verify.scene({"worktree": str(repo), "branch": "work", "base_commit": head})
+    assert unknown == [f"无法核实：{repo} 的未提交改动（timed out）"]
     assert verify.scene({"worktree": str(tmp_path / "gone")}) == [
         f"执行目录不存在：{tmp_path / 'gone'}"
     ]
+
+
+def test_a_renumbering_stopped_by_a_held_directory_is_finished_by_the_next_run(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = Harness(home)
+    h.register("T001", title="本地任务")
+    h.run("task_cancel", task_id="T001", user_source=h.source("T001", 1, "cancel"))
+    (home.root / "runs" / "T001" / "a1").mkdir(parents=True)
+    ledger = Ledger(home, machine="m1")
+    _, snapshot = build(tmp_path)
+    replace = Path.replace
+
+    def held(self: Path, target: Any) -> Path:
+        if self.name == "T001" and self.parent.name == "runs":
+            raise PermissionError("held by a scanner")
+        return replace(self, target)
+
+    def no_wait(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(renumber.time, "sleep", no_wait)
+    monkeypatch.setattr(Path, "replace", held)
+    with pytest.raises(TswError) as stopped:
+        run_import(home, ledger, snapshot, renumber_local=[("T001", "T011")])
+    assert stopped.value.details["reason"] == "renumber_move"
+    assert "task.renumbered" not in types(ledger)
+    assert (home.root / "runs" / "T001" / "a1").is_dir()  # nothing half-copied
+    monkeypatch.setattr(Path, "replace", replace)
+    run_import(home, ledger, snapshot, renumber_local=[("T001", "T011")])
+    assert (home.root / "runs" / "T011" / "a1").is_dir()
+    assert (home.root / "todo" / "T011.md").read_text(encoding="utf-8").startswith("### T011")
