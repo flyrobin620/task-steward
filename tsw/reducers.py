@@ -54,14 +54,18 @@ def _task_imported(conn: sqlite3.Connection, event: Event) -> None:
     if data.get("update"):  # a later snapshot of a task nobody has touched here since
         for table in ("tasks", "dependencies", "outputs", "imported_tasks"):
             conn.execute(f"DELETE FROM {table} WHERE task_id = ?", (task_id,))
+        conn.execute("DELETE FROM resource_claims WHERE owner_task = ?", (task_id,))
+        conn.execute(
+            "DELETE FROM input_requests WHERE task_id = ? AND kind = 'imported'", (task_id,)
+        )
     elif conn.execute("SELECT 1 FROM tasks WHERE task_id = ?", (task_id,)).fetchone():
         raise rejected("账本中同一任务被登记了两次", reason="ledger_inconsistent", task_id=task_id)
     when = data.get("last_activity") or event.time
     conn.execute(
         "INSERT INTO tasks(task_id, title, repo, kind, status, revision, version, spec_path, "
         "spec_sha256, registered_seq, last_activity, source_seq, goal, acceptance, pause, "
-        "attempt_count, previous_status, done_at, accepted_at, business_changed_at) "
-        "VALUES(?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "attempt_count, previous_status, done_at, accepted_at, business_changed_at, "
+        "resources, stale) VALUES(?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task_id,
             data["title"],
@@ -82,14 +86,43 @@ def _task_imported(conn: sqlite3.Connection, event: Event) -> None:
             data.get("done_at"),
             data.get("accepted_at"),
             when,
+            json.dumps(data.get("resources") or [], ensure_ascii=False),
+            1 if data.get("stale") else 0,
         ),
     )
+    for resource in data.get("held_resources") or []:
+        conn.execute(
+            "INSERT INTO resource_claims(resource, owner_task, status) VALUES(?, ?, 'held') "
+            "ON CONFLICT(resource, owner_task) DO UPDATE SET status = 'held'",
+            (str(resource), task_id),
+        )
+    request: dict[str, Any] | None = data.get("input_request")
+    if request:
+        conn.execute(
+            "INSERT OR REPLACE INTO input_requests(request_id, task_id, kind, status, question, "
+            "binding) VALUES(?, ?, 'imported', 'pending', ?, ?)",
+            (
+                request["request_id"],
+                task_id,
+                request["question"],
+                json.dumps(
+                    {"revision": event.revision or 1, "source": request.get("source")},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+            ),
+        )
     deps: list[dict[str, Any]] = data.get("dependencies") or []
     for dep in deps:
         conn.execute(
             "INSERT OR IGNORE INTO dependencies(task_id, dep_id, bound_revision, kind, reason) "
-            "VALUES(?, ?, 0, ?, 'imported')",
-            (task_id, dep["dep_id"], dep.get("kind") or "explicit"),
+            "VALUES(?, ?, ?, ?, 'imported')",
+            (
+                task_id,
+                dep["dep_id"],
+                int(dep.get("bound_revision") or 0),
+                dep.get("kind") or "explicit",
+            ),
         )
     outputs: list[dict[str, Any]] = data.get("outputs") or []
     for out in outputs:

@@ -32,8 +32,13 @@ def tasks() -> dict[str, dict[str, Any]]:
     return {
         "T001": {
             "status": "done",
-            "retirement": {"archived_at": "2026-10-09T00:00:00+00:00", "reason": "用户归档"},
+            "retirement": {
+                "archived_at": "2026-10-09T00:00:00+00:00",
+                "reason": "用户归档",
+                "retained_resources": ["res-kept"],
+            },
             "user_acceptance": accepted,
+            "outputs": [{"id": "report", "type": "report", "ref": "runs/T001/a1/result.html"}],
         },
         "T002": {"status": "cancelled"},
         "T003": {"status": "done", "user_acceptance": accepted},
@@ -48,10 +53,17 @@ def tasks() -> dict[str, dict[str, Any]]:
         "T005": {"status": "pending", "dependencies": ["T004"]},
         "T006": {
             "status": "paused",
+            "dependencies": ["T003"],
             "follow_up": {"owner": "主控", "next_action": "等外部", "resume_condition": "外部完成"},
+            "input_request": {"id": "req-1", "question": "要继续吗？", "status": "pending"},
+            "resources": ["res-paused"],
         },
         "T007": {"status": "running", "attempts": [{"number": 1}, {"number": 2}]},
         "T008": {"status": "failed"},
+        "T010": {
+            "status": "paused",
+            "retirement": {"archived_at": "2026-10-11T00:00:00+00:00", "reason": "用户关闭"},
+        },
     }
 
 
@@ -91,7 +103,12 @@ def build(root: Path, *, tail_events: int = 2) -> tuple[Path, Path]:
     keywords.mkdir(parents=True)
     (keywords / "k.json").write_text("{}", encoding="utf-8")
     full = {
-        tid: {"id": tid, "revision": 1, "definition": _definition(tid), **rec}
+        tid: {
+            "id": tid,
+            "revision": 1,
+            "definition": _definition(tid, resources=rec.pop("resources", [])),
+            **rec,
+        }
         for tid, rec in records.items()
     }
     derived = {
@@ -134,7 +151,7 @@ def build(root: Path, *, tail_events: int = 2) -> tuple[Path, Path]:
         ],
         "files": {
             "index": "TODO.md",
-            "todo": [f"todo/T00{i}.md" for i in range(1, 10)],
+            "todo": [f"todo/T{i:03d}.md" for i in range(1, 11)],
             "runs": ["T001", "T004"],
             "config": ["config/repositories.json"],
             "keywords": "metadata/task-keywords",

@@ -12,8 +12,10 @@ from tests.import_fixture import PR, build
 from tests.machine_harness import Harness
 from tsw.errors import TswError
 from tsw.home import Home
+from tsw.importer import orchestrator_agent as importer
 from tsw.importer.orchestrator_agent import run_import
 from tsw.ledger import Ledger
+from tsw.machine import guards
 from tsw.tasks import TaskSpec, next_task_id, note, register
 
 pytestmark = pytest.mark.use_case("UC-IMPORT-001")
@@ -34,7 +36,7 @@ def test_every_class_is_imported_with_its_history(home: Home, tmp_path: Path) ->
     ledger = Ledger(home)
     summary = run_import(home, ledger, snapshot)
     assert summary["classes"] == {
-        "archived": 1,
+        "archived": 2,
         "cancelled": 1,
         "accepted": 1,
         "done": 1,
@@ -42,7 +44,7 @@ def test_every_class_is_imported_with_its_history(home: Home, tmp_path: Path) ->
         "paused": 3,
     }
     assert summary["todo_only"] == ["T009"]
-    assert types(ledger) == ["import.started", *["import.task_imported"] * 8, "import.completed"]
+    assert types(ledger) == ["import.started", *["import.task_imported"] * 9, "import.completed"]
     tasks = {r["task_id"]: r for r in rows(ledger, "SELECT * FROM tasks")}
     assert tasks["T001"]["previous_status"] == "accepted"
     assert tasks["T003"]["accepted_at"] == "2026-10-01T00:00:00Z"
@@ -82,7 +84,7 @@ def test_every_class_is_imported_with_its_history(home: Home, tmp_path: Path) ->
         .startswith("<!doctype html>")
     )
     with ledger.view() as conn:
-        assert next_task_id(conn) == "T009"  # new tasks continue after the imported ones
+        assert next_task_id(conn) == "T011"  # new tasks continue after the imported ones
 
 
 def test_running_the_same_import_again_appends_nothing(home: Home, tmp_path: Path) -> None:
@@ -91,7 +93,7 @@ def test_running_the_same_import_again_appends_nothing(home: Home, tmp_path: Pat
     run_import(home, ledger, snapshot)
     before = types(ledger)
     again = run_import(home, ledger, snapshot)
-    assert (again["imported"], again["unchanged"]) == (0, 8)
+    assert (again["imported"], again["unchanged"]) == (0, 9)
     assert types(ledger) == before
 
 
@@ -107,7 +109,7 @@ def test_a_later_snapshot_updates_untouched_tasks_only(home: Home, tmp_path: Pat
     (second / "snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
     summary = run_import(home, ledger, second)
     assert [c["task_id"] for c in summary["conflicts"]] == ["T006"]
-    assert summary["imported"] == 7
+    assert summary["imported"] == 8
     seq = rows(ledger, "SELECT source_sequence FROM imported_tasks WHERE task_id = 'T005'")
     assert seq == [{"source_sequence": 5}]
 
@@ -132,7 +134,7 @@ def test_a_source_that_moved_after_the_export_is_refused(home: Home, tmp_path: P
     with (source / "runtime" / "events.jsonl").open("ab") as stream:
         stream.write(b'{"sequence": 5}\n')
     dry = run_import(home, Ledger(home), snapshot, dry_run=True)
-    assert dry["volume_problems"] and dry["tasks"] == 8
+    assert dry["volume_problems"] and dry["tasks"] == 9
     with pytest.raises(TswError) as stale:
         run_import(home, Ledger(home), snapshot)
     assert stale.value.details["reason"] == "snapshot_stale"
@@ -157,3 +159,112 @@ def test_imported_tasks_continue_in_the_state_machine(home: Home, tmp_path: Path
     for task_id in ("T001", "T003"):
         with pytest.raises(TswError):
             h.run("task_dispatch", task_id=task_id, workdir="w", user_turn=True)
+
+
+def test_snapshot_paths_and_ids_cannot_leave_the_data_directory(home: Home, tmp_path: Path) -> None:
+    _, snapshot_dir = build(tmp_path)
+    (tmp_path / "outside.txt").write_text("x", encoding="utf-8")
+    path = snapshot_dir / "snapshot.json"
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
+    snapshot["files"]["config"] = ["../outside.txt"]
+    snapshot["tasks"]["../T999"] = snapshot["tasks"].pop("T008")
+    path.write_text(json.dumps(snapshot), encoding="utf-8")
+    with pytest.raises(TswError) as unsafe:
+        run_import(home, Ledger(home), snapshot_dir)
+    assert unsafe.value.details["reason"] == "snapshot_path"
+    snapshot["files"]["config"] = []
+    path.write_text(json.dumps(snapshot), encoding="utf-8")
+    summary = run_import(home, Ledger(home), snapshot_dir)
+    assert summary["invalid_task_ids"] == ["../T999"]
+    assert not (home.root.parent / "T999").exists()
+
+
+def test_resources_dependencies_requests_and_references_carry_over(
+    home: Home, tmp_path: Path
+) -> None:
+    h = Harness(home)
+    _, snapshot = build(tmp_path)
+    run_import(home, Ledger(home, machine="m1"), snapshot)
+    claims = rows(
+        h.ledger, "SELECT resource, owner_task FROM resource_claims WHERE status = 'held'"
+    )
+    assert {(c["resource"], c["owner_task"]) for c in claims} == {
+        ("res-kept", "T001"),
+        ("res-paused", "T006"),
+    }
+    assert json.loads(h.task("T006")["resources"]) == ["res-paused"]
+    bound = rows(h.ledger, "SELECT bound_revision FROM dependencies WHERE task_id = 'T006'")
+    assert bound == [{"bound_revision": 1}]
+    with h.ledger.view() as conn:
+        assert guards.dependency_problems(conn, "T006") == []  # accepted T003 satisfies it
+        # Archived without finishing (T010 was paused) does not satisfy a dependency.
+        conn.execute(
+            "INSERT INTO dependencies(task_id, dep_id, bound_revision, kind, reason) "
+            "VALUES('T005', 'T010', 1, 'explicit', 'test')"
+        )
+        reasons = {p["dep_id"]: p["reason"] for p in guards.dependency_problems(conn, "T005")}
+        conn.rollback()
+    assert reasons["T010"] == "not_done"
+    ref = rows(h.ledger, "SELECT ref FROM outputs WHERE task_id = 'T001'")[0]["ref"]
+    assert ref == "legacy://orchestrator-agent/runs/T001/a1/result.html"
+    assert (home.root / LEGACY / "runs" / "T001" / "a1" / "result.html").is_file()
+    requests = rows(h.ledger, "SELECT request_id, kind, status FROM input_requests")
+    assert requests == [
+        {"request_id": "orchestrator-agent:req-1", "kind": "imported", "status": "pending"}
+    ]
+    source = h.source("T006", 1, "answer", "继续", request_id="orchestrator-agent:req-1")
+    h.run(
+        "input_resolve",
+        task_id="T006",
+        request_id="orchestrator-agent:req-1",
+        answer="继续",
+        user_source=source,
+    )
+    assert rows(h.ledger, "SELECT status FROM input_requests") == [{"status": "resolved"}]
+    assert h.status("T006") == "paused"
+
+
+def test_a_conflict_found_under_the_commit_lock_overwrites_nothing(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, first = build(tmp_path / "one")
+    ledger = Ledger(home)
+    run_import(home, ledger, first)
+    _, second = build(tmp_path / "two", tail_events=3)
+    spec = home.root / "todo" / "T006.md"
+    before = spec.read_bytes()
+    (tmp_path / "two" / "control" / "todo" / "T006.md").write_text("改过的任务书", encoding="utf-8")
+    staging = importer.stage
+
+    def stage_then_race(home_: Home, plan: Any, source: Path) -> Any:
+        staged = staging(home_, plan, source)
+        if plan.task_id == "T006":  # the new system writes to T006 after the import checked it
+            ledger.commit(note("T006", "并发备注", actor={"role": "cli"}))
+        return staged
+
+    monkeypatch.setattr(importer, "stage", stage_then_race)
+    summary = run_import(home, ledger, second)
+    assert {c["task_id"] for c in summary["conflicts"]} == {"T006"}
+    assert spec.read_bytes() == before
+
+
+def test_an_interrupted_import_is_completed_by_the_next_run(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, snapshot = build(tmp_path)
+    ledger = Ledger(home)
+    complete = importer._commit_completed
+
+    def crash(*_: Any) -> None:
+        raise RuntimeError("stopped after the last task")
+
+    monkeypatch.setattr(importer, "_commit_completed", crash)
+    with pytest.raises(RuntimeError):
+        run_import(home, ledger, snapshot)
+    assert "import.completed" not in types(ledger)
+    monkeypatch.setattr(importer, "_commit_completed", complete)
+    run_import(home, ledger, snapshot)
+    assert types(ledger).count("import.completed") == 1
+    before = types(ledger)
+    run_import(home, ledger, snapshot)
+    assert types(ledger) == before

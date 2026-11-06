@@ -280,6 +280,10 @@ def input_resolve(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                         },
                     )
                 )
+        elif request["kind"] == "imported":
+            # A question the source system was still waiting on: record the answer; the task
+            # moves on through its own transitions (resume, dispatch) afterwards.
+            data["imported"] = True
         else:
             raise rejected("该请求需要专门的工具处理", reason="request_kind", kind=request["kind"])
         return [

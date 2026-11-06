@@ -27,6 +27,8 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import os
+import re
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -47,6 +49,7 @@ ACTOR = {"role": "cli", "op": "import"}
 LEGACY = f"legacy/{SYSTEM}"
 VOLUMES = f"ledger/imported/{SYSTEM}"
 KINDS = {"research": "research", "design": "design", "code": "code"}
+TASK_ID = re.compile(r"T[0-9]{1,6}")
 # Old statuses that were still running when the source stopped: handed over (DN005 §3 rule 7).
 ACTIVE = frozenset({"starting", "running", "waiting_user", "review", "integrating", "conflict"})
 READ_ONLY = frozenset({"archived", "accepted", "cancelled"})
@@ -86,6 +89,21 @@ def load_snapshot(directory: Path) -> tuple[dict[str, Any], str]:
     return snapshot, sha256_hex(raw)
 
 
+def safe_rel(value: Any) -> str:
+    """A relative path from the snapshot; refuses absolute paths, drives and ``..``."""
+    text = str(value or "").replace("\\", "/")
+    parts = [p for p in text.split("/") if p not in ("", ".")]
+    if not parts or text.startswith("/") or ":" in text or ".." in parts:
+        raise rejected("快照中的路径不安全", reason="snapshot_path", path=str(value))
+    return "/".join(parts)
+
+
+def inside(path: Path, base: Path) -> bool:
+    target = os.path.normcase(os.path.realpath(path))
+    root = os.path.normcase(os.path.realpath(base))
+    return target == root or target.startswith(root.rstrip("\\/") + os.sep)
+
+
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -98,7 +116,7 @@ def check_volumes(source: Path, snapshot: Mapping[str, Any]) -> list[str]:
     """Problems with the source's event volumes compared with the snapshot (DN005 §6 item 2)."""
     problems: list[str] = []
     for volume in snapshot.get("volumes") or []:
-        path = source / str(volume["path"])
+        path = source / safe_rel(volume["path"])
         if not path.is_file():
             problems.append(f"缺少事件卷 {volume['path']}")
         elif path.stat().st_size != volume["bytes"] or _file_sha256(path) != volume["sha256"]:
@@ -135,6 +153,7 @@ def _pause(task: Mapping[str, Any], rule: int) -> dict[str, Any] | None:
             "next_action": "核实旧 worker 已停止并交接",
             "resume_condition": "有旧 worker 停止证据或用户确认",
             "imported": True,
+            "source_input_request": task.get("input_request"),
         }
     if rule != 6:
         return None
@@ -225,12 +244,43 @@ def _outputs(task: Mapping[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _local_ref(task_id: str, ref: Any, read_only: bool) -> Any:
+    """A result reference of the source, as it resolves after the import (DN005 §4.2 step 6)."""
+    if not isinstance(ref, str) or not ref.startswith(f"runs/{task_id}/") or not read_only:
+        return ref
+    return f"legacy://{SYSTEM}/{ref}"
+
+
+def resolve_ref(home: Home, ref: str) -> Path | None:
+    """Where a ``runs/`` or ``legacy://`` reference lives in the data directory."""
+    if ref.startswith("legacy://"):
+        system, _, rest = ref[len("legacy://") :].partition("/")
+        return home.root / "legacy" / system / rest
+    if ref.startswith("runs/"):
+        return home.root / ref
+    return None
+
+
+def _open_request(task: Mapping[str, Any]) -> dict[str, Any] | None:
+    request = task.get("input_request")
+    if not isinstance(request, dict) or request.get("status") in ("resolved", "cancelled"):
+        return None
+    if not request.get("id") or not request.get("question"):
+        return None
+    return {
+        "request_id": f"{SYSTEM}:{request['id']}",
+        "question": str(request["question"]),
+        "source": dict(request),
+    }
+
+
 def plan_task(
     task_id: str,
     task: Mapping[str, Any],
     derived: Mapping[str, Any],
     *,
     source: Path,
+    revisions: Mapping[str, int] | None = None,
 ) -> Planned:
     definition: Mapping[str, Any] = task.get("definition") or {}
     new_status, rule = classify(task, derived)
@@ -263,11 +313,32 @@ def plan_task(
         "attempt_count": len(task.get("attempts") or []),
         "pause": _pause(task, rule),
         "dependencies": [
-            {"dep_id": str(d), "kind": "explicit"}
+            {
+                "dep_id": str(d),
+                "kind": "explicit",
+                # Bound to the upstream revision the source last saw; the source's own stale
+                # flag says whether that upstream changed since (DN002 G-DEP).
+                "bound_revision": int((revisions or {}).get(str(d), 0)),
+            }
             for d in (task.get("dependencies") or [])
             if isinstance(d, str)
         ],
-        "outputs": _outputs(task),
+        "stale": bool(task.get("stale")),
+        "resources": [str(r) for r in definition.get("resources") or []],
+        # Resources a retired task still holds, and the resources a paused task keeps
+        # (DN002 T14), stay claimed until there is evidence they were released.
+        "held_resources": sorted(
+            {str(r) for r in retirement.get("retained_resources") or []}
+            | (
+                {str(r) for r in definition.get("resources") or []}
+                if new_status == "paused"
+                else set()
+            )
+        ),
+        "input_request": None if read_only else _open_request(task),
+        "outputs": [
+            {**out, "ref": _local_ref(task_id, out["ref"], read_only)} for out in _outputs(task)
+        ],
         "runs": runs_rel if (source / "runs" / task_id).is_dir() else None,
         "legacy": {
             "revision": task.get("revision"),
@@ -291,6 +362,44 @@ def plan_task(
     return Planned(task_id, str(task.get("status")), new_status, rule, data, files)
 
 
+def stage(home: Home, plan: Planned, source: Path) -> list[tuple[Path, str]]:
+    """Copy a task's files to a private staging area; nothing in the data directory changes.
+
+    They are published under the commit lock by the task's command, after the conflict checks
+    (:func:`_task_imported`), so a refused import never overwrites anything.
+    """
+    area = home.root / "cache" / "import-staging" / plan.task_id
+    if area.exists():
+        shutil.rmtree(area)
+    staged: list[tuple[Path, str]] = []
+    for index, (src, rel) in enumerate(plan.files):
+        if not inside(src, source):
+            raise rejected("来源文件越出来源目录", reason="snapshot_path", path=str(src))
+        target = area / str(index)
+        if src.is_dir():
+            shutil.copytree(src, target, symlinks=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, target)
+        staged.append((target, rel))
+    spec = next((p for p, rel in staged if rel == plan.data["spec_path"]), None)
+    plan.data["spec_sha256"] = _file_sha256(spec) if spec is not None else None
+    return staged
+
+
+def publish(home: Home, staged: list[tuple[Path, str]]) -> None:
+    for path, rel in staged:
+        target = home.root / rel
+        if not inside(target.parent if target.parent.exists() else home.root, home.root):
+            raise rejected("导入目标越出数据目录", reason="snapshot_path", path=rel)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+        os.replace(path, target)
+
+
 # ---------------------------------------------------------------------- import
 
 
@@ -305,6 +414,7 @@ class Report:
     todo_only: list[str] = field(default_factory=lambda: [])
     missing_files: list[str] = field(default_factory=lambda: [])
     volume_problems: list[str] = field(default_factory=lambda: [])
+    invalid: list[str] = field(default_factory=lambda: [])
     dry_run: bool = False
 
     def counts(self) -> dict[str, int]:
@@ -325,6 +435,7 @@ class Report:
             "todo_only": self.todo_only,
             "missing_files": self.missing_files,
             "volume_problems": self.volume_problems,
+            "invalid_task_ids": self.invalid,
         }
 
 
@@ -344,10 +455,20 @@ def run_import(
             problems=report.volume_problems,
         )
     derived: Mapping[str, Any] = snapshot.get("derived") or {}
-    for task_id in sorted(snapshot["tasks"], key=_task_number):
+    revisions = {
+        str(tid): int(task.get("revision") or 1) for tid, task in snapshot["tasks"].items()
+    }
+    for task_id in sorted(snapshot["tasks"], key=lambda t: _task_number(str(t))):
+        if not TASK_ID.fullmatch(str(task_id)):
+            report.invalid.append(str(task_id))
+            continue
         report.planned.append(
             plan_task(
-                task_id, snapshot["tasks"][task_id], derived.get(task_id) or {}, source=source
+                task_id,
+                snapshot["tasks"][task_id],
+                derived.get(task_id) or {},
+                source=source,
+                revisions=revisions,
             )
         )
     known = {p.task_id for p in report.planned}
@@ -389,29 +510,50 @@ def run_import(
         return report.summary()
     storage = ledger.storage
     assert isinstance(storage, FsStorage)
-    if not todo:  # nothing new in the source: no events at all (DN005 §6 item 6)
+    batch = _batch(ledger, last_seq)
+    if not todo and batch == "completed":  # nothing new: no events at all (DN005 §6 item 6)
+        report.missing_files = _unresolved_refs(home, report.planned)
         with storage.writer():
             _write_report(home, report)
         return report.summary()
-    assert isinstance(storage, FsStorage)
     with storage.writer():
         _copy_volumes(home, source, snapshot)
         _copy_legacy(home, source, snapshot, snapshot_dir)
     _commit_started(ledger, snapshot, snapshot_sha, last_seq)
     for plan in todo:
         with storage.writer():
-            for src, rel in plan.files:
-                if not _copy(home, src, rel):
-                    report.missing_files.append(rel)
-        spec = home.root / plan.data["spec_path"]
-        plan.data["spec_sha256"] = _file_sha256(spec) if spec.is_file() else None
-        result = ledger.commit(_task_imported(plan, last_seq))
-        (report.unchanged if result.duplicate else report.imported).append(plan.task_id)
-    report.missing_files += _unresolved_refs(home, report.planned)
+            staged = stage(home, plan, source)
+        try:
+            result = ledger.commit(_task_imported(home, plan, staged, last_seq))
+        except TswError as exc:
+            if exc.details.get("reason") != "import_conflict":
+                raise
+            report.conflicts.append(
+                {"task_id": plan.task_id, "reason": "导入时发现新系统中的事件，不覆盖"}
+            )
+            continue
+        if result.duplicate or not result.events:
+            report.unchanged.append(plan.task_id)
+        else:
+            report.imported.append(plan.task_id)
+    report.missing_files = _unresolved_refs(home, report.planned)
     _commit_completed(ledger, report, last_seq)
     with storage.writer():
+        shutil.rmtree(home.root / "cache" / "import-staging", ignore_errors=True)
         _write_report(home, report)
     return report.summary()
+
+
+def _batch(ledger: Ledger, last_seq: int) -> str | None:
+    """How far an import of this source sequence got: None, "started" or "completed"."""
+    state: str | None = None
+    for event in ledger.storage.read(since=0):
+        if event.type in ("import.started", "import.completed") and (
+            event.data.get("source_sequence", (event.data.get("source") or {}).get("last_sequence"))
+            == last_seq
+        ):
+            state = "completed" if event.type == "import.completed" else state or "started"
+    return state
 
 
 def _task_number(task_id: str) -> int:
@@ -424,7 +566,7 @@ def _copy(home: Home, src: Path, rel: str) -> bool:
     if not src.exists():
         return False
     if src.is_dir():
-        shutil.copytree(src, target, dirs_exist_ok=True)
+        shutil.copytree(src, target, dirs_exist_ok=True, symlinks=True)
     else:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, target)
@@ -466,30 +608,30 @@ def _copy_legacy(home: Home, source: Path, snapshot: Mapping[str, Any], snapshot
     files = snapshot.get("files") or {}
     legacy = home.root / LEGACY
     legacy.mkdir(parents=True, exist_ok=True)
-    for rel in [files.get("index"), *(files.get("config") or [])]:
-        if rel and (source / rel).is_file():
+    for given in [files.get("index"), *(files.get("config") or []), files.get("keywords")]:
+        if not given:
+            continue
+        rel = safe_rel(given)
+        if inside(source / rel, source) and (source / rel).exists():
             _copy(home, source / rel, f"{LEGACY}/{rel}")
-    if files.get("keywords") and (source / files["keywords"]).is_dir():
-        _copy(home, source / files["keywords"], f"{LEGACY}/{files['keywords']}")
     imports = home.root / LEGACY / "import"
     imports.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(snapshot_dir / "snapshot.json", imports / "snapshot.json")
 
 
 def _unresolved_refs(home: Home, planned: list[Planned]) -> list[str]:
-    """Recorded reports that do not resolve inside the data directory (DN005 §6 item 3)."""
+    """Result references that do not resolve inside the data directory (DN005 §6 item 3)."""
     missing: list[str] = []
     for plan in planned:
-        if not plan.data["runs"]:
-            continue
-        for key in ("worker_report", "review_report"):
-            ref = plan.data["legacy"].get(key)
-            if not isinstance(ref, str) or not ref.startswith(f"runs/{plan.task_id}/"):
-                continue
-            local = plan.data["runs"] + ref[len(f"runs/{plan.task_id}") :]
-            if not (home.root / local).exists():
-                missing.append(local)
-    return missing
+        read_only = not plan.resumable
+        refs = [plan.data["legacy"].get(k) for k in ("worker_report", "review_report")]
+        refs += [o["ref"] for o in plan.data["outputs"]]
+        for ref in refs:
+            local = _local_ref(plan.task_id, ref, read_only)
+            path = resolve_ref(home, local) if isinstance(local, str) else None
+            if path is not None and not path.exists():
+                missing.append(str(local))
+    return sorted(set(missing))
 
 
 # ---------------------------------------------------------------------- events
@@ -519,17 +661,23 @@ def _commit_started(ledger: Ledger, snapshot: Mapping[str, Any], sha: str, last_
     )
 
 
-def _task_imported(plan: Planned, last_seq: int) -> Command:
+def _task_imported(
+    home: Home, plan: Planned, staged: list[tuple[Path, str]], last_seq: int
+) -> Command:
+    """The task's event; its files are published here, under the commit lock, after the checks."""
     data = {**plan.data, "source_sequence": last_seq}
 
     def build(ctx: CommitContext) -> list[EventDraft]:
         row = ctx.conn.execute(
-            "SELECT t.version, i.event_seq FROM tasks t "
+            "SELECT t.version, i.event_seq, i.source_sequence FROM tasks t "
             "LEFT JOIN imported_tasks i ON i.task_id = t.task_id WHERE t.task_id = ?",
             (plan.task_id,),
         ).fetchone()
         if row is not None and (row["event_seq"] is None or int(row["version"]) != 1):
             raise rejected("任务已在新系统中有自己的事件，不覆盖", reason="import_conflict")
+        if row is not None and int(row["source_sequence"]) >= last_seq:
+            return []  # an import of the same or a later snapshot got here first
+        publish(home, staged)
         return [
             EventDraft(
                 type="import.task_imported",
