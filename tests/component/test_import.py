@@ -91,6 +91,11 @@ def test_every_class_is_imported_with_its_history(home: Home, tmp_path: Path) ->
     )
     with ledger.view() as conn:
         assert next_task_id(conn) == "T011"  # new tasks continue after the imported ones
+    # The STATUS page shows the imported PRs and outputs as links (DN005 §6 item 5).
+    page = (home.root / "views" / "STATUS.html").read_text(encoding="utf-8")
+    assert f'<a href="{PR}">PR #7</a>' in page
+    assert '<a href="../runs/T004/a1/result.html">report</a>' in page
+    assert "2026-10-04T12:00:00Z" in page
 
 
 def test_running_the_same_import_again_appends_nothing(home: Home, tmp_path: Path) -> None:

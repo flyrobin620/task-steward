@@ -46,8 +46,39 @@ def _e(value: Any) -> str:
     return html.escape("" if value is None else str(value))
 
 
+def _href(ref: str) -> str | None:
+    """A link for an output reference, relative to ``views/``; None when it is not a location."""
+    if ref.startswith(("https://", "http://")):
+        return ref
+    if ref.startswith("legacy://"):
+        return "../legacy/" + ref[len("legacy://") :]
+    if ref.startswith("runs/"):
+        return "../" + ref
+    return None
+
+
+def _outputs(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    """PR links and registered outputs per task, PRs first."""
+    out: dict[str, list[str]] = {}
+    for r in conn.execute(
+        "SELECT task_id, output_id, type, ref, delivery FROM outputs "
+        "ORDER BY task_id, type != 'pr', output_id"
+    ):
+        ref = str(r["ref"])
+        label = ref.rsplit("/", 2)[-1] if r["type"] == "pr" and "/pull/" in ref else r["output_id"]
+        label = f"PR #{label}" if r["type"] == "pr" and str(label).isdigit() else str(label)
+        if r["delivery"]:
+            label += f"（{r['delivery']}）"
+        href = _href(ref)
+        out.setdefault(str(r["task_id"]), []).append(
+            f'<a href="{_e(href)}">{_e(label)}</a>' if href else _e(label)
+        )
+    return out
+
+
 def render(conn: sqlite3.Connection) -> str:
     tasks = [dict(r) for r in conn.execute("SELECT * FROM tasks ORDER BY registered_seq")]
+    outputs = _outputs(conn)
     meta = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM meta")}
     lease = conn.execute("SELECT * FROM leases WHERE name = 'scheduler'").fetchone()
     attempts = {
@@ -91,7 +122,9 @@ def render(conn: sqlite3.Connection) -> str:
             f"{' · ' + _e(row['substate']) if row['substate'] else ''}</td>"
             f"<td>{_e(row['revision'])}</td>"
             f"<td>{_e(row['current_attempt'] or '')}{' · ' + _e(phase) if phase else ''}</td>"
-            f"<td>{_e(row['last_activity'])}</td><td>{'<br>'.join(_e(n) for n in notes)}</td></tr>"
+            f"<td>{_e(row['last_activity'])}</td>"
+            f"<td>{'<br>'.join(outputs.get(row['task_id'], []))}</td>"
+            f"<td>{'<br>'.join(_e(n) for n in notes)}</td></tr>"
         )
     judgments = conn.execute(
         "SELECT COUNT(*) AS n FROM judgments WHERE status = 'open'"
@@ -123,8 +156,8 @@ def render(conn: sqlite3.Connection) -> str:
 <p class="meta">账本序号 {_e(meta.get("projected_seq", "0"))} · 最近记录 {_e(last)} · {lease_text}</p>
 <div class="cards">{"".join(f'<div class="card"><b>{n}</b>{_e(label)}</div>' for label, n in cards)}</div>
 <h2>任务</h2>
-<table><thead><tr><th>任务</th><th>标题</th><th>仓库</th><th>类型</th><th>状态</th><th>revision</th><th>attempt</th><th>最近记录</th><th>说明</th></tr></thead>
-<tbody>{"".join(rows) or '<tr><td colspan="9">没有任务</td></tr>'}</tbody></table>
+<table><thead><tr><th>任务</th><th>标题</th><th>仓库</th><th>类型</th><th>状态</th><th>revision</th><th>attempt</th><th>最近记录</th><th>PR 与产出</th><th>说明</th></tr></thead>
+<tbody>{"".join(rows) or '<tr><td colspan="10">没有任务</td></tr>'}</tbody></table>
 <p class="meta">本页由 tsw 根据账本生成，请勿手工编辑；已归档任务不在此列出（{archived} 个）。</p>
 </body>
 </html>
