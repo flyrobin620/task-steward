@@ -246,7 +246,12 @@ def merge_problem(
     api_path = re.compile(rf"/?repos/{re.escape(own)}/pulls/\d+/merge", re.I)
     words = [a for a in args if not a.startswith("-")]
     is_api = bool(words) and words[0].lower() == "api"
+    # gh resolves a bare owner/name and the REST API against github.com; any other host must be
+    # named (``-R HOST/OWNER/NAME``, ``--hostname HOST`` or a PR link on that host).
+    default_site = site == "github.com"
+    host_named = False
     confirmed: list[str] = []
+    api_paths: list[str] = []
     stray: list[str] = []
     skip_value = False
     for i, arg in enumerate(args):
@@ -268,27 +273,36 @@ def merge_problem(
             )
             skip_value = "=" not in arg
             if arg.startswith("--hostname"):
-                if value.lower() != site:
+                if value.lower() == site:
+                    host_named = True
+                else:
                     stray.append(value)
-            elif value.lower() in (own, f"{site}/{own}"):
+            elif value.lower() == f"{site}/{own}" or (value.lower() == own and default_site):
                 confirmed.append(value)
             else:
                 stray.append(value)
             continue
         if "/" not in arg and ":" not in arg:
             continue
-        if (pr_link.fullmatch(arg) and not is_api) or (is_api and api_path.fullmatch(arg)):
-            confirmed.append(arg)
+        if pr_link.fullmatch(arg) and not is_api:
+            confirmed.append(arg)  # a link carries its host
+            continue
+        if is_api and api_path.fullmatch(arg):
+            api_paths.append(arg)
             continue
         stray.append(arg)
+    if is_api and api_paths and (default_site or host_named):
+        # gh api goes to github.com unless --hostname says otherwise.
+        confirmed.extend(api_paths)
     if stray:
         return f"只能合并本任务仓库（{repository}）的 PR；无法确认的目标：{', '.join(stray)}"
-    if is_api and not any(api_path.fullmatch(c) for c in confirmed):
-        return "只能用 gh pr merge 或 REST 合并接口（repos/<owner>/<name>/pulls/<n>/merge）合并"
-    if not confirmed:
-        return (
-            f"合并须明确指向本任务仓库：gh pr merge <编号> -R {repository}，或使用该仓库的 PR 链接"
+    if is_api and not confirmed:
+        return "只能用 gh pr merge 或 REST 合并接口（repos/<owner>/<name>/pulls/<n>/merge）合并" + (
+            "" if default_site else f"，并带 --hostname {site}"
         )
+    if not confirmed:
+        target = repository if default_site else f"{site}/{repository}"
+        return f"合并须明确指向本任务仓库：gh pr merge <编号> -R {target}，或使用该仓库的 PR 链接"
     return None
 
 

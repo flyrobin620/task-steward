@@ -138,3 +138,33 @@ def test_a_worker_merges_only_its_own_repository_with_the_authorization(
         worker=True,
     )
     assert (problem is None) is allowed, problem
+
+
+@pytest.mark.use_case("UC-MERGE-001")
+@pytest.mark.parametrize(
+    ("command", "allowed"),
+    [
+        ("gh api -X PUT repos/example/demo/pulls/3/merge", False),
+        ("gh api --hostname ghe.example.org -X PUT repos/example/demo/pulls/3/merge", True),
+        ("gh api --hostname github.com -X PUT repos/example/demo/pulls/3/merge", False),
+        ("gh pr merge 3 -R example/demo", False),
+        ("gh pr merge 3 -R ghe.example.org/example/demo", True),
+        ("gh pr merge https://ghe.example.org/example/demo/pull/3", True),
+        ("gh pr merge https://github.com/example/demo/pull/3", False),
+    ],
+)
+def test_a_repository_on_another_host_must_be_named_with_its_host(
+    tmp_path: Path, command: str, allowed: bool
+) -> None:
+    home = Home(tmp_path / "home")
+    problem = bash_problem(
+        command,
+        home=home,
+        push_allowed=True,
+        pr_allowed=True,
+        merge_allowed=True,
+        merge_repository="example/demo",
+        merge_host="ghe.example.org",
+        worker=True,
+    )
+    assert (problem is None) is allowed, problem
