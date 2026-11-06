@@ -23,9 +23,9 @@ from tsw import __version__, lease
 from tsw.config import EffectiveConfig, load_config
 from tsw.errors import ErrorCode, TswError, rejected
 from tsw.events import utc_now
-from tsw.home import Home, open_home
+from tsw.home import Home, open_home, workdir_path
 from tsw.host import inbox as inbox_mod
-from tsw.host.identity import Identity, resolve, within, workdir_path
+from tsw.host.identity import Identity, resolve, within
 from tsw.ledger import Ledger
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.model import loads, row_dict, task

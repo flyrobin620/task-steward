@@ -6,7 +6,6 @@ acceptance and cancellation (DN002 §3.2, §5; DN006 §8.3)."""
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from collections.abc import Mapping
 from typing import Any
@@ -14,6 +13,7 @@ from typing import Any
 from tsw.commands import Command, CommitContext
 from tsw.errors import rejected
 from tsw.events import EventDraft, digest
+from tsw.home import same_dir
 from tsw.machine import guards
 from tsw.machine.base import (
     ToolEnv,
@@ -458,7 +458,7 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 )
             attempt_id = str(previous["attempt"])
             mode = "standby" if previous["phase"] == "standby" else "continue"
-            if previous["workdir"] and not _same_dir(workdir, str(previous["workdir"])):
+            if previous["workdir"] and not same_dir(ctx.home, workdir, str(previous["workdir"])):
                 raise rejected(
                     "已有会话在另一个执行目录中，派发要沿用该目录",
                     reason="workdir_mismatch",
@@ -529,7 +529,7 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
     purpose = text(inp, "purpose")
     user_turn = flag(inp, "user_turn")
-    workdir = opt_text(inp, "workdir")  # where the session is created (required for prestart)
+    given_workdir = opt_text(inp, "workdir")  # where the session is created
     if purpose not in ("dispatch", "prestart"):
         raise rejected(
             "purpose 必须是 dispatch 或 prestart", reason="invalid_input", field="purpose"
@@ -544,7 +544,11 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             if current is None or current["phase"] != "planned":
                 raise rejected("派发中的 attempt 必须处于 planned", reason="invalid_attempt")
             attempt_id = str(current["attempt"])
-            if workdir and current["workdir"] and not _same_dir(workdir, str(current["workdir"])):
+            if (
+                given_workdir
+                and current["workdir"]
+                and not same_dir(ctx.home, given_workdir, str(current["workdir"]))
+            ):
                 raise rejected(
                     "会话目录必须是派发时记录的执行目录",
                     reason="workdir_mismatch",
@@ -571,6 +575,9 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 )
         guards.g_one_attempt(ctx.conn, task_id, allowed=None)
         previous = attempt(ctx.conn, task_id, attempt_id)
+        # Every prestart generation records its directory, the default included, so a retry
+        # never inherits the directory of a generation that was not created.
+        workdir = given_workdir or f"work/{task_id}/{attempt_id}"
         generation = (int(previous["generation"]) if previous else 0) + 1
         return [
             EventDraft(
@@ -591,10 +598,6 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         ]
 
     return _cmd(env, "attempt_start", inp, build)
-
-
-def _same_dir(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
 @tool("attempt_reconcile", "orchestrator", description="会话创建结果对账（T08 / T09 / 迟到会话）")

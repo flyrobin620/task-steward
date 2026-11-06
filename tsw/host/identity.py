@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from tsw.home import Home
+from tsw.home import Home, workdir_path
 from tsw.machine.model import row_dict
 
 SESSION_ENV = "CLAUDE_CODE_HOST_SESSION_ID"
@@ -43,12 +43,6 @@ HOST_CLI_COMMANDS = frozenset(
 
 def _norm(path: Path) -> str:
     return os.path.normcase(str(path.expanduser().resolve()))
-
-
-def workdir_path(home: Home, recorded: str) -> Path:
-    """An execution directory as recorded in the ledger; relative ones are in the data directory."""
-    path = Path(recorded).expanduser()
-    return path if path.is_absolute() else home.root / path
 
 
 def within(path: Path, root: Path) -> bool:

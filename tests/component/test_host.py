@@ -597,3 +597,55 @@ def test_default_and_home_relative_execution_directories_are_recognised(h: Harne
     relative.mkdir(parents=True)
     who = Server(h.home, {SESSION_ENV: "w-2"}, relative).identity()
     assert (who.pending, who.task_id) == (True, "T002")
+
+
+@mark.use_case("UC-HOST-001")
+def test_a_prestart_retry_without_a_directory_uses_the_default(h: Harness, tmp_path: Path) -> None:
+    h.register("T001")
+    h.plan("T001")
+    first = h.run(
+        "attempt_start",
+        task_id="T001",
+        purpose="prestart",
+        user_turn=True,
+        workdir=str(tmp_path / "custom"),
+    )
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=first["events"][0]["data"]["generation"],
+        outcome="not_created",
+    )
+    again = h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    default = h.home.root / "work" / "T001" / "a1"
+    default.mkdir(parents=True)
+    assert Server(h.home, {SESSION_ENV: "w-1"}, default).identity().pending
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=again["events"][0]["data"]["generation"],
+        outcome="created",
+        session_ref="w-1",
+    )
+    h.run("task_dispatch", task_id="T001", workdir=str(default))  # same place, absolute form
+    assert Server(h.home, {SESSION_ENV: "w-1"}, default).identity().role == "worker"
+
+
+@mark.use_case("UC-HOST-001")
+def test_relative_and_absolute_forms_name_the_same_directory(h: Harness) -> None:
+    h.register("T001")
+    h.plan("T001")
+    started = h.run(
+        "attempt_start", task_id="T001", purpose="prestart", user_turn=True, workdir="work/wt"
+    )
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=started["events"][0]["data"]["generation"],
+        outcome="created",
+        session_ref="w-1",
+    )
+    h.run("task_dispatch", task_id="T001", workdir=str(h.home.root / "work" / "wt"))

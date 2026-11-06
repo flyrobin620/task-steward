@@ -39,6 +39,21 @@ LAYOUT = (
 BACKED_UP = ("ledger", "runs", "todo", "config", "outbox", "legacy")
 
 
+def workdir_path(home: Home, recorded: str) -> Path:
+    """An execution directory as recorded in the ledger; relative ones are in the data directory."""
+    path = Path(recorded).expanduser()
+    return path if path.is_absolute() else home.root / path
+
+
+def same_dir(home: Home, a: str, b: str) -> bool:
+    """Whether two recorded execution directories name the same place."""
+
+    def key(value: str) -> str:
+        return os.path.normcase(os.path.normpath(str(workdir_path(home, value))))
+
+    return key(a) == key(b)
+
+
 def resolve_home(env: Mapping[str, str] | None = None, repo_root: Path | None = None) -> Path:
     environ = os.environ if env is None else env
     explicit = environ.get("TSW_HOME")
