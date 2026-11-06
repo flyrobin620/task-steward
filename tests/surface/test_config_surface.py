@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -146,3 +148,68 @@ def test_maintenance_tools_over_stdio(home: Path, tmp_path: Path) -> None:
     assert payload(replies[4])["ok"] is True
     assert payload(replies[5])["kind"] == "ledger_rebuild"
     assert payload(replies[6])["details"]["reason"] == "g_user"
+
+
+@pytest.mark.use_case("UC-CONFIG-002")
+def test_a_broken_configuration_is_repaired_over_mcp_and_the_cli(home: Path) -> None:
+    config_file = home / "config" / "task-steward.json"
+    config_file.write_text("{ broken", encoding="utf-8")
+    good = {"version": 1, "repositories": {"demo": {"path": "~/src/demo"}}}
+    words = {
+        "channel": "main-session",
+        "principal": "owner",
+        "message_ref": "orch-9:msg-fix",
+        "text": "按原样修好",
+        "target": ["config", hashlib.sha256(b"{ broken").hexdigest(), "authorize"],
+    }
+    replies = by_id(
+        mcp(
+            home,
+            home,
+            "orch-9",
+            INIT,
+            NOTE,
+            call(1, "lease_acquire"),
+            call(2, "task_list"),
+            call(
+                3,
+                "config_change",
+                ops=[{"op": "set", "path": "", "value": good}],
+                reason="修复",
+                user_source=words,
+            ),
+            call(4, "config_show"),
+        )
+    )
+    assert "expires_at" in payload(replies[1])
+    assert payload(replies[3])["events"][0]["data"]["change_id"] == "C001"
+    assert payload(replies[4])["valid"] is True
+
+    # The command line (outside a host session) repairs the same way.
+    config_file.write_text("{ broken again", encoding="utf-8")
+    words = {
+        **words,
+        "message_ref": "cli:msg-fix",
+        "target": ["config", hashlib.sha256(b"{ broken again").hexdigest(), "authorize"],
+    }
+    inp = {
+        "ops": [{"op": "set", "path": "", "value": good}],
+        "reason": "修复",
+        "user_source": words,
+    }
+    code, out = run_json(
+        "tool",
+        "run",
+        "config_change",
+        "--input",
+        json.dumps(inp, ensure_ascii=False),
+        "--role",
+        "orchestrator",
+        "--session",
+        "orch-9",
+        "--machine",
+        socket.gethostname(),
+    )
+    assert code == 0, out
+    assert out["events"][0]["data"]["change_id"] == "C002"
+    assert json.loads(config_file.read_text(encoding="utf-8")) == good

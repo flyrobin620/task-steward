@@ -8,11 +8,12 @@ and a dry run with the same arguments. ``restore``, ``quiesce`` / ``resume-write
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from tsw.commands import Command, CommitContext
+from tsw import confedit
+from tsw.commands import Command, CommitContext, CommitResult
 from tsw.errors import rejected
 from tsw.events import EventDraft, digest, utc_now
 from tsw.home import Home
@@ -119,40 +120,99 @@ class Maintenance:
                 "summary": {k: v for k, v in result.items() if isinstance(v, (int, str, bool))},
             }
             return {**result, "params_digest": params_digest, "sequence": self._record(record)}
-        verified_source(
+        source = verified_source(
             args.get("user_source") if isinstance(args.get("user_source"), Mapping) else None,
             ["import", IMPORT_SOURCE, "authorize"],
             channels=CONFIG_CHANNELS,
             mismatch="正式导入须附用户原话："
             'target 为 ["import", "orchestrator-agent", "authorize"]',
         )
-        if not self._dry_run_since_last_import(params_digest):
+
+        def authorize() -> None:
+            # Runs under the import lock, before anything is imported: the dry run and the
+            # user's words are checked against the ledger as it is now, then recorded.
+            self.ledger.commit(
+                Command(
+                    actor=self.actor,
+                    input={"op": "import_authorized", "params_digest": params_digest},
+                    build=lambda ctx: self._authorize_import(ctx, params, params_digest, source),
+                )
+            )
+
+        return run_import(
+            self.home,
+            _LeaseGuarded(self.ledger, self._lease_guard),
+            snapshot_dir,
+            dry_run=False,
+            renumber_local=pairs,
+            exclude=exclude,
+            on_locked=authorize,
+        )
+
+    def _lease_guard(self, ctx: CommitContext) -> None:
+        if not self.session_id:
+            raise rejected("主会话工具需要会话 ID", reason="lease_missing")
+        require_lease(ctx.conn, self.session_id, self.machine, ctx.now)
+
+    def _authorize_import(
+        self,
+        ctx: CommitContext,
+        params: Mapping[str, Any],
+        params_digest: str,
+        source: Mapping[str, Any],
+    ) -> list[EventDraft]:
+        """A matching dry run since the last completed import; words not used by a completed one."""
+        self._lease_guard(ctx)
+        rehearsed = False
+        pending: list[tuple[str, str] | None] = []  # authorizations since the last completion
+        used: set[tuple[str, str] | None] = set()
+        for event in ctx.storage.read(since=0):
+            if event.type == "import.completed":
+                rehearsed = False
+                used.update(pending)
+                pending = []
+            elif event.type == EVENT and event.data.get("params_digest") == params_digest:
+                if event.data.get("kind") == "import_dry_run":
+                    rehearsed = True
+            if event.type == EVENT and event.data.get("kind") == "import_authorized":
+                pending.append(confedit.source_ref(event.data.get("user_source")))
+        if not rehearsed:
             raise rejected(
                 "正式导入前须先用同样的参数演练（dry_run）",
                 reason="dry_run_required",
                 params_digest=params_digest,
             )
-        return run_import(
-            self.home,
-            self.ledger,
-            snapshot_dir,
-            dry_run=False,
-            renumber_local=pairs,
-            exclude=exclude,
-        )
+        if confedit.source_ref(source) in used:
+            raise rejected("这条用户原话已经授权过一次导入", reason="source_reused")
+        return [
+            EventDraft(
+                type=EVENT,
+                data={
+                    "kind": "import_authorized",
+                    "params": dict(params),
+                    "params_digest": params_digest,
+                    "user_source": dict(source),
+                },
+            )
+        ]
 
-    def _dry_run_since_last_import(self, params_digest: str) -> bool:
-        found = False
-        for event in self.ledger.storage.read(since=0):
-            if event.type == "import.completed":
-                found = False
-            elif (
-                event.type == EVENT
-                and event.data.get("kind") == "import_dry_run"
-                and event.data.get("params_digest") == params_digest
-            ):
-                found = True
-        return found
+
+class _LeaseGuarded(Ledger):
+    """The same ledger, with the caller's lease checked inside every commit (DN006 §9.7)."""
+
+    def __init__(self, inner: Ledger, guard: Callable[[CommitContext], None]) -> None:  # pyright: ignore[reportMissingSuperCall]
+        self.__dict__.update(inner.__dict__)
+        self._guard = guard
+
+    def commit(self, command: Command) -> CommitResult:
+        build = command.build
+
+        def guarded(ctx: CommitContext) -> Sequence[EventDraft]:
+            self._guard(ctx)
+            return build(ctx)
+
+        command.build = guarded
+        return super().commit(command)
 
 
 def _strings(args: Mapping[str, Any], key: str) -> list[str]:

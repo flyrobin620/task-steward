@@ -30,7 +30,7 @@ import json
 import os
 import re
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -520,8 +520,13 @@ def run_import(
     dry_run: bool = False,
     renumber_local: list[tuple[str, str]] | None = None,
     exclude: list[str] | None = None,
+    on_locked: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    """One import at a time: the event volumes, manifest and legacy files are shared targets."""
+    """One import at a time: the event volumes, manifest and legacy files are shared targets.
+
+    ``on_locked`` runs once the import lock is held, before anything is written (a real run
+    only): the place to check and record the authorization of this run.
+    """
     if dry_run:
         return _run_import(
             home, ledger, snapshot_dir, dry_run=True, renumber_local=renumber_local, exclude=exclude
@@ -534,6 +539,8 @@ def run_import(
             ErrorCode.UNAVAILABLE, "另一个导入正在进行，等它结束后再运行", reason="import_running"
         ) from exc
     try:
+        if on_locked is not None:
+            on_locked()
         return _run_import(
             home,
             ledger,

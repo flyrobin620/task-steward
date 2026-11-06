@@ -18,7 +18,7 @@ from typing import Any
 
 from tsw import lease
 from tsw.commands import Command, CommitContext
-from tsw.config import EffectiveConfig, load_config, resolve_repository
+from tsw.config import EffectiveConfig, lease_minutes, load_config, resolve_repository
 from tsw.events import EventDraft
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
@@ -270,21 +270,26 @@ class Guard:
                 '并用 mcp__ccd_session_mgmt__send_message(session_id="parent") 唤醒主会话。',
             )
         lines = [f"你是 TaskSteward 主会话（数据目录 {self.home.root}）。"]
-        if not self.config.valid:
-            lines.append("配置无效，所有写工具都会被拒绝：先运行 tsw config validate。")
-        else:
-            try:
-                self.ledger.commit(
-                    lease.acquire(
-                        str(who.session_id),
-                        machine=self.machine,
-                        lease_minutes=int(self.config.get("scheduling.lease_minutes")),
-                        actor={"role": "orchestrator", "session_id": who.session_id},
-                    )
+        try:
+            # Taken even with an invalid configuration: config_change needs the lease to repair
+            # it (DN003 §7.1).
+            self.ledger.commit(
+                lease.acquire(
+                    str(who.session_id),
+                    machine=self.machine,
+                    lease_minutes=lease_minutes(self.config),
+                    actor={"role": "orchestrator", "session_id": who.session_id},
                 )
-                lines.append("已持有调度租约。")
-            except Exception as exc:  # another orchestrator holds it: read-only
-                lines.append(f"未取得调度租约，本会话只读运行（{exc}）。")
+            )
+            lines.append("已持有调度租约。")
+        except Exception as exc:  # another orchestrator holds it: read-only
+            lines.append(f"未取得调度租约，本会话只读运行（{exc}）。")
+        if not self.config.valid:
+            lines.append(
+                "配置无效，除 config_change / config_revert 外的写工具都会被拒绝："
+                "用 config_show 查看问题，再用 config_change 修复。"
+            )
+        else:
             with self.ledger.view() as conn:
                 items = inbox_mod.attention(conn, self.ledger.storage, self.config)
             summary = "，".join(

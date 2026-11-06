@@ -594,6 +594,13 @@ def _validate_paths(values: dict[str, Any], problems: list[str], home: Home) -> 
             problems.append(f"{dotted}: 文件不存在 {value}")
 
 
+def lease_minutes(config: EffectiveConfig) -> int:
+    """The lease length; the default while the configuration is invalid, so that an orchestrator
+    can still hold the lease it needs to repair the configuration (DN003 §7.1)."""
+    source = config.values if config.valid else DEFAULTS
+    return int(get(source, "scheduling.lease_minutes"))
+
+
 def resolve_path(home: Home, value: str) -> Path:
     """Absolute paths stay; ``~`` expands; other paths are relative to the data directory."""
     path = Path(value).expanduser()

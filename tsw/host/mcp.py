@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from tsw import __version__, confedit, lease
-from tsw.config import EffectiveConfig, load_config
+from tsw.config import EffectiveConfig, lease_minutes, load_config
 from tsw.errors import ErrorCode, TswError, rejected
 from tsw.events import utc_now
 from tsw.home import Home, open_home, workdir_path
@@ -268,7 +268,7 @@ class Server:
             command = lease.acquire(
                 str(who.session_id),
                 machine=self.machine,
-                lease_minutes=int(config.require_valid().get("scheduling.lease_minutes")),
+                lease_minutes=lease_minutes(config),
                 actor={"role": "orchestrator", "session_id": who.session_id},
             )
             return {"expires_at": ledger.commit(command).events[-1].data["expires_at"]}

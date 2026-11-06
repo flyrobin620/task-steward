@@ -35,7 +35,7 @@ def authorize(h: Harness, text: str = "同意开启推送") -> dict[str, Any]:
     return {
         "channel": "main-session",
         "principal": "owner",
-        "message_ref": "orch-1:msg-7",
+        "message_ref": f"orch-1:msg-{text}",
         "text": text,
         "target": ["config", confedit.text_sha(confedit.read_text(h.home)), "authorize"],
     }
@@ -159,6 +159,52 @@ def test_revert_restores_the_text_before_a_change_and_is_itself_recorded(home: H
     with pytest.raises(TswError) as exc:
         h.run("config_revert", to_change="C999", reason="r")
     assert rejection(exc) == "no_such_change"
+
+
+def test_one_user_message_authorizes_one_change(home: Home) -> None:
+    h = Harness(home)
+    ops = [{"op": "set", "path": "repositories.demo.delivery", "value": {"push": True}}]
+    first = authorize(h, "同意推送")
+    h.run("config_change", ops=ops, reason="开启", user_source=first, command_id="c-1")
+    # A retry of the same command is a duplicate, not a second use of the words.
+    again = h.run("config_change", ops=ops, reason="开启", user_source=first, command_id="c-1")
+    assert again["duplicate"] is True
+    h.run("config_revert", to_change="C001", reason="撤销", user_source=authorize(h, "撤销推送"))
+    # The file is back to what the first words were bound to; they still cannot be replayed.
+    with pytest.raises(TswError) as exc:
+        h.run("config_change", ops=ops, reason="再次开启", user_source=first)
+    assert rejection(exc) == "source_reused"
+    assert load_config(home).get("repositories.demo.delivery.push") is None
+
+
+def test_a_dotted_repository_name_does_not_hide_a_permission_key(home: Home) -> None:
+    h = Harness(home)
+    add = [{"op": "set", "path": ["repositories", "my.repo"], "value": {"path": "~/src/my"}}]
+    h.run("config_change", ops=add, reason="新仓库", user_source=authorize(h, "加仓库"))
+    push = [{"op": "set", "path": ["repositories", "my.repo", "delivery", "push"], "value": True}]
+    with pytest.raises(TswError) as exc:
+        h.run("config_change", ops=push, reason="开启推送")
+    assert rejection(exc) == "g_user"
+    out = h.run("config_change", ops=push, reason="开启推送", user_source=authorize(h, "推送"))
+    assert out["events"][0]["data"]["changed_keys"] == [
+        ["repositories", "my.repo", "delivery", "push"]
+    ]
+
+
+def test_a_rebuild_does_not_write_a_finished_change_over_a_hand_restore(home: Home) -> None:
+    h = Harness(home)
+    original = confedit.read_text(home)
+    h.run(
+        "config_change",
+        ops=[{"op": "set", "path": "scheduling.max_workers", "value": 2}],
+        reason="r",
+    )
+    assert confedit.read_text(home) != original
+    assert original is not None
+    home.path(CONFIG).write_text(original, encoding="utf-8", newline="")
+    h.ledger.rebuild()
+    h.register("T001")
+    assert confedit.read_text(home) == original
 
 
 def test_a_hand_edit_is_kept_as_the_base_of_the_next_change(home: Home) -> None:
@@ -295,7 +341,35 @@ def test_a_real_import_needs_the_users_words_and_a_matching_dry_run(
     tools.import_orchestrator_agent({"snapshot": str(snapshot), "user_source": words})
     assert any(e.type == "import.completed" for e in h.ledger.storage.read())
     assert dry["params_digest"]
-    # After an import, a new real run needs a new dry run.
+    # After an import, a new real run needs a new dry run, and new words.
     with pytest.raises(TswError) as exc:
         tools.import_orchestrator_agent({"snapshot": str(snapshot), "user_source": words})
     assert rejection(exc) == "dry_run_required"
+    tools.import_orchestrator_agent({"snapshot": str(snapshot), "dry_run": True})
+    with pytest.raises(TswError) as exc:
+        tools.import_orchestrator_agent({"snapshot": str(snapshot), "user_source": words})
+    assert rejection(exc) == "source_reused"
+
+
+@pytest.mark.use_case("UC-STORE-003")
+def test_an_import_rechecks_the_lease_under_the_import_lock(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lease is lost between the first check and the import lock: nothing is imported."""
+    h = Harness(home)
+    _, snapshot = build(tmp_path)
+    holder = Maintenance(home, h.ledger, "orch-1", MACHINE)
+    holder.import_orchestrator_agent({"snapshot": str(snapshot), "dry_run": True})
+    late = Maintenance(home, h.ledger, "orch-2", MACHINE)
+    monkeypatch.setattr(late, "_require_lease", lambda: None)  # passed before the lease moved
+    words = {
+        "channel": "main-session",
+        "principal": "owner",
+        "message_ref": "orch-2:msg-1",
+        "text": "导入",
+        "target": ["import", "orchestrator-agent", "authorize"],
+    }
+    with pytest.raises(TswError) as exc:
+        late.import_orchestrator_agent({"snapshot": str(snapshot), "user_source": words})
+    assert rejection(exc) == "lease_held"
+    assert not any(e.type.startswith("import.") for e in h.ledger.storage.read())

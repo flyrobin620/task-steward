@@ -29,6 +29,7 @@ from tsw.importer import renumber
 from tsw.importer.orchestrator_agent import run_import as run_import_orchestrator_agent
 from tsw.ledger import Ledger
 from tsw.machine.base import REGISTRY, Caller
+from tsw.machine.config_tools import CONFIG_TOOLS
 from tsw.machine.runner import run_tool
 from tsw.review.run import run_round
 from tsw.storage.fs import FsStorage, restore
@@ -246,7 +247,17 @@ def _cmd_tool_run(args: argparse.Namespace) -> dict[str, Any]:
         raise TswError(ErrorCode.REJECTED, "--input 必须是 JSON 对象") from exc
     if not isinstance(payload, dict):
         raise TswError(ErrorCode.REJECTED, "--input 必须是 JSON 对象")
-    ledger, config = _writer(args)
+    if args.name in CONFIG_TOOLS:
+        # Configuration tools repair an invalid configuration; they validate their own result.
+        home = _home(args)
+        config = load_config(home)
+        ledger = (
+            _ledger_for(home, config, args.machine)
+            if config.valid
+            else Ledger(home, machine=args.machine)
+        )
+    else:
+        ledger, config = _writer(args)
     caller = Caller(role=args.role, session_id=args.session, machine=args.machine)
     return run_tool(ledger, config, caller, args.name, payload)  # pyright: ignore[reportUnknownArgumentType]
 

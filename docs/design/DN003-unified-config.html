@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="9e0756a14dc619a6ee0cd3bed57a7595431cf648fea3b1829343185d8c1a8491">
+<meta name="tsw-source-sha256" content="5f5d077d57cd8627f0bc1475125243e1fc51ced316202cbeba695073c8fe3881">
 <title>DN003 统一配置</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -216,14 +216,15 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <table><thead><tr><th>工具</th><th>角色</th><th>作用</th></tr></thead><tbody><tr><td><code>config_change</code></td><td>主会话（持有调度租约）</td><td>按顺序应用 <code>ops</code> 修改 <code>config/task-steward.json</code>：<code>{op: &quot;set&quot;, path, value}</code> 或 <code>{op: &quot;unset&quot;, path}</code>；<code>path</code> 用点号，键名含点号时写成字符串数组；空路径的 <code>set</code> 替换整个文件。附 <code>reason</code>，可选 <code>user_source</code> 与 <code>expected_sha256</code></td></tr><tr><td><code>config_revert</code></td><td>主会话（持有调度租约）</td><td>把文件恢复到某次修改（<code>to_change</code>，如 <code>C003</code>）<strong>之前</strong>的内容；恢复本身也是一次修改</td></tr><tr><td><code>config_show</code></td><td>主会话（只读）</td><td>有效配置、每个值的来源、校验问题，以及配置文件的 sha256</td></tr><tr><td><code>config_history</code></td><td>主会话（只读）</td><td>修改记录；给出 <code>change_id</code> 时返回该次修改前后的全文</td></tr></tbody></table>
 <p>两个写工具在账本提交锁内按以下顺序执行：</p>
 <ol><li>读取当前文件，计算摘要；给了 <code>expected_sha256</code> 而不一致时以 <code>config_conflict</code> 拒绝。</li><li>应用修改，得到新的文件内容；与默认值、本机覆盖合并后按 §4 完整校验。**无效时以 <code>config_invalid</code> 拒绝，文件不动，不记账。**</li><li>比较修改前后的叶子字段，得到改动的键；其中有权限类键（§7.2）时检查 <code>user_source</code>。</li><li>记录 <code>config.changed</code> 事件：修改编号（<code>C001</code> 起）、类型（<code>change</code> / <code>revert</code>）、<code>ops</code> 或被恢复的修改编号、改动的键、权限类键、理由、用户来源、修改前后的全文与摘要。</li><li>写入文件（临时文件加原子替换）。</li></ol>
-<p>事件先落账再写文件。两步之间中断时，下一次任何提交（或 <code>ledger rebuild</code>）发现最近一次修改尚未写入，且文件仍是该修改记录的“修改前”内容，就补写新内容；文件已是其他内容（用户在此期间手改过）时不覆盖。配置不含秘密（§1），所以事件保存全文，任何一次修改都能精确回退。</p>
-<p>当前配置无效时（例如手工编辑后不是合法 JSON），其他写工具都被拒绝，但 <code>config_change</code> 与 <code>config_revert</code> 仍可用：它们只要求修改<strong>后</strong>的配置有效。当前文件不能解析时，只能用空路径的 <code>set</code> 替换整个文件。</p>
+<p>事件先落账再写文件。两步之间中断时，下一次任何提交（或 <code>ledger rebuild</code>）发现最近一次修改尚未写入，且文件仍是该修改记录的“修改前”内容，就补写新内容；文件已是其他内容（用户在此期间手改过）时不覆盖。“已经处理到哪一次修改”记在 <code>cache/config-applied.json</code>，不在投影里，所以 <code>ledger rebuild</code> 不会把早已写入的修改再次写到用户之后手工恢复的内容上；从备份恢复后（<code>cache/</code> 不备份）只按文件内容判断。配置不含秘密（§1），所以事件保存全文，任何一次修改都能精确回退。</p>
+<p>当前配置无效时（例如手工编辑后不是合法 JSON），其他写工具都被拒绝，但 <code>config_change</code> 与 <code>config_revert</code> 仍可用：它们只要求修改<strong>后</strong>的配置有效。修复需要调度租约，所以配置无效时主会话仍按默认租期领取或续期租约（SessionStart 与 <code>lease_acquire</code>）。当前文件不能解析时，只能用空路径的 <code>set</code> 替换整个文件。命令行 <code>tsw tool run config_change</code> 在会话外同样可以修复。</p>
 <p>这两个工具只修改 <code>config/task-steward.json</code>。本机覆盖 <code>config/task-steward.local.json</code> 只含路径类字段（§5），仍由用户编辑。</p>
 <h3 id="72-权限类键">7.2 权限类键</h3>
 <p>改动下列键（新增、删除或修改，<strong>不区分扩大还是收窄</strong>）时，必须附用户原话：</p>
 <table><thead><tr><th>键</th><th>理由</th></tr></thead><tbody><tr><td><code>repositories.*.delivery</code>、<code>repositories.*.auth_profile</code>、<code>repositories.*.commit_identity</code>，以及新增或删除整个 <code>repositories.&lt;id&gt;</code></td><td>远端交付授权、交付身份</td></tr><tr><td><code>accounts</code></td><td>凭据引用</td></tr><tr><td><code>policies</code></td><td>用户保留的决定与约定</td></tr><tr><td><code>roles.*.permission_mode</code>、<code>roles.*.session</code>、<code>roles.reviewer</code>（全部）、<code>roles.worker.allow_in_task_subagents</code></td><td>角色权限模式、会话宿主、评审器</td></tr><tr><td><code>plugins</code></td><td>加载的会话适配器、人类渠道与存储决定能力边界</td></tr><tr><td><code>input.triage</code>、<code>input.channels</code></td><td>主会话能否自行判断、问题投到哪里</td></tr><tr><td><code>review.block_on</code>、<code>review.max_rounds</code>、<code>review.orchestrator_extension_limit</code></td><td>评审门槛与主会话可自行追加的上限</td></tr></tbody></table>
 <p>替换整个上级对象（例如 <code>roles</code>）同样算改动其下的权限类键。收窄也要原话：逐键判断扩大还是收窄容易出错，一律要求原话更简单。</p>
-<p>用户原话以 <code>VerifiedSource</code>（DN006 §8.5）提交，渠道为主会话、Teams 或 Portal（worker 会话中的原话不能授权主会话改配置），决定对象为 <code>[&quot;config&quot;, &lt;修改前文件的 sha256&gt;, &quot;authorize&quot;]</code>：它绑定到这一次修改所基于的文件，不能复用到另一次修改。修改前文件的摘要由 <code>config_show</code> 给出；文件不存在时为 <code>&quot;none&quot;</code>。</p>
+<p>用户原话以 <code>VerifiedSource</code>（DN006 §8.5）提交，渠道为主会话、Teams 或 Portal（worker 会话中的原话不能授权主会话改配置），决定对象为 <code>[&quot;config&quot;, &lt;修改前文件的 sha256&gt;, &quot;authorize&quot;]</code>：它绑定到这一次修改所基于的文件。一条用户消息（渠道 + 消息引用）只能授权一次修改：即使回退后文件回到原来的内容，同一条原话也不能再次授权（<code>source_reused</code>）；同一命令的重试用相同的 <code>command_id</code>，按幂等返回原结果。修改前文件的摘要由 <code>config_show</code> 给出；文件不存在时为 <code>&quot;none&quot;</code>。</p>
+<p>权限判定按键的路径段进行，不按拼接后的文本：仓库 ID 含点号（如 <code>repositories[&quot;my.repo&quot;]</code>）时，同样能识别其下的 <code>delivery</code> 等键。</p>
 <p>其余键主会话可以直接修改，事件中记录理由。</p>
 <h3 id="73-边界">7.3 边界</h3>
 <ul><li>worker 调用这些工具一律以 <code>role_denied</code> 拒绝（工具只注册给主会话）；没有调度租约的主会话以 <code>lease_held</code> 等拒绝。</li><li>hooks 照旧拒绝主会话用编辑类工具或命令行写入 <code>config/</code>，拒绝信息指向 <code>config_change</code>。</li><li>用户手工编辑的文件是下一次修改的基准，事件中记录基准摘要。</li><li>生效方式不变（§1 第 5 条）：只影响之后创建的会话和之后的调用。</li></ul>

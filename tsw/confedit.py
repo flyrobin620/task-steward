@@ -30,8 +30,11 @@ from tsw.storage.fs import atomic_write
 
 CHANGE_EVENT = "config.changed"
 LAST_CHANGE = "config:last_change"  # projection meta: the latest change (sequence, id)
-APPLIED = "config:applied"  # projection meta: the latest change known to be in the file
 COUNT = "config:count"  # projection meta: number of changes, for the next change id
+# The latest change known to be in the file (or deliberately left out because the file was
+# edited by hand). Kept outside the projection, so a ``ledger rebuild`` does not forget it and
+# write an old change over a later hand edit.
+APPLIED_FILE = "config-applied.json"
 NO_FILE = "none"  # the digest recorded when the file does not exist
 
 # Keys that grant or withdraw authority (DN003 §7.2): changing any of them, in either direction,
@@ -156,36 +159,57 @@ def _leaves(value: Any, prefix: tuple[str, ...] = ()) -> dict[tuple[str, ...], A
     return {prefix: value}
 
 
-def changed_paths(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[str]:
-    """Every leaf added, removed or changed, as dotted paths."""
+Key = tuple[str, ...]
+
+
+def changed_keys(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[Key]:
+    """Every leaf added, removed or changed, as key segments (map keys may contain dots)."""
     old, new = _leaves(dict(before)), _leaves(dict(after))
     keys = {k for k in old.keys() | new.keys() if k}
-    changed = {k for k in keys if k not in old or k not in new or _canon(old[k]) != _canon(new[k])}
-    return sorted(".".join(k) for k in changed)
+    return sorted(
+        k for k in keys if k not in old or k not in new or _canon(old[k]) != _canon(new[k])
+    )
+
+
+def dotted(keys: Iterable[Key]) -> list[str]:
+    """Keys for display; segments are joined with dots."""
+    return [".".join(k) for k in keys]
 
 
 def _canon(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
-def _matches(parts: list[str], pattern: str) -> bool:
+def _matches(parts: Key, pattern: str) -> bool:
     wanted = pattern.split(".")
     shared = min(len(parts), len(wanted))
     return all(w in ("*", p) for p, w in zip(parts[:shared], wanted[:shared], strict=True))
 
 
-def permission_paths(
-    before: Mapping[str, Any], after: Mapping[str, Any], changed: Iterable[str]
-) -> list[str]:
-    """The changed paths that need the user's own words, plus added or removed repositories."""
-    out = {path for path in changed if any(_matches(path.split("."), p) for p in PERMISSION_KEYS)}
+def permission_keys(
+    before: Mapping[str, Any], after: Mapping[str, Any], changed: Iterable[Key]
+) -> list[Key]:
+    """The changed keys that need the user's own words, plus added or removed repositories.
+
+    Matching works on key segments, never on joined text, so a map key containing dots
+    (``repositories["my.repo"]``) cannot shift the segments and slip past a pattern.
+    """
+    out = {key for key in changed if any(_matches(key, p) for p in PERMISSION_KEYS)}
     old, new = _keys(before.get("repositories")), _keys(after.get("repositories"))
-    out |= {f"repositories.{name}" for name in old ^ new}
+    out |= {("repositories", name) for name in old ^ new}
     return sorted(out)
 
 
 def _keys(value: Any) -> set[str]:
     return {str(k) for k in value} if isinstance(value, dict) else set()
+
+
+def source_ref(source: Any) -> tuple[str, str] | None:
+    """The user message a ``VerifiedSource`` refers to: (channel, message reference)."""
+    if not isinstance(source, Mapping):
+        return None
+    channel, ref = source.get("channel"), source.get("message_ref")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    return (channel, ref) if isinstance(channel, str) and isinstance(ref, str) else None
 
 
 # ---------------------------------------------------------------------- the ledger
@@ -243,10 +267,22 @@ def apply_pending(ctx: CommitContext) -> None:
     if raw is None:
         return
     sequence = int(json.loads(raw)["sequence"])
-    if int(get_meta(ctx.conn, APPLIED) or 0) >= sequence:
+    if _applied(ctx.home) >= sequence:
         return
     event = next(e for e in ctx.storage.read(since=sequence - 1) if e.sequence == sequence)
     current = text_sha(read_text(ctx.home))
     if current != event.data["after_sha256"] and current == event.data["before_sha256"]:
         write_text(ctx.home, event.data.get("after"))
-    set_meta(ctx.conn, APPLIED, str(sequence))
+    atomic_write(
+        ctx.home.cache_dir / APPLIED_FILE, json.dumps({"sequence": sequence}).encode("utf-8")
+    )
+
+
+def _applied(home: Home) -> int:
+    """The latest change already settled; 0 when unknown (for example after a restore)."""
+    try:
+        return int(
+            json.loads((home.cache_dir / APPLIED_FILE).read_text(encoding="utf-8"))["sequence"]
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0

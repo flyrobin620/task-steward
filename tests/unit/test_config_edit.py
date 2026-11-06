@@ -51,8 +51,10 @@ def test_malformed_operations_are_refused(ops: list[object]) -> None:
 def test_changed_paths_cover_added_removed_and_changed_leaves() -> None:
     before = {"a": {"b": 1, "c": [1, 2]}, "d": 1}
     after = {"a": {"b": 2, "c": [1, 2]}, "e": {"f": True}}
-    assert confedit.changed_paths(before, after) == ["a.b", "d", "e.f"]
-    assert confedit.changed_paths(before, before) == []
+    changed = confedit.changed_keys(before, after)
+    assert changed == [("a", "b"), ("d",), ("e", "f")]
+    assert confedit.dotted(changed) == ["a.b", "d", "e.f"]
+    assert confedit.changed_keys(before, before) == []
 
 
 @pytest.mark.parametrize(
@@ -79,16 +81,27 @@ def test_changed_paths_cover_added_removed_and_changed_leaves() -> None:
     ],
 )
 def test_permission_keys(path: str, permission: bool) -> None:
-    assert (confedit.permission_paths({}, {}, [path]) == [path]) is permission
+    key = tuple(path.split("."))
+    assert (confedit.permission_keys({}, {}, [key]) == [key]) is permission
+
+
+def test_a_map_key_with_dots_cannot_shift_the_segments() -> None:
+    before = {"repositories": {"my.repo": {"path": "~/r"}}}
+    after = {"repositories": {"my.repo": {"path": "~/r", "delivery": {"push": True}}}}
+    changed = confedit.changed_keys(before, after)
+    assert changed == [("repositories", "my.repo", "delivery", "push")]
+    assert confedit.permission_keys(before, after, changed) == changed
+    harmless = {"repositories": {"my.repo": {"path": "~/other"}}}
+    assert confedit.permission_keys(before, harmless, confedit.changed_keys(before, harmless)) == []
 
 
 def test_adding_or_removing_a_repository_is_a_permission_change() -> None:
     before = {"repositories": {"a": {"path": "~/a"}}}
     after = {"repositories": {"b": {"path": "~/b"}}}
-    changed = confedit.changed_paths(before, after)
-    assert confedit.permission_paths(before, after, changed) == [
-        "repositories.a",
-        "repositories.b",
+    changed = confedit.changed_keys(before, after)
+    assert confedit.permission_keys(before, after, changed) == [
+        ("repositories", "a"),
+        ("repositories", "b"),
     ]
 
 
