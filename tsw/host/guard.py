@@ -195,15 +195,11 @@ def python_invocation(args: Sequence[str]) -> tuple[str, str, list[str]]:
     while i < len(args):
         arg = args[i]
         if arg == "--":
-            return (
-                ("script", args[i + 1], list(args[i + 2 :]))
-                if i + 1 < len(args)
-                else (
-                    "stdin",
-                    "",
-                    [],
-                )
-            )
+            # The next argument is the script; ``-`` still means standard input.
+            target = args[i + 1] if i + 1 < len(args) else "-"
+            if target == "-":
+                return "stdin", "", list(args[i + 2 :])
+            return "script", target, list(args[i + 2 :])
         if arg == "-":
             return "stdin", "", list(args[i + 1 :])
         if arg.startswith("--"):
