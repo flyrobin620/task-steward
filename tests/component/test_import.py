@@ -594,6 +594,10 @@ def test_an_excluded_number_still_bounds_the_renumbering(home: Home, tmp_path: P
     snapshot["files"]["todo"].append("todo/T012.md")  # a spec-only task above every task
     path.write_text(json.dumps(snapshot), encoding="utf-8")
     ledger = Ledger(home, machine="m1")
+    # A dry run changes nothing; without the floor the next task would be T011.
+    run_import(home, ledger, snapshot_dir, dry_run=True, exclude=["T012"])
+    with ledger.view() as conn:
+        assert next_task_id(conn) == "T002"
     with pytest.raises(TswError) as low:
         run_import(home, ledger, snapshot_dir, exclude=["T012"], renumber_local=[("T001", "T011")])
     assert low.value.details["reason"] == "renumber_floor"
@@ -604,7 +608,23 @@ def test_an_excluded_number_still_bounds_the_renumbering(home: Home, tmp_path: P
     # New tasks never take a number the source used, even one that was only a spec.
     with ledger.view() as conn:
         assert next_task_id(conn) == "T014"
-    snapshot["controller"] = None
     ledger.rebuild()
     with ledger.view() as conn:
         assert next_task_id(conn) == "T014"
+
+
+def test_new_tasks_come_after_a_spec_only_number_above_every_task(
+    home: Home, tmp_path: Path
+) -> None:
+    _, snapshot_dir = build(tmp_path)
+    path = snapshot_dir / "snapshot.json"
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
+    snapshot["files"]["todo"].append("todo/T012.md")  # above the highest task, T010
+    path.write_text(json.dumps(snapshot), encoding="utf-8")
+    ledger = Ledger(home)
+    run_import(home, ledger, snapshot_dir, exclude=["T012"])
+    with ledger.view() as conn:
+        assert next_task_id(conn) == "T013"  # not T011: T012 was used by the source
+    ledger.rebuild()
+    with ledger.view() as conn:
+        assert next_task_id(conn) == "T013"

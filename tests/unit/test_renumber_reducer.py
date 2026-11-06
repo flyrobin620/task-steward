@@ -116,6 +116,13 @@ def test_new_item_ids_skip_ids_a_renumbered_task_kept() -> None:
     )
     assert next_item_id(conn, "input_requests", "request_id", "Q", "T001") == "Q-T001-2"
     assert next_item_id(conn, "input_requests", "request_id", "Q", "T011") == "Q-T011-2"
+    for n in (1, 2):  # consecutive ids kept by the renumbered task are all skipped
+        conn.execute(
+            "INSERT INTO decisions(decision_id, task_id, trigger, decision, rationale, basis, "
+            "confidence, sequence) VALUES(?, 'T011', 't', 'd', 'r', 'b', 'c', 1)",
+            (f"D-T001-{n}",),
+        )
+    assert next_item_id(conn, "decisions", "decision_id", "D", "T001") == "D-T001-3"
 
 
 def test_status_links_to_local_results_are_percent_encoded() -> None:
