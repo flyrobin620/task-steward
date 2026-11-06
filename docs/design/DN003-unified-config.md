@@ -312,7 +312,7 @@ tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命�
 
 | 键 | 理由 |
 | --- | --- |
-| `repositories.*.delivery`、`repositories.*.auth_profile`、`repositories.*.commit_identity`，以及新增或删除整个 `repositories.<id>` | 远端交付授权、交付身份 |
+| `repositories.*.delivery`、`repositories.*.repository` / `host` / `provider`（交付与合并的目标）、`repositories.*.auth_profile`、`repositories.*.commit_identity`，以及新增或删除整个 `repositories.<id>` | 远端交付授权、交付目标与身份 |
 | `accounts` | 凭据引用 |
 | `policies` | 用户保留的决定与约定 |
 | `roles.*.permission_mode`、`roles.*.session`、`roles.reviewer`（全部）、`roles.worker.allow_in_task_subagents` | 角色权限模式、会话宿主、评审器 |

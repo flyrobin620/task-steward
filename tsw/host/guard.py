@@ -141,6 +141,7 @@ def bash_problem(
     pr_allowed: bool,
     merge_allowed: bool = False,
     merge_repository: str | None = None,
+    merge_host: str | None = None,
     worker: bool,
     cwd: Path | None = None,
     writable_roots: Sequence[Path] | None = None,
@@ -178,13 +179,15 @@ def bash_problem(
             if sub == "push" and not push_allowed:
                 return "该仓库没有推送授权（repositories.*.delivery.push）"
         elif program.name == "gh":
-            words, values = shell.split_options(program.args, _GH_VALUE_OPTIONS)
+            words, _ = shell.split_options(program.args, _GH_VALUE_OPTIONS)
             lowered = [w.lower() for w in words]
             merging = lowered[:2] == ["pr", "merge"] or (
                 lowered[:1] == ["api"] and any("merge" in w.lower() for w in program.args)
             )
             if merging:
-                problem = merge_problem(words, values, merge_allowed, merge_repository)
+                problem = merge_problem(
+                    program.args, command, merge_allowed, merge_repository, merge_host
+                )
                 if problem is not None:
                     return problem
             words = lowered
@@ -193,35 +196,90 @@ def bash_problem(
     return None
 
 
-_PR_URL = re.compile(r"github\.com/([^/\s]+/[^/\s]+)/pull/\d+", re.IGNORECASE)
-_API_MERGE = re.compile(r"repos/([^/\s]+/[^/\s]+)/pulls/\d+/merge\b", re.IGNORECASE)
+# Options of ``gh pr merge`` / ``gh api`` whose values are free text, never a target repository.
+_MERGE_TEXT_OPTIONS = {
+    "-t",
+    "--subject",
+    "-b",
+    "--body",
+    "-F",
+    "--body-file",
+    "-A",
+    "--author-email",
+    "--match-head-commit",
+    "-f",
+    "--raw-field",
+    "--field",
+    "-X",
+    "--method",
+    "-H",
+    "--header",
+}
 
 
 def merge_problem(
-    words: Sequence[str],
-    values: Mapping[str, Sequence[str]],
+    args: Sequence[str],
+    command: str,
     allowed: bool,
     repository: str | None,
+    host: str | None = None,
 ) -> str | None:
-    """Why a worker's ``gh`` merge is refused: no authorization for this task, or a target
-    outside the task's own repository (decision 0002, DN002 §3.5)."""
+    """Why a worker's ``gh`` merge is refused (decision 0002, DN002 §3.5): no authorization for
+    this task, or a target that is not, or cannot be shown to be, the task's own repository.
+
+    Every argument that could name a repository (anything with ``/`` or ``:``) must be the
+    task's repository in a recognised form: ``-R`` / ``--repo``, a PR link on the repository's
+    host, or the REST merge path. Anything else, including clustered short options, other hosts
+    and ``GH_REPO`` / ``GH_HOST``, is refused rather than guessed."""
     if not allowed:
         return (
             "该任务没有合并授权（开发任务且仓库 repositories.*.delivery.merge）："
             "PR 由主会话合并，worker 提交时用 merge_skipped 说明"
         )
-    targets = [*values.get("-R", []), *values.get("--repo", [])]
-    if words[:1] and words[0].lower() == "api":
-        found = [m[1] for w in words[1:] for m in [_API_MERGE.search(w)] if m]
-        if not found:
-            return "只能用 gh pr merge 或 REST 合并接口（repos/<owner>/<name>/pulls/<n>/merge）合并"
-        targets += found
-    else:
-        targets += [m[1] for w in words[2:] for m in [_PR_URL.search(w)] if m]
-    wanted = (repository or "").lower()
-    stray = sorted({t for t in targets if t.lower() != wanted})
+    if re.search(r"\bGH_(REPO|HOST)\b", command):
+        return "合并时不能用 GH_REPO / GH_HOST 改变目标仓库"
+    own = (repository or "").lower()
+    site = (host or "github.com").lower()
+    pr_link = re.compile(rf"https?://{re.escape(site)}/{re.escape(own)}/pull/\d+/?", re.I)
+    api_path = re.compile(rf"/?repos/{re.escape(own)}/pulls/\d+/merge", re.I)
+    words = [a for a in args if not a.startswith("-")]
+    is_api = bool(words) and words[0].lower() == "api"
+    rehearsed: list[str] = []
+    stray: list[str] = []
+    skip_value = False
+    for i, arg in enumerate(args):
+        if skip_value:
+            skip_value = False
+            continue
+        if arg in _MERGE_TEXT_OPTIONS:
+            skip_value = True
+            continue
+        if any(
+            arg.startswith(option + "=")
+            for option in _MERGE_TEXT_OPTIONS
+            if option.startswith("--")
+        ):
+            continue
+        if arg in ("-R", "--repo") or arg.startswith("--repo="):
+            value = (
+                arg.split("=", 1)[1] if "=" in arg else (args[i + 1] if i + 1 < len(args) else "")
+            )
+            skip_value = "=" not in arg
+            if value.lower() not in (own, f"{site}/{own}"):
+                stray.append(value)
+            continue
+        if "/" not in arg and ":" not in arg:
+            continue
+        if pr_link.fullmatch(arg) and not is_api:
+            continue
+        if is_api and api_path.fullmatch(arg):
+            rehearsed.append(arg)
+            continue
+        stray.append(arg)
     if stray:
-        return f"只能合并本任务仓库（{repository}）的 PR，不能合并 {', '.join(stray)}"
+        return f"只能合并本任务仓库（{repository}）的 PR；无法确认的目标：{', '.join(stray)}"
+    if is_api and not rehearsed:
+        return "只能用 gh pr merge 或 REST 合并接口（repos/<owner>/<name>/pulls/<n>/merge）合并"
     return None
 
 
@@ -395,9 +453,10 @@ class Guard:
         if tool == "Bash":
             push_allowed = pr_allowed = merge_allowed = False
             merge_repository: str | None = None
+            merge_host: str | None = None
             if who.role == "worker" and who.task_id:
-                push_allowed, pr_allowed, merge_allowed, merge_repository = self._delivery(
-                    who.task_id
+                push_allowed, pr_allowed, merge_allowed, merge_repository, merge_host = (
+                    self._delivery(who.task_id)
                 )
             problem = bash_problem(
                 str(tool_input.get("command") or ""),
@@ -406,6 +465,7 @@ class Guard:
                 pr_allowed=pr_allowed,
                 merge_allowed=merge_allowed,
                 merge_repository=merge_repository,
+                merge_host=merge_host,
                 worker=who.role == "worker",
                 cwd=self.cwd,
                 writable_roots=who.writable_roots if who.role == "worker" else None,
@@ -521,8 +581,9 @@ class Guard:
         target = shell.resolve(words[1], self.cwd)
         return target is not None and any(within(target, r) for r in who.writable_roots)
 
-    def _delivery(self, task_id: str) -> tuple[bool, bool, bool, str | None]:
-        """Push, PR and merge authorization of the task, and its repository's ``owner/name``."""
+    def _delivery(self, task_id: str) -> tuple[bool, bool, bool, str | None, str | None]:
+        """Push, PR and merge authorization of the task; its repository's ``owner/name`` and
+        host."""
         with self.ledger.view() as conn:
             row = row_dict(
                 conn.execute(
@@ -530,15 +591,17 @@ class Guard:
                 ).fetchone()
             )
         if row is None:
-            return False, False, False, None
+            return False, False, False, None, None
         repo = resolve_repository(self.config, str(row["repo"]))
         delivery = self.config.get(f"repositories.{repo}.delivery", {}) if repo else {}
         slug = self.config.get(f"repositories.{repo}.repository") if repo else None
+        host = self.config.get(f"repositories.{repo}.host") if repo else None
         return (
             bool(delivery.get("push")),
             bool(delivery.get("create_pr")),
             merge_authorized(self.config, row),
             slug if isinstance(slug, str) else None,
+            host if isinstance(host, str) else None,
         )
 
 

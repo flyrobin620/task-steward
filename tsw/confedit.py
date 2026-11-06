@@ -42,6 +42,9 @@ NO_FILE = "none"  # the digest recorded when the file does not exist
 # prefix of the other, so replacing a whole parent object is caught too.
 PERMISSION_KEYS = (
     "repositories.*.delivery",
+    "repositories.*.repository",
+    "repositories.*.host",
+    "repositories.*.provider",
     "repositories.*.auth_profile",
     "repositories.*.commit_identity",
     "accounts",

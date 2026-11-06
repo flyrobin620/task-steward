@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="729a13adb400c58fa3a9aa81b827994ad0018dd4fee50f0366c59f783b60aaec">
+<meta name="tsw-source-sha256" content="959f2f0780b362ddfc355390ff53c15813754e7ba9d014a8b910ca46633d32c9">
 <title>DN003 统一配置</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -222,7 +222,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p>这两个工具只修改 <code>config/task-steward.json</code>。本机覆盖 <code>config/task-steward.local.json</code> 只含路径类字段（§5），仍由用户编辑。</p>
 <h3 id="72-权限类键">7.2 权限类键</h3>
 <p>改动下列键（新增、删除或修改，<strong>不区分扩大还是收窄</strong>）时，必须附用户原话：</p>
-<table><thead><tr><th>键</th><th>理由</th></tr></thead><tbody><tr><td><code>repositories.*.delivery</code>、<code>repositories.*.auth_profile</code>、<code>repositories.*.commit_identity</code>，以及新增或删除整个 <code>repositories.&lt;id&gt;</code></td><td>远端交付授权、交付身份</td></tr><tr><td><code>accounts</code></td><td>凭据引用</td></tr><tr><td><code>policies</code></td><td>用户保留的决定与约定</td></tr><tr><td><code>roles.*.permission_mode</code>、<code>roles.*.session</code>、<code>roles.reviewer</code>（全部）、<code>roles.worker.allow_in_task_subagents</code></td><td>角色权限模式、会话宿主、评审器</td></tr><tr><td><code>plugins</code></td><td>加载的会话适配器、人类渠道与存储决定能力边界</td></tr><tr><td><code>input.triage</code>、<code>input.channels</code></td><td>主会话能否自行判断、问题投到哪里</td></tr><tr><td><code>review.block_on</code>、<code>review.max_rounds</code>、<code>review.orchestrator_extension_limit</code></td><td>评审门槛与主会话可自行追加的上限</td></tr></tbody></table>
+<table><thead><tr><th>键</th><th>理由</th></tr></thead><tbody><tr><td><code>repositories.*.delivery</code>、<code>repositories.*.repository</code> / <code>host</code> / <code>provider</code>（交付与合并的目标）、<code>repositories.*.auth_profile</code>、<code>repositories.*.commit_identity</code>，以及新增或删除整个 <code>repositories.&lt;id&gt;</code></td><td>远端交付授权、交付目标与身份</td></tr><tr><td><code>accounts</code></td><td>凭据引用</td></tr><tr><td><code>policies</code></td><td>用户保留的决定与约定</td></tr><tr><td><code>roles.*.permission_mode</code>、<code>roles.*.session</code>、<code>roles.reviewer</code>（全部）、<code>roles.worker.allow_in_task_subagents</code></td><td>角色权限模式、会话宿主、评审器</td></tr><tr><td><code>plugins</code></td><td>加载的会话适配器、人类渠道与存储决定能力边界</td></tr><tr><td><code>input.triage</code>、<code>input.channels</code></td><td>主会话能否自行判断、问题投到哪里</td></tr><tr><td><code>review.block_on</code>、<code>review.max_rounds</code>、<code>review.orchestrator_extension_limit</code></td><td>评审门槛与主会话可自行追加的上限</td></tr></tbody></table>
 <p>替换整个上级对象（例如 <code>roles</code>）同样算改动其下的权限类键。收窄也要原话：逐键判断扩大还是收窄容易出错，一律要求原话更简单。</p>
 <p>用户原话以 <code>VerifiedSource</code>（DN006 §8.5）提交，渠道为主会话、Teams 或 Portal（worker 会话中的原话不能授权主会话改配置），决定对象为 <code>[&quot;config&quot;, &lt;修改前文件的 sha256&gt;, &quot;authorize&quot;]</code>：它绑定到这一次修改所基于的文件。一条用户消息（渠道 + 消息引用）只能授权一次修改：即使回退后文件回到原来的内容，同一条原话也不能再次授权（<code>source_reused</code>）；同一命令的重试用相同的 <code>command_id</code>，按幂等返回原结果。修改前文件的摘要由 <code>config_show</code> 给出；文件不存在时为 <code>&quot;none&quot;</code>。</p>
 <p>权限判定按键的路径段进行，不按拼接后的文本：仓库 ID 含点号（如 <code>repositories[&quot;my.repo&quot;]</code>）时，同样能识别其下的 <code>delivery</code> 等键。</p>

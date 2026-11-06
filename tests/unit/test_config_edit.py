@@ -63,6 +63,8 @@ def test_changed_paths_cover_added_removed_and_changed_leaves() -> None:
         ("repositories.app.delivery.push", True),
         ("repositories.app.auth_profile", True),
         ("repositories.app.path", False),
+        ("repositories.app.repository", True),
+        ("repositories.app.host", True),
         ("repositories.app.aliases", False),
         ("accounts.gh.auth.config_dir", True),
         ("policies.email", True),

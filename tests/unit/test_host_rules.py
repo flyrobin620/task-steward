@@ -109,6 +109,13 @@ def test_writes_into_the_ledger_through_the_shell_are_refused(tmp_path: Path) ->
         ("gh pr merge https://github.com/example/other/pull/3", False),
         ("gh api -X PUT repos/example/other/pulls/3/merge", False),
         ("gh api graphql -f query='mutation{mergePullRequest(input:{})}'", False),
+        ("gh pr merge 3 -sdRother/repo", False),
+        ("gh pr merge 3 -sdR other/repo", False),
+        ("gh pr merge https://ghe.example.org/other/repo/pull/3 --squash", False),
+        ("gh pr merge https://ghe.example.org/example/demo/pull/3 --squash", False),
+        ("GH_REPO=other/repo gh pr merge 3 --squash", False),
+        ("gh pr merge 3 --squash --body-file ../notes/merge.md -t 'a/b'", True),
+        ("gh pr merge 3 -R github.com/example/demo", True),
     ],
 )
 def test_a_worker_merges_only_its_own_repository_with_the_authorization(
