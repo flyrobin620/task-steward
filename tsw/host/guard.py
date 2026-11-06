@@ -227,10 +227,12 @@ def merge_problem(
     """Why a worker's ``gh`` merge is refused (decision 0002, DN002 §3.5): no authorization for
     this task, or a target that is not, or cannot be shown to be, the task's own repository.
 
-    Every argument that could name a repository (anything with ``/`` or ``:``) must be the
-    task's repository in a recognised form: ``-R`` / ``--repo``, a PR link on the repository's
-    host, or the REST merge path. Anything else, including clustered short options, other hosts
-    and ``GH_REPO`` / ``GH_HOST``, is refused rather than guessed."""
+    The merge must name its target explicitly, so that neither the working directory nor gh's
+    default remote decides it: ``gh pr merge`` with ``-R`` / ``--repo`` or a PR link on the
+    repository's host, ``gh api`` with the REST merge path. Every argument that could name a
+    repository (anything with ``/`` or ``:``) and ``--hostname`` must agree with the task's
+    repository; anything else, including clustered short options, other hosts and
+    ``GH_REPO`` / ``GH_HOST``, is refused rather than guessed."""
     if not allowed:
         return (
             "该任务没有合并授权（开发任务且仓库 repositories.*.delivery.merge）："
@@ -244,7 +246,7 @@ def merge_problem(
     api_path = re.compile(rf"/?repos/{re.escape(own)}/pulls/\d+/merge", re.I)
     words = [a for a in args if not a.startswith("-")]
     is_api = bool(words) and words[0].lower() == "api"
-    rehearsed: list[str] = []
+    confirmed: list[str] = []
     stray: list[str] = []
     skip_value = False
     for i, arg in enumerate(args):
@@ -260,26 +262,33 @@ def merge_problem(
             if option.startswith("--")
         ):
             continue
-        if arg in ("-R", "--repo") or arg.startswith("--repo="):
+        if arg in ("-R", "--repo", "--hostname") or arg.startswith(("--repo=", "--hostname=")):
             value = (
                 arg.split("=", 1)[1] if "=" in arg else (args[i + 1] if i + 1 < len(args) else "")
             )
             skip_value = "=" not in arg
-            if value.lower() not in (own, f"{site}/{own}"):
+            if arg.startswith("--hostname"):
+                if value.lower() != site:
+                    stray.append(value)
+            elif value.lower() in (own, f"{site}/{own}"):
+                confirmed.append(value)
+            else:
                 stray.append(value)
             continue
         if "/" not in arg and ":" not in arg:
             continue
-        if pr_link.fullmatch(arg) and not is_api:
-            continue
-        if is_api and api_path.fullmatch(arg):
-            rehearsed.append(arg)
+        if (pr_link.fullmatch(arg) and not is_api) or (is_api and api_path.fullmatch(arg)):
+            confirmed.append(arg)
             continue
         stray.append(arg)
     if stray:
         return f"只能合并本任务仓库（{repository}）的 PR；无法确认的目标：{', '.join(stray)}"
-    if is_api and not rehearsed:
+    if is_api and not any(api_path.fullmatch(c) for c in confirmed):
         return "只能用 gh pr merge 或 REST 合并接口（repos/<owner>/<name>/pulls/<n>/merge）合并"
+    if not confirmed:
+        return (
+            f"合并须明确指向本任务仓库：gh pr merge <编号> -R {repository}，或使用该仓库的 PR 链接"
+        )
     return None
 
 

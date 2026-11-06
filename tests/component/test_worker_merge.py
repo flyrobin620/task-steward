@@ -150,7 +150,8 @@ def test_the_hook_refuses_merging_for_other_task_kinds(home: Home, kind: str) ->
 
 def test_the_hook_lets_a_development_worker_merge_only_its_repository(home: Home) -> None:
     h, w = harness(home, merge=True)
-    assert bash(h, w, "gh pr merge 3 --squash") is None
+    assert bash(h, w, "gh pr merge 3 -R example/demo --squash") is None
+    assert bash(h, w, "gh pr merge 3 --squash") is not None
     out = bash(h, w, "gh -R example/other pr merge 3 --squash")
     assert (
         out is not None and "example/other" in out["hookSpecificOutput"]["permissionDecisionReason"]
