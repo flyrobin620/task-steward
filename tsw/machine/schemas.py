@@ -244,4 +244,35 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         diff_note=S,
     ),
     "sync": schema([]),
+    "config_change": schema(
+        ["ops", "reason"],
+        ops={
+            "type": "array",
+            "description": "按顺序应用：set（空路径表示替换整个文件）/ unset；路径用点号，"
+            "键名含点号时用字符串数组",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "op": {"enum": ["set", "unset"]},
+                    "path": {"description": "如 repositories.app.delivery.push"},
+                    "value": {"description": "set 的新值（任意 JSON）"},
+                },
+                "required": ["op", "path"],
+            },
+        },
+        reason=S,
+        user_source={
+            **SOURCE,
+            "description": "改动权限类键时必填：用户原话；target 为 "
+            '["config", 修改前文件的 sha256（config_show 的 file_sha256）, "authorize"]',
+        },
+        expected_sha256={**S, "description": "修改前文件的摘要；不一致时拒绝"},
+    ),
+    "config_revert": schema(
+        ["to_change", "reason"],
+        to_change={**S, "description": "恢复到这次修改（如 C003）之前的内容"},
+        reason=S,
+        user_source={**SOURCE, "description": "恢复涉及权限类键时必填，target 同 config_change"},
+        expected_sha256=S,
+    ),
 }

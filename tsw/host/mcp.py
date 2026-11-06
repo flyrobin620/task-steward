@@ -19,18 +19,20 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import IO, Any
 
-from tsw import __version__, lease
+from tsw import __version__, confedit, lease
 from tsw.config import EffectiveConfig, load_config
 from tsw.errors import ErrorCode, TswError, rejected
 from tsw.events import utc_now
 from tsw.home import Home, open_home, workdir_path
 from tsw.host import inbox as inbox_mod
 from tsw.host.identity import Identity, resolve, within
+from tsw.host.maintenance import Maintenance
 from tsw.ledger import Ledger
 from tsw.machine.base import REGISTRY, Caller
+from tsw.machine.config_tools import CONFIG_TOOLS
 from tsw.machine.model import loads, row_dict, task
 from tsw.machine.runner import run_tool
-from tsw.machine.schemas import SCHEMAS
+from tsw.machine.schemas import SCHEMAS, SOURCE
 from tsw.review.run import run_round
 from tsw.storage.fs import FsStorage
 from tsw.tasks import task_row
@@ -79,6 +81,51 @@ HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
     ),
     "lease_status": (("orchestrator",), "调度租约状态", EMPTY),
     "lease_acquire": (("orchestrator",), "领取或续期调度租约（本会话）", EMPTY),
+    "config_show": (
+        ("orchestrator",),
+        "有效配置、每个值的来源、校验问题，以及配置文件的 sha256"
+        "（config_change 的 user_source 要用）",
+        EMPTY,
+    ),
+    "config_history": (
+        ("orchestrator",),
+        "配置修改记录；给出 change_id 时返回该次修改前后的全文",
+        {"type": "object", "properties": {"change_id": {"type": "string"}}},
+    ),
+    "home_backup": (
+        ("orchestrator",),
+        "在线备份数据目录到外部的新目录或空目录（tsw backup）",
+        {
+            "type": "object",
+            "properties": {"dest": {"type": "string", "description": "数据目录之外的绝对路径"}},
+            "required": ["dest"],
+        },
+    ),
+    "ledger_audit": (("orchestrator",), "全量审计账本摘要链与投影（只读）", EMPTY),
+    "ledger_rebuild": (
+        ("orchestrator",),
+        "先全量审计，再从账本重建投影与派生文件（tsw ledger rebuild）",
+        EMPTY,
+    ),
+    "import_orchestrator_agent": (
+        ("orchestrator",),
+        "导入 orchestrator-agent 历史（DN005）；dry_run 只演练，正式导入须先同参数演练并附用户原话",
+        {
+            "type": "object",
+            "properties": {
+                "snapshot": {"type": "string", "description": "export-snapshot 写出的快照目录"},
+                "dry_run": {"type": "boolean"},
+                "renumber_local": {"type": "array", "items": {"type": "string"}},
+                "exclude": {"type": "array", "items": {"type": "string"}},
+                "user_source": {
+                    **SOURCE,
+                    "description": "正式导入必填；target 为 "
+                    '["import", "orchestrator-agent", "authorize"]',
+                },
+            },
+            "required": ["snapshot"],
+        },
+    ),
     "review_run": (
         ("worker",),
         "运行一轮自评审（DN004）：记录 review_start，调用配置的评审器，"
@@ -196,7 +243,9 @@ class Server:
                     "worker 只能操作自己的任务", reason="task_scope", task_id=args["task_id"]
                 )
         caller = Caller(role=who.role, session_id=who.session_id, machine=self.machine)
-        out = run_tool(ledger, config.require_valid(), caller, name, dict(args))
+        # Configuration tools must be able to repair an invalid configuration (DN003 §7.1).
+        usable = config if name in CONFIG_TOOLS else config.require_valid()
+        out = run_tool(ledger, usable, caller, name, dict(args))
         if name == "task_dispatch":
             self._prepare_workdir(args)
         return out
@@ -223,6 +272,38 @@ class Server:
                 actor={"role": "orchestrator", "session_id": who.session_id},
             )
             return {"expires_at": ledger.commit(command).events[-1].data["expires_at"]}
+        maintenance = Maintenance(self.home, ledger, who.session_id, self.machine)
+        if name == "home_backup":
+            return maintenance.backup(str(args.get("dest") or ""))
+        if name == "ledger_audit":
+            return maintenance.audit()
+        if name == "ledger_rebuild":
+            config.require_valid()
+            return maintenance.rebuild()
+        if name == "import_orchestrator_agent":
+            config.require_valid()
+            return maintenance.import_orchestrator_agent(args)
+        if name == "config_show":
+            current = confedit.read_text(self.home)
+            return {
+                "valid": config.valid,
+                "values": config.values,
+                "sources": config.sources,
+                "problems": config.problems,
+                "warnings": config.warnings,
+                "file_sha256": confedit.text_sha(current),
+            }
+        if name == "config_history":
+            change_id = _opt_str(args, "change_id")
+            if change_id:
+                event = confedit.find_change(ledger.storage, change_id)
+                return {
+                    **confedit.summary(event),
+                    "before": event.data.get("before"),
+                    "after": event.data.get("after"),
+                    "ops": event.data.get("ops"),
+                }
+            return [confedit.summary(e) for e in confedit.change_events(ledger.storage)]
         if name == "inbox_ack":
             sequences = args.get("sequences")
             if not isinstance(sequences, list):

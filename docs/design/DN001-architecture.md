@@ -161,7 +161,7 @@ SessionStart hook 先把会话登记为主会话角色或 worker（按会话 ID 
 
 cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一致时拒绝写工具，hooks 也拒绝写入与命令行（只允许 `cd` 回执行目录）。worker 绑定后 MCP server 发出 `notifications/tools/list_changed`（客户端空闲时也由后台每 2 秒检查一次），客户端据此刷新工具列表。
 
-身份只来自会话本身：在已绑定数据目录的会话里（主会话、worker、已撤销），`tsw` 命令行只开放不需要声明角色的入口（`mcp`、`guard`、`review run` 与只读命令；`host render` 等维护命令在会话外运行），`tsw tool run --role` 等写入口一律拒绝，必须走 MCP。hooks 拿到同一个会话 ID（环境变量）以及 payload 中的内部会话 ID、cwd、权限模式，做同样的检查。不在 prompt 中放 token 或 capability 文件路径。
+身份只来自会话本身：在已绑定数据目录的会话里（主会话、worker、已撤销），`tsw` 命令行只开放不需要声明角色的入口（`mcp`、`guard`、`review run` 与只读命令；`host render`、`restore`、`quiesce` 等维护命令由用户在会话外运行；备份、审计、重建投影与导入经 MCP 工具开放给主会话，见 DN006 §9.7），`tsw tool run --role` 等写入口一律拒绝，必须走 MCP。hooks 拿到同一个会话 ID（环境变量）以及 payload 中的内部会话 ID、cwd、权限模式，做同样的检查。不在 prompt 中放 token 或 capability 文件路径。
 
 ### 7.2 按角色的 MCP 工具
 
@@ -185,6 +185,8 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一�
 | `operations_pending` / `operation_receipt` | ✓ | — | 委托操作的领取与回执（DN006 §4） |
 | `input_triage` / `input_escalate` | ✓ | — | 主会话判断：回答、追加评审轮次、认定意见不成立、批准延后或交给人类（DN006 §8） |
 | `input_response` | 渠道回调 | — | 人类渠道写回答复，核实后生效 |
+| `config_change` / `config_revert` / `config_show` / `config_history` | ✓ | — | 修改、回退与查看统一配置；权限类键须附用户原话（DN003 §7） |
+| `home_backup` / `ledger_audit` / `ledger_rebuild` / `import_orchestrator_agent` | ✓ | — | 数据目录维护（DN006 §9.7）；正式导入须附用户原话 |
 
 每个写工具都带 `command_id`（幂等）和 `expected_version`（乐观锁）。同一 ID 内容不同则拒绝。CLI `tsw <tool>` 与 MCP 共用同一实现，供人工排查使用。
 
@@ -198,6 +200,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一�
 | 主会话 | `task_dispatch` `attempt_start` `attempt_reconcile` `attempt_deliver` `attempt_continue` `attempt_update` | T07–T09、T15、预启动、对账与迟到会话 |
 | 主会话 | `task_pause` `task_resume` `judge` `feedback` `integrate` `output_link` `task_accept` | T10、T11、T14、T17–T21、T27、主会话判断 |
 | 主会话 | `user_accept` `user_reject` `task_cancel` `task_archive` `dependency_invalidate` `resource_release` `sync` | T16、T22–T26、依赖传播 |
+| 主会话 | `config_change` `config_revert` | 修改与回退统一配置（DN003 §7），不改变任务状态 |
 | worker | `progress_note` `question` `review_start` `review_fail` `review_complete` `review_triage` `review_decide` `review_exhausted` `self_check_failed` `submit` `task_pause`（仅 T14）`output_link` | E01–E07、T13、T14 |
 
 主会话的写工具都要求持有调度租约（G-LEASE）；worker 工具要求调用者就是该任务当前 attempt 绑定的会话。
@@ -208,7 +211,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一�
 | --- | --- | --- |
 | SessionStart | 全部 | 由 cwd 与 session_id 识别角色；主会话尝试领取租约，并注入未读 inbox 数与 attention 摘要；worker 注入任务 ID、brief 路径、可写路径和评审规则 |
 | PreToolUse（Edit / Write / NotebookEdit / Bash） | worker | 拒绝写出可写路径；拒绝未获交付授权的 `git push` 与 PR 操作；拒绝对可执行文件求哈希的命令（除非账本有用户批准记录）；拒绝直接修改 `ledger/`、`STATUS.html` |
-| PreToolUse | orchestrator | 拒绝直接编辑 `ledger/`、生成视图和投影；拒绝在派发窗口外重复 `start_session` 同名 attempt |
+| PreToolUse | orchestrator | 拒绝直接编辑 `ledger/`、`config/`、生成视图和投影（配置经 `config_change` 修改）；拒绝在派发窗口外重复 `start_session` 同名 attempt |
 | UserPromptSubmit | worker | 检测 `[report]`，注入回传协议提示 |
 | Stop | orchestrator | 运行只读 `attention`；有未处理 reportable 事件时阻止一次结束（`stop_hook_active` 防循环） |
 | Stop | worker | 记录 `worker.turn_ended` 观察事件（不改状态）；若处于 `reviewing` 且评审进程仍在运行，提示不要结束 |

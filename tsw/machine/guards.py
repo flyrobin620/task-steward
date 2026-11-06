@@ -219,6 +219,19 @@ def g_user(
     source: Mapping[str, Any] | None, *, task_id: str, revision: int, kind: str
 ) -> dict[str, Any]:
     """G-USER: a verified source naming the user, the message, the words and the target."""
+    return verified_source(
+        source, [task_id, revision, kind], mismatch="用户来源的决定对象与当前任务不一致"
+    )
+
+
+def verified_source(
+    source: Mapping[str, Any] | None,
+    expected: list[Any],
+    *,
+    channels: tuple[str, ...] = USER_CHANNELS,
+    mismatch: str = "用户来源的决定对象与本次操作不一致",
+) -> dict[str, Any]:
+    """A ``VerifiedSource`` (DN006 §8.5) whose target is exactly ``expected``."""
     if not isinstance(source, Mapping):
         raise rejected("需要用户的真实来源（VerifiedSource）", reason="g_user")
     missing = [
@@ -228,17 +241,11 @@ def g_user(
     ]
     if missing:
         raise rejected("用户来源字段不完整", reason="g_user", missing=missing)
-    if source["channel"] not in USER_CHANNELS:
+    if source["channel"] not in channels:
         raise rejected("用户来源的渠道无效", reason="g_user", channel=source["channel"])
     target = source.get("target")
-    expected = [task_id, revision, kind]
     if not isinstance(target, list) or list(target) != expected:  # pyright: ignore[reportUnknownArgumentType]
-        raise rejected(
-            "用户来源的决定对象与当前任务不一致",
-            reason="g_user",
-            expected=expected,
-            target=target,
-        )
+        raise rejected(mismatch, reason="g_user", expected=expected, target=target)
     return dict(source)
 
 

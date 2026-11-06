@@ -413,10 +413,16 @@ def _read_layer(path: Path, problems: list[str]) -> dict[str, Any]:
     return raw
 
 
-def load_config(home: Home) -> EffectiveConfig:
+def load_config(home: Home, *, main_layer: dict[str, Any] | None = None) -> EffectiveConfig:
+    """The effective configuration; ``main_layer`` replaces the data directory's file (used to
+    validate a proposed change before it is written)."""
     problems: list[str] = []
     warnings: list[str] = []
-    main = _read_layer(home.path(CONFIG_FILE), problems)
+    main = (
+        copy.deepcopy(main_layer)
+        if main_layer is not None
+        else _read_layer(home.path(CONFIG_FILE), problems)
+    )
     local = _read_layer(home.path(LOCAL_FILE), problems)
 
     for dotted in REMOVED_WITH_WARNING:

@@ -1,6 +1,6 @@
 # DN003 统一配置
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN004 worker 自评审](DN004-worker-self-review.md)
 
@@ -240,7 +240,7 @@
 
 ## 4. 校验规则
 
-tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命令仍可用）。数据目录维护命令（`quiesce`、`resume-writes`、`backup`、`restore`）不读取配置，配置损坏时仍可用于备份与修复。默认值中的字段都是必填的，用 `null` 删除后报错；只有明确可选的字段（如 `roles.reviewer.fallback_session`）可以删除。结构错误（类型不对、缺少必填字段）先报告，语义规则在结构正确后才检查：
+tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命令仍可用；修改配置的工具见 §7.1）。数据目录维护命令（`quiesce`、`resume-writes`、`backup`、`restore`）不读取配置，配置损坏时仍可用于备份与修复。默认值中的字段都是必填的，用 `null` 删除后报错；只有明确可选的字段（如 `roles.reviewer.fallback_session`）可以删除。结构错误（类型不对、缺少必填字段）先报告，语义规则在结构正确后才检查：
 
 1. `version` 必须为 1；未知字段报错（防止拼写错误被静默忽略），但 `roles.comparison` 这一已删除字段只记录警告。
 2. 模型 ID 匹配 `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`；effort 属于 `low|medium|high|xhigh|max`。
@@ -276,3 +276,57 @@ tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命�
 | 配置摘要 | 每次派发记录在 `task.dispatch_started` 事件中 | 用于解释“这个 attempt 是按哪份配置创建的” |
 
 配置文件位于数据目录，随数据目录备份；使用 `fs+git` 存储时也随数据目录的私有仓库提交。产品 repo 只提供 schema 与默认模板。tsw 不会把配置值复制到其他配置文件。
+
+## 7. 经 tsw 工具修改配置
+
+用户 2026-11-06 决定：主会话可以修改任何配置，每次修改校验通过才生效、记入账本、可以回退；扩大或收窄权限的键须附用户原话。worker 不能修改配置。主会话直接编辑 `config/` 中的文件仍被 hooks 拒绝；用户在会话外手工编辑仍然允许，tsw 不做外部修改检测。
+
+### 7.1 工具与执行顺序
+
+| 工具 | 角色 | 作用 |
+| --- | --- | --- |
+| `config_change` | 主会话（持有调度租约） | 按顺序应用 `ops` 修改 `config/task-steward.json`：`{op: "set", path, value}` 或 `{op: "unset", path}`；`path` 用点号，键名含点号时写成字符串数组；空路径的 `set` 替换整个文件。附 `reason`，可选 `user_source` 与 `expected_sha256` |
+| `config_revert` | 主会话（持有调度租约） | 把文件恢复到某次修改（`to_change`，如 `C003`）**之前**的内容；恢复本身也是一次修改 |
+| `config_show` | 主会话（只读） | 有效配置、每个值的来源、校验问题，以及配置文件的 sha256 |
+| `config_history` | 主会话（只读） | 修改记录；给出 `change_id` 时返回该次修改前后的全文 |
+
+两个写工具在账本提交锁内按以下顺序执行：
+
+1. 读取当前文件，计算摘要；给了 `expected_sha256` 而不一致时以 `config_conflict` 拒绝。
+2. 应用修改，得到新的文件内容；与默认值、本机覆盖合并后按 §4 完整校验。**无效时以 `config_invalid` 拒绝，文件不动，不记账。**
+3. 比较修改前后的叶子字段，得到改动的键；其中有权限类键（§7.2）时检查 `user_source`。
+4. 记录 `config.changed` 事件：修改编号（`C001` 起）、类型（`change` / `revert`）、`ops` 或被恢复的修改编号、改动的键、权限类键、理由、用户来源、修改前后的全文与摘要。
+5. 写入文件（临时文件加原子替换）。
+
+事件先落账再写文件。两步之间中断时，下一次任何提交（或 `ledger rebuild`）发现最近一次修改尚未写入，且文件仍是该修改记录的“修改前”内容，就补写新内容；文件已是其他内容（用户在此期间手改过）时不覆盖。配置不含秘密（§1），所以事件保存全文，任何一次修改都能精确回退。
+
+当前配置无效时（例如手工编辑后不是合法 JSON），其他写工具都被拒绝，但 `config_change` 与 `config_revert` 仍可用：它们只要求修改**后**的配置有效。当前文件不能解析时，只能用空路径的 `set` 替换整个文件。
+
+这两个工具只修改 `config/task-steward.json`。本机覆盖 `config/task-steward.local.json` 只含路径类字段（§5），仍由用户编辑。
+
+### 7.2 权限类键
+
+改动下列键（新增、删除或修改，**不区分扩大还是收窄**）时，必须附用户原话：
+
+| 键 | 理由 |
+| --- | --- |
+| `repositories.*.delivery`、`repositories.*.auth_profile`、`repositories.*.commit_identity`，以及新增或删除整个 `repositories.<id>` | 远端交付授权、交付身份 |
+| `accounts` | 凭据引用 |
+| `policies` | 用户保留的决定与约定 |
+| `roles.*.permission_mode`、`roles.*.session`、`roles.reviewer`（全部）、`roles.worker.allow_in_task_subagents` | 角色权限模式、会话宿主、评审器 |
+| `plugins` | 加载的会话适配器、人类渠道与存储决定能力边界 |
+| `input.triage`、`input.channels` | 主会话能否自行判断、问题投到哪里 |
+| `review.block_on`、`review.max_rounds`、`review.orchestrator_extension_limit` | 评审门槛与主会话可自行追加的上限 |
+
+替换整个上级对象（例如 `roles`）同样算改动其下的权限类键。收窄也要原话：逐键判断扩大还是收窄容易出错，一律要求原话更简单。
+
+用户原话以 `VerifiedSource`（DN006 §8.5）提交，渠道为主会话、Teams 或 Portal（worker 会话中的原话不能授权主会话改配置），决定对象为 `["config", <修改前文件的 sha256>, "authorize"]`：它绑定到这一次修改所基于的文件，不能复用到另一次修改。修改前文件的摘要由 `config_show` 给出；文件不存在时为 `"none"`。
+
+其余键主会话可以直接修改，事件中记录理由。
+
+### 7.3 边界
+
+- worker 调用这些工具一律以 `role_denied` 拒绝（工具只注册给主会话）；没有调度租约的主会话以 `lease_held` 等拒绝。
+- hooks 照旧拒绝主会话用编辑类工具或命令行写入 `config/`，拒绝信息指向 `config_change`。
+- 用户手工编辑的文件是下一次修改的基准，事件中记录基准摘要。
+- 生效方式不变（§1 第 5 条）：只影响之后创建的会话和之后的调用。

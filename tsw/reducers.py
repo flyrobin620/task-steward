@@ -10,7 +10,7 @@ import json
 import sqlite3
 from typing import Any
 
-from tsw import lease
+from tsw import confedit, lease
 from tsw.errors import rejected
 from tsw.events import Event
 from tsw.host.inbox import reduce_acked
@@ -186,6 +186,10 @@ def _import_marker(conn: sqlite3.Connection, event: Event) -> None:
     """import.started / import.completed: the facts live in the event; nothing to project."""
 
 
+def _maintenance(conn: sqlite3.Connection, event: Event) -> None:
+    """A record of a maintenance run (backup, rebuild, import dry run); no projected state."""
+
+
 def _task_note(conn: sqlite3.Connection, event: Event) -> None:
     conn.execute(
         "INSERT INTO task_notes(task_id, sequence, text) VALUES(?, ?, ?)",
@@ -206,4 +210,6 @@ REDUCERS: dict[str, Reducer] = {
     "controller.lease_taken_over": lease.reduce_taken_over,
     **MACHINE_REDUCERS,
     "orchestrator.inbox_acked": reduce_acked,
+    confedit.CHANGE_EVENT: confedit.reduce_changed,
+    "maintenance.performed": _maintenance,
 }
