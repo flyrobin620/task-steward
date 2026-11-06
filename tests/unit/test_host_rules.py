@@ -61,6 +61,15 @@ def test_tsw_owned_paths(tmp_path: Path) -> None:
             "宿主",
         ),
         ("py -m tsw --home h guard Stop", True, True, True, "宿主"),
+        ("python -mtsw guard UserPromptSubmit", True, True, True, "宿主"),
+        ("python -B -mtsw.cli guard UserPromptSubmit", True, True, False, "宿主"),
+        ("python -m tsw.__main__ guard UserPromptSubmit", True, True, True, "宿主"),
+        ("python -mtsw tool run x", True, True, True, "tool run"),
+        ("python -Bmtsw guard Stop", True, True, True, "宿主"),
+        ("python -X utf8 -Bm tsw guard Stop", True, True, True, "宿主"),
+        ("python -Ic 'import tsw'", True, True, True, "导入"),
+        ("python -m pytest -k tsw", True, True, True, None),
+        ("python script.py -m tsw guard", True, True, True, None),
     ],
 )
 def test_bash_rules(  # noqa: PLR0917 - one parameter per table column

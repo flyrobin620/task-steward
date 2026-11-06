@@ -47,6 +47,7 @@ _WRITE_WORDS = re.compile(
 _IMPORTS_TSW = re.compile(r"\b(import\s+tsw|from\s+tsw[\s.])")
 _PYTHONS = {"python", "python3", "py", "pythonw"}
 _PYTHON_VALUE_OPTIONS = {"-X", "-W", "--check-hash-based-pycs"}
+_TSW_MODULES = ("tsw", "tsw.cli", "tsw.__main__")
 _TSW_GLOBAL_OPTIONS = {"--home"}  # options of ``tsw`` that take a value
 # gh options that take a value and may come before the command words (``gh -R o/r pr merge``).
 _GH_VALUE_OPTIONS = {
@@ -111,15 +112,9 @@ def tsw_cli_command(program: shell.Program) -> str | None:
     if program.name == "tsw":
         rest = args
     elif program.name in _PYTHONS:
-        rest = None
-        for i, arg in enumerate(args):
-            if arg.replace("\\", "/").endswith("tsw_launch.py"):
-                rest = args[i + 1 :]
-                break
-            if arg == "-m" and i + 1 < len(args) and args[i + 1] in ("tsw", "tsw.cli"):
-                rest = args[i + 2 :]
-                break
-        if rest is None:
+        kind, value, rest = python_invocation(args)
+        launcher = kind == "script" and value.replace("\\", "/").endswith("tsw_launch.py")
+        if not (launcher or (kind == "module" and value in _TSW_MODULES)):
             return None
     else:
         return None
@@ -191,30 +186,52 @@ def bash_problem(
     return None
 
 
-def python_code(program: shell.Program, command: str) -> str:
-    """The code Python runs inline: ``-c CODE``, or stdin (a heredoc) when there is no script.
-
-    Options are read as the interpreter does: they end at ``-c``, ``-m``, ``-`` or the script.
-    """
-    args = list(program.args)
+def python_invocation(args: Sequence[str]) -> tuple[str, str, list[str]]:
+    """What a Python command line runs, read as the interpreter reads its options:
+    ``("code", CODE, rest)``, ``("module", NAME, rest)``, ``("script", PATH, rest)`` or
+    ``("stdin", "", rest)``. Short options may be clustered (``-Bmtsw``, ``-Ic CODE``), and
+    ``-c`` / ``-m`` / ``-W`` / ``-X`` take the rest of their cluster or the next argument."""
     i = 0
     while i < len(args):
         arg = args[i]
-        if arg == "-c":
-            return args[i + 1] if i + 1 < len(args) else ""
-        if arg.startswith("-c") and not arg.startswith("--"):
-            return arg[2:]
-        if arg == "-m" or (arg.startswith("-m") and not arg.startswith("--")):
-            return ""  # a module; ``-m tsw`` is caught as a tsw command
+        if arg == "--":
+            return (
+                ("script", args[i + 1], list(args[i + 2 :]))
+                if i + 1 < len(args)
+                else (
+                    "stdin",
+                    "",
+                    [],
+                )
+            )
         if arg == "-":
-            return command
-        if arg in _PYTHON_VALUE_OPTIONS:
-            i += 2
+            return "stdin", "", list(args[i + 1 :])
+        if arg.startswith("--"):
+            i += 2 if arg in _PYTHON_VALUE_OPTIONS else 1
             continue
         if not arg.startswith("-"):
-            return ""  # a script file
-        i += 1
-    return command
+            return "script", arg, list(args[i + 1 :])
+        consumed_next = False
+        for j, flag_char in enumerate(arg[1:], start=1):
+            if flag_char in "cmWX":
+                value = arg[j + 1 :]
+                if not value:
+                    value = args[i + 1] if i + 1 < len(args) else ""
+                    consumed_next = True
+                if flag_char in "cm":
+                    rest = list(args[i + 2 :] if consumed_next else args[i + 1 :])
+                    return ("code" if flag_char == "c" else "module"), value, rest
+                break
+        i += 2 if consumed_next else 1
+    return "stdin", "", []
+
+
+def python_code(program: shell.Program, command: str) -> str:
+    """The code Python runs inline: ``-c CODE``, or stdin (a heredoc) when there is no script."""
+    kind, value, _ = python_invocation(list(program.args))
+    if kind == "code":
+        return value
+    return command if kind == "stdin" else ""
 
 
 # ---------------------------------------------------------------------- the hook
