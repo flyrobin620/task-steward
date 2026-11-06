@@ -161,6 +161,17 @@ def test_imported_tasks_continue_in_the_state_machine(home: Home, tmp_path: Path
         assert h.status(task_id) == "ready"
     dispatched = h.run("task_dispatch", task_id="T007", workdir="w7", user_turn=True)
     assert dispatched["events"][0]["data"]["attempt"] == "a3"
+    # The new attempt's brief carries the resume package (DN005 §5.1).
+    brief = (home.root / "runs" / "T007" / "a3" / "brief.md").read_text(encoding="utf-8")
+    for expected in (
+        "resume 资料包",
+        "a2：执行目录 wt/t007；分支 codex/t007；base abc",
+        "已有交付报告：runs/T007/a2/result.html",
+        "最近反馈：补测试后再交",
+        "T004（accepted）：报告 runs/T004/a1/result.html",
+        "先对账",
+    ):
+        assert expected in brief
     # Read-only history stays read-only.
     for task_id in ("T001", "T003"):
         with pytest.raises(TswError):
@@ -240,15 +251,15 @@ def test_a_conflict_found_under_the_commit_lock_overwrites_nothing(
     spec = home.root / "todo" / "T006.md"
     before = spec.read_bytes()
     (tmp_path / "two" / "control" / "todo" / "T006.md").write_text("改过的任务书", encoding="utf-8")
-    staging = importer.stage
+    preparing = importer.prepare
 
-    def stage_then_race(home_: Home, plan: Any, source: Path) -> Any:
-        staged = staging(home_, plan, source)
+    def prepare_then_race(plan: Any, source: Path) -> Any:
+        files = preparing(plan, source)
         if plan.task_id == "T006":  # the new system writes to T006 after the import checked it
             ledger.commit(note("T006", "并发备注", actor={"role": "cli"}))
-        return staged
+        return files
 
-    monkeypatch.setattr(importer, "stage", stage_then_race)
+    monkeypatch.setattr(importer, "prepare", prepare_then_race)
     summary = run_import(home, ledger, second)
     assert {c["task_id"] for c in summary["conflicts"]} == {"T006"}
     assert spec.read_bytes() == before

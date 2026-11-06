@@ -58,7 +58,16 @@ def tasks() -> dict[str, dict[str, Any]]:
             "input_request": {"id": "req-1", "question": "要继续吗？", "status": "pending"},
             "resources": ["res-paused"],
         },
-        "T007": {"status": "running", "attempts": [{"number": 1}, {"number": 2}]},
+        "T007": {
+            "status": "running",
+            "attempts": [
+                {"number": 1},
+                {"number": 2, "worktree": "wt/t007", "branch": "codex/t007", "base_commit": "abc"},
+            ],
+            "worker_report": "runs/T007/a2/result.html",
+            "last_feedback": "补测试后再交",
+            "dependencies": ["T004"],
+        },
         "T008": {"status": "failed"},
         "T010": {
             "status": "paused",

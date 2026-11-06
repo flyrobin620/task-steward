@@ -30,6 +30,8 @@ import json
 import os
 import re
 import shutil
+import stat
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -208,6 +210,8 @@ def _attempts(task: Mapping[str, Any]) -> list[dict[str, Any]]:
         "revision",
         "execution_mode",
         "repo",
+        "worktree",
+        "working_directory",
     )
     return [{k: a.get(k) for k in keep if k in a} for a in task.get("attempts") or []]
 
@@ -353,6 +357,8 @@ def plan_task(
             "review_report": task.get("review_report"),
             "last_feedback": task.get("last_feedback"),
             "result": task.get("result"),
+            "candidate_commit": task.get("candidate_commit"),
+            "integration": task.get("integration"),
         },
     }
     files: list[tuple[Path, str]] = []
@@ -364,42 +370,61 @@ def plan_task(
     return Planned(task_id, str(task.get("status")), new_status, rule, data, files)
 
 
-def stage(home: Home, plan: Planned, source: Path) -> list[tuple[Path, str]]:
-    """Copy a task's files to a private staging area; nothing in the data directory changes.
+def prepare(plan: Planned, source: Path) -> list[tuple[Path, str]]:
+    """Check a task's source files and record its spec digest; nothing is written yet.
 
-    They are published under the commit lock by the task's command, after the conflict checks
-    (:func:`_task_imported`), so a refused import never overwrites anything.
+    The files are copied by the task's command under the commit lock, after the conflict
+    checks (:func:`_task_imported`), so a refused import never overwrites anything.
     """
-    area = home.root / "cache" / "import-staging" / plan.task_id
-    if area.exists():
-        shutil.rmtree(area)
-    staged: list[tuple[Path, str]] = []
-    for index, (src, rel) in enumerate(plan.files):
+    for src, _ in plan.files:
         if not inside(src, source):
             raise rejected("来源文件越出来源目录", reason="snapshot_path", path=str(src))
-        target = area / str(index)
-        if src.is_dir():
-            shutil.copytree(src, target, symlinks=True)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, target)
-        staged.append((target, rel))
-    spec = next((p for p, rel in staged if rel == plan.data["spec_path"]), None)
+    spec = next((src for src, rel in plan.files if rel == plan.data["spec_path"]), None)
     plan.data["spec_sha256"] = _file_sha256(spec) if spec is not None else None
-    return staged
+    return list(plan.files)
 
 
-def publish(home: Home, staged: list[tuple[Path, str]]) -> None:
-    for path, rel in staged:
+def _writable_then_retry(func: Any, path: str, _exc: Any) -> None:
+    """rmtree helper: read-only files (git objects) are made writable and removed again."""
+    Path(path).chmod(stat.S_IWRITE)
+    func(path)
+
+
+def remove_tree(path: Path) -> None:
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_writable_then_retry)
+    else:  # pragma: no cover - Python 3.10 / 3.11
+        shutil.rmtree(path, onerror=_writable_then_retry)
+
+
+def place(home: Home, files: list[tuple[Path, str]]) -> None:
+    """Copy a task's files into the data directory, replacing what an earlier import put there.
+
+    Copied in place rather than renamed from a staging area: on Windows a freshly written tree
+    of tens of thousands of files is often still held open by scanners, and the rename fails.
+    """
+    for src, rel in files:
         target = home.root / rel
         if not inside(target.parent if target.parent.exists() else home.root, home.root):
             raise rejected("导入目标越出数据目录", reason="snapshot_path", path=rel)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_dir():
-            shutil.rmtree(target)
-        elif target.exists():
-            target.unlink()
-        path.replace(target)
+        try:
+            if target.is_dir():
+                remove_tree(target)
+            elif target.exists():
+                target.unlink()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if src.is_dir():
+                shutil.copytree(src, target, symlinks=True)
+            else:
+                shutil.copy2(src, target)
+        except OSError as exc:
+            raise TswError(
+                ErrorCode.UNAVAILABLE,
+                "复制任务文件失败；重新运行导入会从这个任务继续",
+                reason="import_copy",
+                path=rel,
+                error=str(exc),
+            ) from exc
 
 
 # ---------------------------------------------------------------------- import
@@ -523,10 +548,9 @@ def run_import(
         _copy_legacy(home, source, snapshot, snapshot_dir)
     _commit_started(ledger, snapshot, snapshot_sha, last_seq)
     for plan in todo:
-        with storage.writer():
-            staged = stage(home, plan, source)
+        files = prepare(plan, source)
         try:
-            result = ledger.commit(_task_imported(home, plan, staged, last_seq))
+            result = ledger.commit(_task_imported(home, plan, files, last_seq))
         except TswError as exc:
             if exc.details.get("reason") != "import_conflict":
                 raise
@@ -541,7 +565,6 @@ def run_import(
     report.missing_files = _unresolved_refs(home, report.planned)
     _commit_completed(ledger, report, last_seq)
     with storage.writer():
-        shutil.rmtree(home.root / "cache" / "import-staging", ignore_errors=True)
         _write_report(home, report)
     return report.summary()
 
@@ -664,7 +687,7 @@ def _commit_started(ledger: Ledger, snapshot: Mapping[str, Any], sha: str, last_
 
 
 def _task_imported(
-    home: Home, plan: Planned, staged: list[tuple[Path, str]], last_seq: int
+    home: Home, plan: Planned, files: list[tuple[Path, str]], last_seq: int
 ) -> Command:
     """The task's event; its files are published here, under the commit lock, after the checks."""
     data = {**plan.data, "source_sequence": last_seq}
@@ -679,7 +702,7 @@ def _task_imported(
             raise rejected("任务已在新系统中有自己的事件，不覆盖", reason="import_conflict")
         if row is not None and int(row["source_sequence"]) >= last_seq:
             return []  # an import of the same or a later snapshot got here first
-        publish(home, staged)
+        place(home, files)
         return [
             EventDraft(
                 type="import.task_imported",

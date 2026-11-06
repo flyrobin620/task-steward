@@ -14,6 +14,7 @@ from tsw.commands import Command, CommitContext
 from tsw.errors import rejected
 from tsw.events import EventDraft, digest
 from tsw.home import same_dir
+from tsw.importer.resume import resume_package
 from tsw.machine import guards
 from tsw.machine.base import (
     ToolEnv,
@@ -337,6 +338,7 @@ def task_update(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             # DN002 §5.1: the brief is brought to the new revision before binding.
             updated = {**row, "revision": revision, "goal": goal, "acceptance": dumps(acceptance)}
             body = _brief(
+                ctx.conn,
                 updated,
                 str(current["attempt"]),
                 str(current["workdir"]),
@@ -419,14 +421,20 @@ def stale_keep(inp: Mapping[str, Any], env: ToolEnv) -> Command:
 # ---------------------------------------------------------------------- dispatch and attempts
 
 
-def _brief(row: Mapping[str, Any], attempt_id: str, workdir: str, read_set: list[str]) -> str:
+def _brief(
+    conn: sqlite3.Connection,
+    row: Mapping[str, Any],
+    attempt_id: str,
+    workdir: str,
+    read_set: list[str],
+) -> str:
     acceptance = "\n".join(f"- {item}" for item in loads(row["acceptance"], []))
     return (
         f"# 任务书 {row['task_id']} {attempt_id}\n\n"
         f"- 标题：{row['title']}\n- 仓库：{row['repo']}\n- revision：{row['revision']}\n"
         f"- 执行目录：{workdir}\n- 授权读取集合：{', '.join(read_set)}\n\n"
         f"## 目标\n\n{row['goal']}\n\n## 验收\n\n{acceptance}\n"
-    )
+    ) + resume_package(conn, str(row["task_id"]))
 
 
 @tool("task_dispatch", "orchestrator", description="派发任务（T07，R-ATTEMPT）")
@@ -481,7 +489,7 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         read_set = sorted({task_id, *map(str, deps), *extra_reads})
         brief_path = f"runs/{task_id}/{attempt_id}/brief.md"
         ctx.storage.put_artifact(
-            brief_path, _brief(row, attempt_id, workdir, read_set).encode("utf-8")
+            brief_path, _brief(ctx.conn, row, attempt_id, workdir, read_set).encode("utf-8")
         )
         return [
             EventDraft(
