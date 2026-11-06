@@ -30,8 +30,6 @@ import json
 import os
 import re
 import shutil
-import stat
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -42,8 +40,10 @@ from tsw.commands import Command, CommitContext
 from tsw.errors import ErrorCode, TswError, rejected
 from tsw.events import EventDraft, sha256_hex, utc_now
 from tsw.home import Home
-from tsw.importer import renumber
+from tsw.importer import renumber, verify
+from tsw.importer.files import make_writable, remove_tree
 from tsw.ledger import Ledger
+from tsw.projection import projected_tail
 from tsw.storage.fs import FsStorage
 
 SYSTEM = "orchestrator-agent"
@@ -385,19 +385,6 @@ def prepare(plan: Planned, source: Path) -> list[tuple[Path, str]]:
     return list(plan.files)
 
 
-def _writable_then_retry(func: Any, path: str, _exc: Any) -> None:
-    """rmtree helper: read-only files (git objects) are made writable and removed again."""
-    Path(path).chmod(stat.S_IWRITE)
-    func(path)
-
-
-def remove_tree(path: Path) -> None:
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=_writable_then_retry)
-    else:  # pragma: no cover - Python 3.10 / 3.11
-        shutil.rmtree(path, onerror=_writable_then_retry)
-
-
 def place(home: Home, files: list[tuple[Path, str]]) -> None:
     """Copy a task's files into the data directory, replacing what an earlier import put there.
 
@@ -411,7 +398,8 @@ def place(home: Home, files: list[tuple[Path, str]]) -> None:
         try:
             if target.is_dir():
                 remove_tree(target)
-            elif target.exists():
+            elif target.exists():  # copy2 keeps a read-only source file read-only
+                make_writable(target)
                 target.unlink()
             target.parent.mkdir(parents=True, exist_ok=True)
             if src.is_dir():
@@ -444,6 +432,9 @@ class Report:
     volume_problems: list[str] = field(default_factory=lambda: [])
     invalid: list[str] = field(default_factory=lambda: [])
     renumbered: list[dict[str, str]] = field(default_factory=lambda: [])
+    checks: list[verify.Check] = field(default_factory=lambda: [])
+    start_sequence: int = 0
+    rerun: bool = False
     dry_run: bool = False
 
     def counts(self) -> dict[str, int]:
@@ -523,7 +514,10 @@ def run_import(
     for old, new in renumber_local or []:
         if dry_run:
             with ledger.view() as conn:
-                if conn.execute("SELECT 1 FROM tasks WHERE task_id = ?", (new,)).fetchone() is None:
+                done = conn.execute(
+                    "SELECT 1 FROM commands WHERE command_id = ?", (f"renumber:{old}:{new}",)
+                ).fetchone()
+                if done is None:
                     renumber.check(conn, old, new, floor=floor)
         else:
             ledger.commit(renumber.command(home, old, new, floor=floor))
@@ -552,15 +546,17 @@ def run_import(
                 {"task_id": plan.task_id, "reason": "导入后已在新系统中有事件，不覆盖"}
             )
         else:
-            plan.data["update"] = True
-            todo.append(plan)
+            todo.append(plan)  # a later snapshot of an untouched task: an update
     if dry_run:
         return report.summary()
     storage = ledger.storage
     assert isinstance(storage, FsStorage)
     batch = _batch(ledger, last_seq)
+    report.start_sequence = _tail(ledger)
+    report.rerun = batch == "completed"
     if not todo and batch == "completed":  # nothing new: no events at all (DN005 §6 item 6)
         report.missing_files = _unresolved_refs(home, report.planned)
+        _verify(home, ledger, report)
         with storage.writer():
             _write_report(home, report)
         return report.summary()
@@ -585,9 +581,29 @@ def run_import(
             report.imported.append(plan.task_id)
     report.missing_files = _unresolved_refs(home, report.planned)
     _commit_completed(ledger, report, last_seq)
+    _verify(home, ledger, report)
     with storage.writer():
         _write_report(home, report)
     return report.summary()
+
+
+def _tail(ledger: Ledger) -> int:
+    with ledger.view() as conn:
+        return projected_tail(conn).sequence
+
+
+def _verify(home: Home, ledger: Ledger, report: Report) -> None:
+    """The DN005 §6 checks, after the import's events (they are not part of the summary)."""
+    report.checks = verify.checks(
+        home,
+        ledger,
+        report.snapshot,
+        conflicts=[str(c["task_id"]) for c in report.conflicts],
+        missing=report.missing_files,
+        volume_problems=check_volumes(Path(report.snapshot["source"]["root"]), report.snapshot),
+        new_events=_tail(ledger) - report.start_sequence,
+        rerun=report.rerun,
+    )
 
 
 def _batch(ledger: Ledger, last_seq: int) -> str | None:
@@ -675,7 +691,8 @@ def _unresolved_refs(home: Home, planned: list[Planned]) -> list[str]:
         for ref in refs:
             local = _local_ref(plan.task_id, ref, read_only)
             path = resolve_ref(home, local) if isinstance(local, str) else None
-            if path is not None and not path.exists():
+            # A link that leads out of the data directory does not count as kept history.
+            if path is not None and (not path.exists() or not inside(path, home.root)):
                 missing.append(str(local))
     return sorted(set(missing))
 
@@ -724,12 +741,14 @@ def _task_imported(
         if row is not None and int(row["source_sequence"]) >= last_seq:
             return []  # an import of the same or a later snapshot got here first
         place(home, files)
+        # New or update is decided here, under the lock: another import may have brought the
+        # task in since this run looked (DN005 §4.4).
         return [
             EventDraft(
                 type="import.task_imported",
                 task_id=plan.task_id,
                 revision=int(plan.data["legacy"].get("revision") or 1),
-                data=data,
+                data={**data, "update": row is not None},
             )
         ]
 
@@ -762,14 +781,6 @@ def _commit_completed(ledger: Ledger, report: Report, last_seq: int) -> None:
 
 
 # ---------------------------------------------------------------------- report
-
-
-CHECKS = (
-    ("任务总数与旧系统一致", "tasks"),
-    ("事件卷按原字节复制并核对摘要", "volumes"),
-    ("只读任务的成果在数据目录内可解析", "refs"),
-    ("重复导入不产生新事件", "idempotent"),
-)
 
 
 def _write_report(home: Home, report: Report) -> None:
@@ -817,13 +828,16 @@ def _write_report(home: Home, report: Report) -> None:
         lines += [f"- 事件卷：{p}" for p in report.volume_problems]
     if not (report.conflicts or report.todo_only or report.missing_files or report.volume_problems):
         lines.append("- 无")
+    lines += ["", "## 验证清单（DN005 §6）", "", "| 项 | 检查 | 结果 |", "| --- | --- | --- |"]
+    for check in sorted(report.checks, key=lambda c: c.number):
+        lines.append(f"| {check.number} | {check.title} | {check.mark()} |")
+    for check in sorted(report.checks, key=lambda c: c.number):
+        lines += ["", f"### {check.number}. {check.title}：{check.mark()}", ""]
+        lines += [f"- {d}" for d in check.details[:200]]
     lines += [
         "",
-        "## 未自动完成的核对（DN005 §6）",
+        "## 其他",
         "",
-        "- 可 resume 任务的执行目录、分支与提交是否与记录一致：派发时由 worker 第一步对账。",
-        "- 新旧 STATUS 页逐项比对：人工抽查。",
-        "- resume 演练：人工抽取至少 3 个任务做到对账为止。",
         "- 旧系统的仓库、账号配置已原样复制到 "
         f"`{LEGACY}/config/`，没有自动并入统一配置；按需手工转换（DN003 §3.4）。",
     ]
@@ -854,6 +868,8 @@ def _html(markdown: str) -> str:
             body.append(f"<h1>{html.escape(line[2:])}</h1>")
         elif line.startswith("## "):
             body.append(f"<h2>{html.escape(line[3:])}</h2>")
+        elif line.startswith("### "):
+            body.append(f"<h3>{html.escape(line[4:])}</h3>")
         elif line.lstrip().startswith("- "):
             body.append(f"<p>• {html.escape(line.strip()[2:])}</p>")
         elif line.strip():

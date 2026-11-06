@@ -5,6 +5,10 @@ attempt is dispatched, its brief gets this section: where the earlier work is, w
 delivered, what is still open, and the reconciliation the worker does before continuing.
 """
 
+# Legacy records are walked generically.
+# pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false
+# pyright: reportUnknownVariableType=false
+
 from __future__ import annotations
 
 import json
@@ -29,6 +33,23 @@ def _line(label: str, value: Any) -> str:
     return f"- {label}：{value}"
 
 
+def _text(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("answer", "decision", "text"):
+            if key in value:
+                return str(value[key])
+    return json.dumps(value, ensure_ascii=False, sort_keys=True) if value is not None else "未记录"
+
+
+def _report_path(ref: Any, resumable: Any) -> str | None:
+    """Where a dependency's report is in the data directory (DN005 §4.2 step 6)."""
+    if not isinstance(ref, str) or not ref:
+        return None
+    if resumable is not None and not int(resumable) and ref.startswith("runs/"):
+        return f"legacy/orchestrator-agent/{ref}"  # read-only history was copied there
+    return ref
+
+
 def resume_package(conn: sqlite3.Connection, task_id: str) -> str:
     """The brief section for a resumable imported task; empty for any other task."""
     imported = conn.execute(
@@ -46,12 +67,12 @@ def resume_package(conn: sqlite3.Connection, task_id: str) -> str:
         (task_id,),
     ).fetchall()
     requests = conn.execute(
-        "SELECT request_id, question, status FROM input_requests WHERE task_id = ? "
-        "AND status = 'pending' ORDER BY request_id",
+        "SELECT request_id, question, status, resolution FROM input_requests WHERE task_id = ? "
+        "ORDER BY request_id",
         (task_id,),
     ).fetchall()
     deps = conn.execute(
-        "SELECT d.dep_id, t.status, i.legacy FROM dependencies d "
+        "SELECT d.dep_id, t.status, i.legacy, i.resumable, i.source FROM dependencies d "
         "LEFT JOIN tasks t ON t.task_id = d.dep_id "
         "LEFT JOIN imported_tasks i ON i.task_id = d.dep_id WHERE d.task_id = ? ORDER BY d.dep_id",
         (task_id,),
@@ -85,8 +106,13 @@ def resume_package(conn: sqlite3.Connection, task_id: str) -> str:
         f"核实时间 {o['verified_at'] or '未记录'}"
         for o in outputs
     ] or ["- 无"]
-    lines += ["", "### 待答问题", ""]
-    lines += [f"- {r['request_id']}：{r['question']}" for r in requests] or ["- 无"]
+    lines += ["", "### 问题与用户答复", ""]
+    for r in requests:
+        answer = _loads(r["resolution"], None)
+        state = "待答" if r["status"] == "pending" else f"{r['status']}，答复：{_text(answer)}"
+        lines.append(f"- {r['request_id']}：{r['question']}（{state}）")
+    if not requests:
+        lines.append("- 无")
     lines += ["", "### 执行现场（旧 attempt）", ""]
     for attempt in attempts:
         place = attempt.get("worktree") or attempt.get("working_directory") or attempt.get("source")
@@ -101,7 +127,7 @@ def resume_package(conn: sqlite3.Connection, task_id: str) -> str:
     lines.append(_line("集成提交", legacy.get("result") or legacy.get("integration")))
     lines += ["", "### 依赖成果", ""]
     for dep in deps:
-        report = _loads(dep["legacy"], {}).get("worker_report")
+        report = _report_path(_loads(dep["legacy"], {}).get("worker_report"), dep["resumable"])
         lines.append(f"- {dep['dep_id']}（{dep['status'] or '未知'}）：报告 {report or '未记录'}")
     if not deps:
         lines.append("- 无")

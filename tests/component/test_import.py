@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import stat
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +13,10 @@ import pytest
 from tests.import_fixture import PR, build
 from tests.machine_harness import Harness
 from tsw.errors import TswError
+from tsw.events import sha256_hex
 from tsw.home import Home
 from tsw.importer import orchestrator_agent as importer
+from tsw.importer import verify
 from tsw.importer.orchestrator_agent import run_import
 from tsw.ledger import Ledger
 from tsw.machine import guards
@@ -84,6 +88,16 @@ def test_every_class_is_imported_with_its_history(home: Home, tmp_path: Path) ->
     assert (home.root / LEGACY / "config" / "repositories.json").is_file()
     report = (home.root / LEGACY / "import" / "report.md").read_text(encoding="utf-8")
     assert "T009" in report and "| T004 | done | done |" in report
+    # The DN005 §6 checks the import can compute; item 6 needs a second run.
+    for line in (
+        "| 1 | 任务总数与旧审计一致 | 通过 |",
+        "| 2 | 事件卷按原字节复制，来源未改动 | 通过 |",
+        "| 3 | 成果引用在数据目录内可解析 | 通过 |",
+        "| 4 | 可 resume 任务的执行现场与记录一致 | 未通过 |",
+        "- T007：执行目录不存在：wt/t007",
+        "| 6 | 重复执行导入不产生新事件 | 需人工 |",
+    ):
+        assert line in report
     assert (
         (home.root / LEGACY / "import" / "report.html")
         .read_text(encoding="utf-8")
@@ -106,6 +120,8 @@ def test_running_the_same_import_again_appends_nothing(home: Home, tmp_path: Pat
     again = run_import(home, ledger, snapshot)
     assert (again["imported"], again["unchanged"]) == (0, 9)
     assert types(ledger) == before
+    report = (home.root / LEGACY / "import" / "report.md").read_text(encoding="utf-8")
+    assert "| 6 | 重复执行导入不产生新事件 | 通过 |" in report
 
 
 def test_a_later_snapshot_updates_untouched_tasks_only(home: Home, tmp_path: Path) -> None:
@@ -118,6 +134,8 @@ def test_a_later_snapshot_updates_untouched_tasks_only(home: Home, tmp_path: Pat
     snapshot["source"]["root"] = str(tmp_path / "two" / "control")
     snapshot["tasks"]["T005"]["status"] = "ready"
     (second / "snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
+    # A spec copied read-only from the source is still replaced by the later snapshot.
+    (home.root / "todo" / "T005.md").chmod(stat.S_IREAD)
     summary = run_import(home, ledger, second)
     assert [c["task_id"] for c in summary["conflicts"]] == ["T006"]
     assert summary["imported"] == 8
@@ -164,6 +182,16 @@ def test_imported_tasks_continue_in_the_state_machine(home: Home, tmp_path: Path
     for task_id in ("T006", "T007"):
         h.run("task_resume", task_id=task_id, condition_met=True, note="已核实")
         assert h.status(task_id) == "ready"
+    h.run(
+        "input_resolve",
+        task_id="T006",
+        request_id="orchestrator-agent:req-1",
+        answer="继续",
+        user_source=h.source("T006", 1, "answer", "继续", request_id="orchestrator-agent:req-1"),
+    )
+    dispatched = h.run("task_dispatch", task_id="T006", workdir="w6", user_turn=True)
+    brief6 = (home.root / "runs" / "T006" / "a1" / "brief.md").read_text(encoding="utf-8")
+    assert "orchestrator-agent:req-1：要继续吗？（resolved，答复：继续）" in brief6
     dispatched = h.run("task_dispatch", task_id="T007", workdir="w7", user_turn=True)
     assert dispatched["events"][0]["data"]["attempt"] == "a3"
     # The new attempt's brief carries the resume package (DN005 §5.1).
@@ -174,6 +202,8 @@ def test_imported_tasks_continue_in_the_state_machine(home: Home, tmp_path: Path
         "已有交付报告：runs/T007/a2/result.html",
         "最近反馈：补测试后再交",
         "T004（accepted）：报告 runs/T004/a1/result.html",
+        # Read-only history was copied to legacy/, and the package points there.
+        "T001（archived）：报告 legacy/orchestrator-agent/runs/T001/a1/result.html",
         "先对账",
     ):
         assert expected in brief
@@ -295,21 +325,35 @@ def test_an_interrupted_import_is_completed_by_the_next_run(
 def test_a_finished_local_task_is_renumbered_to_make_room(home: Home, tmp_path: Path) -> None:
     h = Harness(home)
     h.register("T001", title="本地任务")
-    h.register("T002", title="下游")
-    h.plan("T002", deps=["T001"])
+    h.register("T002", title="仍在执行")
+    h.plan("T002")
+    h.run("task_dispatch", task_id="T002", workdir="w2", user_turn=True, read_set=["T001"])
     h.run("task_cancel", task_id="T001", user_source=h.source("T001", 1, "cancel"))
     result = home.root / "runs" / "T001" / "a1" / "result.html"
     result.parent.mkdir(parents=True)
     result.write_text("<p>本地成果</p>", encoding="utf-8")
     ledger = Ledger(home, machine="m1")
     _, snapshot = build(tmp_path)
-    # The other conflicting task is still active and cannot move.
+    # A first import leaves both ids to the local tasks; T008 depends on the source's T001.
+    first = run_import(home, ledger, snapshot)
+    assert [c["task_id"] for c in first["conflicts"]] == ["T001", "T002"]
+    # The task still running cannot move; a new id must come after every imported id.
     with pytest.raises(TswError) as refused:
         run_import(home, ledger, snapshot, renumber_local=[("T002", "T012")])
     assert refused.value.details["reason"] == "renumber_active"
-    with pytest.raises(TswError) as low:  # the new id must come after every imported id
-        run_import(home, ledger, snapshot, dry_run=True, renumber_local=[("T001", "T010")])
+    with pytest.raises(TswError) as low:
+        run_import(home, ledger, snapshot, dry_run=True, renumber_local=[("T001", "T009")])
     assert low.value.details["reason"] == "renumber_floor"
+    # A target that is already taken is refused before anything moves.
+    taken = home.root / "runs" / "T011"
+    taken.mkdir()
+    with pytest.raises(TswError) as busy:
+        run_import(home, ledger, snapshot, renumber_local=[("T001", "T011")])
+    assert busy.value.details["reason"] == "renumber_taken"
+    assert (home.root / "todo" / "T001.md").is_file() and result.is_file()
+    taken.rmdir()
+    # An earlier run that stopped after moving the spec is finished by the next one.
+    (home.root / "todo" / "T001.md").replace(home.root / "todo" / "T011.md")
     before = len(types(ledger))
     summary = run_import(home, ledger, snapshot, renumber_local=[("T001", "T011")])
     assert summary["renumbered_local"] == [{"from": "T001", "to": "T011"}]
@@ -318,19 +362,89 @@ def test_a_finished_local_task_is_renumbered_to_make_room(home: Home, tmp_path: 
     assert tasks["T011"]["title"] == "本地任务" and tasks["T011"]["status"] == "cancelled"
     assert tasks["T011"]["spec_path"] == "todo/T011.md"
     assert tasks["T001"]["title"] == "旧任务 T001"  # the imported one took the id
-    deps = rows(ledger, "SELECT dep_id FROM dependencies WHERE task_id = 'T002'")
-    assert deps == [{"dep_id": "T011"}]
     spec = (home.root / "todo" / "T011.md").read_text(encoding="utf-8")
     assert spec.startswith("### T011")
+    assert tasks["T011"]["spec_sha256"] == sha256_hex(spec.encode("utf-8"))
     assert (home.root / "runs" / "T011" / "a1" / "result.html").is_file()
     assert not (home.root / "runs" / "T001").exists()
+    # The local worker that may read T001 may now read T011; the imported T008 still
+    # depends on the source's T001.
+    read_set = rows(ledger, "SELECT read_set FROM attempts WHERE task_id = 'T002'")
+    assert json.loads(read_set[0]["read_set"]) == ["T002", "T011"]
+    deps = rows(ledger, "SELECT dep_id FROM dependencies WHERE task_id = 'T008'")
+    assert deps == [{"dep_id": "T001"}]
     # Running it again (renumbering included) appends nothing, and a rebuild agrees.
     after = types(ledger)
     assert after[before] == "task.renumbered"
     run_import(home, ledger, snapshot, renumber_local=[("T001", "T011")])
     assert types(ledger) == after
-    projected = rows(ledger, "SELECT task_id, status, spec_path, version FROM tasks ORDER BY 1")
+    query = "SELECT task_id, status, spec_path, version FROM tasks ORDER BY 1"
+    projected = rows(ledger, query), rows(ledger, "SELECT * FROM attempts ORDER BY 1, 2")
     ledger.rebuild()
-    assert rows(ledger, "SELECT task_id, status, spec_path, version FROM tasks ORDER BY 1") == (
-        projected
-    )
+    assert (rows(ledger, query), rows(ledger, "SELECT * FROM attempts ORDER BY 1, 2")) == projected
+
+
+def test_an_import_that_lost_a_race_to_another_import_updates(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, older = build(tmp_path / "one")
+    _, newer = build(tmp_path / "two", tail_events=3)
+    ledger = Ledger(home)
+    preparing = importer.prepare
+    raced: list[bool] = []
+
+    def older_import_first(plan: Any, source: Path) -> Any:
+        if not raced:  # the older snapshot's import gets in after this run looked
+            raced.append(True)
+            monkeypatch.setattr(importer, "prepare", preparing)
+            run_import(home, ledger, older)
+            monkeypatch.setattr(importer, "prepare", older_import_first)
+        return preparing(plan, source)
+
+    monkeypatch.setattr(importer, "prepare", older_import_first)
+    summary = run_import(home, ledger, newer)
+    assert summary["conflicts"] == []
+    seqs = rows(ledger, "SELECT DISTINCT source_sequence FROM imported_tasks")
+    assert seqs == [{"source_sequence": 5}]
+
+
+def test_the_recorded_execution_scene_is_compared_with_the_disk(tmp_path: Path) -> None:
+    repo = tmp_path / "wt"
+    repo.mkdir()
+
+    def git(*args: str) -> str:
+        done = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t",
+                "-c",
+                "core.autocrlf=false",
+                *args,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return done.stdout.strip()
+
+    git("init", "-q", "-b", "work")
+    (repo / "a.txt").write_text("a", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "a")
+    head = git("rev-parse", "HEAD")
+    assert verify.scene({"worktree": str(repo), "branch": "work", "base_commit": head}) == []
+    (repo / "b.txt").write_text("b", encoding="utf-8")
+    found = verify.scene({"worktree": str(repo), "branch": "other", "base_commit": "0" * 40})
+    assert [f.split("：")[0] for f in found] == [
+        "分支为 work，记录为 other",
+        f"记录的 base {'0' * 12} 不在当前 HEAD 的历史中",
+        "有未提交改动",
+    ]
+    assert verify.scene({"worktree": str(tmp_path / "gone")}) == [
+        f"执行目录不存在：{tmp_path / 'gone'}"
+    ]

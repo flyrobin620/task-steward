@@ -9,6 +9,7 @@ the new id, and later events use the new id.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import sqlite3
@@ -18,6 +19,7 @@ from tsw.commands import Command, CommitContext
 from tsw.errors import rejected
 from tsw.events import EventDraft, sha256_hex
 from tsw.home import Home
+from tsw.importer.files import make_writable, remove_tree
 
 MOVABLE = frozenset({"done", "accepted", "archived", "cancelled"})
 RUNNING = frozenset({"starting", "standby", "live"})
@@ -78,38 +80,55 @@ def check(conn: sqlite3.Connection, old: str, new: str, *, floor: int) -> dict[s
     return dict(row)
 
 
+def _plan_moves(home: Home, old: str, new: str) -> list[tuple[str, str]]:
+    """The moves still to do; refuses before anything is written when a target is taken.
+
+    A move an interrupted earlier run already made (source gone, target present) is done.
+    """
+    moves: list[tuple[str, str]] = []
+    for old_rel, new_rel in ((f"todo/{old}.md", f"todo/{new}.md"), (f"runs/{old}", f"runs/{new}")):
+        source, target = home.root / old_rel, home.root / new_rel
+        if source.exists() and target.exists():
+            raise rejected("新编号的文件已存在", reason="renumber_taken", path=new_rel)
+        if source.exists():
+            moves.append((old_rel, new_rel))
+    return moves
+
+
 def _move(home: Home, old_rel: str, new_rel: str) -> None:
     source, target = home.root / old_rel, home.root / new_rel
-    if not source.exists():
-        return
-    if target.exists():
-        raise rejected("新编号的文件已存在", reason="renumber_taken", path=new_rel)
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         source.replace(target)
     except OSError:  # a directory held open (Windows): copy, then remove the original
         if source.is_dir():
             shutil.copytree(source, target, symlinks=True)
-            shutil.rmtree(source)
+            remove_tree(source)
         else:
             shutil.copy2(source, target)
+            make_writable(source)
             source.unlink()
+
+
+def _renamed_spec(text: str, old: str, new: str) -> str:
+    # The heading names the task: "### T001：…" becomes "### T238：…".
+    return re.sub(rf"^(#+\s*){old}(?=\W)", rf"\g<1>{new}", text, count=1, flags=re.M)
 
 
 def command(home: Home, old: str, new: str, *, floor: int) -> Command:
     def build(ctx: CommitContext) -> list[EventDraft]:
         row = check(ctx.conn, old, new, floor=floor)
         spec_old, spec_new = f"todo/{old}.md", f"todo/{new}.md"
+        moves = _plan_moves(home, old, new)  # every check happens before the first write
+        for old_rel, new_rel in moves:
+            _move(home, old_rel, new_rel)
         spec_sha = None
-        spec = home.root / spec_old
-        if spec.is_file():
-            text = spec.read_text(encoding="utf-8")
-            # The heading names the task: "### T001：…" becomes "### T238：…".
-            text = re.sub(rf"^(#+\s*){old}(?=\W)", rf"\g<1>{new}", text, count=1, flags=re.M)
+        spec = home.root / spec_new
+        if spec.is_file():  # renamed after the move, so a retry finds it in either state
+            text = _renamed_spec(spec.read_text(encoding="utf-8"), old, new)
+            make_writable(spec)
             spec.write_text(text, encoding="utf-8", newline="\n")
             spec_sha = sha256_hex(text.encode("utf-8"))
-        _move(home, spec_old, spec_new)
-        _move(home, f"runs/{old}", f"runs/{new}")
         return [
             EventDraft(
                 type="task.renumbered",
@@ -155,7 +174,22 @@ def reduce(conn: sqlite3.Connection, event: Any) -> None:
                         (before, after, old),
                     )
             conn.execute(f"UPDATE {table} SET {key} = ? WHERE {key} = ?", (new, old))
-    conn.execute("UPDATE dependencies SET dep_id = ? WHERE dep_id = ?", (new, old))
+    # Only the system's own tasks refer to the local task; an imported task's dependency on the
+    # same id means the imported task of the source system.
+    conn.execute(
+        "UPDATE dependencies SET dep_id = ? WHERE dep_id = ? "
+        "AND task_id NOT IN (SELECT task_id FROM imported_tasks)",
+        (new, old),
+    )
+    for task_id, attempt, read_set in conn.execute(
+        "SELECT task_id, attempt, read_set FROM attempts WHERE read_set LIKE ?",
+        (f'%"{old}"%',),
+    ).fetchall():
+        names = [new if r == old else r for r in json.loads(read_set or "[]")]
+        conn.execute(
+            "UPDATE attempts SET read_set = ? WHERE task_id = ? AND attempt = ?",
+            (json.dumps(sorted(set(names)), ensure_ascii=False), task_id, attempt),
+        )
     conn.execute(
         "UPDATE tasks SET spec_path = ?, spec_sha256 = COALESCE(?, spec_sha256), "
         "version = version + 1 WHERE task_id = ?",
