@@ -51,6 +51,16 @@ def test_tsw_owned_paths(tmp_path: Path) -> None:
         ("Get-FileHash C:/tools/app.exe", True, True, False, "哈希"),
         ("sha256sum report.md", True, True, True, None),
         ("git status", False, False, True, None),
+        # The hook entry records the user's words: only the host runs it (DN006 §8.1a).
+        ("echo '{}' | tsw guard UserPromptSubmit", True, True, True, "宿主调用"),
+        (
+            "python plugin/bin/tsw_launch.py guard UserPromptSubmit < p.json",
+            True,
+            True,
+            False,
+            "宿主",
+        ),
+        ("py -m tsw --home h guard Stop", True, True, True, "宿主"),
     ],
 )
 def test_bash_rules(  # noqa: PLR0917 - one parameter per table column

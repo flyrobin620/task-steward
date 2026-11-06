@@ -114,17 +114,24 @@ def session_message(
     about its latest question, while that question has no answer from the user in this session
     yet. That includes a question the orchestrator or another channel already answered: the
     user's own reply there is a late answer that prevails (DN006 §8.5)."""
+    # Only the session's latest question counts: once it is answered here, or a newer question
+    # replaced it, older questions never collect messages again.
     request = row_dict(
         conn.execute(
-            "SELECT s.request_id FROM in_session_requests s "
-            "JOIN input_requests r ON r.request_id = s.request_id "
-            "WHERE s.task_id = ? AND s.session_ref = ? AND s.answered_in_session = 0 "
-            "AND r.status IN ('pending', 'resolved') ORDER BY s.asked_at DESC, s.request_id DESC "
-            "LIMIT 1",
+            "SELECT s.request_id, s.answered_in_session, r.status, r.binding "
+            "FROM in_session_requests s JOIN input_requests r ON r.request_id = s.request_id "
+            "WHERE s.task_id = ? AND s.session_ref = ? "
+            "ORDER BY r.rowid DESC LIMIT 1",
             (task_id, session_ref),
         ).fetchone()
     )
-    if request is None or is_automated(prompt):
+    if (
+        request is None
+        or request["answered_in_session"]
+        or request["status"] not in ("pending", "resolved")
+        or loads(request["binding"], {}).get("revision") != int(task(conn, task_id)["revision"])
+        or is_automated(prompt)
+    ):
         return None
     if not prompt.strip():
         return None
