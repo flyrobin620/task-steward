@@ -164,20 +164,26 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     for entries in hooks.values():
         for entry in entries:
             assert "tsw_launch.py" in entry["hooks"][0]["command"]
-    assert (
-        (PLUGIN / "skills" / "orchestrate" / "SKILL.md")
-        .read_text(encoding="utf-8")
-        .startswith("---\nname: orchestrate")
-    )
+    # The plugin is enabled at user scope, so a skill in it would reach every session in any
+    # directory. The orchestrator's skill is rendered into the data directory instead.
+    assert not (PLUGIN / "skills").exists()
     market = json.loads(
         (REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
     )
     assert market["plugins"][0]["source"] == "./plugin"
-    code, _ = run_json("host", "render")
+    skill = home / ".claude" / "skills" / "orchestrate" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("stale", encoding="utf-8")
+    code, out = run_json("host", "render")
     assert code == 0
+    assert [Path(p) for p in out["written"]] == [home / "CLAUDE.md", skill]
     assert (home / "CLAUDE.md").read_text(encoding="utf-8").startswith("# TaskSteward 数据目录")
+    text = skill.read_text(encoding="utf-8")
+    assert text.startswith("---\nname: orchestrate\ndescription: ")
+    assert "\n---\n\n# TaskSteward 主会话\n" in text
     code, hint = run_json("host", "install-hint")
     assert code == 0 and "/plugin install task-steward@task-steward" in hint["hint"]
+    assert "tsw host render" in hint["hint"]
 
 
 def launch(

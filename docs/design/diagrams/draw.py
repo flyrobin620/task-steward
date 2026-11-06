@@ -356,12 +356,12 @@ def classification():
 def architecture():
     for k,t,c,dt,en in [
      ('U','用户','blue','','U · user'),
-     ('O','主会话','blue','cwd = 控制根\nskill: orchestrate','orchestrator'),
+     ('O','主会话','blue','cwd = 控制根\nskill: orchestrate（数据目录）','orchestrator'),
      ('W1','worker 子会话','orange','cwd = 任务 worktree','T241-a1'),
      ('W2','worker 子会话','orange','cwd = 研究目录','T242-a1'),
      ('MCP','tsw MCP server','purple','按 cwd 解析角色·按角色暴露工具','MCP'),
      ('HOOKS','hooks','purple','SessionStart / PreToolUse / Stop','HOOKS'),
-     ('SK','skills','purple','orchestrate / worker / self-review','SK'),
+     ('SK','skills','purple','worker / self-review','SK'),
      ('L','事件账本','blue','ledger/events/*.jsonl','L · ledger'),
      ('PJ','.local 投影','teal','state.sqlite（可重建）','PJ · projection'),
      ('CFG','统一配置','blue','config/task-steward.json','CFG · configuration'),

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="c088ebd8d526e4e22cdb6ebe9ec335e610b5621970425180dbcf6863003c9884">
+<meta name="tsw-source-sha256" content="272a6f0e2f25d9cc5e160ca82906c4acb4bdb42ae2fc315078873fd45ec05010">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -70,7 +70,7 @@ python -m tsw ledger audit</code></pre>
   docs/development/       开发规则
   docs/decisions/         决定记录
   docs/use-cases/         use-case 目录与状态迁移清单
-  plugin/                 Claude Code 插件：skills、hooks、MCP 配置（后续里程碑）
+  plugin/                 Claude Code 插件：hooks、MCP 配置（主会话 skill 由 tsw host render 生成在数据目录）
   tsw/                    核心库与 CLI：数据目录、存储、账本、投影、任务（逐步扩展）
   tests/                  unit / component / surface / conformance 测试
   tools/                  门禁、文档生成与检查（live 场景在后续里程碑加入）</code></pre>

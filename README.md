@@ -72,7 +72,7 @@ task-steward/
   docs/development/       开发规则
   docs/decisions/         决定记录
   docs/use-cases/         use-case 目录与状态迁移清单
-  plugin/                 Claude Code 插件：skills、hooks、MCP 配置（后续里程碑）
+  plugin/                 Claude Code 插件：hooks、MCP 配置（主会话 skill 由 tsw host render 生成在数据目录）
   tsw/                    核心库与 CLI：数据目录、存储、账本、投影、任务（逐步扩展）
   tests/                  unit / component / surface / conformance 测试
   tools/                  门禁、文档生成与检查（live 场景在后续里程碑加入）
