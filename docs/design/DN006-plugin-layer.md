@@ -182,7 +182,7 @@ class HostIntegration(Protocol):
 
 | 实现 | 流程说明与工具注册 | 规则执行 | 规则强度 |
 | --- | --- | --- | --- |
-| `claude-code` | `.claude-plugin/plugin.json`、skills（主会话入口 `orchestrate`）、`.mcp.json` | PreToolUse / Stop / SessionStart hooks 调用 `tsw guard` | enforced |
+| `claude-code` | 插件：`.claude-plugin/plugin.json`、`.mcp.json`；数据目录：`CLAUDE.md` 与主会话入口 skill `.claude/skills/orchestrate/SKILL.md`（`tsw host render` 生成） | PreToolUse / Stop / SessionStart hooks 调用 `tsw guard` | enforced |
 | `codex` | `AGENTS.md` 片段、`.codex/agents/task-worker.toml`、`codex mcp add tsw` 命令 | `workspace-write` 沙箱的可写根限定为执行目录与草稿目录；命令审批规则 | 写入范围 enforced，其余 advisory |
 | `copilot` | `.github/agents/task-worker.agent.md`、skill、Copilot MCP 配置 | 会话权限模式与允许的工具集 | advisory（待验证） |
 | `remote-hub` | 远程会话中枢的 controller 意图与 worker 指派模板 | 依所选会话宿主 | 依宿主 |
@@ -190,6 +190,8 @@ class HostIntegration(Protocol):
 宿主声明为 `advisory` 时，STATUS 页和任务报告标注“规则为提示级”，并要求主会话在 G-ACCEPT 中额外核对写入范围（`git status` 与 diff 范围检查）。
 
 `claude-code` 的 enforced 有边界：编辑类工具（Write、Edit 等）的目标路径可以精确检查；Bash 命令只能尽力解析——识别重定向、`tee`、`cp`/`mv`/`rm`/`mkdir`、`sed -i`、PowerShell 的 `Set-Content`/`Out-File`/`New-Item` 等常见写法，跟踪 `cd`，并递归读取 `bash -c`、`powershell -Command`、`cmd /c`；变量、脚本内部的写入看不到。因此 G-ACCEPT 对 `claude-code` 同样核对 diff 是否落在可写根内。git/gh 的推送、建 PR、合并按程序名识别（忽略路径与 `.exe` 后缀）。
+
+`claude-code` 的插件按用户级启用，任何目录的会话（主会话、`~/tsw-worktrees` 或 `work/<任务>/<attempt>` 中的 worker、无关会话）都会加载它，所以插件只携带每个会话都需要的 MCP 注册与 hooks。主会话的流程说明不放进插件：`render_instructions` 把 `CLAUDE.md` 和 `orchestrate` skill 写进数据目录，后者是 Claude Code 的项目 skill（`<cwd>/.claude/skills/`），只有以数据目录为工作目录的会话会发现它。Claude Code 也从上级目录加载 `CLAUDE.md` 与项目 skill，执行目录在数据目录之下（`work/<任务>/<attempt>`）的 worker 同样会看到二者，所以二者都写明：`whoami` 的角色不是 orchestrator 时忽略。skill 的来源在产品代码中（`tsw/host/orchestrate_skill.md`），产品更新后重新运行 `tsw host render`。
 
 插件由 Claude Code 复制到插件缓存运行，缓存里没有 `tsw` 运行时。启动器按顺序查找：`TSW_REPO` 环境变量、插件所在的产品仓库（源码树或原地使用的本地市场）、`tsw init` 写入数据目录标记文件的 `product_repo`；都找不到时 MCP server 报错退出，hooks 静默放行。
 
