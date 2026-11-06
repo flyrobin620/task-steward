@@ -197,6 +197,19 @@ def input_escalated(conn: sqlite3.Connection, event: Event) -> None:
     input_requested(conn, event)
     if event.data.get("transition") == "T11":
         _set(conn, _tid(event), waiting_revision=event.data["binding"]["revision"])
+    if event.data.get("kind") == "in_session":
+        conn.execute(
+            "INSERT INTO in_session_requests(request_id, task_id, session_ref, asked_at, "
+            "handoff_after, reserved) VALUES(?, ?, ?, ?, ?, ?)",
+            (
+                event.data["request_id"],
+                _tid(event),
+                event.data["session_ref"],
+                event.time,
+                event.data["handoff_after"],
+                1 if event.data.get("reserved") else 0,
+            ),
+        )
     for item in event.data.get("resolves", []):
         conn.execute("UPDATE judgments SET status = 'escalated' WHERE item_id = ?", (item,))
 
@@ -206,8 +219,18 @@ def input_resolved(conn: sqlite3.Connection, event: Event) -> None:
     task_id = _tid(event)
     conn.execute(
         "UPDATE input_requests SET status = 'resolved', resolution = ? WHERE request_id = ?",
-        (dumps({"source": data["source"], "answer": data.get("answer")}), data["request_id"]),
+        (
+            dumps(
+                {
+                    "source": data["source"],
+                    "answer": data.get("answer"),
+                    **{k: data[k] for k in ("source_kind", "decision_id") if k in data},
+                }
+            ),
+            data["request_id"],
+        ),
     )
+    _answered_in_session(conn, event)
     tid = _move(conn, event)
     if tid == "T12":
         if data["new_cycle"]:
@@ -223,6 +246,56 @@ def input_resolved(conn: sqlite3.Connection, event: Event) -> None:
 
 
 def input_late_response(conn: sqlite3.Connection, event: Event) -> None:
+    _answered_in_session(conn, event)
+    _touch(conn, event, business=False)
+
+
+def _answered_in_session(conn: sqlite3.Connection, event: Event) -> None:
+    source = event.data.get("source")
+    channel = source.get("channel") if isinstance(source, dict) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    if channel == "in-session":
+        conn.execute(
+            "UPDATE in_session_requests SET answered_in_session = 1 WHERE request_id = ?",
+            (event.data["request_id"],),
+        )
+
+
+def input_session_message(conn: sqlite3.Connection, event: Event) -> None:
+    """The user wrote in the worker's session while a question was open (DN006 §8.2)."""
+    data = event.data
+    conn.execute(
+        "INSERT INTO session_messages(message_id, task_id, request_id, session_ref, text, "
+        "sequence) VALUES(?, ?, ?, ?, ?, ?)",
+        (
+            data["message_id"],
+            _tid(event),
+            data["request_id"],
+            data["session_ref"],
+            data["text"],
+            event.sequence,
+        ),
+    )
+    conn.execute(
+        "UPDATE in_session_requests SET responded_at = COALESCE(responded_at, ?) "
+        "WHERE request_id = ?",
+        (event.time, data["request_id"]),
+    )
+    _touch(conn, event, business=False)
+
+
+def input_handed_off(conn: sqlite3.Connection, event: Event) -> None:
+    conn.execute(
+        "UPDATE in_session_requests SET handed_off_at = ? WHERE request_id = ?",
+        (event.time, event.data["request_id"]),
+    )
+    _touch(conn, event, business=False)
+
+
+def input_relayed(conn: sqlite3.Connection, event: Event) -> None:
+    conn.execute(
+        "UPDATE in_session_requests SET relayed_to = ? WHERE request_id = ?",
+        (event.data["channel"], event.data["request_id"]),
+    )
     _touch(conn, event, business=False)
 
 
@@ -728,6 +801,9 @@ REDUCERS: dict[str, Reducer] = {
     "input.escalated": input_escalated,
     "input.resolved": input_resolved,
     "input.late_response": input_late_response,
+    "input.session_message": input_session_message,
+    "input.handed_off": input_handed_off,
+    "input.relayed": input_relayed,
     "dependency.satisfied": dependency_satisfied,
     "dependency.invalidated": dependency_invalidated,
     "dependency.rebound": dependency_rebound,

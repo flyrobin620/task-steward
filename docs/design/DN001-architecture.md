@@ -24,7 +24,7 @@
 4. 可以导入 orchestrator-agent 的全部历史。pending 与待用户验收的任务可凭任务书和已有交付报告 resume；已归档、已验收的任务只读，见 DN005。
 5. 状态由账本事件驱动，任务状态机见 DN002。
 6. 调度层插件化，支持不同用户配置（例如没有 Codex 或没有 Claude Code），见 DN006。
-7. worker 提问、评审预算用完、阻断项延后请求先由主会话在授权边界内综合判断，确需人类时经插件式渠道请求（in-session、Teams、remote-hub Portal），见 DN006 §8。
+7. 任务内需要用户决定的事（提问、评审预算用完、阻断项延后请求）由 worker 在自己的会话里直接问用户，超时无人回复才转交主会话；跨任务的事由主会话在授权边界内综合判断，确需人类时经插件式渠道请求（in-session、Teams、remote-hub Portal），见 DN006 §8。
 8. 运行数据放在与产品 repo 分离的数据目录，备份该目录即可，见 §8 与 DN006 §9。
 
 **非目标**
@@ -142,6 +142,8 @@ worker 会话分两步启动（DN006 §4.1）：先**创建**会话，再**投�
 
 原地答复不放宽可写范围、账本与远端交付约束。改动已验收产物时，worker 须告诉用户“尚未回传、尚未重新验收”。
 
+worker 用 `ask_user` 向用户提问后，用户在子会话里的回复由 hook 记录，worker 引用它登记答复（DN006 §8.1a）；这是任务内的问答，同样不回传主会话。
+
 ### 6.6 子代理的使用边界
 
 Claude Code 的 `Agent` 子代理（in-process subagent）**不作为业务 worker**：用户不能直接对话，生命周期依附父会话，不能被交接。worker 可以在自己的任务内使用子代理做并行调查或局部审查，但不能启动会话、调度其他 worker 或与其他 worker 对话。
@@ -177,7 +179,9 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一�
 | `accept` / `user_accept` / `user_reject` / `archive` / `cancel` | ✓ | — | T18、T22–T26；`user_*` 必须附用户消息来源 |
 | `pr_link` / `output_link` | ✓ | 登记草稿，主控核验 | PR 与产出登记 |
 | `progress_note` | ✓ | ✓ | 不唤醒主会话 |
-| `question` | — | ✓ | T11 |
+| `question` | — | ✓ | 跨任务事项交主会话判断（DN006 §8.1） |
+| `ask_user` / `user_answer` / `input_handoff` | — | ✓ | 在本会话直接问用户（T11）、登记 hook 记录的用户答复（T12）、超时转交（DN006 §8.1a–§8.1b） |
+| `handoff_resolve` / `input_relay` | ✓ | — | 对转交的会话内问题代为决定（T12）或转达给用户（DN006 §8.1b） |
 | `review_run` / `review_triage` / `review_decide` | — | ✓ | DN004 |
 | `submit` | — | ✓ | T13，执行 G-SUBMIT 检查 |
 | `report_back` | — | ✓ | `[report]` 回传 |
@@ -201,7 +205,8 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一�
 | 主会话 | `task_pause` `task_resume` `judge` `feedback` `integrate` `output_link` `task_accept` | T10、T11、T14、T17–T21、T27、主会话判断 |
 | 主会话 | `user_accept` `user_reject` `task_cancel` `task_archive` `dependency_invalidate` `resource_release` `sync` | T16、T22–T26、依赖传播 |
 | 主会话 | `config_change` `config_revert` | 修改与回退统一配置（DN003 §7），不改变任务状态 |
-| worker | `progress_note` `question` `review_start` `review_fail` `review_complete` `review_triage` `review_decide` `review_exhausted` `self_check_failed` `submit` `task_pause`（仅 T14）`output_link` | E01–E07、T13、T14 |
+| worker | `progress_note` `question` `ask_user` `user_answer` `input_handoff` `review_start` `review_fail` `review_complete` `review_triage` `review_decide` `review_exhausted` `self_check_failed` `submit` `task_pause`（仅 T14）`output_link` | E01–E07、T11、T12、T13、T14 |
+| 主会话 | `handoff_resolve` `input_relay` | 转交后的 T12 与转达（DN006 §8.1b） |
 
 主会话的写工具都要求持有调度租约（G-LEASE）；worker 工具要求调用者就是该任务当前 attempt 绑定的会话。
 
@@ -212,8 +217,8 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一�
 | SessionStart | 全部 | 由 cwd 与 session_id 识别角色；主会话尝试领取租约，并注入未读 inbox 数与 attention 摘要；worker 注入任务 ID、brief 路径、可写路径和评审规则 |
 | PreToolUse（Edit / Write / NotebookEdit / Bash） | worker | 拒绝写出可写路径；拒绝未获交付授权的 `git push` 与 PR 操作；拒绝对可执行文件求哈希的命令（除非账本有用户批准记录）；拒绝直接修改 `ledger/`、`STATUS.html` |
 | PreToolUse | orchestrator | 拒绝直接编辑 `ledger/`、`config/`、生成视图和投影（配置经 `config_change` 修改）；拒绝在派发窗口外重复 `start_session` 同名 attempt |
-| UserPromptSubmit | worker | 检测 `[report]`，注入回传协议提示 |
-| Stop | orchestrator | 运行只读 `attention`；有未处理 reportable 事件时阻止一次结束（`stop_hook_active` 防循环） |
+| UserPromptSubmit | worker | 检测 `[report]`，注入回传协议提示；worker 有未获用户答复的会话内问题时，把用户消息原文记为 `input.session_message` 并告诉 worker 消息编号（注入的其他会话消息不记，DN006 §8.1a） |
+| Stop | orchestrator | 运行只读 `attention`；有未处理 reportable 事件，或有已超时未转交的会话内问题（提示运行 `sync`）时阻止一次结束（`stop_hook_active` 防循环） |
 | Stop | worker | 记录 `worker.turn_ended` 观察事件（不改状态）；若处于 `reviewing` 且评审进程仍在运行，提示不要结束 |
 
 hooks 是强制边界；skill 和 CLAUDE.md 只写流程与判断准则，不再承载可以机械检查的规则。

@@ -284,27 +284,64 @@ interactive 动作映射（承载 worker 的实现）：
 
 **为什么 Codex 原生子代理（`spawn_agent`）不作为默认实现**：它只受创建它的主会话控制，用户不能直接对话，也不能交接。只有在主会话就是 Codex 线程、并且用户接受这些限制时才启用 `codex-native`，能力声明中 `user_direct_chat=false`、`reuse_session` 仅限同一主会话。
 
-## 8. 主会话判断与 P3 人类渠道
+## 8. 用户输入、主会话判断与 P3 人类渠道
 
-### 8.1 需要主会话判断的场合
+### 8.1 两类事项：先问用户，跨任务的交主会话
 
-worker 遇到自己不能独自决定的事时，不直接找人，而是先交给主会话判断。三种场合走同一流程：
+用户 2026-11-06 决定：每个任务的工作尽量在 worker 自己的会话里完成，主会话只协调并保持上下文干净。worker 遇到自己不能独自决定的事，按事项分两类处理：
 
-| 场合 | worker 提交的事件 | 例子 |
+| 类别 | 例子 | 去向 |
 | --- | --- | --- |
-| 提问 | `worker.question` | 验收条款含义不清、两种实现取舍、需要某个外部事实 |
-| 评审预算用完 | `review.budget_exhausted` | 本周期已评审 `max_rounds` 轮，仍有阻断项（DN004 §5） |
-| 阻断项需要延后 | `review.defer_requested` | 修复超出本任务范围，或依赖外部团队 |
+| 任务内的事 | 验收条款含义不清、两种实现取舍、需要某个外部事实；评审预算用完（`review.budget_exhausted`）、阻断项需要延后（`review.defer_requested`）、评审器不可用（`review.unavailable`） | worker 在**自己的会话里直接问用户**（§8.1a）；超时无人回复才转交主会话（§8.1b） |
+| 跨任务的事 | 独占资源冲突、依赖需要调整、需要改动其他任务的范围或产出 | `worker.question` 交主会话判断（§8.2–§8.4） |
 
-主会话的判断是即时工作，任务保持 `in_progress`；只有决定交给人类时才经 T11 进入 `waiting_user`（DN002）。
+主会话的判断（§8.2–§8.4）因此只用于两种来源：转交来的任务内问题，以及跨任务的事。任务状态的变化见 DN002 T11、T12 与 §3.3a。
 
-![主会话判断与人类渠道](diagrams/input-routing.svg)
+![用户输入与主会话判断](diagrams/input-routing.svg)
 
 图源：[diagrams/input-routing.mmd](diagrams/input-routing.mmd)
+
+### 8.1a 在 worker 会话中直接问用户
+
+1. worker 调用 `ask_user`（问题全文；可带上评审升级等待处理事项的编号；只有用户本人能决定的事——凭据、验收、`reserved_for_user` 中的决定——标 `reserved`）。tsw 记录 `input.escalated`（`kind: in_session`，渠道 `in-session`，记下 worker 会话与转交时间），任务经 T11 进入 `waiting_user`，名额保持。
+2. worker 在本会话的回复中把问题原样写给用户，结束这一轮。这个问题**不进入主会话 inbox**：主会话的 `attention` 只显示“某任务有一个会话内问题、何时转交”，不显示问题内容；STATUS 页是给用户看的，显示问题与转交时间。
+3. 用户在 worker 会话中发消息时，`UserPromptSubmit` hook 把消息原文记为观察事件 `input.session_message`（消息编号 `M-…`），并把编号告诉 worker。其他会话或 app 注入的消息（`<cross-session-message>`、`<side-sessions-event>`、定时任务等）不记录。
+4. 消息回答了问题时，worker 调用 `user_answer`，必须引用 hook 记录的消息编号，且该消息来自同一 worker 会话。tsw 用记录中的原文构造 `VerifiedSource`（渠道 `in-session`），记录 `input.resolved`，经 T12 回到离开时的子状态。同一次答复可以带上用户批准的追加评审轮次（`source = user`，没有累计上限）、批准延后或认定不成立的阻断项。用户原话来自 hook，不来自 worker 的转述，所以 worker 不能伪造答复。
+
+用户回复了但还没有回答问题（例如“让我想想”）时，worker 在会话中继续与用户交流；问题不会因超时转交。
+
+### 8.1b 超时转交主会话
+
+| 项目 | 规则 |
+| --- | --- |
+| 超时 | `input.in_session_timeout_minutes`（DN003 §3.1a，默认 10 分钟），从 `ask_user` 起算 |
+| 转交条件 | 问题仍未答复、尚未转交，且在这段时间内用户没有在 worker 会话中发过任何消息 |
+| 谁来触发 | (1) worker：问完后用宿主的定时唤醒（Claude Code 的会话内定时任务）在超时后检查，仍无回复就调用 `input_handoff`，再用 `send_message(session_id="parent")` 唤醒主会话；(2) 系统规则：`sync` 把已到期的问题一并转交（`by: system`）。主会话结束一轮前，Stop hook 发现有到期未转交的问题时提示运行 `sync`；`attention` 的 `handoff_due` 也列出它们 |
+| 事件 | `input.handed_off`（问题编号、触发者、转交时间），默认在 `scheduling.wake.reportable_events` 中，进入主会话 inbox。任务状态不变，仍为 `waiting_user` |
+
+转交之后，主会话可以：
+
+- **在授权边界内代为决定**（`handoff_resolve`）：回答、追加评审轮次（受 `review.orchestrator_extension_limit` 限制）、认定意见不成立或批准延后。记录 `orchestrator.decision`（`DecisionRecord`，理由与依据按 §8.2）与 `input.resolved`（`source_kind = orchestrator`，没有用户来源），经 T12 让 worker 继续，并用消息告诉 worker 决定内容。主会话代答不是用户批准，不满足 G-USER。§8.2 的硬边界照旧：凭据与 MFA、用户验收与退回、`policies.reserved_for_user`、超出任务书与配置授权的事，主会话都不能代答；worker 标为 `reserved` 的问题，`handoff_resolve` 一律拒绝。
+- **转达给用户**（`input_relay`）：渠道为主会话本身（`main-session`，例如在主会话中向用户提问）或已加载、支持 `request_response` 的其他人类渠道（如 Teams，§8.6）。记录 `input.relayed`。用户经该渠道的答复由主会话用 `input_resolve` 记录，来源是该渠道核实过的 `VerifiedSource`（主会话消息、Teams 回复等），满足 G-USER，经 T12 让 worker 继续。worker 会话中的原话只能由 worker 经 `user_answer` 登记，主会话不能用 `input_resolve` 代为记录 `in-session` 来源。
+- **继续等待**：什么都不做，问题保持待答。
+
+### 8.1c 迟到的答复
+
+第一个生效的答复决定 T12，之后的答复都不改变任务状态，但都记账：
+
+| 情形 | 处理 |
+| --- | --- |
+| 已转交、主会话尚未决定时，用户在 worker 会话中回答 | 仍是有效答复：worker 经 `user_answer` 记录，T12 生效。主会话之后的 `handoff_resolve` 与经其他渠道收到的答复以 `request_not_pending` 拒绝或记为 `input.late_response`；已转达的渠道按 §8.6 撤回 |
+| 主会话已代答或其他渠道已答复之后，用户才在 worker 会话中回答 | hook 照常记录这条消息（该问题还没有来自 worker 会话的用户答复）；worker 经 `user_answer` 记为 `input.late_response`，标明它取代的答复（`supersedes`）。用户本人的话优先于主会话代答：worker 以用户的话为准继续，必要的返工是任务内的正常工作；超出任务范围时按需求变更经主会话处理（`[report]`，DN001 §6.5）。之前的答复也来自用户、两者冲突时，worker 再次 `ask_user` 确认 |
+| 其他渠道的答复晚于已生效的答复 | 记为 `input.late_response`（§8.6 多渠道规则） |
+
+超时本身不是答复；转交只改变谁来处理，不替用户作出决定。
 
 ### 8.2 判断方式：授权边界 + 综合判断
 
 不按问题类别硬性划分。规则分两层：
+
+适用于转交来的任务内问题（§8.1b）与跨任务的事（§8.1）。
 
 **唯一的硬边界：不越过已有授权。** 下列情形主会话不能自行决定，必须交给人类：
 
@@ -396,7 +433,7 @@ T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与
 
 | 实现 | 能力 | 发送 | 回收 | 核实 |
 | --- | --- | --- | --- | --- |
-| `in-session` | request_response，push（不支持 notify） | 无需发送：问题就在 worker 会话里，用户直接回答 | worker 记录答复（source = user，会话 ID + 原话） | 宿主会话消息归属 |
+| `in-session` | request_response，push（不支持 notify） | 无需发送：worker 用 `ask_user` 记录后在自己的会话里提问（§8.1a） | `UserPromptSubmit` hook 记录用户消息原文（`input.session_message`），worker 用 `user_answer` 引用消息编号登记 | 宿主会话消息归属：消息由 hook 在该 worker 会话中取得，注入的其他会话消息不记录 |
 | `teams-chat` | request_response，notify，poll，delegated | 主会话经 Teams MCP 工具 向本人 self chat 发送带请求 ID 的卡片 | 主会话被唤醒时（或按 `teams_poll` 间隔）读取 self chat 中发送后的新消息，取 Teams 回复（replyTo 该消息）或含请求 ID 的消息 | 按消息 ID 精确 GET 读回，发送者为本人 |
 | `hub-portal` | request_response，notify（Portal 通知卡片），push，direct | tsw 把请求发布到 Hub 门户（问题卡片） | Portal 用户提交答复，经认证回调写回 tsw | Portal 的 owner 认证 + 请求 ID |
 | `email-draft` | notify_only | 在邮箱生成草稿（默认不发送，沿用邮件约定） | — | — |

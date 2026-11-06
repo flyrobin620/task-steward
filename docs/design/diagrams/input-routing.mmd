@@ -1,14 +1,17 @@
 flowchart TD
-    Q1([worker.question<br/>问题 · 可选项 · 自己的建议]) --> J
-    Q2([review.budget_exhausted<br/>未解决阻断项 · 各轮记录]) --> J
-    Q3([review.defer_requested / review.unavailable]) --> J
+    Q1([任务内的事<br/>提问 · 评审预算用完 · 延后请求 · 评审器不可用]) --> ASK
+    Q2([跨任务的事 · worker.question<br/>资源冲突 · 依赖调整 · 其他任务的范围]) --> J
+    ASK[ask_user · T11 → waiting_user<br/>问题留在 worker 会话，不进主会话 inbox] --> U{超时前用户回复?}
+    U -- 回复 --> UA[hook 记录原话 · user_answer<br/>input.resolved · source=user]
+    U -- 无回复 --> HO[input.handed_off<br/>worker input_handoff 或 sync]
+    HO --> J
     J{input.triage}
     J -- human_direct --> ESC
-    J -- orchestrator_judgment --> A{越过已有授权?<br/>凭据 · 用户验收 · reserved_for_user · 超出任务书与配置}
+    J -- orchestrator_judgment --> A{越过已有授权?<br/>凭据 · 用户验收 · reserved_for_user · 超出任务书与配置 · reserved 问题}
     A -- 是 --> ESC
     A -- 否 --> F[主会话综合判断<br/>依据 · 可逆性 · 影响范围 · 把握 · worker 请求 · 等待成本]
     F --> D{决定}
-    D -- 回答 --> R1[input.resolved · source=orchestrator]
+    D -- 回答 --> R1[input.resolved · source=orchestrator<br/>转交的问题经 T12 返回]
     D -- 追加评审轮次 --> R2[review.budget_extended<br/>累计不超过 orchestrator_extension_limit]
     D -- 认定意见不成立 --> R3[review.finding_overruled]
     D -- 批准延后 --> R4[review.defer_approved<br/>列入已知问题]
@@ -19,13 +22,14 @@ flowchart TD
     R3 --> DR
     R4 --> DR
     R5 --> DR
-    DR --> W1([worker 继续 · 任务保持 in_progress])
-    ESC[交给人类 · T11 → waiting_user<br/>InputRequest 含主会话分析] --> CH{按 input.channels 投递}
-    CH --> S1[in-session<br/>用户在 worker 会话直接回答]
+    DR --> W1([worker 继续])
+    ESC[交给人类<br/>转交的问题 input_relay · 跨任务的事 T11] --> CH{按渠道投递}
+    CH --> S1[main-session<br/>主会话中直接问用户]
     CH --> S2[teams-chat<br/>发 self chat 卡片 · 主会话唤醒时轮询]
     CH --> S3[hub-portal<br/>Portal 问题卡片 · 回调写回]
-    S1 --> V{第一个通过核实的答复}
+    S1 --> V{第一个生效的答复}
     S2 --> V
     S3 --> V
-    V --> RR[input.resolved · source=user<br/>T12 回到 in_progress]
-    RR --> C[其他渠道 cancel<br/>迟到答复记为 input.late_response]
+    UA --> V
+    V --> RR[T12 回到 in_progress<br/>source=user 满足 G-USER]
+    RR --> C[迟到的答复记为 input.late_response<br/>worker 会话中用户的话优先于主会话代答]

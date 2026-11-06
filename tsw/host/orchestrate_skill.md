@@ -32,7 +32,10 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
 
 ## 回传与判断
 
-worker 提问、评审预算用完、阻断项延后请求、评审器不可用都会出现在 `inbox` 与 `attention`。用 `judge` 处理：
+worker 先在自己的会话里直接问用户（`ask_user`），你看不到问题内容，也不用处理。只有两类事会出现在 `inbox`：
+
+- `input.handed_off`：worker 会话中的问题超时（默认 10 分钟）无人回复，转交给你。`attention` 的 `handoff_due` 列出已到期但还没转交的问题，运行 `sync` 转交。转交后你可以在授权边界内代为决定（`handoff_resolve`：回答、追加轮次、认定不成立或批准延后，写明理由与依据），或把问题转达给用户（`input_relay`，例如在本会话中问用户，答复用 `input_resolve` 附用户原话记录），也可以继续等待。worker 标了 `reserved` 的问题只能转达或等待。决定后用消息告诉 worker。用户之后在 worker 会话里的回复仍然有效：问题未决时它直接生效，已决时记为迟到答复，以用户的话为准。
+- `worker.question`：跨任务的事（独占资源冲突、依赖调整、改动其他任务的范围）。用 `judge` 处理：
 
 - 唯一的硬边界是不越过已有授权：凭据、用户验收与退回、配置 `policies.reserved_for_user` 中的决定、超出任务书的范围，都交给用户（`decision: escalate`）。
 - 其余情况综合依据、可逆性、影响范围、把握、worker 是否要求人类决定和等待成本，自主回答、追加轮次、认定不成立、批准延后或调整方向，并写明理由与依据。主会话的决定不是用户批准。
