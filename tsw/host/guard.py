@@ -19,12 +19,13 @@ from typing import Any
 from tsw import lease
 from tsw.commands import Command, CommitContext
 from tsw.config import EffectiveConfig, lease_minutes, load_config, resolve_repository
-from tsw.events import EventDraft
+from tsw.events import EventDraft, utc_now
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
 from tsw.host import shell
 from tsw.host.identity import HOST_CLI_COMMANDS, Identity, resolve, within
 from tsw.ledger import Ledger
+from tsw.machine.ask_user import handoff_due, session_message
 from tsw.machine.model import row_dict
 
 WRITE_TOOLS = {
@@ -266,8 +267,10 @@ class Guard:
                 "SessionStart",
                 f"你是 TaskSteward 任务 {who.task_id} 的 worker（attempt {who.attempt}）。"
                 f"任务书：{who.brief_path or '等待投递'}。只在可写路径内修改：{roots}。"
-                "完成后用 review_run 做自评审并逐条处置，再 submit；需要主会话判断时用 question，"
-                '并用 mcp__ccd_session_mgmt__send_message(session_id="parent") 唤醒主会话。',
+                "完成后用 review_run 做自评审并逐条处置，再 submit。需要用户决定的事用 ask_user "
+                "在本会话直接问用户，用户回复后用 user_answer 登记；跨任务的事（资源冲突、依赖、"
+                "其他任务的范围）才用 question 交主会话，并用 "
+                'mcp__ccd_session_mgmt__send_message(session_id="parent") 唤醒主会话。',
             )
         lines = [f"你是 TaskSteward 主会话（数据目录 {self.home.root}）。"]
         try:
@@ -363,13 +366,47 @@ class Guard:
 
     def on_UserPromptSubmit(self, who: Identity) -> dict[str, Any] | None:
         prompt = str(self.payload.get("prompt") or "")
-        if who.role == "worker" and "[report]" in prompt:
-            return context(
-                "UserPromptSubmit",
-                "用户要求回传（[report]）：先用 progress_note 记录用户决定、已做动作与影响范围，"
-                '再用 mcp__ccd_session_mgmt__send_message(session_id="parent") 通知主会话。',
+        if who.role != "worker":
+            return None
+        notes: list[str] = []
+        recorded = self._record_answer(who, prompt) if self.config.valid else None
+        if recorded is not None:
+            notes.append(
+                f"这条用户消息已记录为 {recorded['message_id']}（问题 {recorded['request_id']}）。"
+                "它回答了问题时，用 user_answer 引用这个编号登记答复。"
             )
-        return None
+        if "[report]" in prompt:
+            notes.append(
+                "用户要求回传（[report]）：先用 progress_note 记录用户决定、已做动作与影响范围，"
+                '再用 mcp__ccd_session_mgmt__send_message(session_id="parent") 通知主会话。'
+            )
+        return context("UserPromptSubmit", "".join(notes)) if notes else None
+
+    def _record_answer(self, who: Identity, prompt: str) -> dict[str, Any] | None:
+        """Record the user's words while the worker's question is open (DN006 §8.2)."""
+        if who.phase != "live" or not who.task_id or not who.session_id:
+            return None
+        task_id, session_id = who.task_id, who.session_id
+        out: dict[str, Any] = {}
+
+        def build(ctx: CommitContext) -> list[EventDraft]:
+            draft = session_message(ctx.conn, task_id, session_id, prompt)
+            if draft is not None:
+                out.update(draft.data)
+            return [] if draft is None else [draft]
+
+        try:
+            self.ledger.commit(
+                Command(
+                    actor={"role": "user", "session_id": session_id, "via": "UserPromptSubmit"},
+                    input={"op": "session_message", "prompt": prompt},
+                    build=build,
+                )
+            )
+        except Exception as exc:  # recording must never block the user's message
+            print(f"tsw guard: session message not recorded: {exc}", file=sys.stderr)
+            return None
+        return out or None
 
     def on_Stop(self, who: Identity) -> dict[str, Any] | None:
         again = bool(self.payload.get("stop_hook_active"))
@@ -378,11 +415,18 @@ class Guard:
                 return None
             with self.ledger.view() as conn:
                 pending = inbox_mod.inbox(conn, self.ledger.storage, self.config)
+                due = handoff_due(conn, utc_now())
             if pending:
                 return {
                     "decision": "block",
                     "reason": f"还有 {len(pending)} 条未处理的回传，"
                     "先调用 inbox 处理并 inbox_ack。",
+                }
+            if due:
+                return {
+                    "decision": "block",
+                    "reason": f"有 {len(due)} 个 worker 会话中的问题已超时无人回复："
+                    "运行 sync 转交，再按 inbox 处理。",
                 }
             return None
         with self.ledger.view() as conn:

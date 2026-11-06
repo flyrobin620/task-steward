@@ -65,6 +65,9 @@ DEFAULTS: dict[str, Any] = {
     },
     "input": {
         "triage": "orchestrator_judgment",
+        # A worker asks the user in its own session first; with no reply for this long the
+        # question is handed to the orchestrator (DN006 §8.3).
+        "in_session_timeout_minutes": 10,
         "decision_digest": {
             "enabled": True,
             "schedule": "daily_and_on_task_done",
@@ -118,9 +121,7 @@ DEFAULTS: dict[str, Any] = {
             "reportable_events": [
                 "worker.submitted",
                 "worker.question",
-                "review.budget_exhausted",
-                "review.defer_requested",
-                "review.unavailable",
+                "input.handed_off",
                 "task.paused",
                 "report_back",
             ],
@@ -196,6 +197,7 @@ SCHEMA: dict[str, Any] = _obj(
     input=_obj(
         triage=_choice("orchestrator_judgment", "human_direct"),
         channels=STRS,
+        in_session_timeout_minutes=_int(1),
         decision_digest=_obj(enabled=B, schedule=S, channel=S),
         teams_poll=_obj(interval_minutes=_int(1), max_interval_minutes=_int(1)),
     ),

@@ -9,8 +9,9 @@ from typing import Any
 from tsw.commands import Command, CommitContext
 from tsw.config import EffectiveConfig
 from tsw.errors import rejected
-from tsw.events import Event, EventDraft
+from tsw.events import Event, EventDraft, utc_now
 from tsw.lease import require_lease
+from tsw.machine.ask_user import handoff_due
 from tsw.machine.guards import invalidated
 from tsw.machine.model import OCCUPYING, loads
 from tsw.storage.base import StorageBackend
@@ -97,14 +98,28 @@ def attention(
             {"item_id": r["item_id"], "task_id": r["task_id"], "trigger": r["trigger"]}
             for r in conn.execute("SELECT * FROM judgments WHERE status = 'open' ORDER BY item_id")
         ],
+        # A question still waiting in a worker's session is the worker's and the user's: the
+        # orchestrator sees that it is open, not what it asks (DN006 §8.2).
         "pending_input": [
             {
                 "request_id": r["request_id"],
                 "task_id": r["task_id"],
                 "kind": r["kind"],
-                "question": r["question"],
+                **(
+                    {"channel": "in-session", "handoff_after": r["handoff_after"]}
+                    if r["kind"] == "in_session" and r["handed_off_at"] is None
+                    else {"question": r["question"]}
+                ),
             }
-            for r in conn.execute("SELECT * FROM input_requests WHERE status = 'pending'")
+            for r in conn.execute(
+                "SELECT r.*, s.handoff_after, s.handed_off_at FROM input_requests r "
+                "LEFT JOIN in_session_requests s ON s.request_id = r.request_id "
+                "WHERE r.status = 'pending'"
+            )
+        ],
+        "handoff_due": [
+            {"request_id": r["request_id"], "task_id": r["task_id"]}
+            for r in handoff_due(conn, utc_now())
         ],
         "reconcile": [
             {"task_id": r["task_id"], "attempt": r["attempt"], "session_name": r["session_name"]}

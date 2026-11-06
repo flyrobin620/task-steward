@@ -35,6 +35,7 @@
   "input": {
     "triage": "orchestrator_judgment",
     "channels": ["in-session", "teams-chat"],
+    "in_session_timeout_minutes": 10,
     "decision_digest": {"enabled": true, "schedule": "daily_and_on_task_done", "channel": "teams-chat"},
     "teams_poll": {"interval_minutes": 5, "max_interval_minutes": 30}
   },
@@ -82,7 +83,7 @@
     "max_workers": 5,
     "lease_minutes": 120,
     "prestart": {"enabled": true, "max_standby": 10},
-    "wake": {"worker_message_parent": true, "reportable_events": ["worker.submitted", "worker.question", "review.budget_exhausted", "review.defer_requested", "review.unavailable", "task.paused", "report_back"]}
+    "wake": {"worker_message_parent": true, "reportable_events": ["worker.submitted", "worker.question", "input.handed_off", "task.paused", "report_back"]}
   },
   "sessions": {
     "name_pattern": "{task_id_lower}-{attempt}-g{generation}",
@@ -164,7 +165,7 @@
 
 已删除字段：`roles.comparison`（Astra 对照版）。导入历史配置时如出现该字段，记录为已忽略，不报错。
 
-**不可配置的评审规则**：评审是必经环节，任何人（包括主会话）都不能跳过；提交 HEAD 必须等于最后评审 HEAD。这两条是 DN002 的不变量（G-SUBMIT），配置中没有开关；配置中出现 `review.required`、`review.require_final_head_reviewed`、`review.on_unavailable` 时报错。评审器不可用、预算用完等情形交主会话判断（DN006 §8）。
+**不可配置的评审规则**：评审是必经环节，任何人（包括主会话）都不能跳过；提交 HEAD 必须等于最后评审 HEAD。这两条是 DN002 的不变量（G-SUBMIT），配置中没有开关；配置中出现 `review.required`、`review.require_final_head_reviewed`、`review.on_unavailable` 时报错。评审器不可用、预算用完等情形由 worker 在自己的会话中问用户，超时转交主会话判断（DN006 §8.1）。
 
 ### 3.1a `plugins` 与 `input`
 
@@ -177,6 +178,7 @@
 | `plugins.human_channels` | `in-session`、`teams-chat` | 可用的人类渠道 |
 | `plugins.storage.use` | `fs` | `fs` 或 `fs+git`（数据目录作为用户私有 Git 仓库） |
 | `input.triage` | `orchestrator_judgment` | `orchestrator_judgment`：主会话在授权边界内综合判断（DN006 §8.2）；`human_direct`：主会话不判断，一律交给人类 |
+| `input.in_session_timeout_minutes` | 10 | worker 在自己会话中提问后，用户这么久没有任何回复就转交主会话（DN006 §8.1b） |
 | `input.channels` | 已加载的全部 `request_response` 渠道 | 升级时同时投递的渠道；必须是已加载渠道的子集；第一个通过核实的答复生效 |
 | `input.decision_digest` | 每日及任务完成时，经 Teams | 把主会话的自主决定汇总通知用户，便于事后核对（DN006 §8.4）；`channel` 为 `"local"` 时只写入 STATUS 页与验收报告 |
 | `input.teams_poll` | 5 分钟，退避到 30 分钟 | Teams 渠道的轮询间隔（主会话运行时） |
@@ -185,7 +187,7 @@
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `max_rounds` | 3 | 每个提交周期的基础评审轮次（含首轮）；有效预算还要加上主会话与用户的追加（DN002 §3.3）。用完仍有阻断项时交主会话判断（DN006 §8.3）：可追加轮次、认定意见不成立、批准延后、调整方向或交给人类。轮次编号在 attempt 内持续递增 |
+| `max_rounds` | 3 | 每个提交周期的基础评审轮次（含首轮）；有效预算还要加上主会话与用户的追加（DN002 §3.3）。用完仍有阻断项时 worker 在自己的会话中问用户，超时转交主会话判断（DN006 §8.1）：可追加轮次、认定意见不成立、批准延后或调整方向。轮次编号在 attempt 内持续递增 |
 | `orchestrator_extension_limit` | 3 | 同一提交周期内主会话累计最多追加的轮次；再需要追加只能交给人类决定 |
 | `retry_limit` | 2 | 单轮调用失败的重试次数 |
 | `block_on` | `critical`, `high` | 必须处置（修复或有据拒绝）的严重级别 |

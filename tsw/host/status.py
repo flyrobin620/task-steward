@@ -86,6 +86,14 @@ def render(conn: sqlite3.Connection) -> str:
         (r["task_id"], r["attempt"]): dict(r) for r in conn.execute("SELECT * FROM attempts")
     }
     invalid = invalidated(conn)
+    asking = {
+        str(r["task_id"]): dict(r)
+        for r in conn.execute(
+            "SELECT r.task_id, r.request_id, r.question, s.handoff_after, s.handed_off_at, "
+            "s.relayed_to, s.responded_at FROM input_requests r "
+            "JOIN in_session_requests s ON s.request_id = r.request_id WHERE r.status = 'pending'"
+        )
+    }
     counts: dict[str, int] = {}
     for row in tasks:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
@@ -110,6 +118,18 @@ def render(conn: sqlite3.Connection) -> str:
             notes.append("stale：上游已变化")
         if row["task_id"] in invalid and row["status"] in OCCUPYING:
             notes.append("依赖失效，需停止 worker")
+        ask = asking.get(row["task_id"])
+        if ask is not None:
+            # The page is for the user: the question itself is shown so it can be answered.
+            if ask["relayed_to"]:
+                where = f"已转交主会话，并转达到 {ask['relayed_to']}"
+            elif ask["handed_off_at"]:
+                where = f"已于 {ask['handed_off_at']} 转交主会话"
+            elif ask["responded_at"]:
+                where = "用户已在 worker 会话中回复"
+            else:
+                where = f"请在 worker 会话中回答；{ask['handoff_after']} 前无回复则转交主会话"
+            notes.append(f"等待用户（{ask['request_id']}，{where}）：{ask['question']}")
         pause = loads(row["pause"], None)
         if pause:
             notes.append(

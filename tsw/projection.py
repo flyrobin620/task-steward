@@ -161,6 +161,28 @@ CREATE TABLE IF NOT EXISTS input_requests(
     binding TEXT NOT NULL,
     resolution TEXT
 );
+-- Questions a worker asks the user in its own session (DN006 §8.2). Only the in-session events
+-- of DN006 §8.2–§8.3 write these two tables, so a projection made before them stays valid.
+CREATE TABLE IF NOT EXISTS in_session_requests(
+    request_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    session_ref TEXT NOT NULL,
+    asked_at TEXT NOT NULL,
+    handoff_after TEXT NOT NULL,
+    reserved INTEGER NOT NULL,
+    answered_in_session INTEGER NOT NULL DEFAULT 0,
+    responded_at TEXT,
+    handed_off_at TEXT,
+    relayed_to TEXT
+);
+CREATE TABLE IF NOT EXISTS session_messages(
+    message_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    session_ref TEXT NOT NULL,
+    text TEXT NOT NULL,
+    sequence INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS outputs(
     task_id TEXT NOT NULL,
     output_id TEXT NOT NULL,
