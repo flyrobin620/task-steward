@@ -70,6 +70,8 @@ def test_tsw_owned_paths(tmp_path: Path) -> None:
         ("python -Ic 'import tsw'", True, True, True, "导入"),
         ("python -m pytest -k tsw", True, True, True, None),
         ("python script.py -m tsw guard", True, True, True, None),
+        ("python -- - <<'PY'\nimport tsw\nPY", True, True, True, "导入"),
+        ("python -B -- tsw_launch.py guard Stop", True, True, True, "宿主"),
     ],
 )
 def test_bash_rules(  # noqa: PLR0917 - one parameter per table column
