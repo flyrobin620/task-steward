@@ -125,14 +125,41 @@ class Server:
         with Ledger(self.home, machine=self.machine).view() as conn:
             return resolve(conn, self.home, self.env, self.cwd)
 
-    def tools(self, who: Identity) -> list[dict[str, Any]]:
+    def listing_role(self, who: Identity) -> str:
+        """The role whose tools ``tools/list`` shows, which may run ahead of the identity.
+
+        The orchestrator records ``attempt_start`` and creates the worker session before it can
+        bind that session with ``attempt_reconcile``, so the worker's first ``tools/list`` comes
+        from an unbound session. Clients may keep that first list for the whole conversation and
+        never act on ``tools/list_changed``, so a session opened in the execution directory of an
+        attempt that is starting is shown the worker tools already. Listing grants nothing: every
+        call resolves the caller again and is checked against its real role (:meth:`call`).
+        """
+        if who.role != "none" or not who.session_id:
+            return who.role
+        with Ledger(self.home, machine=self.machine).view() as conn:
+            rows = conn.execute(
+                "SELECT task_id, attempt, workdir FROM attempts "
+                "WHERE phase = 'starting' AND generation_valid = 1"
+            ).fetchall()
+        for row in rows:
+            roots = [self.home.root / "work" / str(row["task_id"]) / str(row["attempt"])]
+            if row["workdir"]:
+                roots.append(Path(str(row["workdir"])).expanduser())
+            if any(within(self.cwd, root) for root in roots):
+                return "worker"
+        return who.role
+
+    def tools(self, who: Identity, role: str | None = None) -> list[dict[str, Any]]:
+        """The tools of ``role`` (default: the caller's own role)."""
+        role = role or who.role
         listed: list[dict[str, Any]] = []
         for name, (roles, description, schema) in HOST_TOOLS.items():
-            if who.role in roles:
+            if role in roles:
                 listed.append({"name": name, "description": description, "inputSchema": schema})
-        if who.role in ("orchestrator", "worker"):
+        if role in ("orchestrator", "worker"):
             for name, spec in sorted(REGISTRY.tools.items()):
-                if who.role in spec.roles:
+                if role in spec.roles:
                     listed.append(
                         {
                             "name": name,
@@ -140,7 +167,7 @@ class Server:
                             "inputSchema": SCHEMAS[name],
                         }
                     )
-            if who.role == "orchestrator":
+            if role == "orchestrator":
                 listed.append(
                     {
                         "name": "sync",
@@ -298,7 +325,7 @@ class Server:
                     marker = ledger_marker(self.home)
                     who = self.identity()  # on failure neither the list nor the marker moves
                     self.listed, self._marker = _list_key(who), marker
-                result = {"tools": self.tools(who)}
+                result = {"tools": self.tools(who, self.listing_role(who))}
             elif method == "tools/call":
                 if (
                     not isinstance(params, dict)

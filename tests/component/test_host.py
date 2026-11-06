@@ -336,6 +336,41 @@ def test_the_server_announces_new_tools_once_a_session_is_bound(h: Harness, tmp_
 
 
 @mark.use_case("UC-HOST-001")
+def test_a_session_starting_in_an_execution_directory_is_listed_the_worker_tools(
+    h: Harness, tmp_path: Path
+) -> None:
+    # Clients may keep their first tool list and ignore list_changed, and the worker session is
+    # created before the orchestrator can bind it: list the worker tools already, grant nothing.
+    h.register("T001")
+    h.plan("T001")
+    workdir = tmp_path / "wt" / "T001"
+    workdir.mkdir(parents=True)
+    h.run("task_dispatch", task_id="T001", workdir=str(workdir), user_turn=True)
+    started = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
+    server = Server(h.home, {SESSION_ENV: "w-1"}, workdir / "sub")
+    listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    names = {t["name"] for t in listed[0]["result"]["tools"]}
+    assert {"whoami", "task_read", "review_run", "submit", "review_triage"} <= names
+    assert "task_list" not in names
+    with pytest.raises(TswError) as denied:
+        server.call("task_read", {"task_id": "T001"})
+    assert denied.value.to_dict()["details"]["reason"] == "role_denied"
+    elsewhere = Server(h.home, {SESSION_ENV: "x-1"}, tmp_path / "elsewhere")
+    other = elsewhere.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert [t["name"] for t in other[0]["result"]["tools"]] == ["whoami"]
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=started["events"][0]["data"]["generation"],
+        outcome="created",
+        session_ref="w-1",
+        brief_delivered=True,
+    )
+    assert server.call("task_read", {"task_id": "T001"})["task_id"] == "T001"
+
+
+@mark.use_case("UC-HOST-001")
 def test_an_idle_client_hears_about_its_new_tools(h: Harness, tmp_path: Path) -> None:
     workdir = tmp_path / "wt" / "T001"
     lines: list[dict[str, Any]] = []
