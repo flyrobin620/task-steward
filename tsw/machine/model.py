@@ -119,6 +119,27 @@ def loads(value: Any, default: Any) -> Any:
     return json.loads(value)
 
 
+def next_item_id(
+    conn: sqlite3.Connection, table: str, column: str, prefix: str, task_id: str
+) -> str:
+    """``<prefix>-<task>-<n>`` after the task's own items, skipping ids used anywhere in the table.
+
+    A renumbered task keeps the ids it was given under its old number, so a task that later
+    takes that number must not be handed the same id again.
+    """
+    number = int(
+        conn.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE task_id = ?", (task_id,)).fetchone()[
+            "n"
+        ]
+    )
+    while True:
+        number += 1
+        candidate = f"{prefix}-{task_id}-{number}"
+        used = conn.execute(f"SELECT 1 FROM {table} WHERE {column} = ?", (candidate,)).fetchone()
+        if used is None:
+            return candidate
+
+
 def dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 

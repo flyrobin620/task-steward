@@ -67,7 +67,11 @@ def dependency_problems(
             upstream["status"] == "archived" and upstream["previous_status"] == "cancelled"
         ):
             reason = "cancelled"
-        elif upstream["status"] not in ("done", "accepted", "archived"):
+        elif upstream["status"] not in ("done", "accepted", "archived") or (
+            # Only work that was finished before it was archived satisfies a dependency.
+            upstream["status"] == "archived"
+            and upstream["previous_status"] not in ("done", "accepted")
+        ):
             reason = "not_done"
         elif int(upstream["revision"]) != int(dep["bound_revision"]):
             reason = "revision_changed"

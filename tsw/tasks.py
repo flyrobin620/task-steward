@@ -94,7 +94,9 @@ def render_spec(task_id: str, spec: TaskSpec) -> str:
 
 
 def next_task_id(conn: sqlite3.Connection) -> str:
-    highest = 0
+    """After every task, and after every number an imported history used (DN005 §4.4)."""
+    floor = conn.execute("SELECT value FROM meta WHERE key = 'task_id_floor'").fetchone()
+    highest = int(floor["value"]) if floor is not None else 0
     for row in conn.execute("SELECT task_id FROM tasks"):
         highest = max(highest, int(str(row["task_id"])[1:]))
     return f"T{highest + 1:03d}"

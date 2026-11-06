@@ -15,7 +15,7 @@ from tsw.machine import orchestrator as _orchestrator
 from tsw.machine import worker as _worker
 from tsw.machine.base import REGISTRY, Caller, Tool, ToolEnv, check_caller, check_version
 from tsw.machine.guards import dependency_problems, invalidated, topological
-from tsw.machine.model import OCCUPYING, loads
+from tsw.machine.model import OCCUPYING, loads, next_item_id
 
 # Importing the tool modules registers their tools.
 TOOL_MODULES = (_orchestrator, _worker)
@@ -74,16 +74,14 @@ def sync_command(env: ToolEnv, report: dict[str, Any] | None = None) -> Command:
                 and not int(row["stale"])
                 and problems != loads(row["stale_ack"], None)
             ):
-                count = ctx.conn.execute(
-                    "SELECT COUNT(*) AS n FROM input_requests WHERE task_id = ?", (task_id,)
-                ).fetchone()["n"]
+                request_id = next_item_id(ctx.conn, "input_requests", "request_id", "Q", task_id)
                 drafts.append(
                     EventDraft(
                         type="input.requested",
                         task_id=task_id,
                         revision=revision,
                         data={
-                            "request_id": f"Q-{task_id}-{int(count) + 1}",
+                            "request_id": request_id,
                             "kind": "stale",
                             "question": "上游任务已变化，该任务的成果需要保持还是重新验证？",
                             "binding": {"revision": revision, "dependencies": problems},
