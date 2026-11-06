@@ -138,7 +138,11 @@ def build(root: Path, *, tail_events: int = 2) -> tuple[Path, Path]:
             "exported_at": "2026-11-06T00:00:00+00:00",
             "last_sequence": last,
         },
-        "controller": {"session": "old"},
+        "controller": {
+            "holder": "codex:old",
+            "session": "old",
+            "expires_at": "2026-11-04T15:27:24+00:00",
+        },
         "tasks": full,
         "derived": derived,
         "volumes": [

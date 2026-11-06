@@ -128,6 +128,20 @@ def check_volumes(source: Path, snapshot: Mapping[str, Any]) -> list[str]:
     return problems
 
 
+def source_lease(snapshot: Mapping[str, Any], now: str) -> dict[str, Any]:
+    """The source's scheduling lease at import time (DN005 §4.1): released, expired or active."""
+    lease = snapshot.get("controller") or {}
+    holder = lease.get("holder") or lease.get("session")
+    expires = _time(lease.get("expires_at"))
+    if not holder:
+        state = "released"
+    elif expires is not None and expires <= now:
+        state = "expired"
+    else:
+        state = "active"
+    return {"state": state, "holder": holder, "expires_at": expires, "checked_at": now}
+
+
 # ---------------------------------------------------------------------- classification
 
 
@@ -432,6 +446,7 @@ class Report:
     invalid: list[str] = field(default_factory=lambda: [])
     renumbered: list[dict[str, str]] = field(default_factory=lambda: [])
     checks: list[verify.Check] = field(default_factory=lambda: [])
+    lease: dict[str, Any] = field(default_factory=lambda: {})
     appended: int = 0  # events this run appended
     rerun: bool = False
     dry_run: bool = False
@@ -461,6 +476,7 @@ class Report:
             "volume_problems": self.volume_problems,
             "invalid_task_ids": self.invalid,
             "renumbered_local": self.renumbered,
+            "source_lease": self.lease,
         }
 
 
@@ -483,6 +499,13 @@ def run_import(
             "来源账本与快照不一致，先停止旧系统调度并重新导出",
             reason="snapshot_stale",
             problems=report.volume_problems,
+        )
+    report.lease = source_lease(snapshot, utc_now())
+    if report.lease["state"] == "active" and not dry_run:
+        raise rejected(
+            "旧系统的调度租约仍有效，先停止旧系统调度，等租约过期或释放后重新导出",
+            reason="source_lease_active",
+            lease=report.lease,
         )
     derived: Mapping[str, Any] = snapshot.get("derived") or {}
     revisions = {
@@ -567,7 +590,7 @@ def run_import(
     with storage.writer():
         _copy_volumes(home, source, snapshot)
         _copy_legacy(home, source, snapshot, snapshot_dir)
-    report.count(_commit_started(ledger, snapshot, snapshot_sha, last_seq))
+    report.count(_commit_started(ledger, snapshot, snapshot_sha, last_seq, report.lease))
     for plan in todo:
         files = prepare(plan, source)
         try:
@@ -701,7 +724,7 @@ def _unresolved_refs(home: Home, planned: list[Planned]) -> list[str]:
 
 
 def _commit_started(
-    ledger: Ledger, snapshot: Mapping[str, Any], sha: str, last_seq: int
+    ledger: Ledger, snapshot: Mapping[str, Any], sha: str, last_seq: int, lease: dict[str, Any]
 ) -> CommitResult:
     def build(ctx: CommitContext) -> list[EventDraft]:
         return [
@@ -712,6 +735,8 @@ def _commit_started(
                     "snapshot_sha256": sha,
                     "tasks": len(snapshot["tasks"]),
                     "controller": snapshot.get("controller"),
+                    # Recorded before anything is imported: the old system had stopped.
+                    "source_lease": lease,
                 },
             )
         ]
@@ -794,6 +819,8 @@ def _write_report(home: Home, report: Report) -> None:
         f"- 导入时间：{utc_now()}",
         f"- 来源：{source['root']}（提交 {source.get('git_head')}）",
         f"- 来源账本末端序号：{summary['source_sequence']}；快照摘要：{report.snapshot_sha256}",
+        f"- 旧调度租约：{report.lease.get('state')}（持有者 {report.lease.get('holder')}，"
+        f"到期 {report.lease.get('expires_at')}，核对于 {report.lease.get('checked_at')}）",
         f"- 任务：{summary['tasks']}；本次写入 {summary['imported']}，"
         f"未变化 {summary['unchanged']}",
         "",

@@ -55,6 +55,8 @@ def test_every_class_is_imported_with_its_history(home: Home, tmp_path: Path) ->
     }
     assert summary["todo_only"] == ["T009"]
     assert types(ledger) == ["import.started", *["import.task_imported"] * 9, "import.completed"]
+    started = next(e for e in ledger.storage.read() if e.type == "import.started")
+    assert started.data["source_lease"]["state"] == "expired"  # the old system had stopped
     tasks = {r["task_id"]: r for r in rows(ledger, "SELECT * FROM tasks")}
     assert tasks["T001"]["previous_status"] == "accepted"
     assert tasks["T003"]["accepted_at"] == "2026-10-01T00:00:00Z"
@@ -509,3 +511,22 @@ def test_a_renumbering_stopped_by_a_held_directory_is_finished_by_the_next_run(
     run_import(home, ledger, snapshot, renumber_local=[("T001", "T011")])
     assert (home.root / "runs" / "T011" / "a1").is_dir()
     assert (home.root / "todo" / "T011.md").read_text(encoding="utf-8").startswith("### T011")
+
+
+def test_an_active_lease_of_the_source_stops_the_import(home: Home, tmp_path: Path) -> None:
+    _, snapshot_dir = build(tmp_path)
+    path = snapshot_dir / "snapshot.json"
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
+    snapshot["controller"]["expires_at"] = "2999-01-01T00:00:00+00:00"
+    path.write_text(json.dumps(snapshot), encoding="utf-8")
+    ledger = Ledger(home)
+    assert run_import(home, ledger, snapshot_dir, dry_run=True)["source_lease"]["state"] == "active"
+    with pytest.raises(TswError) as active:
+        run_import(home, ledger, snapshot_dir)
+    assert active.value.details["reason"] == "source_lease_active"
+    assert types(ledger) == []
+    snapshot["controller"] = {"holder": None}  # released
+    path.write_text(json.dumps(snapshot), encoding="utf-8")
+    run_import(home, ledger, snapshot_dir)
+    started = next(e for e in ledger.storage.read() if e.type == "import.started")
+    assert started.data["source_lease"]["state"] == "released"

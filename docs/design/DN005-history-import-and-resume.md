@@ -65,7 +65,7 @@
 
 ### 4.1 前置条件
 
-1. 旧系统停止调度：Codex / Copilot 主会话不再运行派发类命令；旧租约已过期或已释放。导入在 `import.started` 事件中记录旧租约状态。
+1. 旧系统停止调度：Codex / Copilot 主会话不再运行派发类命令；旧租约已过期或已释放。导入在导入时刻按快照中的租约判断 `released` / `expired` / `active`，记入 `import.started` 事件的 `source_lease`；租约仍有效时拒绝导入（`source_lease_active`），演练（`--dry-run`）只报告。
 2. 在隔离副本上对旧账本运行只读全审计（`python -m orchestrator ledger audit`），确认没有缺卷、间隙或冲突。
 3. 备份旧控制根：全部事件卷、TODO / todo、config、runs 的 Git 提交 SHA，以及 `.local` 中的通知 outbox 与受管 inbox 数据库（用 SQLite backup API）。
 
