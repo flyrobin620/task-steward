@@ -31,6 +31,12 @@ def types(ledger: Ledger) -> list[str]:
     return [e.type for e in ledger.storage.read()]
 
 
+@pytest.mark.transition("I01")
+@pytest.mark.transition("I02")
+@pytest.mark.transition("I03")
+@pytest.mark.transition("I04")
+@pytest.mark.transition("I05")
+@pytest.mark.transition("I06")
 def test_every_class_is_imported_with_its_history(home: Home, tmp_path: Path) -> None:
     source, snapshot = build(tmp_path)
     ledger = Ledger(home)

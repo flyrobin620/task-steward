@@ -79,7 +79,9 @@ def load_snapshot(directory: Path) -> tuple[dict[str, Any], str]:
         snapshot = json.loads(raw)
     except (OSError, ValueError) as exc:
         raise rejected("读不到导入快照", reason="snapshot_unreadable", path=str(path)) from exc
-    if not isinstance(snapshot, dict) or snapshot.get("schema") != SNAPSHOT_SCHEMA:
+    if not isinstance(snapshot, dict):
+        raise rejected("导入快照的格式版本不受支持", reason="snapshot_schema", schema=None)
+    if snapshot.get("schema") != SNAPSHOT_SCHEMA:
         raise rejected(
             "导入快照的格式版本不受支持", reason="snapshot_schema", schema=snapshot.get("schema")
         )
@@ -397,7 +399,7 @@ def publish(home: Home, staged: list[tuple[Path, str]]) -> None:
             shutil.rmtree(target)
         elif target.exists():
             target.unlink()
-        os.replace(path, target)
+        path.replace(target)
 
 
 # ---------------------------------------------------------------------- import

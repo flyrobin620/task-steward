@@ -65,7 +65,8 @@ def _task_imported(conn: sqlite3.Connection, event: Event) -> None:
         "INSERT INTO tasks(task_id, title, repo, kind, status, revision, version, spec_path, "
         "spec_sha256, registered_seq, last_activity, source_seq, goal, acceptance, pause, "
         "attempt_count, previous_status, done_at, accepted_at, business_changed_at, "
-        "resources, stale) VALUES(?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "resources, stale) "
+        "VALUES(?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             task_id,
             data["title"],
@@ -90,7 +91,8 @@ def _task_imported(conn: sqlite3.Connection, event: Event) -> None:
             1 if data.get("stale") else 0,
         ),
     )
-    for resource in data.get("held_resources") or []:
+    held: list[Any] = data.get("held_resources") or []
+    for resource in held:
         conn.execute(
             "INSERT INTO resource_claims(resource, owner_task, status) VALUES(?, ?, 'held') "
             "ON CONFLICT(resource, owner_task) DO UPDATE SET status = 'held'",

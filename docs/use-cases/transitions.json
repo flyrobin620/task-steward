@@ -455,38 +455,62 @@
     {
       "id": "I01",
       "kind": "import_rule",
-      "status": "planned",
-      "note": "历史导入在 v2 实现（docs/decisions/0001）"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "v2"
     },
     {
       "id": "I02",
       "kind": "import_rule",
-      "status": "planned",
-      "note": "历史导入在 v2 实现（docs/decisions/0001）"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "v2"
     },
     {
       "id": "I03",
       "kind": "import_rule",
-      "status": "planned",
-      "note": "历史导入在 v2 实现（docs/decisions/0001）"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "v2"
     },
     {
       "id": "I04",
       "kind": "import_rule",
-      "status": "planned",
-      "note": "历史导入在 v2 实现（docs/decisions/0001）"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "v2"
     },
     {
       "id": "I05",
       "kind": "import_rule",
-      "status": "planned",
-      "note": "历史导入在 v2 实现（docs/decisions/0001）"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "v2"
     },
     {
       "id": "I06",
       "kind": "import_rule",
-      "status": "planned",
-      "note": "历史导入在 v2 实现（docs/decisions/0001）"
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "v2"
     }
   ]
 }
