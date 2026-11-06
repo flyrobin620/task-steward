@@ -534,3 +534,20 @@ def test_an_active_lease_of_the_source_stops_the_import(home: Home, tmp_path: Pa
     run_import(home, ledger, snapshot_dir)
     started = next(e for e in ledger.storage.read() if e.type == "import.started")
     assert started.data["source_lease"]["state"] == "released"
+
+
+def test_spec_only_tasks_the_user_dropped_are_excluded(home: Home, tmp_path: Path) -> None:
+    _, snapshot = build(tmp_path)
+    ledger = Ledger(home)
+    with pytest.raises(TswError) as unknown:  # only spec-only tasks can be dropped
+        run_import(home, ledger, snapshot, exclude=["T004"])
+    assert unknown.value.details["reason"] == "exclude_unknown"
+    assert types(ledger) == []
+    summary = run_import(home, ledger, snapshot, exclude=["T009"])
+    assert (summary["todo_only"], summary["excluded_todo_only"]) == ([], ["T009"])
+    assert not (home.root / "todo" / "T009.md").exists()
+    report = (home.root / LEGACY / "import" / "report.md").read_text(encoding="utf-8")
+    assert "需要决定" not in report
+    assert "用户决定不导入、不建任务、不存档：T009" in report
+    with ledger.view() as conn:
+        assert next_task_id(conn) == "T011"

@@ -18,8 +18,15 @@ def test_dry_run_then_import_from_the_command_line(tmp_path: Path) -> None:
     _, snapshot = build(tmp_path)
     code, dry = run_json("import", "orchestrator-agent", "--snapshot", str(snapshot), "--dry-run")
     assert code == 0 and dry["dry_run"] and dry["tasks"] == 9
-    code, done = run_json("import", "orchestrator-agent", "--snapshot", str(snapshot))
+    code, bad = run_json(
+        "import", "orchestrator-agent", "--snapshot", str(snapshot), "--renumber-local", "T001"
+    )
+    assert code == 3 and bad["details"]["reason"] == "renumber_syntax"
+    code, done = run_json(
+        "import", "orchestrator-agent", "--snapshot", str(snapshot), "--exclude", "T009"
+    )
     assert code == 0 and done["imported"] == 9
+    assert done["excluded_todo_only"] == ["T009"] and done["todo_only"] == []
     code, listed = run_json("task", "list")
     assert code == 0
     statuses = {t["task_id"]: t["status"] for t in listed["tasks"]}

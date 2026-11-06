@@ -462,6 +462,7 @@ class Report:
     unchanged: list[str] = field(default_factory=lambda: [])
     conflicts: list[dict[str, Any]] = field(default_factory=lambda: [])
     todo_only: list[str] = field(default_factory=lambda: [])
+    excluded: list[str] = field(default_factory=lambda: [])
     missing_files: list[str] = field(default_factory=lambda: [])
     volume_problems: list[str] = field(default_factory=lambda: [])
     invalid: list[str] = field(default_factory=lambda: [])
@@ -493,6 +494,7 @@ class Report:
             "unchanged": len(self.unchanged),
             "conflicts": self.conflicts,
             "todo_only": self.todo_only,
+            "excluded_todo_only": self.excluded,
             "missing_files": self.missing_files,
             "volume_problems": self.volume_problems,
             "invalid_task_ids": self.invalid,
@@ -508,6 +510,7 @@ def run_import(
     *,
     dry_run: bool = False,
     renumber_local: list[tuple[str, str]] | None = None,
+    exclude: list[str] | None = None,
 ) -> dict[str, Any]:
     snapshot, snapshot_sha = load_snapshot(snapshot_dir)
     source = Path(snapshot["source"]["root"])
@@ -554,11 +557,22 @@ def run_import(
         ),
         key=_task_number,
     )
+    # Spec-only tasks the user decided not to keep: not imported, not listed as open (their
+    # numbers still count for the floor, so they are never reused).
+    unknown = sorted(set(exclude or []) - set(report.todo_only))
+    if unknown:
+        raise rejected(
+            "只能排除只有任务书、旧账本中没有登记的任务",
+            reason="exclude_unknown",
+            task_ids=unknown,
+        )
+    report.excluded = sorted(set(exclude or []), key=_task_number)
     floor = max(
         [_task_number(p.task_id) for p in report.planned]
         + [_task_number(t) for t in report.todo_only]
         + [0]
     )
+    report.todo_only = [t for t in report.todo_only if t not in report.excluded]
     for old, new in renumber_local or []:
         if dry_run:
             with ledger.view() as conn:
@@ -878,6 +892,15 @@ def _write_report(home: Home, report: Report) -> None:
         lines += [f"- 事件卷：{p}" for p in report.volume_problems]
     if not (report.conflicts or report.todo_only or report.missing_files or report.volume_problems):
         lines.append("- 无")
+    if report.excluded:
+        lines += [
+            "",
+            "## 按用户决定排除",
+            "",
+            "- 只有任务书、旧账本中没有登记，用户决定不导入、不建任务、不存档："
+            + "、".join(report.excluded)
+            + "（旧索引 TODO.md 原样存档在 legacy/，其中仍有它们的索引行）",
+        ]
     lines += ["", "## 验证清单（DN005 §6）", "", "| 项 | 检查 | 结果 |", "| --- | --- | --- |"]
     for check in sorted(report.checks, key=lambda c: c.number):
         lines.append(f"| {check.number} | {check.title} | {check.mark()} |")

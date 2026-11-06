@@ -298,6 +298,7 @@ def _cmd_import_orchestrator_agent(args: argparse.Namespace) -> dict[str, Any]:
         Path(args.snapshot),
         dry_run=args.dry_run,
         renumber_local=renumber.parse(args.renumber_local),
+        exclude=args.exclude,
     )
 
 
@@ -439,6 +440,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         metavar="OLD=NEW",
         help="先把与导入编号冲突的已结束本地任务改到新编号（可重复），例如 T001=T238",
+    )
+    oa.add_argument(
+        "--exclude",
+        action="append",
+        metavar="ID",
+        help="按用户决定排除只有任务书、旧账本未登记的任务（可重复）：不导入，也不列为待决定",
     )
 
     add(sub, "quiesce", _cmd_quiesce, "静止数据目录（之后可直接复制）")
