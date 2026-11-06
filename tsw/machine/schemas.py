@@ -168,6 +168,10 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         task_id=S,
         verified_head=S,
         summary=S,
+        post_merge={
+            **S,
+            "description": "worker 已合并时必填：合并后的核对（main 上合并提交的 CI 等）",
+        },
         acceptance={
             "type": "array",
             "items": {
@@ -246,6 +250,12 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         report_html=S,
         worktree_clean=B,
         diff_note=S,
+        merge={
+            "type": "object",
+            "description": "worker 已合并 PR（仓库授权 delivery.merge 的开发任务）",
+            "properties": {"pr": S, "merge_commit": S, "merged_head": S},
+        },
+        merge_skipped={**S, "description": "授权合并但没有合并时的原因（任务书或仓库规则）"},
     ),
     "sync": schema([]),
     "ask_user": schema(

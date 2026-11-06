@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="323d75ecc0653463c1ec0723aa1ffaafc0302a64efd7638d449adee2ef2e497d">
+<meta name="tsw-source-sha256" content="6c54904834261615762385f30f1aef07e185610153981e919a80e61e37a105c6">
 <title>DN003 统一配置</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -149,7 +149,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
       &quot;instructions&quot;: [&quot;AGENTS.md&quot;, &quot;CLAUDE.md&quot;],
       &quot;worktree_files&quot;: [{&quot;source&quot;: &quot;dev-settings.json&quot;, &quot;destination&quot;: &quot;.local/dev-settings.json&quot;}],
       &quot;validation&quot;: [],
-      &quot;delivery&quot;: {&quot;push&quot;: true, &quot;create_pr&quot;: true}
+      &quot;delivery&quot;: {&quot;push&quot;: true, &quot;create_pr&quot;: true, &quot;merge&quot;: false}
     }
   },
   &quot;accounts&quot;: {
@@ -196,7 +196,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <h3 id="33-scheduling-与-sessions">3.3 <code>scheduling</code> 与 <code>sessions</code></h3>
 <ul><li><code>max_workers</code>：活动任务上限（DN002 G-SLOT）。实际并发取它与平台可用额度的较小值。</li><li><code>prestart.enabled</code> / <code>prestart.max_standby</code>：是否在用户 turn 中为已规划任务预启动 worker 会话，以及同时待命的会话上限（DN002 §5.6）。关闭预启动时，自动 turn 中变为可派发的任务都要等用户下一次发消息才能创建会话。</li><li><code>wake.worker_message_parent</code>：reportable 事件发生时，worker 是否同时用 <code>mcp__ccd_session_mgmt__send_message(session_id=&quot;parent&quot;)</code> 给父会话发消息（DN001 §6.3）。</li><li><code>sessions.archive_on_accept</code>：验收后是否归档子会话。默认 <code>false</code>，保留以便用户回看；归档时须有工具回执。</li></ul>
 <h3 id="34-repositories-与-accounts">3.4 <code>repositories</code> 与 <code>accounts</code></h3>
-<p>结构沿用 orchestrator-agent 的 <code>config/repositories.json</code> 与 <code>config/accounts.json</code>，合并为两个小节（账号只记录名称与认证目录引用，凭据本身不进数据目录），并新增 <code>aliases</code>（原 <code>repositories.md</code> 中的缩写表）。导入时自动转换（DN005 §4.4）。<code>delivery.push</code> / <code>create_pr</code> 是该仓库的默认交付授权，具体任务仍以用户当次指令为准。</p>
+<p>结构沿用 orchestrator-agent 的 <code>config/repositories.json</code> 与 <code>config/accounts.json</code>，合并为两个小节（账号只记录名称与认证目录引用，凭据本身不进数据目录），并新增 <code>aliases</code>（原 <code>repositories.md</code> 中的缩写表）。导入时自动转换（DN005 §4.4）。<code>delivery.push</code> / <code>create_pr</code> / <code>merge</code> 是该仓库的默认交付授权，具体任务仍以用户当次指令为准。<code>merge</code>（默认关闭）为 <code>true</code> 时，该仓库的开发任务由 worker 在门禁、评审与意见都解决后自行合并 PR，再提交（DN002 §3.5）。三者都是权限类键（§7.2）。</p>
 <h3 id="35-policies">3.5 <code>policies</code></h3>
 <p>集中保存原先写在 AGENTS.md 中、可由程序检查的用户约定。hooks 和门禁读取这些值：</p>
 <table><thead><tr><th>字段</th><th>来源约定</th><th>执行点</th></tr></thead><tbody><tr><td><code>executable_hashing</code></td><td>用户 2026-10-30：默认不做可执行文件哈希</td><td>worker PreToolUse hook 拦截</td></tr><tr><td><code>email</code></td><td>邮件默认只存草稿</td><td>发送类 MCP 工具调用前的 hook</td></tr><tr><td><code>pr_default_state</code></td><td>以合并为目的的 PR 默认 ready-for-review</td><td><code>pr_link</code> 登记校验</td></tr><tr><td><code>user_acceptance_source_required</code></td><td>用户验收须有真实来源</td><td><code>user_accept</code> 门禁</td></tr><tr><td><code>auto_archive_days</code></td><td>已验收满 7 天归档</td><td>sync 规则 T24</td></tr></tbody></table>

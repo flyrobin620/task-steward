@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from tsw.commands import Command, CommitContext
+from tsw.config import EffectiveConfig, resolve_repository
 from tsw.errors import rejected
 from tsw.events import EventDraft, digest
 from tsw.home import same_dir
@@ -342,6 +343,7 @@ def task_update(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 str(current["attempt"]),
                 str(current["workdir"]),
                 loads(current["read_set"], []),
+                env.config,
             )
             ctx.storage.put_artifact(str(current["brief_path"]), body.encode("utf-8"))
             data["brief"] = {"attempt": current["attempt"], "revision": revision}
@@ -420,18 +422,38 @@ def stale_keep(inp: Mapping[str, Any], env: ToolEnv) -> Command:
 # ---------------------------------------------------------------------- dispatch and attempts
 
 
-def _brief(
+def _delivery_line(config: EffectiveConfig, row: Mapping[str, Any]) -> str:
+    """How the work leaves the worker (DN002 G-SUBMIT; decision 0002)."""
+    repo = resolve_repository(config, str(row["repo"]))
+    delivery = config.get(f"repositories.{repo}.delivery", {}) if repo else {}
+    yes = {True: "是", False: "否"}
+    merge = (
+        "worker 在门禁、评审与意见都解决后自行合并，再提交（任务书或仓库 AGENTS.md 另有规定时"
+        "从其规定，提交时说明）"
+        if guards.merge_authorized(config, row)
+        else "worker 不合并"
+    )
+    return (
+        f"- 交付：推送 {yes[bool(delivery.get('push'))]}；"
+        f"开 PR {yes[bool(delivery.get('create_pr'))]}；合并：{merge}\n"
+    )
+
+
+def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
     conn: sqlite3.Connection,
     row: Mapping[str, Any],
     attempt_id: str,
     workdir: str,
     read_set: list[str],
+    config: EffectiveConfig,
 ) -> str:
     acceptance = "\n".join(f"- {item}" for item in loads(row["acceptance"], []))
     return (
         f"# 任务书 {row['task_id']} {attempt_id}\n\n"
         f"- 标题：{row['title']}\n- 仓库：{row['repo']}\n- revision：{row['revision']}\n"
-        f"- 执行目录：{workdir}\n- 授权读取集合：{', '.join(read_set)}\n\n"
+        f"- 执行目录：{workdir}\n- 授权读取集合：{', '.join(read_set)}\n"
+        + _delivery_line(config, row)
+        + "\n"
         f"## 目标\n\n{row['goal']}\n\n## 验收\n\n{acceptance}\n"
     ) + resume_package(conn, str(row["task_id"]))
 
@@ -488,7 +510,8 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         read_set = sorted({task_id, *map(str, deps), *extra_reads})
         brief_path = f"runs/{task_id}/{attempt_id}/brief.md"
         ctx.storage.put_artifact(
-            brief_path, _brief(ctx.conn, row, attempt_id, workdir, read_set).encode("utf-8")
+            brief_path,
+            _brief(ctx.conn, row, attempt_id, workdir, read_set, env.config).encode("utf-8"),
         )
         return [
             EventDraft(
@@ -1209,6 +1232,7 @@ def task_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     verified_head = text(inp, "verified_head")
     results = items(inp, "acceptance")
     summary = text(inp, "summary")
+    post_merge = opt_text(inp, "post_merge")
 
     def build(ctx: CommitContext) -> list[EventDraft]:
         row = task(ctx.conn, task_id)
@@ -1244,6 +1268,27 @@ def task_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         ).fetchall()
         if not verified:
             raise rejected("没有已核验登记的 PR 或产出", reason="g_accept", check="outputs")
+        merge = submission.get("merge")
+        if merge:
+            # The worker merged before submitting: the orchestrator checks after the merge
+            # (DN002 G-ACCEPT): the merged PR is verified, and so is main after the merge commit.
+            if not ctx.conn.execute(
+                "SELECT 1 FROM outputs WHERE task_id = ? AND type = 'pr' AND ref = ? "
+                "AND verified_at IS NOT NULL",
+                (task_id, merge["pr"]),
+            ).fetchone():
+                raise rejected(
+                    "worker 合并的 PR 尚未核验登记",
+                    reason="g_accept",
+                    check="merged_pr",
+                    pr=merge["pr"],
+                )
+            if not (post_merge and post_merge.strip()):
+                raise rejected(
+                    "worker 已合并：须写明合并后的核对（main 上合并提交的 CI 等）",
+                    reason="g_accept",
+                    check="post_merge",
+                )
         open_integrations = ctx.conn.execute(
             "SELECT repo FROM integrations WHERE task_id = ? AND status IN ('started', 'conflict')",
             (task_id,),
@@ -1265,6 +1310,14 @@ def task_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             f"- {c['item']}：{'已完成' if c['status'] == 'done' else '用户明确替代'}"
             for c in checked
         ]
+        if merge:
+            lines += [
+                "",
+                "## 合并后核对",
+                "",
+                f"- worker 合并：{merge['pr']}（合并提交 {merge['merge_commit']}）",
+                f"- {post_merge}",
+            ]
         decisions = ctx.conn.execute(
             "SELECT decision_id, decision, rationale FROM decisions WHERE task_id = ? ORDER BY "
             "sequence",
@@ -1286,6 +1339,7 @@ def task_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     "head": verified_head,
                     "review_path": review_path,
                     "reviews": recheck["rounds"],
+                    **({"post_merge": post_merge} if merge else {}),
                 },
             )
         ]

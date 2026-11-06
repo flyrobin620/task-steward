@@ -42,7 +42,8 @@ worker 先在自己的会话里直接问用户（`ask_user`），你看不到问
 
 ## 核验与验收
 
-- worker 提交后（`inbox` 中的 `worker.submitted`）核对报告、评审证据、Git 状态与产出：`output_link` 登记已核实的 PR 与产出，必要时 `integrate`；有剩余工作就 `feedback`。
+- worker 提交后（`inbox` 中的 `worker.submitted`）核对报告、评审证据、Git 状态与产出：`output_link` 登记已核实的 PR 与产出；有剩余工作就 `feedback`（已合并的改动由 worker 另开 PR 修复）。
+- worker 已合并的开发任务（提交中有 `merge`）：你不再合并，改为合并后核对：PR 确已合并、合并提交与提交 HEAD 对应、`main` 上该合并提交的 CI 结果。`task_accept` 的 `post_merge` 写明核对结果。没有合并的任务（`merge_skipped` 或仓库未授权）按仓库规则由你合并，必要时 `integrate`。
 - 全部满足时 `task_accept`：逐项列出验收要求的结论与证据。之后告诉用户任务完成、等待人工验收。
 - 用户明确验收或退回时 `user_accept` / `user_reject`，附用户原话与消息引用；不能以 worker 回执、自评或超时代替。
 

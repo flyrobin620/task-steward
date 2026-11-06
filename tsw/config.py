@@ -260,7 +260,7 @@ SCHEMA: dict[str, Any] = _obj(
             instructions=STRS,
             worktree_files={"type": "list", "item": _obj(source=S, destination=S)},
             validation={"type": "list", "item": {"type": "any"}},
-            delivery=_obj(push=B, create_pr=B),
+            delivery=_obj(push=B, create_pr=B, merge=B),
         ),
     },
     accounts={

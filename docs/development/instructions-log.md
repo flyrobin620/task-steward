@@ -14,3 +14,4 @@
 | 日期 | 变更 | 原位置 | 新位置 | 原因 |
 | --- | --- | --- | --- | --- |
 | 2026-11-05 | 初始开发规则 | — | `AGENTS.md` 与 `docs/development/*` | 进入 v1 开发前制定，见 [0001](../decisions/0001-development-process.md) |
+| 2026-11-06 | 编排器派发的任务由 worker 自己合并，编排者合并后核对；敏感改动类别全部保留，用户确认由 worker 在自己的会话中取得 | `AGENTS.md` 第 4 节第 6 步、`workflow.md`、`review.md`（编排者验收后合并） | 同一位置 | 用户决定，见 [0002](../decisions/0002-worker-merges.md) |

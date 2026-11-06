@@ -138,6 +138,7 @@ def bash_problem(
     home: Home,
     push_allowed: bool,
     pr_allowed: bool,
+    merge_allowed: bool = False,
     worker: bool,
     cwd: Path | None = None,
     writable_roots: Sequence[Path] | None = None,
@@ -177,10 +178,14 @@ def bash_problem(
         elif program.name == "gh":
             words, _ = shell.split_options(program.args, _GH_VALUE_OPTIONS)
             words = [w.lower() for w in words]
-            if words[:2] == ["pr", "merge"] or (
+            merging = words[:2] == ["pr", "merge"] or (
                 words[:1] == ["api"] and any("merge" in w.lower() for w in program.args)
-            ):
-                return "worker 不能合并 PR"
+            )
+            if merging and not merge_allowed:
+                return (
+                    "该仓库没有合并授权（repositories.*.delivery.merge）：PR 由主会话合并，"
+                    "worker 提交时用 merge_skipped 说明"
+                )
             if words[:2] == ["pr", "create"] and not pr_allowed:
                 return "创建 PR 需要仓库的 delivery.create_pr 授权"
     return None
@@ -284,7 +289,8 @@ class Guard:
                 "SessionStart",
                 f"你是 TaskSteward 任务 {who.task_id} 的 worker（attempt {who.attempt}）。"
                 f"任务书：{who.brief_path or '等待投递'}。只在可写路径内修改：{roots}。"
-                "完成后用 review_run 做自评审并逐条处置，再 submit。需要用户决定的事用 ask_user "
+                "完成后用 review_run 做自评审并逐条处置；任务书写明由 worker 合并时，"
+                "门禁、评审与意见都解决后自行合并 PR，再 submit。需要用户决定的事用 ask_user "
                 "在本会话直接问用户，用户回复后用 user_answer 登记；跨任务的事（资源冲突、依赖、"
                 "其他任务的范围）才用 question 交主会话，并用 "
                 'mcp__ccd_session_mgmt__send_message(session_id="parent") 唤醒主会话。',
@@ -353,14 +359,15 @@ class Guard:
                 )
             return None
         if tool == "Bash":
-            push_allowed = pr_allowed = False
+            push_allowed = pr_allowed = merge_allowed = False
             if who.role == "worker" and who.task_id:
-                push_allowed, pr_allowed = self._delivery(who.task_id)
+                push_allowed, pr_allowed, merge_allowed = self._delivery(who.task_id)
             problem = bash_problem(
                 str(tool_input.get("command") or ""),
                 home=self.home,
                 push_allowed=push_allowed,
                 pr_allowed=pr_allowed,
+                merge_allowed=merge_allowed,
                 worker=who.role == "worker",
                 cwd=self.cwd,
                 writable_roots=who.writable_roots if who.role == "worker" else None,
@@ -476,14 +483,18 @@ class Guard:
         target = shell.resolve(words[1], self.cwd)
         return target is not None and any(within(target, r) for r in who.writable_roots)
 
-    def _delivery(self, task_id: str) -> tuple[bool, bool]:
+    def _delivery(self, task_id: str) -> tuple[bool, bool, bool]:
         with self.ledger.view() as conn:
             row = row_dict(
                 conn.execute("SELECT repo FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
             )
         repo = resolve_repository(self.config, str(row["repo"])) if row else None
         delivery = self.config.get(f"repositories.{repo}.delivery", {}) if repo else {}
-        return bool(delivery.get("push")), bool(delivery.get("create_pr"))
+        return (
+            bool(delivery.get("push")),
+            bool(delivery.get("create_pr")),
+            bool(delivery.get("merge")),
+        )
 
 
 def _turn_ended(who: Identity) -> Command:

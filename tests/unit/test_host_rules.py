@@ -94,3 +94,25 @@ def test_writes_into_the_ledger_through_the_shell_are_refused(tmp_path: Path) ->
     assert (
         bash_problem(reading, home=home, push_allowed=True, pr_allowed=True, worker=False) is None
     )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr merge 3 --squash",
+        "gh -R owner/repo pr merge 3 --squash --delete-branch",
+        "gh api -X PUT repos/o/r/pulls/3/merge",
+    ],
+)
+@pytest.mark.use_case("UC-MERGE-001")
+def test_a_worker_merges_only_with_the_repository_authorization(
+    tmp_path: Path, command: str
+) -> None:
+    """Decision 0002: delivery.merge lets the worker merge its own PR."""
+    home = Home(tmp_path / "home")
+    refused = bash_problem(command, home=home, push_allowed=True, pr_allowed=True, worker=True)
+    assert refused is not None and "delivery.merge" in refused
+    allowed = bash_problem(
+        command, home=home, push_allowed=True, pr_allowed=True, merge_allowed=True, worker=True
+    )
+    assert allowed is None

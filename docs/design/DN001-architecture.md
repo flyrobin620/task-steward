@@ -75,6 +75,7 @@
 | 准备执行目录、派发 | — | 负责 | — | — |
 | 实现与验证 | 可在子会话直接指导 | 不代做 | 负责 | — |
 | 成果评审 | — | 复核评审证据 | 发起、逐条处置、决定迭代 | 给出结构化意见 |
+| 开 PR 与合并（开发任务） | 授权（`delivery.merge`）；确认须用户确认的改动 | 未授权时合并；授权时合并后核对 | 授权时自行开 PR 并合并（DN002 §3.5） | — |
 | 技术验收（done） | — | 负责，逐项核验 | 提供证据 | — |
 | 人工验收（accepted） | 负责 | 记录真实来源 | — | — |
 | 归档 | 可指定 | 执行并核实会话处置 | — | — |
@@ -183,7 +184,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一�
 | `ask_user` / `user_answer` / `input_handoff` | — | ✓ | 在本会话直接问用户（T11）、登记 hook 记录的用户答复（T12）、超时转交（DN006 §8.1a–§8.1b） |
 | `handoff_resolve` / `input_relay` | ✓ | — | 对转交的会话内问题代为决定（T12）或转达给用户（DN006 §8.1b） |
 | `review_run` / `review_triage` / `review_decide` | — | ✓ | DN004 |
-| `submit` | — | ✓ | T13，执行 G-SUBMIT 检查 |
+| `submit` | — | ✓ | T13，执行 G-SUBMIT 检查；worker 已合并时带合并记录（DN002 §3.5） |
 | `report_back` | — | ✓ | `[report]` 回传 |
 | `attention` | ✓ | — | 只读自检：缺证、过期问题、已停未收口 |
 | `operations_pending` / `operation_receipt` | ✓ | — | 委托操作的领取与回执（DN006 §4） |
@@ -215,7 +216,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一�
 | hook | 角色 | 行为 |
 | --- | --- | --- |
 | SessionStart | 全部 | 由 cwd 与 session_id 识别角色；主会话尝试领取租约，并注入未读 inbox 数与 attention 摘要；worker 注入任务 ID、brief 路径、可写路径和评审规则 |
-| PreToolUse（Edit / Write / NotebookEdit / Bash） | worker | 拒绝写出可写路径；拒绝未获交付授权的 `git push` 与 PR 操作；拒绝在命令行运行 hook 入口 `tsw guard`（它记录用户原话，只由宿主调用）；拒绝对可执行文件求哈希的命令（除非账本有用户批准记录）；拒绝直接修改 `ledger/`、`STATUS.html` |
+| PreToolUse（Edit / Write / NotebookEdit / Bash） | worker | 拒绝写出可写路径；拒绝未获交付授权的 `git push`、建 PR 与合并（合并须仓库的 `delivery.merge`）；拒绝在命令行运行 hook 入口 `tsw guard`（它记录用户原话，只由宿主调用）；拒绝对可执行文件求哈希的命令（除非账本有用户批准记录）；拒绝直接修改 `ledger/`、`STATUS.html` |
 | PreToolUse | orchestrator | 拒绝直接编辑 `ledger/`、`config/`、生成视图和投影（配置经 `config_change` 修改）；拒绝在派发窗口外重复 `start_session` 同名 attempt |
 | UserPromptSubmit | worker | 检测 `[report]`，注入回传协议提示；worker 有未获用户答复的会话内问题时，把用户消息原文记为 `input.session_message` 并告诉 worker 消息编号（注入的其他会话消息不记，DN006 §8.1a） |
 | Stop | orchestrator | 运行只读 `attention`；有未处理 reportable 事件，或有已超时未转交的会话内问题（提示运行 `sync`）时阻止一次结束（`stop_hook_active` 防循环） |

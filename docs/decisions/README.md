@@ -4,7 +4,8 @@
 
 | 编号 | 标题 | 状态 |
 | --- | --- | --- |
-| [0001](0001-development-process.md) | 开发流程、测试层级与 CI | 已接受 |
+| [0001](0001-development-process.md) | 开发流程、测试层级与 CI | 已接受；第 7 条已被 0002 取代 |
+| [0002](0002-worker-merges.md) | 由完成改动的 worker 合并 PR | 已接受 |
 
 ## 规则
 
