@@ -102,9 +102,10 @@ def test_writes_into_the_ledger_through_the_shell_are_refused(tmp_path: Path) ->
     [
         ("gh pr merge 3 --squash", False),  # gh's default remote is not a confirmed target
         ("cd ../other && gh pr merge 3 --squash", False),
-        ("gh -R example/demo pr merge 3 --squash --delete-branch", True),
+        ("gh -R example/demo pr merge 3 --squash --delete-branch", False),  # host not named
+        ("gh -R github.com/example/demo pr merge 3 --squash --delete-branch", True),
         ("gh pr merge https://github.com/Example/Demo/pull/3 --squash", True),
-        ("gh api -X PUT repos/example/demo/pulls/3/merge", True),
+        ("gh api -X PUT repos/example/demo/pulls/3/merge", False),  # GH_HOST may redirect it
         ("gh -R example/other pr merge 3 --squash", False),
         ("gh pr merge --repo=example/other 3", False),
         ("gh pr merge https://github.com/example/other/pull/3", False),
@@ -115,7 +116,7 @@ def test_writes_into_the_ledger_through_the_shell_are_refused(tmp_path: Path) ->
         ("gh pr merge https://ghe.example.org/other/repo/pull/3 --squash", False),
         ("gh pr merge https://ghe.example.org/example/demo/pull/3 --squash", False),
         ("GH_REPO=other/repo gh pr merge 3 --squash", False),
-        ("gh pr merge 3 -R example/demo --body-file ../notes/merge.md -t 'a/b'", True),
+        ("gh pr merge 3 -R github.com/example/demo --body-file ../m.md -t 'a/b'", True),
         ("gh api --hostname ghe.example.org -X PUT repos/example/demo/pulls/3/merge", False),
         ("gh api --hostname=github.com -X PUT repos/example/demo/pulls/3/merge", True),
         ("gh pr merge 3 -R github.com/example/demo", True),

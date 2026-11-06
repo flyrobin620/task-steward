@@ -156,7 +156,7 @@
 | HEAD | 合并的 PR head 必须等于最后一轮自评审的 HEAD（即提交 HEAD）；为同步主分支而改变 HEAD 时，先经 E06 补审增量 |
 | 另有说明 | 任务书或仓库规则要求由他人合并时，worker 不合并，提交时用 `merge_skipped` 写明原因，由主会话按原流程合并（必要时 `integrate`） |
 | 未授权 | 仓库没有 `delivery.merge`、或任务不是开发任务时，worker 不能合并（hooks 拒绝合并命令），提交也不能带合并记录 |
-| 合并目标 | 授权的仓库必须写明 `repository`（`owner/name`）；hooks 只放行明确指向本任务仓库的合并：`gh pr merge` 带 `-R <owner>/<name>` 或该仓库 host 上的 PR 链接，或 REST 合并接口 `repos/<owner>/<name>/pulls/<n>/merge`（`--hostname` 须为该仓库的 host；仓库不在 github.com 时，`-R` 写成 `HOST/OWNER/NAME`、REST 合并必须带 `--hostname`）；不指明目标、由当前目录或 gh 默认远端决定的合并不放行。无法确认为本仓库的目标（合并的短选项、其他 host、`GH_REPO` / `GH_HOST`）与 GraphQL 合并一律拒绝。`repository` / `host` 本身是权限类键（DN003 §7.2） |
+| 合并目标 | 授权的仓库必须写明 `repository`（`owner/name`）；hooks 只放行明确指向本任务仓库（含 host）的合并：`gh pr merge` 带 `-R HOST/OWNER/NAME` 或该仓库 host 上的 PR 链接，或带 `--hostname HOST` 的 REST 合并接口 `repos/<owner>/<name>/pulls/<n>/merge`；不指明仓库或 host、由当前目录、gh 默认远端或 `GH_HOST` 等环境决定目标的合并不放行。无法确认为本仓库的目标（合并的短选项、其他 host、`GH_REPO` / `GH_HOST`）与 GraphQL 合并一律拒绝。`repository` / `host` 本身是权限类键（DN003 §7.2） |
 | 合并后核对 | 主会话在 `verifying` 中核对：PR 已合并、合并提交与提交 HEAD 对应、`main` 上该合并提交的 CI 结果，并在 `task_accept` 中写明（G-ACCEPT）。发现问题时经 T17 交回同一 worker，以新的 PR 修复；已合并的改动不由状态机撤销，需要撤销时由 worker 开 revert PR |
 
 ## 4. 守卫条件

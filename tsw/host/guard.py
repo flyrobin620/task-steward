@@ -246,9 +246,9 @@ def merge_problem(
     api_path = re.compile(rf"/?repos/{re.escape(own)}/pulls/\d+/merge", re.I)
     words = [a for a in args if not a.startswith("-")]
     is_api = bool(words) and words[0].lower() == "api"
-    # gh resolves a bare owner/name and the REST API against github.com; any other host must be
-    # named (``-R HOST/OWNER/NAME``, ``--hostname HOST`` or a PR link on that host).
-    default_site = site == "github.com"
+    # The host is always named (``-R HOST/OWNER/NAME``, ``--hostname HOST`` or a PR link): a bare
+    # owner/name and the REST API resolve their host from gh's settings and environment
+    # (``GH_HOST``), which the session may have changed.
     host_named = False
     confirmed: list[str] = []
     api_paths: list[str] = []
@@ -277,7 +277,7 @@ def merge_problem(
                     host_named = True
                 else:
                     stray.append(value)
-            elif value.lower() == f"{site}/{own}" or (value.lower() == own and default_site):
+            elif value.lower() == f"{site}/{own}":
                 confirmed.append(value)
             else:
                 stray.append(value)
@@ -291,17 +291,18 @@ def merge_problem(
             api_paths.append(arg)
             continue
         stray.append(arg)
-    if is_api and api_paths and (default_site or host_named):
+    if is_api and api_paths and host_named:
         # gh api goes to github.com unless --hostname says otherwise.
         confirmed.extend(api_paths)
     if stray:
         return f"只能合并本任务仓库（{repository}）的 PR；无法确认的目标：{', '.join(stray)}"
     if is_api and not confirmed:
-        return "只能用 gh pr merge 或 REST 合并接口（repos/<owner>/<name>/pulls/<n>/merge）合并" + (
-            "" if default_site else f"，并带 --hostname {site}"
+        return (
+            "只能用 gh pr merge 或带 --hostname 的 REST 合并接口"
+            f"（--hostname {site} repos/<owner>/<name>/pulls/<n>/merge）合并"
         )
     if not confirmed:
-        target = repository if default_site else f"{site}/{repository}"
+        target = f"{site}/{repository}"
         return f"合并须明确指向本任务仓库：gh pr merge <编号> -R {target}，或使用该仓库的 PR 链接"
     return None
 
