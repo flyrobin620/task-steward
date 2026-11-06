@@ -405,9 +405,9 @@ def test_r13_a_worker_cannot_pause_verification(home: Home) -> None:
 def test_r14_cancel_settles_creations_first_and_late_sessions_are_not_adopted(h: Harness) -> None:
     h.register("T001")
     h.plan("T001")
-    started_data = h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)[
-        "events"
-    ][0]["data"]
+    started_data = h.run(
+        "attempt_start", task_id="T001", purpose="prestart", user_turn=True, workdir="w"
+    )["events"][0]["data"]
     cancel = {
         "task_id": "T001",
         "worker_stopped": True,
@@ -434,7 +434,9 @@ def test_r14_cancel_settles_creations_first_and_late_sessions_are_not_adopted(h:
     assert h.status("T001") == "cancelled"
     assert (
         reason_of(
-            lambda: h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+            lambda: h.run(
+                "attempt_start", task_id="T001", purpose="prestart", user_turn=True, workdir="w"
+            )
         )
         == "invalid_state"
     )

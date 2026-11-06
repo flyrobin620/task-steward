@@ -16,8 +16,9 @@ import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-from tsw.home import Home
+from tsw.home import Home, workdir_path
 from tsw.machine.model import row_dict
 
 SESSION_ENV = "CLAUDE_CODE_HOST_SESSION_ID"
@@ -60,6 +61,7 @@ class Identity:
     brief_path: str | None = None
     writable_roots: tuple[Path, ...] = field(default_factory=tuple)
     cwd_consistent: bool = True
+    pending: bool = False  # not bound yet, but started in a starting attempt's directory
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -72,6 +74,7 @@ class Identity:
             "brief_path": self.brief_path,
             "writable_roots": [str(p) for p in self.writable_roots],
             "cwd_consistent": self.cwd_consistent,
+            "pending": self.pending,
         }
 
 
@@ -97,7 +100,7 @@ def resolve(conn: sqlite3.Connection, home: Home, env: Mapping[str, str], cwd: P
         if row is not None:
             roots = [home.root / "work" / str(row["task_id"]) / str(row["attempt"])]
             if row["workdir"]:
-                roots.insert(0, Path(str(row["workdir"])).expanduser())
+                roots.insert(0, workdir_path(home, str(row["workdir"])))
             consistent = any(within(cwd, root) for root in roots)
             return Identity(
                 role="worker",
@@ -112,4 +115,38 @@ def resolve(conn: sqlite3.Connection, home: Home, env: Mapping[str, str], cwd: P
             )
     if session and _norm(cwd) == _norm(home.root):
         return Identity(role="orchestrator", session_id=session, cwd=cwd)
+    pending = _awaiting_session(conn, home, cwd) if session else None
+    if pending is not None:
+        return Identity(
+            role="none",
+            session_id=session,
+            cwd=cwd,
+            task_id=str(pending["task_id"]),
+            attempt=str(pending["attempt"]),
+            phase=str(pending["phase"]),
+            pending=True,
+        )
     return Identity(role="none", session_id=session, cwd=cwd)
+
+
+def _awaiting_session(conn: sqlite3.Connection, home: Home, cwd: Path) -> dict[str, Any] | None:
+    """The attempt whose session is being created in ``cwd``, if any.
+
+    The orchestrator records the attempt (``starting``), creates the session in the attempt's
+    directory and binds it only after the app has returned the session ID. The new session's
+    MCP server lists its tools in between, and hosts may keep that first list, so such a
+    session is listed as the worker it is about to become; every call still waits for the
+    binding.
+    """
+    for row in conn.execute(
+        "SELECT * FROM attempts WHERE phase = 'starting' AND generation_valid = 1 "
+        "AND session_ref IS NULL ORDER BY rowid DESC"
+    ):
+        found = row_dict(row)
+        assert found is not None
+        roots = [home.root / "work" / str(found["task_id"]) / str(found["attempt"])]
+        if found["workdir"]:
+            roots.append(workdir_path(home, str(found["workdir"])))
+        if any(within(cwd, root) for root in roots):
+            return found
+    return None

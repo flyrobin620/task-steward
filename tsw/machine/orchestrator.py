@@ -13,6 +13,7 @@ from typing import Any
 from tsw.commands import Command, CommitContext
 from tsw.errors import rejected
 from tsw.events import EventDraft, digest
+from tsw.home import same_dir
 from tsw.machine import guards
 from tsw.machine.base import (
     ToolEnv,
@@ -457,6 +458,12 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 )
             attempt_id = str(previous["attempt"])
             mode = "standby" if previous["phase"] == "standby" else "continue"
+            if previous["workdir"] and not same_dir(ctx.home, workdir, str(previous["workdir"])):
+                raise rejected(
+                    "已有会话在另一个执行目录中，派发要沿用该目录",
+                    reason="workdir_mismatch",
+                    workdir=previous["workdir"],
+                )
         else:
             raise rejected("未知的 attempt 阶段", reason="invalid_attempt", phase=previous["phase"])
         if mode in ("new", "reuse_planned"):
@@ -522,6 +529,7 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
     purpose = text(inp, "purpose")
     user_turn = flag(inp, "user_turn")
+    given_workdir = opt_text(inp, "workdir")  # where the session is created
     if purpose not in ("dispatch", "prestart"):
         raise rejected(
             "purpose 必须是 dispatch 或 prestart", reason="invalid_input", field="purpose"
@@ -536,6 +544,16 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             if current is None or current["phase"] != "planned":
                 raise rejected("派发中的 attempt 必须处于 planned", reason="invalid_attempt")
             attempt_id = str(current["attempt"])
+            if (
+                given_workdir
+                and current["workdir"]
+                and not same_dir(ctx.home, given_workdir, str(current["workdir"]))
+            ):
+                raise rejected(
+                    "会话目录必须是派发时记录的执行目录",
+                    reason="workdir_mismatch",
+                    workdir=current["workdir"],
+                )
         else:
             require_status(row, "ready", "waiting_dependency")
             if not env.config.get("scheduling.prestart.enabled"):
@@ -557,6 +575,9 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 )
         guards.g_one_attempt(ctx.conn, task_id, allowed=None)
         previous = attempt(ctx.conn, task_id, attempt_id)
+        # Every prestart generation records its directory, the default included, so a retry
+        # never inherits the directory of a generation that was not created.
+        workdir = given_workdir or f"work/{task_id}/{attempt_id}"
         generation = (int(previous["generation"]) if previous else 0) + 1
         return [
             EventDraft(
@@ -571,6 +592,7 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     "purpose": purpose,
                     "controller": env.caller.session_id,
                     "adapter": str(env.config.get("roles.worker.session")),
+                    **({"workdir": workdir} if purpose == "prestart" else {}),
                 },
             )
         ]

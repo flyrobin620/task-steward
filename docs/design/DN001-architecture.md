@@ -154,13 +154,12 @@ tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC �
 
 - 会话 ID 等于某个已登记 attempt 绑定的会话 → 该 attempt 的 worker；该 attempt 已被替换或关闭时 → **已撤销**（revoked）：只暴露 `whoami`，hooks 拒绝写入与命令行，且永远不会因为目录在数据目录而回落成主会话；
 - 会话目录是数据目录（`TSW_HOME`）且不是 worker → **主会话角色**。主会话角色可以使用只读工具（`inbox`、`attention`、`context_*` 等）以及租约工具（领取、在用户确认后 `controller_takeover`）；派发、验收等写工具还要求该会话持有调度租约（G-LEASE）；
+- 还没有绑定、但会话目录是某个 `starting` 且尚未绑定会话的 attempt 的执行目录 → **待绑定的 worker**：工具列表从一开始就按 worker 列出，除 `whoami` 外的调用一律以 `not_bound` 拒绝；hooks 拒绝它的编辑、命令行与建会话，`tsw` 命令行也按已绑定会话限制，直到主会话 `attempt_reconcile` 完成绑定。预启动（`attempt_start` 的 `prestart`）可以给出会话将要创建在的执行目录（不给时为 `work/<任务>/<attempt>`），之后派发沿用该目录。执行目录可以写成相对数据目录的路径。主会话只能在 app 返回会话 ID 之后才绑定，而新会话的 MCP server 在此之前就已列出工具；实测 Claude Code 不会因 `notifications/tools/list_changed` 重新获取列表，所以必须让第一次列表就是 worker 的。
 - 其他 → 只暴露 `whoami` 和只读帮助。
 
 SessionStart hook 先把会话登记为主会话角色或 worker（按会话 ID 与目录），再尝试领取租约（§6.4）；领取失败时该会话保持主会话角色、只读运行。
 
 cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一致时拒绝写工具，hooks 也拒绝写入与命令行（只允许 `cd` 回执行目录）。worker 绑定后 MCP server 发出 `notifications/tools/list_changed`（客户端空闲时也由后台每 2 秒检查一次），客户端据此刷新工具列表。
-
-实测 Claude Code 桌面 app 不采纳这条通知：worker 会话整段对话都沿用启动时的第一份工具列表。而 worker 会话是在 `attempt_start` 之后、`attempt_reconcile` 绑定之前创建的，第一次 `tools/list` 时还没有绑定。因此列工具时，未绑定会话的 cwd 若位于某个 `starting`（当前有效代次）attempt 的执行目录内（登记的执行目录或 `work/<任务>/<attempt>`），就先列出 worker 工具。列表不授予任何权限：每次调用都重新解析身份，按真实角色检查，绑定前调用 worker 工具一律以 `role_denied` 拒绝。
 
 身份只来自会话本身：在已绑定数据目录的会话里（主会话、worker、已撤销），`tsw` 命令行只开放不需要声明角色的入口（`mcp`、`guard`、`review run` 与只读命令；`host render` 等维护命令在会话外运行），`tsw tool run --role` 等写入口一律拒绝，必须走 MCP。hooks 拿到同一个会话 ID（环境变量）以及 payload 中的内部会话 ID、cwd、权限模式，做同样的检查。不在 prompt 中放 token 或 capability 文件路径。
 

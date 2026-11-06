@@ -23,7 +23,7 @@ from tsw import __version__, lease
 from tsw.config import EffectiveConfig, load_config
 from tsw.errors import ErrorCode, TswError, rejected
 from tsw.events import utc_now
-from tsw.home import Home, open_home
+from tsw.home import Home, open_home, workdir_path
 from tsw.host import inbox as inbox_mod
 from tsw.host.identity import Identity, resolve, within
 from tsw.ledger import Ledger
@@ -39,6 +39,8 @@ from tsw.tasks import task_row
 # asking for another revision gets the newest one and decides whether to continue.
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 EMPTY: dict[str, Any] = {"type": "object", "properties": {}}
+# What a listing depends on: role, pending worker, task, attempt.
+ListKey = tuple[str, bool, str | None, str | None]
 INVALID_REQUEST = -32600
 POLL_ENV = "TSW_MCP_POLL_SECONDS"
 POLL_SECONDS = 2.0  # how often an idle session checks whether its role changed
@@ -99,7 +101,7 @@ class Server:
         self.env = dict(env)
         self.cwd = cwd
         self.machine = lease.this_machine()
-        self.listed: tuple[str, str | None, str | None] | None = None  # identity at tools/list
+        self.listed: ListKey | None = None  # identity at tools/list
         self._listed_lock = threading.Lock()
         self._marker: tuple[tuple[str, int, int], ...] | None = None
 
@@ -125,34 +127,10 @@ class Server:
         with Ledger(self.home, machine=self.machine).view() as conn:
             return resolve(conn, self.home, self.env, self.cwd)
 
-    def listing_role(self, who: Identity) -> str:
-        """The role whose tools ``tools/list`` shows, which may run ahead of the identity.
-
-        The orchestrator records ``attempt_start`` and creates the worker session before it can
-        bind that session with ``attempt_reconcile``, so the worker's first ``tools/list`` comes
-        from an unbound session. Clients may keep that first list for the whole conversation and
-        never act on ``tools/list_changed``, so a session opened in the execution directory of an
-        attempt that is starting is shown the worker tools already. Listing grants nothing: every
-        call resolves the caller again and is checked against its real role (:meth:`call`).
-        """
-        if who.role != "none" or not who.session_id:
-            return who.role
-        with Ledger(self.home, machine=self.machine).view() as conn:
-            rows = conn.execute(
-                "SELECT task_id, attempt, workdir FROM attempts "
-                "WHERE phase = 'starting' AND generation_valid = 1"
-            ).fetchall()
-        for row in rows:
-            roots = [self.home.root / "work" / str(row["task_id"]) / str(row["attempt"])]
-            if row["workdir"]:
-                roots.append(Path(str(row["workdir"])).expanduser())
-            if any(within(self.cwd, root) for root in roots):
-                return "worker"
-        return who.role
-
-    def tools(self, who: Identity, role: str | None = None) -> list[dict[str, Any]]:
-        """The tools of ``role`` (default: the caller's own role)."""
-        role = role or who.role
+    def tools(self, who: Identity) -> list[dict[str, Any]]:
+        # A session started for an attempt that is not bound yet sees the worker's tools from
+        # its first listing (hosts may never ask again); calls still wait for the binding.
+        role = "worker" if who.pending else who.role
         listed: list[dict[str, Any]] = []
         for name, (roles, description, schema) in HOST_TOOLS.items():
             if role in roles:
@@ -186,6 +164,13 @@ class Server:
             raise rejected("当前角色不能使用该工具", reason="role_denied", role=who.role, tool=name)
         if name == "whoami":
             return who.to_dict()
+        if who.pending:
+            raise rejected(
+                "本会话还没有绑定到 attempt：等主会话完成绑定（attempt_reconcile）后再调用",
+                reason="not_bound",
+                task_id=who.task_id,
+                attempt=who.attempt,
+            )
         config = self._config()
         ledger = self._ledger(config)
         if name == "review_run":
@@ -218,9 +203,7 @@ class Server:
 
     def _prepare_workdir(self, args: Mapping[str, Any]) -> None:
         """A research task's execution directory lives under ``work/`` and is created here."""
-        workdir = Path(str(args.get("workdir") or "")).expanduser()
-        if not workdir.is_absolute():
-            workdir = self.home.root / workdir
+        workdir = workdir_path(self.home, str(args.get("workdir") or ""))
         if within(workdir, self.home.root / "work"):
             workdir.mkdir(parents=True, exist_ok=True)
 
@@ -325,7 +308,7 @@ class Server:
                     marker = ledger_marker(self.home)
                     who = self.identity()  # on failure neither the list nor the marker moves
                     self.listed, self._marker = _list_key(who), marker
-                result = {"tools": self.tools(who, self.listing_role(who))}
+                result = {"tools": self.tools(who)}
             elif method == "tools/call":
                 if (
                     not isinstance(params, dict)
@@ -486,8 +469,9 @@ def _error(mid: Any, code: int, text: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": text}}
 
 
-def _list_key(who: Identity) -> tuple[str, str | None, str | None]:
-    return (who.role, who.task_id, who.attempt)
+def _list_key(who: Identity) -> ListKey:
+    """What the listed tools depend on: the role, whether it is a pending worker, the attempt."""
+    return (who.role, who.pending, who.task_id, who.attempt)
 
 
 def tool_names() -> list[str]:

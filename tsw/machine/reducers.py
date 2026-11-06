@@ -311,6 +311,7 @@ def attempt_start_requested(conn: sqlite3.Connection, event: Event) -> None:
         purpose=data["purpose"],
         controller=data["controller"],
         adapter=data["adapter"],
+        **({"workdir": data["workdir"]} if data.get("workdir") else {}),
     )
     if known is None:
         conn.execute(

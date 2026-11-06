@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from tests.machine_harness import Harness
+from tsw.cli import main as cli_main
 from tsw.errors import TswError
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
@@ -354,7 +355,7 @@ def test_a_session_starting_in_an_execution_directory_is_listed_the_worker_tools
     assert "task_list" not in names
     with pytest.raises(TswError) as denied:
         server.call("task_read", {"task_id": "T001"})
-    assert denied.value.to_dict()["details"]["reason"] == "role_denied"
+    assert denied.value.to_dict()["details"]["reason"] == "not_bound"
     elsewhere = Server(h.home, {SESSION_ENV: "x-1"}, tmp_path / "elsewhere")
     other = elsewhere.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     assert [t["name"] for t in other[0]["result"]["tools"]] == ["whoami"]
@@ -478,3 +479,173 @@ def test_a_failed_listing_does_not_swallow_the_next_change(
     assert server.list_changes() == [
         {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
     ]
+
+
+@mark.use_case("UC-HOST-001")
+def test_a_session_created_for_an_attempt_lists_worker_tools_before_binding(
+    h: Harness, tmp_path: Path
+) -> None:
+    h.register("T001")
+    h.plan("T001")
+    workdir = tmp_path / "wt" / "T001"
+    workdir.mkdir(parents=True)
+    h.run("task_dispatch", task_id="T001", workdir=str(workdir), user_turn=True)
+    started = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
+    # The app has created the session; the orchestrator has not bound it yet.
+    server = Server(h.home, {SESSION_ENV: "w-1"}, workdir)
+    listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    names = {t["name"] for t in listed[0]["result"]["tools"]}
+    assert {"whoami", "review_run", "review_triage", "review_decide", "submit"} <= names
+    assert "task_dispatch" not in names
+    early = server.call("whoami", {})
+    assert (early["role"], early["pending"], early["task_id"]) == ("none", True, "T001")
+    with pytest.raises(TswError) as waiting:
+        server.call("progress_note", {"text": "x"})
+    assert waiting.value.details["reason"] == "not_bound"
+    context = guard(h, "w-1", workdir).run("SessionStart")
+    assert context is not None and "whoami" in context["hookSpecificOutput"]["additionalContext"]
+    elsewhere = Server(h.home, {SESSION_ENV: "x-1"}, tmp_path)
+    assert [t["name"] for t in elsewhere.tools(elsewhere.identity())] == ["whoami"]
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=started["events"][0]["data"]["generation"],
+        outcome="created",
+        session_ref="w-1",
+        brief_delivered=True,
+    )
+    assert server.call("whoami", {})["role"] == "worker"
+    # Another session opened in the same directory after the binding is not a candidate.
+    late = Server(h.home, {SESSION_ENV: "w-2"}, workdir)
+    assert [t["name"] for t in late.tools(late.identity())] == ["whoami"]
+
+
+@mark.use_case("UC-HOST-002")
+def test_a_pending_session_can_only_read_until_it_is_bound(
+    h: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    h.register("T001")
+    h.plan("T001")
+    workdir = tmp_path / "wt" / "T001"
+    workdir.mkdir(parents=True)
+    h.run("task_dispatch", task_id="T001", workdir=str(workdir), user_turn=True)
+    h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
+    for tool, tool_input in (
+        ("Write", {"file_path": str(workdir / "a.py")}),
+        ("Bash", {"command": "git status"}),
+        ("mcp__ccd_session__start_session", {"name": "x"}),
+    ):
+        decision = guard(h, "w-1", workdir, tool_name=tool, tool_input=tool_input).run("PreToolUse")
+        assert (
+            decision is not None
+            and "绑定" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+        )
+    read = guard(h, "w-1", workdir, tool_name="Read", tool_input={"file_path": "a.py"})
+    assert read.run("PreToolUse") is None
+    monkeypatch.setenv(SESSION_ENV, "w-1")
+    monkeypatch.chdir(workdir)
+    assert cli_main(["--home", str(h.home.root), "task", "show", "T001", "--json"]) == 3
+    assert "host_session_cli" in capsys.readouterr().err
+
+
+@mark.use_case("UC-HOST-001")
+def test_a_prestarted_session_is_a_worker_from_its_first_listing(
+    h: Harness, tmp_path: Path
+) -> None:
+    h.register("T001")
+    h.plan("T001")
+    workdir = tmp_path / "wt" / "T001"
+    workdir.mkdir(parents=True)
+    started = h.run(
+        "attempt_start", task_id="T001", purpose="prestart", user_turn=True, workdir=str(workdir)
+    )
+    server = Server(h.home, {SESSION_ENV: "w-1"}, workdir)
+    listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    assert "submit" in {t["name"] for t in listed[0]["result"]["tools"]}
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=started["events"][0]["data"]["generation"],
+        outcome="created",
+        session_ref="w-1",
+    )
+    assert server.call("whoami", {})["phase"] == "standby"
+    with pytest.raises(TswError) as moved:
+        h.run("task_dispatch", task_id="T001", workdir=str(tmp_path / "other"))
+    assert moved.value.details["reason"] == "workdir_mismatch"
+    h.run("task_dispatch", task_id="T001", workdir=str(workdir))
+    assert server.call("whoami", {})["role"] == "worker"
+
+
+@mark.use_case("UC-HOST-001")
+def test_default_and_home_relative_execution_directories_are_recognised(h: Harness) -> None:
+    h.register("T001")
+    h.plan("T001")
+    h.register("T002")
+    h.plan("T002")
+    # A prestart without a directory creates the session in work/<task>/<attempt>.
+    h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    default = h.home.root / "work" / "T001" / "a1"
+    default.mkdir(parents=True)
+    assert Server(h.home, {SESSION_ENV: "w-1"}, default).identity().pending
+    # A dispatch may record its directory relative to the data directory.
+    h.run("task_dispatch", task_id="T002", workdir="work/T002-wt", user_turn=True)
+    h.run("attempt_start", task_id="T002", purpose="dispatch", user_turn=True)
+    relative = h.home.root / "work" / "T002-wt"
+    relative.mkdir(parents=True)
+    who = Server(h.home, {SESSION_ENV: "w-2"}, relative).identity()
+    assert (who.pending, who.task_id) == (True, "T002")
+
+
+@mark.use_case("UC-HOST-001")
+def test_a_prestart_retry_without_a_directory_uses_the_default(h: Harness, tmp_path: Path) -> None:
+    h.register("T001")
+    h.plan("T001")
+    first = h.run(
+        "attempt_start",
+        task_id="T001",
+        purpose="prestart",
+        user_turn=True,
+        workdir=str(tmp_path / "custom"),
+    )
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=first["events"][0]["data"]["generation"],
+        outcome="not_created",
+    )
+    again = h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    default = h.home.root / "work" / "T001" / "a1"
+    default.mkdir(parents=True)
+    assert Server(h.home, {SESSION_ENV: "w-1"}, default).identity().pending
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=again["events"][0]["data"]["generation"],
+        outcome="created",
+        session_ref="w-1",
+    )
+    h.run("task_dispatch", task_id="T001", workdir=str(default))  # same place, absolute form
+    assert Server(h.home, {SESSION_ENV: "w-1"}, default).identity().role == "worker"
+
+
+@mark.use_case("UC-HOST-001")
+def test_relative_and_absolute_forms_name_the_same_directory(h: Harness) -> None:
+    h.register("T001")
+    h.plan("T001")
+    started = h.run(
+        "attempt_start", task_id="T001", purpose="prestart", user_turn=True, workdir="work/wt"
+    )
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=started["events"][0]["data"]["generation"],
+        outcome="created",
+        session_ref="w-1",
+    )
+    h.run("task_dispatch", task_id="T001", workdir=str(h.home.root / "work" / "wt"))

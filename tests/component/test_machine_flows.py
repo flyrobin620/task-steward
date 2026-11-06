@@ -252,9 +252,9 @@ def test_prestart_then_deliver_the_brief_in_a_later_turn(h: Harness) -> None:
     h.register("T002")
     h.plan("T001")
     h.plan("T002", ["T001"])
-    started = h.run("attempt_start", task_id="T002", purpose="prestart", user_turn=True)["events"][
-        0
-    ]["data"]
+    started = h.run(
+        "attempt_start", task_id="T002", purpose="prestart", user_turn=True, workdir="w"
+    )["events"][0]["data"]
     h.run(
         "attempt_reconcile",
         task_id="T002",
@@ -266,7 +266,9 @@ def test_prestart_then_deliver_the_brief_in_a_later_turn(h: Harness) -> None:
     assert h.query("SELECT phase FROM attempts WHERE task_id = 'T002'")[0]["phase"] == "standby"
     assert (
         reason_of(
-            lambda: h.run("attempt_start", task_id="T002", purpose="prestart", user_turn=True)
+            lambda: h.run(
+                "attempt_start", task_id="T002", purpose="prestart", user_turn=True, workdir="w"
+            )
         )
         == "g_one_attempt"
     )
@@ -289,10 +291,12 @@ def test_prestart_limit(home: Home) -> None:
     h.register("T002")
     h.plan("T001")
     h.plan("T002")
-    h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True, workdir="w")
     assert (
         reason_of(
-            lambda: h.run("attempt_start", task_id="T002", purpose="prestart", user_turn=True)
+            lambda: h.run(
+                "attempt_start", task_id="T002", purpose="prestart", user_turn=True, workdir="w"
+            )
         )
         == "max_standby"
     )
