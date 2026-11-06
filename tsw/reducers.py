@@ -14,6 +14,7 @@ from tsw import lease
 from tsw.errors import rejected
 from tsw.events import Event
 from tsw.host.inbox import reduce_acked
+from tsw.importer import renumber
 from tsw.machine.reducers import REDUCERS as MACHINE_REDUCERS
 from tsw.projection import Reducer
 
@@ -180,6 +181,7 @@ REDUCERS: dict[str, Reducer] = {
     "import.started": _import_marker,
     "import.task_imported": _task_imported,
     "import.completed": _import_marker,
+    "task.renumbered": renumber.reduce,
     "controller.lease_acquired": lease.reduce_acquired,
     "controller.lease_released": lease.reduce_released,
     "controller.lease_taken_over": lease.reduce_taken_over,

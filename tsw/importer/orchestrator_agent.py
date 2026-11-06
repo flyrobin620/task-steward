@@ -42,6 +42,7 @@ from tsw.commands import Command, CommitContext
 from tsw.errors import ErrorCode, TswError, rejected
 from tsw.events import EventDraft, sha256_hex, utc_now
 from tsw.home import Home
+from tsw.importer import renumber
 from tsw.ledger import Ledger
 from tsw.storage.fs import FsStorage
 
@@ -442,6 +443,7 @@ class Report:
     missing_files: list[str] = field(default_factory=lambda: [])
     volume_problems: list[str] = field(default_factory=lambda: [])
     invalid: list[str] = field(default_factory=lambda: [])
+    renumbered: list[dict[str, str]] = field(default_factory=lambda: [])
     dry_run: bool = False
 
     def counts(self) -> dict[str, int]:
@@ -463,11 +465,17 @@ class Report:
             "missing_files": self.missing_files,
             "volume_problems": self.volume_problems,
             "invalid_task_ids": self.invalid,
+            "renumbered_local": self.renumbered,
         }
 
 
 def run_import(
-    home: Home, ledger: Ledger, snapshot_dir: Path, *, dry_run: bool = False
+    home: Home,
+    ledger: Ledger,
+    snapshot_dir: Path,
+    *,
+    dry_run: bool = False,
+    renumber_local: list[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     snapshot, snapshot_sha = load_snapshot(snapshot_dir)
     source = Path(snapshot["source"]["root"])
@@ -507,6 +515,19 @@ def run_import(
         ),
         key=_task_number,
     )
+    floor = max(
+        [_task_number(p.task_id) for p in report.planned]
+        + [_task_number(t) for t in report.todo_only]
+        + [0]
+    )
+    for old, new in renumber_local or []:
+        if dry_run:
+            with ledger.view() as conn:
+                if conn.execute("SELECT 1 FROM tasks WHERE task_id = ?", (new,)).fetchone() is None:
+                    renumber.check(conn, old, new, floor=floor)
+        else:
+            ledger.commit(renumber.command(home, old, new, floor=floor))
+        report.renumbered.append({"from": old, "to": new})
     with ledger.view() as conn:
         existing = {
             str(r["task_id"]): r

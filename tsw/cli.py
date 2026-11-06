@@ -25,6 +25,7 @@ from tsw.host.guard import run as run_guard
 from tsw.host.identity import HOST_CLI_COMMANDS, SESSION_ENV
 from tsw.host.identity import resolve as resolve_identity
 from tsw.host.mcp import serve
+from tsw.importer import renumber
 from tsw.importer.orchestrator_agent import run_import as run_import_orchestrator_agent
 from tsw.ledger import Ledger
 from tsw.machine.base import REGISTRY, Caller
@@ -292,7 +293,11 @@ def _cmd_review_run(args: argparse.Namespace) -> dict[str, Any]:
 def _cmd_import_orchestrator_agent(args: argparse.Namespace) -> dict[str, Any]:
     ledger, _ = _writer(args)
     return run_import_orchestrator_agent(
-        ledger.home, ledger, Path(args.snapshot), dry_run=args.dry_run
+        ledger.home,
+        ledger,
+        Path(args.snapshot),
+        dry_run=args.dry_run,
+        renumber_local=renumber.parse(args.renumber_local),
     )
 
 
@@ -429,6 +434,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     oa.add_argument("--snapshot", required=True, help="export-snapshot 写出的快照目录")
     oa.add_argument("--dry-run", action="store_true", help="只核对与分类，不写入")
+    oa.add_argument(
+        "--renumber-local",
+        action="append",
+        metavar="OLD=NEW",
+        help="先把与导入编号冲突的已结束本地任务改到新编号（可重复），例如 T001=T238",
+    )
 
     add(sub, "quiesce", _cmd_quiesce, "静止数据目录（之后可直接复制）")
     add(sub, "resume-writes", _cmd_resume_writes, "解除静止")

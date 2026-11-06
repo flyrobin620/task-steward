@@ -22,7 +22,9 @@ from tsw.storage.fs import atomic_write
 # Bump when tables or reduction rules change; older projections and checkpoints then need a
 # rebuild (DN007 §3.4).
 REDUCER_VERSION = 5
-IMPORTS = frozenset({"import.task_imported"})  # events that carry their own times
+# Events that keep the task's business time: an import carries the source's own times, and a
+# renumbering only moves the task to a new id.
+IMPORTS = frozenset({"import.task_imported", "task.renumbered"})
 KEEP_CHECKPOINTS = 3
 
 SCHEMA_SQL = """
@@ -372,7 +374,8 @@ class Projection:
             )
         reducer(conn, event)
         if event.task_id is not None:
-            # An imported task keeps the business time it had in its source system (DN005 §4.3).
+            # An imported task keeps the business time it had in its source system (DN005 §4.3);
+            # a renumbered task keeps its own.
             conn.execute(
                 "UPDATE tasks SET last_activity = CASE WHEN ? THEN last_activity ELSE ? END, "
                 "source_seq = ? WHERE task_id = ?",

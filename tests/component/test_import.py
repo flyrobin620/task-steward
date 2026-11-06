@@ -290,3 +290,47 @@ def test_an_interrupted_import_is_completed_by_the_next_run(
     before = types(ledger)
     run_import(home, ledger, snapshot)
     assert types(ledger) == before
+
+
+def test_a_finished_local_task_is_renumbered_to_make_room(home: Home, tmp_path: Path) -> None:
+    h = Harness(home)
+    h.register("T001", title="本地任务")
+    h.register("T002", title="下游")
+    h.plan("T002", deps=["T001"])
+    h.run("task_cancel", task_id="T001", user_source=h.source("T001", 1, "cancel"))
+    result = home.root / "runs" / "T001" / "a1" / "result.html"
+    result.parent.mkdir(parents=True)
+    result.write_text("<p>本地成果</p>", encoding="utf-8")
+    ledger = Ledger(home, machine="m1")
+    _, snapshot = build(tmp_path)
+    # The other conflicting task is still active and cannot move.
+    with pytest.raises(TswError) as refused:
+        run_import(home, ledger, snapshot, renumber_local=[("T002", "T012")])
+    assert refused.value.details["reason"] == "renumber_active"
+    with pytest.raises(TswError) as low:  # the new id must come after every imported id
+        run_import(home, ledger, snapshot, dry_run=True, renumber_local=[("T001", "T010")])
+    assert low.value.details["reason"] == "renumber_floor"
+    before = len(types(ledger))
+    summary = run_import(home, ledger, snapshot, renumber_local=[("T001", "T011")])
+    assert summary["renumbered_local"] == [{"from": "T001", "to": "T011"}]
+    assert [c["task_id"] for c in summary["conflicts"]] == ["T002"]
+    tasks = {r["task_id"]: r for r in rows(ledger, "SELECT * FROM tasks")}
+    assert tasks["T011"]["title"] == "本地任务" and tasks["T011"]["status"] == "cancelled"
+    assert tasks["T011"]["spec_path"] == "todo/T011.md"
+    assert tasks["T001"]["title"] == "旧任务 T001"  # the imported one took the id
+    deps = rows(ledger, "SELECT dep_id FROM dependencies WHERE task_id = 'T002'")
+    assert deps == [{"dep_id": "T011"}]
+    spec = (home.root / "todo" / "T011.md").read_text(encoding="utf-8")
+    assert spec.startswith("### T011")
+    assert (home.root / "runs" / "T011" / "a1" / "result.html").is_file()
+    assert not (home.root / "runs" / "T001").exists()
+    # Running it again (renumbering included) appends nothing, and a rebuild agrees.
+    after = types(ledger)
+    assert after[before] == "task.renumbered"
+    run_import(home, ledger, snapshot, renumber_local=[("T001", "T011")])
+    assert types(ledger) == after
+    projected = rows(ledger, "SELECT task_id, status, spec_path, version FROM tasks ORDER BY 1")
+    ledger.rebuild()
+    assert rows(ledger, "SELECT task_id, status, spec_path, version FROM tasks ORDER BY 1") == (
+        projected
+    )
