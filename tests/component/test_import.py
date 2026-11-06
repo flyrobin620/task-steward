@@ -551,3 +551,25 @@ def test_spec_only_tasks_the_user_dropped_are_excluded(home: Home, tmp_path: Pat
     assert "用户决定不导入、不建任务、不存档：T009" in report
     with ledger.view() as conn:
         assert next_task_id(conn) == "T011"
+    before = types(ledger)
+    run_import(home, ledger, snapshot, exclude=["T009", "T009"])  # repeated: same decision
+    assert types(ledger) == before
+
+
+def test_an_excluded_number_still_bounds_the_renumbering(home: Home, tmp_path: Path) -> None:
+    h = Harness(home)
+    h.register("T001", title="本地任务")
+    h.run("task_cancel", task_id="T001", user_source=h.source("T001", 1, "cancel"))
+    _, snapshot_dir = build(tmp_path)
+    path = snapshot_dir / "snapshot.json"
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
+    snapshot["files"]["todo"].append("todo/T012.md")  # a spec-only task above every task
+    path.write_text(json.dumps(snapshot), encoding="utf-8")
+    ledger = Ledger(home, machine="m1")
+    with pytest.raises(TswError) as low:
+        run_import(home, ledger, snapshot_dir, exclude=["T012"], renumber_local=[("T001", "T011")])
+    assert low.value.details["reason"] == "renumber_floor"
+    summary = run_import(
+        home, ledger, snapshot_dir, exclude=["T012"], renumber_local=[("T001", "T013")]
+    )
+    assert summary["excluded_todo_only"] == ["T012"]
