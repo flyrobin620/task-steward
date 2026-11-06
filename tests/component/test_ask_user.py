@@ -340,6 +340,65 @@ def test_review_escalations_are_asked_in_the_session_too(home: Home) -> None:
     assert h.query("SELECT status FROM judgments")[0]["status"] == "resolved"
 
 
+def test_only_the_latest_question_of_the_session_collects_messages(home: Home) -> None:
+    h = Harness(home)
+    w = started(h)
+    first = ask(h, w)
+    h.clock.now = "2026-11-05T00:10:00Z"
+    h.run("sync")
+    h.run(
+        "handoff_resolve",
+        task_id="T001",
+        request_id=first,
+        decision="answer",
+        answer="用 A",
+        rationale="r",
+        basis=["b"],
+        confidence="medium",
+    )
+    second = h.run("ask_user", w, task_id="T001", question="日志放哪？")["events"][0]["data"][
+        "request_id"
+    ]
+    say(h, w, "放 logs/")
+    assert messages(h)[-1]["request_id"] == second
+    h.run(
+        "user_answer", w, task_id="T001", request_id=second, message_id="M-T001-1", answer="logs/"
+    )
+    # The first question was answered by the orchestrator, but a newer one replaced it.
+    assert say(h, w, "顺便说一下") is None
+    # In-session words never come through the orchestrator, whatever the request's state.
+    words = {
+        "channel": "in-session",
+        "principal": "owner",
+        "message_ref": "x",
+        "text": "用 B",
+        "request_id": first,
+        "target": ["T001", 1, "answer"],
+    }
+    assert (
+        reason_of(
+            lambda: h.run(
+                "input_resolve", task_id="T001", request_id=first, answer="B", user_source=words
+            )
+        )
+        == "g_user"
+    )
+
+
+def test_a_requirement_change_closes_the_question_to_messages(home: Home) -> None:
+    h = Harness(home)
+    w = started(h)
+    ask(h, w)
+    h.run(
+        "task_update",
+        task_id="T001",
+        goal="新目标",
+        acceptance=["功能可用"],
+        user_source=h.source("T001", 1, "change"),
+    )
+    assert say(h, w, "用 B") is None
+
+
 def test_the_orchestrator_stop_hook_hands_off_due_questions(home: Home) -> None:
     h = Harness(home)
     w = started(h)

@@ -165,6 +165,10 @@ def bash_problem(
                 return owned_reason(top)
     for program in facts.programs:
         cli = tsw_cli_command(program)
+        if cli == "guard":
+            # Hooks are run by the host, never from a session's shell: a hook records the user's
+            # own words (DN006 §8.1a), so running it by hand would let a session invent them.
+            return "hook 入口只由宿主调用，会话中不能运行 tsw guard"
         if cli is not None and cli not in HOST_CLI_COMMANDS:
             return f"宿主会话中不能运行 tsw {cli}；写操作请使用 tsw MCP 工具"
         if program.name in _PYTHONS and _IMPORTS_TSW.search(python_code(program, command)):

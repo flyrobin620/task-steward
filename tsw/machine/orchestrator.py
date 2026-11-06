@@ -219,6 +219,10 @@ def input_resolve(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 request_id=request_id,
                 source_request=source.get("request_id"),
             )
+        if request["kind"] == "in_session" and source["channel"] == "in-session":
+            # Answers in the worker's session are recorded by the worker with user_answer,
+            # citing the message the hook recorded (DN006 §8.1a), whatever the request's state.
+            raise rejected("worker 会话中的答复由 worker 用 user_answer 登记", reason="g_user")
         if request["status"] != "pending":
             return [
                 EventDraft(
@@ -235,10 +239,6 @@ def input_resolve(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             require_status(row, "intake")
             data["transition"] = "T02"
         elif request["kind"] in ("escalation", "in_session"):
-            if request["kind"] == "in_session" and source["channel"] == "in-session":
-                # Answers in the worker's session are recorded by the worker with user_answer,
-                # citing the message the hook recorded (DN006 §8.2).
-                raise rejected("worker 会话中的答复由 worker 用 user_answer 登记", reason="g_user")
             require_status(row, "waiting_user")
             attempt_row = current_attempt(ctx.conn, task_id)
             if (

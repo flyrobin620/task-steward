@@ -215,7 +215,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与进程 cwd 不一�
 | hook | 角色 | 行为 |
 | --- | --- | --- |
 | SessionStart | 全部 | 由 cwd 与 session_id 识别角色；主会话尝试领取租约，并注入未读 inbox 数与 attention 摘要；worker 注入任务 ID、brief 路径、可写路径和评审规则 |
-| PreToolUse（Edit / Write / NotebookEdit / Bash） | worker | 拒绝写出可写路径；拒绝未获交付授权的 `git push` 与 PR 操作；拒绝对可执行文件求哈希的命令（除非账本有用户批准记录）；拒绝直接修改 `ledger/`、`STATUS.html` |
+| PreToolUse（Edit / Write / NotebookEdit / Bash） | worker | 拒绝写出可写路径；拒绝未获交付授权的 `git push` 与 PR 操作；拒绝在命令行运行 hook 入口 `tsw guard`（它记录用户原话，只由宿主调用）；拒绝对可执行文件求哈希的命令（除非账本有用户批准记录）；拒绝直接修改 `ledger/`、`STATUS.html` |
 | PreToolUse | orchestrator | 拒绝直接编辑 `ledger/`、`config/`、生成视图和投影（配置经 `config_change` 修改）；拒绝在派发窗口外重复 `start_session` 同名 attempt |
 | UserPromptSubmit | worker | 检测 `[report]`，注入回传协议提示；worker 有未获用户答复的会话内问题时，把用户消息原文记为 `input.session_message` 并告诉 worker 消息编号（注入的其他会话消息不记，DN006 §8.1a） |
 | Stop | orchestrator | 运行只读 `attention`；有未处理 reportable 事件，或有已超时未转交的会话内问题（提示运行 `sync`）时阻止一次结束（`stop_hook_active` 防循环） |

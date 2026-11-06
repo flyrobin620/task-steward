@@ -305,7 +305,7 @@ interactive 动作映射（承载 worker 的实现）：
 
 1. worker 调用 `ask_user`（问题全文；可带上评审升级等待处理事项的编号；只有用户本人能决定的事——凭据、验收、`reserved_for_user` 中的决定——标 `reserved`）。tsw 记录 `input.escalated`（`kind: in_session`，渠道 `in-session`，记下 worker 会话与转交时间），任务经 T11 进入 `waiting_user`，名额保持。
 2. worker 在本会话的回复中把问题原样写给用户，结束这一轮。这个问题**不进入主会话 inbox**：主会话的 `attention` 只显示“某任务有一个会话内问题、何时转交”，不显示问题内容；STATUS 页是给用户看的，显示问题与转交时间。
-3. 用户在 worker 会话中发消息时，`UserPromptSubmit` hook 把消息原文记为观察事件 `input.session_message`（消息编号 `M-…`），并把编号告诉 worker。其他会话或 app 注入的消息（`<cross-session-message>`、`<side-sessions-event>`、定时任务等）不记录。
+3. 用户在 worker 会话中发消息时，`UserPromptSubmit` hook 把消息原文记为观察事件 `input.session_message`（消息编号 `M-…`），并把编号告诉 worker。其他会话或 app 注入的消息（`<cross-session-message>`、`<side-sessions-event>`、定时任务等）不记录。只有该会话最新的一个问题接收消息：它已由用户在本会话答复、被更新的问题取代，或任务 revision 已变时，不再记录。hook 入口只由宿主调用：任何会话在命令行运行 `tsw guard` 都被 hooks 拒绝，否则会话可以自己编造“用户消息”。
 4. 消息回答了问题时，worker 调用 `user_answer`，必须引用 hook 记录的消息编号，且该消息来自同一 worker 会话。tsw 用记录中的原文构造 `VerifiedSource`（渠道 `in-session`），记录 `input.resolved`，经 T12 回到离开时的子状态。同一次答复可以带上用户批准的追加评审轮次（`source = user`，没有累计上限）、批准延后或认定不成立的阻断项。用户原话来自 hook，不来自 worker 的转述，所以 worker 不能伪造答复。
 
 用户回复了但还没有回答问题（例如“让我想想”）时，worker 在会话中继续与用户交流；问题不会因超时转交。
