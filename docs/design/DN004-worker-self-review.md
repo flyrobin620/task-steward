@@ -37,7 +37,7 @@ worker 完成任务成果后，**由 worker 自己**启动 Codex（`gpt-6-astra`
 6. **决定**（`review_decide`）：
    - `iterate`：存在需修复的阻断项，且本周期轮次 < 本周期有效预算（`max_rounds` + 主会话追加 + 用户追加，见 DN002 §3.3）。修改并提交新 HEAD 后进入下一轮增量评审。
    - `finalize`：每个阻断项都已按 G-SUBMIT 处置：`fix` 且已验证、有据 `reject`、主会话认定不成立（`review.finding_overruled`），或经主会话 / 用户批准延后（`review.defer_approved`，列入报告“已知问题”）。
-   - `escalate`：本提交周期预算用完仍有阻断项（`review.budget_exhausted`）、阻断项需要延后（`review.defer_requested`），或评审器不可用（`review.unavailable`）。交主会话判断（DN006 §8.3），由主会话决定追加轮次、认定意见不成立、批准延后、调整方向或交给人类；任务保持 `in_progress`，只有交给人类时才进入 `waiting_user`。
+   - `escalate`：本提交周期预算用完仍有阻断项（`review.budget_exhausted`）、阻断项需要延后（`review.defer_requested`），或评审器不可用（`review.unavailable`）。worker 随即在自己的会话中问用户（`ask_user`，DN006 §8.1a），由用户决定追加轮次、认定意见不成立、批准延后或调整方向；任务进入 `waiting_user`。超时无回复时转交主会话，主会话可在授权边界内代为决定（DN006 §8.1b）。
 7. **终版一致性**：`finalize` 时如果当前 HEAD 晚于最后评审的 HEAD（例如定稿后改了报告链接），必须对差异再做一轮增量评审；这一轮同样计入本周期预算，预算耗尽时 `escalate`。
 8. **提交**：调用 `submit`，tsw 执行 G-SUBMIT（DN002 §4）。
 
@@ -152,22 +152,22 @@ worker 不盲信评审意见，处置时先核实：
 | --- | --- |
 | `verdict=pass`，或每个阻断项都已按 G-SUBMIT 处置（修复并验证、有据拒绝、主会话认定不成立、获批延后） | `finalize` |
 | 有阻断项需要修复，本周期轮次 < 本周期有效预算 | `iterate` |
-| 有阻断项需要修复，本提交周期预算已用完 | `escalate`：提交 `review.budget_exhausted`，列出未解决项、各轮记录与 worker 的建议，交主会话判断 |
+| 有阻断项需要修复，本提交周期预算已用完 | `escalate`：提交 `review.budget_exhausted`，列出未解决项、各轮记录与 worker 的建议，在本会话中问用户（超时转交主会话） |
 | 阻断项需要延后（超出本任务范围或依赖外部） | `escalate`：提交 `review.defer_requested`，由主会话批准延后（列入已知问题）、要求继续修复或交给人类 |
-| `verdict=blocked` 因缺材料 | 该轮不算有效评审（不满足 G-SUBMIT，也不能确认修复）；补齐材料后经 E06 以新的一轮重跑（计入本周期预算）；缺的材料自己拿不到时以 `worker.question` 交主会话判断 |
+| `verdict=blocked` 因缺材料 | 该轮不算有效评审（不满足 G-SUBMIT，也不能确认修复）；补齐材料后经 E06 以新的一轮重跑（计入本周期预算）；缺的材料自己拿不到时在本会话中问用户（`ask_user`） |
 | 非阻断项 | worker 自行决定修复或 defer，不影响 finalize |
 
-### 5.1 预算用完后由主会话判断
+### 5.1 预算用完后由用户（或转交后的主会话）决定
 
-worker 提交 `review.budget_exhausted` 时附上：未解决的阻断项与各轮处置记录、每轮评审 HEAD、worker 认为最合理的下一步。主会话按 DN006 §8.2 的方式判断，常见做法：
+worker 提交 `review.budget_exhausted` 时附上：未解决的阻断项与各轮处置记录、每轮评审 HEAD、worker 认为最合理的下一步，并在本会话中把这些写给用户。用户（或超时转交后的主会话，按 DN006 §8.2 的方式）常见的决定：
 
-| 情况 | 主会话的典型决定 |
+| 情况 | 典型决定 |
 | --- | --- |
 | 剩余问题清楚、每轮都在收敛 | 追加 1–2 轮（`review.budget_extended`） |
 | 评审器反复提同一条意见，worker 的反驳有据 | 核实后认定意见不成立（`review.finding_overruled`），理由写入报告 |
 | 问题真实但超出本任务范围 | 批准延后（`review.defer_approved`），列入已知问题，并建议新建任务 |
 | 修复方向错误、来回修改不收敛 | 给出新的修复思路或收窄范围（`orchestrator.feedback`） |
-| 需要改变验收标准、扩大范围，或主会话没有把握 | 交给人类（T11） |
+| 需要改变验收标准、扩大范围，或主会话没有把握 | 转交后的主会话不代答，转达给用户或继续等待 |
 
 主会话或用户的决定由 tsw 记入事件，并在 worker 的当前处置记录（`review/rK-decision.json`）中引用对应的决定 ID：追加轮次后 worker 继续 `iterate`；认定不成立或批准延后后，对应阻断项的处置记为 `overruled` / `deferred_approved`，worker 可以 `finalize`。
 

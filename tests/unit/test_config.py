@@ -266,3 +266,12 @@ def test_resolve_repository_by_name_or_alias(home: Home) -> None:
 )
 def test_model_ids_are_normalized_before_comparison(raw: str, normalized: str) -> None:
     assert normalize_model_id(raw) == normalized
+
+
+@pytest.mark.use_case("UC-MERGE-001")
+def test_a_merge_authorization_names_its_repository(home: Home) -> None:
+    repo: dict[str, Any] = {"path": "~/src/demo", "delivery": {"push": True, "merge": True}}
+    problems = _problems(home, {"version": 1, "repositories": {"demo": repo}})
+    assert any("repositories.demo.repository" in p for p in problems)
+    named = {**repo, "repository": "example/demo"}
+    assert _problems(home, {"version": 1, "repositories": {"demo": named}}) == []

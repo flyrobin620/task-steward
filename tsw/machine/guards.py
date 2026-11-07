@@ -352,6 +352,57 @@ def g_submit(
     }
 
 
+def merge_authorized(config: EffectiveConfig, task_row: Mapping[str, Any]) -> bool:
+    """A development task whose repository lets the worker merge (DN002 G-SUBMIT, 0002)."""
+    if task_row["kind"] != "code":
+        return False
+    repo = resolve_repository(config, str(task_row["repo"]))
+    return bool(repo and config.get(f"repositories.{repo}.delivery.merge"))
+
+
+def g_merge(
+    config: EffectiveConfig,
+    task_row: Mapping[str, Any],
+    head: str,
+    merge: Mapping[str, Any] | None,
+    skipped: str | None,
+) -> dict[str, Any]:
+    """The merge part of G-SUBMIT: a development task in a repository that lets the worker merge
+    is submitted after its PR is merged, unless the brief or the repository says otherwise."""
+    allowed = merge_authorized(config, task_row)
+    if merge is not None:
+        if not allowed:
+            raise rejected(
+                "该仓库或任务类型没有合并授权（repositories.*.delivery.merge）",
+                reason="g_submit",
+                check="merge_authorized",
+            )
+        missing = [
+            k for k in ("pr", "merge_commit", "merged_head") if not str(merge.get(k) or "").strip()
+        ]
+        if missing:
+            raise rejected("合并记录不完整", reason="g_submit", check="merge", missing=missing)
+        if merge["merged_head"] != head:
+            raise rejected(
+                "合并的 PR head 与提交 HEAD（最后评审的 HEAD）不一致",
+                reason="g_submit",
+                check="merged_head",
+                merged_head=merge["merged_head"],
+                head=head,
+            )
+        return {"merge": {k: str(merge[k]) for k in ("pr", "merge_commit", "merged_head")}}
+    if allowed:
+        if not (skipped and skipped.strip()):
+            raise rejected(
+                "该仓库由 worker 合并：先合并 PR 再提交，或用 merge_skipped 说明任务书或仓库规则"
+                "要求由他人合并的原因",
+                reason="g_submit",
+                check="merge",
+            )
+        return {"merge_skipped": skipped.strip()}
+    return {}
+
+
 def controllable(attempt_row: Mapping[str, Any] | None, caller_session: str | None) -> bool:
     return (
         attempt_row is not None

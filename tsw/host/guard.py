@@ -19,12 +19,14 @@ from typing import Any
 from tsw import lease
 from tsw.commands import Command, CommitContext
 from tsw.config import EffectiveConfig, lease_minutes, load_config, resolve_repository
-from tsw.events import EventDraft
+from tsw.events import EventDraft, utc_now
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
 from tsw.host import shell
 from tsw.host.identity import HOST_CLI_COMMANDS, Identity, resolve, within
 from tsw.ledger import Ledger
+from tsw.machine.ask_user import handoff_due, session_message
+from tsw.machine.guards import merge_authorized
 from tsw.machine.model import row_dict
 
 WRITE_TOOLS = {
@@ -46,6 +48,7 @@ _WRITE_WORDS = re.compile(
 _IMPORTS_TSW = re.compile(r"\b(import\s+tsw|from\s+tsw[\s.])")
 _PYTHONS = {"python", "python3", "py", "pythonw"}
 _PYTHON_VALUE_OPTIONS = {"-X", "-W", "--check-hash-based-pycs"}
+_TSW_MODULES = ("tsw", "tsw.cli", "tsw.__main__")
 _TSW_GLOBAL_OPTIONS = {"--home"}  # options of ``tsw`` that take a value
 # gh options that take a value and may come before the command words (``gh -R o/r pr merge``).
 _GH_VALUE_OPTIONS = {
@@ -110,15 +113,9 @@ def tsw_cli_command(program: shell.Program) -> str | None:
     if program.name == "tsw":
         rest = args
     elif program.name in _PYTHONS:
-        rest = None
-        for i, arg in enumerate(args):
-            if arg.replace("\\", "/").endswith("tsw_launch.py"):
-                rest = args[i + 1 :]
-                break
-            if arg == "-m" and i + 1 < len(args) and args[i + 1] in ("tsw", "tsw.cli"):
-                rest = args[i + 2 :]
-                break
-        if rest is None:
+        kind, value, rest = python_invocation(args)
+        launcher = kind == "script" and value.replace("\\", "/").endswith("tsw_launch.py")
+        if not (launcher or (kind == "module" and value in _TSW_MODULES)):
             return None
     else:
         return None
@@ -142,6 +139,9 @@ def bash_problem(
     home: Home,
     push_allowed: bool,
     pr_allowed: bool,
+    merge_allowed: bool = False,
+    merge_repository: str | None = None,
+    merge_host: str | None = None,
     worker: bool,
     cwd: Path | None = None,
     writable_roots: Sequence[Path] | None = None,
@@ -164,6 +164,10 @@ def bash_problem(
                 return owned_reason(top)
     for program in facts.programs:
         cli = tsw_cli_command(program)
+        if cli == "guard":
+            # Hooks are run by the host, never from a session's shell: a hook records the user's
+            # own words (DN006 §8.1a), so running it by hand would let a session invent them.
+            return "hook 入口只由宿主调用，会话中不能运行 tsw guard"
         if cli is not None and cli not in HOST_CLI_COMMANDS:
             return f"宿主会话中不能运行 tsw {cli}；写操作请使用 tsw MCP 工具"
         if program.name in _PYTHONS and _IMPORTS_TSW.search(python_code(program, command)):
@@ -176,40 +180,175 @@ def bash_problem(
                 return "该仓库没有推送授权（repositories.*.delivery.push）"
         elif program.name == "gh":
             words, _ = shell.split_options(program.args, _GH_VALUE_OPTIONS)
-            words = [w.lower() for w in words]
-            if words[:2] == ["pr", "merge"] or (
-                words[:1] == ["api"] and any("merge" in w.lower() for w in program.args)
-            ):
-                return "worker 不能合并 PR"
+            lowered = [w.lower() for w in words]
+            merging = lowered[:2] == ["pr", "merge"] or (
+                lowered[:1] == ["api"] and any("merge" in w.lower() for w in program.args)
+            )
+            if merging:
+                problem = merge_problem(
+                    program.args, command, merge_allowed, merge_repository, merge_host
+                )
+                if problem is not None:
+                    return problem
+            words = lowered
             if words[:2] == ["pr", "create"] and not pr_allowed:
                 return "创建 PR 需要仓库的 delivery.create_pr 授权"
     return None
 
 
-def python_code(program: shell.Program, command: str) -> str:
-    """The code Python runs inline: ``-c CODE``, or stdin (a heredoc) when there is no script.
+# Options of ``gh pr merge`` / ``gh api`` whose values are free text, never a target repository.
+_MERGE_TEXT_OPTIONS = {
+    "-t",
+    "--subject",
+    "-b",
+    "--body",
+    "-F",
+    "--body-file",
+    "-A",
+    "--author-email",
+    "--match-head-commit",
+    "-f",
+    "--raw-field",
+    "--field",
+    "-X",
+    "--method",
+    "-H",
+    "--header",
+}
 
-    Options are read as the interpreter does: they end at ``-c``, ``-m``, ``-`` or the script.
-    """
-    args = list(program.args)
+
+def merge_problem(
+    args: Sequence[str],
+    command: str,
+    allowed: bool,
+    repository: str | None,
+    host: str | None = None,
+) -> str | None:
+    """Why a worker's ``gh`` merge is refused (decision 0002, DN002 §3.5): no authorization for
+    this task, or a target that is not, or cannot be shown to be, the task's own repository.
+
+    The merge must name its target explicitly, so that neither the working directory nor gh's
+    default remote decides it: ``gh pr merge`` with ``-R`` / ``--repo`` or a PR link on the
+    repository's host, ``gh api`` with the REST merge path. Every argument that could name a
+    repository (anything with ``/`` or ``:``) and ``--hostname`` must agree with the task's
+    repository; anything else, including clustered short options, other hosts and
+    ``GH_REPO`` / ``GH_HOST``, is refused rather than guessed."""
+    if not allowed:
+        return (
+            "该任务没有合并授权（开发任务且仓库 repositories.*.delivery.merge）："
+            "PR 由主会话合并，worker 提交时用 merge_skipped 说明"
+        )
+    if re.search(r"\bGH_(REPO|HOST)\b", command):
+        return "合并时不能用 GH_REPO / GH_HOST 改变目标仓库"
+    own = (repository or "").lower()
+    site = (host or "github.com").lower()
+    pr_link = re.compile(rf"https?://{re.escape(site)}/{re.escape(own)}/pull/\d+/?", re.I)
+    api_path = re.compile(rf"/?repos/{re.escape(own)}/pulls/\d+/merge", re.I)
+    words = [a for a in args if not a.startswith("-")]
+    is_api = bool(words) and words[0].lower() == "api"
+    # The host is always named (``-R HOST/OWNER/NAME``, ``--hostname HOST`` or a PR link): a bare
+    # owner/name and the REST API resolve their host from gh's settings and environment
+    # (``GH_HOST``), which the session may have changed.
+    host_named = False
+    confirmed: list[str] = []
+    api_paths: list[str] = []
+    stray: list[str] = []
+    skip_value = False
+    for i, arg in enumerate(args):
+        if skip_value:
+            skip_value = False
+            continue
+        if arg in _MERGE_TEXT_OPTIONS:
+            skip_value = True
+            continue
+        if any(
+            arg.startswith(option + "=")
+            for option in _MERGE_TEXT_OPTIONS
+            if option.startswith("--")
+        ):
+            continue
+        if arg in ("-R", "--repo", "--hostname") or arg.startswith(("--repo=", "--hostname=")):
+            value = (
+                arg.split("=", 1)[1] if "=" in arg else (args[i + 1] if i + 1 < len(args) else "")
+            )
+            skip_value = "=" not in arg
+            if arg.startswith("--hostname"):
+                if value.lower() == site:
+                    host_named = True
+                else:
+                    stray.append(value)
+            elif value.lower() == f"{site}/{own}":
+                confirmed.append(value)
+            else:
+                stray.append(value)
+            continue
+        if "/" not in arg and ":" not in arg:
+            continue
+        if pr_link.fullmatch(arg) and not is_api:
+            confirmed.append(arg)  # a link carries its host
+            continue
+        if is_api and api_path.fullmatch(arg):
+            api_paths.append(arg)
+            continue
+        stray.append(arg)
+    if is_api and api_paths and host_named:
+        # gh api goes to github.com unless --hostname says otherwise.
+        confirmed.extend(api_paths)
+    if stray:
+        return f"只能合并本任务仓库（{repository}）的 PR；无法确认的目标：{', '.join(stray)}"
+    if is_api and not confirmed:
+        return (
+            "只能用 gh pr merge 或带 --hostname 的 REST 合并接口"
+            f"（--hostname {site} repos/<owner>/<name>/pulls/<n>/merge）合并"
+        )
+    if not confirmed:
+        target = f"{site}/{repository}"
+        return f"合并须明确指向本任务仓库：gh pr merge <编号> -R {target}，或使用该仓库的 PR 链接"
+    return None
+
+
+def python_invocation(args: Sequence[str]) -> tuple[str, str, list[str]]:
+    """What a Python command line runs, read as the interpreter reads its options:
+    ``("code", CODE, rest)``, ``("module", NAME, rest)``, ``("script", PATH, rest)`` or
+    ``("stdin", "", rest)``. Short options may be clustered (``-Bmtsw``, ``-Ic CODE``), and
+    ``-c`` / ``-m`` / ``-W`` / ``-X`` take the rest of their cluster or the next argument."""
     i = 0
     while i < len(args):
         arg = args[i]
-        if arg == "-c":
-            return args[i + 1] if i + 1 < len(args) else ""
-        if arg.startswith("-c") and not arg.startswith("--"):
-            return arg[2:]
-        if arg == "-m" or (arg.startswith("-m") and not arg.startswith("--")):
-            return ""  # a module; ``-m tsw`` is caught as a tsw command
+        if arg == "--":
+            # The next argument is the script; ``-`` still means standard input.
+            target = args[i + 1] if i + 1 < len(args) else "-"
+            if target == "-":
+                return "stdin", "", list(args[i + 2 :])
+            return "script", target, list(args[i + 2 :])
         if arg == "-":
-            return command
-        if arg in _PYTHON_VALUE_OPTIONS:
-            i += 2
+            return "stdin", "", list(args[i + 1 :])
+        if arg.startswith("--"):
+            i += 2 if arg in _PYTHON_VALUE_OPTIONS else 1
             continue
         if not arg.startswith("-"):
-            return ""  # a script file
-        i += 1
-    return command
+            return "script", arg, list(args[i + 1 :])
+        consumed_next = False
+        for j, flag_char in enumerate(arg[1:], start=1):
+            if flag_char in "cmWX":
+                value = arg[j + 1 :]
+                if not value:
+                    value = args[i + 1] if i + 1 < len(args) else ""
+                    consumed_next = True
+                if flag_char in "cm":
+                    rest = list(args[i + 2 :] if consumed_next else args[i + 1 :])
+                    return ("code" if flag_char == "c" else "module"), value, rest
+                break
+        i += 2 if consumed_next else 1
+    return "stdin", "", []
+
+
+def python_code(program: shell.Program, command: str) -> str:
+    """The code Python runs inline: ``-c CODE``, or stdin (a heredoc) when there is no script."""
+    kind, value, _ = python_invocation(list(program.args))
+    if kind == "code":
+        return value
+    return command if kind == "stdin" else ""
 
 
 # ---------------------------------------------------------------------- the hook
@@ -266,8 +405,11 @@ class Guard:
                 "SessionStart",
                 f"你是 TaskSteward 任务 {who.task_id} 的 worker（attempt {who.attempt}）。"
                 f"任务书：{who.brief_path or '等待投递'}。只在可写路径内修改：{roots}。"
-                "完成后用 review_run 做自评审并逐条处置，再 submit；需要主会话判断时用 question，"
-                '并用 mcp__ccd_session_mgmt__send_message(session_id="parent") 唤醒主会话。',
+                "完成后用 review_run 做自评审并逐条处置；任务书写明由 worker 合并时，"
+                "门禁、评审与意见都解决后自行合并 PR，再 submit。需要用户决定的事用 ask_user "
+                "在本会话直接问用户，用户回复后用 user_answer 登记；跨任务的事（资源冲突、依赖、"
+                "其他任务的范围）才用 question 交主会话，并用 "
+                'mcp__ccd_session_mgmt__send_message(session_id="parent") 唤醒主会话。',
             )
         lines = [f"你是 TaskSteward 主会话（数据目录 {self.home.root}）。"]
         try:
@@ -333,14 +475,21 @@ class Guard:
                 )
             return None
         if tool == "Bash":
-            push_allowed = pr_allowed = False
+            push_allowed = pr_allowed = merge_allowed = False
+            merge_repository: str | None = None
+            merge_host: str | None = None
             if who.role == "worker" and who.task_id:
-                push_allowed, pr_allowed = self._delivery(who.task_id)
+                push_allowed, pr_allowed, merge_allowed, merge_repository, merge_host = (
+                    self._delivery(who.task_id)
+                )
             problem = bash_problem(
                 str(tool_input.get("command") or ""),
                 home=self.home,
                 push_allowed=push_allowed,
                 pr_allowed=pr_allowed,
+                merge_allowed=merge_allowed,
+                merge_repository=merge_repository,
+                merge_host=merge_host,
                 worker=who.role == "worker",
                 cwd=self.cwd,
                 writable_roots=who.writable_roots if who.role == "worker" else None,
@@ -363,13 +512,47 @@ class Guard:
 
     def on_UserPromptSubmit(self, who: Identity) -> dict[str, Any] | None:
         prompt = str(self.payload.get("prompt") or "")
-        if who.role == "worker" and "[report]" in prompt:
-            return context(
-                "UserPromptSubmit",
-                "用户要求回传（[report]）：先用 progress_note 记录用户决定、已做动作与影响范围，"
-                '再用 mcp__ccd_session_mgmt__send_message(session_id="parent") 通知主会话。',
+        if who.role != "worker":
+            return None
+        notes: list[str] = []
+        recorded = self._record_answer(who, prompt) if self.config.valid else None
+        if recorded is not None:
+            notes.append(
+                f"这条用户消息已记录为 {recorded['message_id']}（问题 {recorded['request_id']}）。"
+                "它回答了问题时，用 user_answer 引用这个编号登记答复。"
             )
-        return None
+        if "[report]" in prompt:
+            notes.append(
+                "用户要求回传（[report]）：先用 progress_note 记录用户决定、已做动作与影响范围，"
+                '再用 mcp__ccd_session_mgmt__send_message(session_id="parent") 通知主会话。'
+            )
+        return context("UserPromptSubmit", "".join(notes)) if notes else None
+
+    def _record_answer(self, who: Identity, prompt: str) -> dict[str, Any] | None:
+        """Record the user's words while the worker's question is open (DN006 §8.2)."""
+        if who.phase != "live" or not who.task_id or not who.session_id:
+            return None
+        task_id, session_id = who.task_id, who.session_id
+        out: dict[str, Any] = {}
+
+        def build(ctx: CommitContext) -> list[EventDraft]:
+            draft = session_message(ctx.conn, task_id, session_id, prompt)
+            if draft is not None:
+                out.update(draft.data)
+            return [] if draft is None else [draft]
+
+        try:
+            self.ledger.commit(
+                Command(
+                    actor={"role": "user", "session_id": session_id, "via": "UserPromptSubmit"},
+                    input={"op": "session_message", "prompt": prompt},
+                    build=build,
+                )
+            )
+        except Exception as exc:  # recording must never block the user's message
+            print(f"tsw guard: session message not recorded: {exc}", file=sys.stderr)
+            return None
+        return out or None
 
     def on_Stop(self, who: Identity) -> dict[str, Any] | None:
         again = bool(self.payload.get("stop_hook_active"))
@@ -378,11 +561,18 @@ class Guard:
                 return None
             with self.ledger.view() as conn:
                 pending = inbox_mod.inbox(conn, self.ledger.storage, self.config)
+                due = handoff_due(conn, utc_now())
             if pending:
                 return {
                     "decision": "block",
                     "reason": f"还有 {len(pending)} 条未处理的回传，"
                     "先调用 inbox 处理并 inbox_ack。",
+                }
+            if due:
+                return {
+                    "decision": "block",
+                    "reason": f"有 {len(due)} 个 worker 会话中的问题已超时无人回复："
+                    "运行 sync 转交，再按 inbox 处理。",
                 }
             return None
         with self.ledger.view() as conn:
@@ -415,14 +605,28 @@ class Guard:
         target = shell.resolve(words[1], self.cwd)
         return target is not None and any(within(target, r) for r in who.writable_roots)
 
-    def _delivery(self, task_id: str) -> tuple[bool, bool]:
+    def _delivery(self, task_id: str) -> tuple[bool, bool, bool, str | None, str | None]:
+        """Push, PR and merge authorization of the task; its repository's ``owner/name`` and
+        host."""
         with self.ledger.view() as conn:
             row = row_dict(
-                conn.execute("SELECT repo FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+                conn.execute(
+                    "SELECT repo, kind FROM tasks WHERE task_id = ?", (task_id,)
+                ).fetchone()
             )
-        repo = resolve_repository(self.config, str(row["repo"])) if row else None
+        if row is None:
+            return False, False, False, None, None
+        repo = resolve_repository(self.config, str(row["repo"]))
         delivery = self.config.get(f"repositories.{repo}.delivery", {}) if repo else {}
-        return bool(delivery.get("push")), bool(delivery.get("create_pr"))
+        slug = self.config.get(f"repositories.{repo}.repository") if repo else None
+        host = self.config.get(f"repositories.{repo}.host") if repo else None
+        return (
+            bool(delivery.get("push")),
+            bool(delivery.get("create_pr")),
+            merge_authorized(self.config, row),
+            slug if isinstance(slug, str) else None,
+            host if isinstance(host, str) else None,
+        )
 
 
 def _turn_ended(who: Identity) -> Command:

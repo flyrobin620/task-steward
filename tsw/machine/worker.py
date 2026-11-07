@@ -514,6 +514,8 @@ def submit(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     report_html = text(inp, "report_html")
     worktree_clean = flag(inp, "worktree_clean")
     diff_note = opt_text(inp, "diff_note")
+    merge = mapping(inp, "merge", required=False)
+    merge_skipped = opt_text(inp, "merge_skipped")
 
     def build(ctx: CommitContext) -> list[EventDraft]:
         row, current = task_and_attempt(ctx.conn, env, task_id)
@@ -522,6 +524,7 @@ def submit(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         if not worktree_clean and not (diff_note and diff_note.strip()):
             raise rejected("工作树不干净时必须说明差异", reason="g_submit", check="worktree")
         evidence = guards.g_submit(ctx.conn, env.config, row, attempt_id, head)
+        merged = guards.g_merge(env.config, row, head, merge, merge_skipped)
         copied: dict[str, str] = {}
         for key, rel, name in (
             ("md", report_md, "result.md"),
@@ -548,6 +551,7 @@ def submit(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             "dependencies": dependencies,
             "worktree_clean": worktree_clean,
             "diff_note": diff_note,
+            **merged,
         }
         return [
             EventDraft(

@@ -51,6 +51,27 @@ def test_tsw_owned_paths(tmp_path: Path) -> None:
         ("Get-FileHash C:/tools/app.exe", True, True, False, "哈希"),
         ("sha256sum report.md", True, True, True, None),
         ("git status", False, False, True, None),
+        # The hook entry records the user's words: only the host runs it (DN006 §8.1a).
+        ("echo '{}' | tsw guard UserPromptSubmit", True, True, True, "宿主调用"),
+        (
+            "python plugin/bin/tsw_launch.py guard UserPromptSubmit < p.json",
+            True,
+            True,
+            False,
+            "宿主",
+        ),
+        ("py -m tsw --home h guard Stop", True, True, True, "宿主"),
+        ("python -mtsw guard UserPromptSubmit", True, True, True, "宿主"),
+        ("python -B -mtsw.cli guard UserPromptSubmit", True, True, False, "宿主"),
+        ("python -m tsw.__main__ guard UserPromptSubmit", True, True, True, "宿主"),
+        ("python -mtsw tool run x", True, True, True, "tool run"),
+        ("python -Bmtsw guard Stop", True, True, True, "宿主"),
+        ("python -X utf8 -Bm tsw guard Stop", True, True, True, "宿主"),
+        ("python -Ic 'import tsw'", True, True, True, "导入"),
+        ("python -m pytest -k tsw", True, True, True, None),
+        ("python script.py -m tsw guard", True, True, True, None),
+        ("python -- - <<'PY'\nimport tsw\nPY", True, True, True, "导入"),
+        ("python -B -- tsw_launch.py guard Stop", True, True, True, "宿主"),
     ],
 )
 def test_bash_rules(  # noqa: PLR0917 - one parameter per table column
@@ -73,3 +94,78 @@ def test_writes_into_the_ledger_through_the_shell_are_refused(tmp_path: Path) ->
     assert (
         bash_problem(reading, home=home, push_allowed=True, pr_allowed=True, worker=False) is None
     )
+
+
+@pytest.mark.use_case("UC-MERGE-001")
+@pytest.mark.parametrize(
+    ("command", "allowed"),
+    [
+        ("gh pr merge 3 --squash", False),  # gh's default remote is not a confirmed target
+        ("cd ../other && gh pr merge 3 --squash", False),
+        ("gh -R example/demo pr merge 3 --squash --delete-branch", False),  # host not named
+        ("gh -R github.com/example/demo pr merge 3 --squash --delete-branch", True),
+        ("gh pr merge https://github.com/Example/Demo/pull/3 --squash", True),
+        ("gh api -X PUT repos/example/demo/pulls/3/merge", False),  # GH_HOST may redirect it
+        ("gh -R example/other pr merge 3 --squash", False),
+        ("gh pr merge --repo=example/other 3", False),
+        ("gh pr merge https://github.com/example/other/pull/3", False),
+        ("gh api -X PUT repos/example/other/pulls/3/merge", False),
+        ("gh api graphql -f query='mutation{mergePullRequest(input:{})}'", False),
+        ("gh pr merge 3 -sdRother/repo", False),
+        ("gh pr merge 3 -sdR other/repo", False),
+        ("gh pr merge https://ghe.example.org/other/repo/pull/3 --squash", False),
+        ("gh pr merge https://ghe.example.org/example/demo/pull/3 --squash", False),
+        ("GH_REPO=other/repo gh pr merge 3 --squash", False),
+        ("gh pr merge 3 -R github.com/example/demo --body-file ../m.md -t 'a/b'", True),
+        ("gh api --hostname ghe.example.org -X PUT repos/example/demo/pulls/3/merge", False),
+        ("gh api --hostname=github.com -X PUT repos/example/demo/pulls/3/merge", True),
+        ("gh pr merge 3 -R github.com/example/demo", True),
+    ],
+)
+def test_a_worker_merges_only_its_own_repository_with_the_authorization(
+    tmp_path: Path, command: str, allowed: bool
+) -> None:
+    """Decision 0002: delivery.merge lets the worker merge its own PR, in its task's repository."""
+    home = Home(tmp_path / "home")
+    refused = bash_problem(command, home=home, push_allowed=True, pr_allowed=True, worker=True)
+    assert refused is not None and "delivery.merge" in refused
+    problem = bash_problem(
+        command,
+        home=home,
+        push_allowed=True,
+        pr_allowed=True,
+        merge_allowed=True,
+        merge_repository="example/demo",
+        worker=True,
+    )
+    assert (problem is None) is allowed, problem
+
+
+@pytest.mark.use_case("UC-MERGE-001")
+@pytest.mark.parametrize(
+    ("command", "allowed"),
+    [
+        ("gh api -X PUT repos/example/demo/pulls/3/merge", False),
+        ("gh api --hostname ghe.example.org -X PUT repos/example/demo/pulls/3/merge", True),
+        ("gh api --hostname github.com -X PUT repos/example/demo/pulls/3/merge", False),
+        ("gh pr merge 3 -R example/demo", False),
+        ("gh pr merge 3 -R ghe.example.org/example/demo", True),
+        ("gh pr merge https://ghe.example.org/example/demo/pull/3", True),
+        ("gh pr merge https://github.com/example/demo/pull/3", False),
+    ],
+)
+def test_a_repository_on_another_host_must_be_named_with_its_host(
+    tmp_path: Path, command: str, allowed: bool
+) -> None:
+    home = Home(tmp_path / "home")
+    problem = bash_problem(
+        command,
+        home=home,
+        push_allowed=True,
+        pr_allowed=True,
+        merge_allowed=True,
+        merge_repository="example/demo",
+        merge_host="ghe.example.org",
+        worker=True,
+    )
+    assert (problem is None) is allowed, problem

@@ -60,8 +60,9 @@ TaskSteward（任务管家）：可插拔宿主的任务编排器。核心库与
    （[testing-layers.md](docs/development/testing-layers.md)）。
 1. 按模板开 PR，同时启动独立评审（与 CI 并行）。
 1. 修完已知问题，重新运行本地门禁，然后一次推送。
-1. 合并条件：`Gate` 在最终 head 上为绿，评审在最终 head 上通过，每条评审意见都已回复并解决；
-   由编排器派发的任务还需编排者验收。满足后由 agent 合并，以下改动须用户明确确认后才能合并：
+1. 合并条件：`Gate` 在最终 head 上为绿，评审在最终 head 上通过，每条评审意见都已回复并解决。
+   满足后由完成改动的 agent 合并（编排器派发的任务即 worker 自己合并，编排者在合并后核对），
+   以下改动须用户明确确认后才能合并（worker 在自己的会话中直接问用户）：
    `.github/**`、`tools/` 中的门禁与 CI 包装器、`AGENTS.md`、`CLAUDE.md`、`docs/development/**`、
    `docs/decisions/**`、`docs/design/**`、发布与版本配置、权限与身份校验相关代码（角色解析、hooks 守卫、
    MCP 写工具授权）、`LICENSE`。

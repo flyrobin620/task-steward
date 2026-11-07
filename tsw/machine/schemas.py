@@ -25,6 +25,10 @@ SOURCE: dict[str, Any] = {
     },
     "required": ["channel", "principal", "message_ref", "text", "target"],
 }
+FINDINGS: dict[str, Any] = {
+    "type": "array",
+    "items": {"type": "object", "properties": {"round": INT, "finding": S}},
+}
 COMMON: dict[str, Any] = {
     "command_id": {**S, "description": "幂等键：同一 ID 重复调用返回原结果"},
     "expected_version": {**INT, "description": "乐观锁：任务版本不一致时拒绝"},
@@ -164,6 +168,10 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         task_id=S,
         verified_head=S,
         summary=S,
+        post_merge={
+            **S,
+            "description": "worker 已合并时必填：合并后的核对（main 上合并提交的 CI 等）",
+        },
         acceptance={
             "type": "array",
             "items": {
@@ -242,8 +250,52 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         report_html=S,
         worktree_clean=B,
         diff_note=S,
+        merge={
+            "type": "object",
+            "description": "worker 已合并 PR（仓库授权 delivery.merge 的开发任务）",
+            "properties": {"pr": S, "merge_commit": S, "merged_head": S},
+        },
+        merge_skipped={**S, "description": "授权合并但没有合并时的原因（任务书或仓库规则）"},
     ),
     "sync": schema([]),
+    "ask_user": schema(
+        ["task_id", "question"],
+        task_id=S,
+        question={**S, "description": "问题全文；随后在本会话的回复里原样写给用户"},
+        items={**STRS, "description": "同时交给用户的待处理事项（review_exhausted 等记录的编号）"},
+        reserved={**B, "description": "只有用户本人能决定（凭据、验收等）：转交后主会话也不能代答"},
+    ),
+    "user_answer": schema(
+        ["task_id", "request_id", "message_id", "answer"],
+        task_id=S,
+        request_id=S,
+        message_id={**S, "description": "hook 记录的用户消息编号（M-…），提示里会给出"},
+        answer={**S, "description": "按用户原话整理的决定"},
+        extend_rounds={**INT, "description": "用户批准追加的评审轮次"},
+        defer_findings=FINDINGS,
+        overrule_findings=FINDINGS,
+    ),
+    "input_handoff": schema(["task_id", "request_id"], task_id=S, request_id=S),
+    "handoff_resolve": schema(
+        ["task_id", "request_id", "decision", "answer", "rationale", "basis", "confidence"],
+        task_id=S,
+        request_id=S,
+        decision={"enum": ["answer", "extend", "overrule", "defer"]},
+        answer=S,
+        rationale=S,
+        basis=STRS,
+        confidence={"enum": ["high", "medium", "low"]},
+        extend_rounds=INT,
+        defer_findings=FINDINGS,
+        overrule_findings=FINDINGS,
+    ),
+    "input_relay": schema(
+        ["task_id", "request_id", "channel"],
+        task_id=S,
+        request_id=S,
+        channel={**S, "description": "main-session 或已加载的其他人类渠道"},
+        note=S,
+    ),
     "config_change": schema(
         ["ops", "reason"],
         ops={

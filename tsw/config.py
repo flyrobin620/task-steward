@@ -29,6 +29,7 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")
 PERMISSION_ORDER = ("ask", "edits", "auto", "full")
 SEVERITIES = ("critical", "high", "medium", "low", "info")
 MODEL_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+REPOSITORY_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # Fields a machine-local override may set (DN003 §5); ``*`` matches one map key.
 LOCAL_WHITELIST = (
     "repositories.*.path",
@@ -65,6 +66,9 @@ DEFAULTS: dict[str, Any] = {
     },
     "input": {
         "triage": "orchestrator_judgment",
+        # A worker asks the user in its own session first; with no reply for this long the
+        # question is handed to the orchestrator (DN006 §8.3).
+        "in_session_timeout_minutes": 10,
         "decision_digest": {
             "enabled": True,
             "schedule": "daily_and_on_task_done",
@@ -118,9 +122,7 @@ DEFAULTS: dict[str, Any] = {
             "reportable_events": [
                 "worker.submitted",
                 "worker.question",
-                "review.budget_exhausted",
-                "review.defer_requested",
-                "review.unavailable",
+                "input.handed_off",
                 "task.paused",
                 "report_back",
             ],
@@ -196,6 +198,7 @@ SCHEMA: dict[str, Any] = _obj(
     input=_obj(
         triage=_choice("orchestrator_judgment", "human_direct"),
         channels=STRS,
+        in_session_timeout_minutes=_int(1),
         decision_digest=_obj(enabled=B, schedule=S, channel=S),
         teams_poll=_obj(interval_minutes=_int(1), max_interval_minutes=_int(1)),
     ),
@@ -258,7 +261,7 @@ SCHEMA: dict[str, Any] = _obj(
             instructions=STRS,
             worktree_files={"type": "list", "item": _obj(source=S, destination=S)},
             validation={"type": "list", "item": {"type": "any"}},
-            delivery=_obj(push=B, create_pr=B),
+            delivery=_obj(push=B, create_pr=B, merge=B),
         ),
     },
     accounts={
@@ -620,6 +623,15 @@ def _validate_repositories(values: dict[str, Any], problems: list[str], home: Ho
     for name, repo in repositories.items():
         if not isinstance(repo, dict):
             continue
+        delivery = repo.get("delivery")
+        if isinstance(delivery, dict) and delivery.get("merge") is True:
+            slug = repo.get("repository")
+            if not (isinstance(slug, str) and REPOSITORY_SLUG.match(slug)):
+                # Merge commands are checked against it: a worker may merge only into the
+                # repository its task belongs to (DN002 §3.5).
+                problems.append(
+                    f"repositories.{name}.repository: delivery.merge 需要写明仓库（owner/name）"
+                )
         profile = repo.get("auth_profile")
         if profile is not None:
             account = accounts.get(profile)

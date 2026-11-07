@@ -528,13 +528,17 @@ def plugin_architecture():
 
 
 def input_routing():
-    d=FlowSVG('input-routing','主会话判断：决定与人类渠道',
-              'Input routing  ·  唯一硬边界是已有授权；其余综合判断，决定写入记录',2640)
-    for key,x in [('Q1',50),('Q2',425),('Q3',800)]:
-        d.card(key,x,255,350,115,'orange')
+    d=FlowSVG('input-routing','用户输入：先在会话里问用户，超时转交主会话',
+              'Input routing  ·  任务内的事先问用户；转交与跨任务的事由主会话在授权边界内判断',2640)
+    d.card('Q2',50,255,330,115,'orange')
+    d.card('Q1',800,255,350,115,'orange')
+    d.card('ASK',820,415,320,105,'orange')
+    d.card('U',820,575,320,60,'teal')
+    d.card('HO',820,705,320,95,'orange')
+    d.card('UA',820,860,320,100,'green')
     d.panel(50,435,650,545,'01  主会话判断','yellow')
     d.card('J',70,495,610,70,'yellow')
-    d.card('A',70,655,610,115,'yellow')
+    d.card('A',70,655,610,140,'yellow')
     d.card('F',70,845,610,110,'yellow')
     d.card('D',70,1060,150,90,'yellow')
     for key,y,h in [('R1',1060,100),('R2',1270,130),('R3',1500,80),
@@ -550,15 +554,19 @@ def input_routing():
     d.card('V',820,2100,320,85,'teal')
     d.card('RR',820,2280,320,105,'green')
     d.card('C',820,2430,320,100,'slate')
-    d.route('Q1','J',[(225,370),(225,410),(300,410),(300,495)],main=True)
-    d.route('Q2','J',[(600,370),(600,390),(375,390),(375,495)],main=True)
-    d.route('Q3','J',[(975,370),(975,425),(550,425),(550,495)],main=True)
+    d.route('Q1','ASK',[(975,370),(975,415)],color='orange',main=True)
+    d.route('Q2','J',[(215,370),(215,405),(450,405),(450,495)],main=True)
+    d.route('ASK','U',[(980,520),(980,575)],color='orange',main=True)
+    d.route('U','UA',[(1140,605),(1180,605),(1180,910),(1140,910)],
+            at=(1158,680),width=44,color='green',main=True)
+    d.route('U','HO',[(980,635),(980,705)],at=(1040,676),width=74,color='orange',main=True)
+    d.route('HO','J',[(820,752),(765,752),(765,550),(680,550)],color='orange',main=True)
+    d.route('J','ESC',[(680,520),(790,520),(790,1120),(820,1120)],
+            at=(735,505),width=100,color='orange',main=True)
     d.route('J','A',at=(530,612),width=255,color='yellow',main=True)
-    d.route('J','ESC',[(680,530),(780,530),(780,1120),(820,1120)],
-            at=(953,510),width=195,color='orange',main=True)
-    d.route('A','ESC',[(680,712),(750,712),(750,1150),(820,1150)],
-            at=(714,688),width=45,color='orange',main=True)
-    d.route('A','F',at=(420,812),width=65,color='yellow',main=True)
+    d.route('A','ESC',[(680,725),(740,725),(740,1150),(820,1150)],
+            at=(714,705),width=45,color='orange',main=True)
+    d.route('A','F',at=(420,822),width=65,color='yellow',main=True)
     d.route('F','D',[(145,955),(145,1060)],color='yellow',main=True)
     d.route('D','R1',[(220,1090),(320,1090)],at=(280,1068),width=60,color='green',main=True)
     for key,y in [('R2',1310),('R3',1540),('R4',1730),('R5',1950)]:
@@ -566,7 +574,6 @@ def input_routing():
                 at=(257,y-26),width=110,color='green',main=True)
     d.route('D','ESC',[(220,1130),(245,1130),(245,1010),(1125,1010),(1125,1090)],
             at=(955,985),width=150,color='orange',main=True)
-    # The five autonomous decisions share a collector beside the cards.
     for key,y in [('R1',1110),('R2',1335),('R3',1540),('R4',1740),('R5',1950)]:
         d.route(key,'DR',[(680,y),(715,y),(715,2165),(680,2165)],color='teal',main=True)
     for x,ys,color in [(175,[1310,1540,1730],'green'),(715,[1335,1540,1740,1950],'teal')]:
@@ -576,13 +583,14 @@ def input_routing():
     d.route('CH','S1',[(985,1365),(985,1450)],color='teal',main=True)
     d.route('CH','S2',[(820,1310),(800,1310),(800,1695),(850,1695)],color='teal')
     d.route('CH','S3',[(820,1340),(775,1340),(775,1885),(850,1885)],color='teal')
-    d.route('S1','V',[(1120,1505),(1175,1505),(1175,2125),(1140,2125)],color='teal')
-    d.route('S2','V',[(1120,1695),(1155,1695),(1155,2160),(1140,2160)],color='teal')
+    d.route('S1','V',[(1120,1505),(1165,1505),(1165,2120),(1140,2120)],color='teal')
+    d.route('S2','V',[(1120,1695),(1150,1695),(1150,2140),(1140,2140)],color='teal')
     d.route('S3','V',[(985,1945),(985,2100)],color='teal',main=True)
+    d.route('UA','V',[(1140,940),(1190,940),(1190,2165),(1140,2165)],color='green',main=True)
     d.route('V','RR',color='green',main=True)
     d.route('RR','C',color='slate',main=True)
     d.text(70,2450,'判断边界',20,'#152C46',weight=700)
-    d.lines(70,2485,'主会话决定不替代用户验收。\n只有交给人类才经 T11 进入 waiting_user。\n超时不是答复；迟到答复不覆盖已生效答复。',630,15,leading=28)
+    d.lines(70,2485,'任务内的问题先在 worker 会话里问用户；超时无回复才转交主会话。\n主会话代答不替代用户验收，标为 reserved 的问题只能转达。\n超时不是答复；迟到答复不改变状态，用户本人的话优先于代答。',630,15,leading=28)
     d.save()
 
 def storage_and_context():

@@ -435,6 +435,35 @@
       }
     },
     {
+      "id": "UC-ASK-001",
+      "title": "worker 在自己的会话里问用户，超时转交主会话（T11、T12、DN006 §8.2–§8.5）",
+      "actor": "worker / 用户 / 主会话",
+      "acceptance": "ask_user 经 T11 进入 waiting_user，问题不进入主会话 inbox，attention 只显示状态；用户在 worker 会话的消息由 UserPromptSubmit hook 记录（其他会话注入的消息不记），user_answer 必须引用本会话记录的消息，经 T12 回到离开时的子状态，可同时登记用户批准的追加轮次、延后或认定不成立；超时（input.in_session_timeout_minutes）且用户未回复时，worker 的 input_handoff 或 sync 的系统规则记录 input.handed_off（可回传），主会话 Stop hook 提示转交；转交后主会话可 handoff_resolve 代答（标为 reserved 的不行）或 input_relay 转达并以 input_resolve 记录用户原话；问题已由他人答复后用户在 worker 会话的回复记为 input.late_response 并标明被取代的答复；STATUS 页显示等待用户的问题与转交状态",
+      "surfaces": [
+        "mcp",
+        "hook",
+        "cli"
+      ],
+      "claims": [
+        "tool:ask_user",
+        "tool:user_answer",
+        "tool:input_handoff",
+        "tool:handoff_resolve",
+        "tool:input_relay"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "unit": "规则依赖账本与投影，在 component 层经真实工具与 hook 验证",
+        "conformance": "不经过插件接口",
+        "live": "host-e2e 场景尚未建立（tools/live.py 不存在）：按 testing-layers 规定，触及 hooks 与 worker 指令的 PR 把 live 报告为未验证；hook 与工具在 surface 层以独立进程验证"
+      }
+    },
+    {
       "id": "UC-VERIFY-001",
       "title": "提交、核验与技术验收（T13、T17、T18、G-SUBMIT、G-ACCEPT）",
       "actor": "worker / 主会话",
@@ -459,6 +488,28 @@
         "conformance": "不经过插件接口",
         "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
         "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
+      }
+    },
+    {
+      "id": "UC-MERGE-001",
+      "title": "开发任务由 worker 合并 PR，主会话合并后核对（DN002 §3.5、G-SUBMIT、G-ACCEPT）",
+      "actor": "worker / 主会话",
+      "acceptance": "仓库授权 delivery.merge 的开发任务：任务书写明合并方式；hooks 只对授权仓库的开发任务放行 worker 的 gh 合并命令，且目标必须是本任务的仓库（配置须写明 repository）；submit 须带合并记录（PR、合并提交、合并的 head 等于提交 HEAD）或 merge_skipped 原因，未授权时不能带合并记录，非开发任务不要求合并；task_accept 要求该 PR 已由主会话核验登记并写明合并后核对，review.md 含“合并后核对”",
+      "surfaces": [
+        "mcp",
+        "hook"
+      ],
+      "claims": [],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "omittedTiers": {
+        "surface": "没有新增工具或命令：submit 与 task_accept 的新字段经 MCP / CLI 共用实现，hooks 规则在 unit 层验证",
+        "conformance": "不经过插件接口",
+        "live": "host-e2e 场景尚未建立（tools/live.py 不存在）：按 testing-layers 规定，触及 hooks 与 worker 指令的 PR 把 live 报告为未验证"
       }
     },
     {
