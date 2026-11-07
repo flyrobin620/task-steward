@@ -4,9 +4,6 @@
 run's folders, so the payloads the real app sends can be checked after the run and kept as
 recorded samples for the surface tests (docs/development/test-environments.md).
 
-At ``SessionStart`` it also puts the run's ``bin/`` (the GitHub stand-in) first on ``PATH``
-through ``CLAUDE_ENV_FILE``, which Claude Code applies to the session's shell commands; a
-``PATH`` in the settings' ``env`` does not reach them.
 """
 
 from __future__ import annotations
@@ -16,14 +13,6 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-
-
-def posix(path: Path) -> str:
-    """A Windows path as the session's Git Bash writes it (``C:/x/y`` becomes ``/c/x/y``)."""
-    text = str(path).replace("\\", "/")
-    if len(text) > 1 and text[1] == ":":
-        text = f"/{text[0].lower()}{text[2:]}"
-    return text
 
 
 def main() -> int:

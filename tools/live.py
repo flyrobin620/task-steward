@@ -681,15 +681,31 @@ def install_gh(run: Run) -> Path:
     return gh
 
 
-def session_settings(run: Run, directory: Path) -> None:
+def bash_path(path: Path) -> str:
+    """A Windows path as the sessions' Git Bash writes it (``C:/x`` becomes ``/c/x``)."""
+    text = str(path).replace("\\", "/")
+    if len(text) > 1 and text[1] == ":":
+        text = f"/{text[0].lower()}{text[2:]}"
+    return text
+
+
+def stub_merge_rule(run: Run) -> str:
+    """The permission rule tsw writes for ``gh pr merge``, for the stand-in's full path.
+
+    A session's shell does not take ``PATH`` from project settings, so the run's tasks call the
+    stand-in by its full path; this rule stands for tsw's ``Bash(gh pr merge:*)``. The hooks
+    still check the merge (they recognise ``gh`` by its program name).
+    """
+    return f"Bash({bash_path(run.bin / 'gh')} pr merge:*)"
+
+
+def session_settings(run: Run, directory: Path, *, merge: bool = False) -> None:
     """Point sessions opened in ``directory`` at this run's data directory.
 
     The user's own settings give every Claude Code session ``TSW_HOME`` (their real data
     directory). Project settings of the folder a session is opened in override it, so the run's
-    main session and workers resolve this run's data directory, never the real one. The
-    recorder hook also puts the run's ``bin/`` first on the shell's ``PATH`` (``gh`` is the
-    stand-in). tsw adds its permission rules to the same file when it creates a worker's
-    session (keys are merged).
+    main session and workers resolve this run's data directory, never the real one. tsw adds
+    its permission rules to the same file when it creates a worker's session (keys are merged).
     """
     run.check_inside(directory)
     settings = directory / ".claude" / "settings.local.json"
@@ -711,12 +727,31 @@ def session_settings(run: Run, directory: Path) -> None:
         }
     ]
     env = {"TSW_HOME": str(run.home), "TSW_LIVE_RUN": str(run.dir)}
-    settings.write_text(json.dumps({"env": env, "hooks": hooks}, indent=2), encoding="utf-8")
+    data: dict[str, Any] = {"env": env, "hooks": hooks}
+    if merge:
+        data["permissions"] = {"allow": [stub_merge_rule(run)]}
+    settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def selected(spec: Mapping[str, Any], names: Iterable[str] | None) -> list[dict[str, Any]]:
+    """The scenario's tasks a run uses: all of them, or the subset ``--tasks`` names."""
+    tasks: list[dict[str, Any]] = list(spec["tasks"])
+    if not names:
+        return tasks
+    wanted = {n.strip() for n in names if n.strip()}
+    unknown = wanted - {str(t["task_id"]) for t in tasks}
+    if unknown:
+        raise SystemExit(f"live: 场景中没有任务 {sorted(unknown)}")
+    return [t for t in tasks if str(t["task_id"]) in wanted]
 
 
 def host_prepare(args: argparse.Namespace) -> int:
     spec = scenario("host-e2e")
+    tasks = selected(spec, (args.tasks or "").split(","))
     run = Run.create("host-e2e")
+    manifest = run.manifest()
+    manifest["tasks"] = [str(t["task_id"]) for t in tasks]
+    run.save(manifest)
     tsw(run, "init")
     tsw(run, "host", "render")
     run.record("dir", "home", state="created", ref=str(run.home))
@@ -739,14 +774,14 @@ def host_prepare(args: argparse.Namespace) -> int:
     timeout = int(spec["config"]["input"]["in_session_timeout_minutes"])
     values = {
         "origin": run.origin.as_posix(),
-        "gh": gh.as_posix(),
+        "gh": bash_path(gh),
         "repository": repository,
         "timeout_plus": str(timeout + 1),
         "home": str(run.home),
         "run_id": run.id,
     }
     session_settings(run, run.home)
-    for task in spec["tasks"]:
+    for task in tasks:
         tsw(
             run,
             "task",
@@ -764,7 +799,19 @@ def host_prepare(args: argparse.Namespace) -> int:
             *[a for item in task["acceptance"] for a in ("--acceptance", item)],
         )
         for attempt in ("a1", "a2"):
-            session_settings(run, run.home / "work" / task["task_id"] / attempt)
+            session_settings(
+                run, run.home / "work" / task["task_id"] / attempt, merge=task["kind"] == "code"
+            )
+    code = "、".join(str(t["task_id"]) for t in tasks if t["kind"] == "code")
+    life = any(t["task_id"] == "T003" for t in tasks)
+    values["code_tasks"] = code
+    values["prestart_step"] = "；T003 先预启动一个待命会话，等我说再派发" if life else ""
+    values["life_step"] = (
+        "在主会话中依次说：“派发 T003”，T003 的 worker 记录就绪后再说"
+        "“暂停 T003”、“恢复 T003”、“取消 T003”。"
+        if life
+        else "（本次运行不含 T003，跳过暂停、恢复与取消。）"
+    )
     steps = [fill(s, values) for s in spec["operator"]]
     operator = [
         f"# live host-e2e {run.id}",
@@ -823,8 +870,11 @@ def host_verify(args: argparse.Namespace) -> int:
             f"product_repo=<repo>; 主会话 {main_sessions}; 主会话事件 {len(orch)} 条",
         )
     )
-    checks.append(permission_rules(run))
-    tasks = ("T001", "T002", "T003")
+    spec = scenario("host-e2e")
+    chosen = selected(spec, run.manifest().get("tasks"))
+    tasks = tuple(str(t["task_id"]) for t in chosen)
+    code = tuple(str(t["task_id"]) for t in chosen if t["kind"] == "code")
+    checks.append(permission_rules(run, chosen))
     workers: dict[str, list[str]] = {}
     for e in evs:
         ref = e["data"].get("session_ref")
@@ -840,16 +890,17 @@ def host_verify(args: argparse.Namespace) -> int:
     delivered = {
         t: seqs(evs, "attempt.brief_delivered", t) + seqs(evs, "attempt.bound", t) for t in tasks
     }
+    prestart = "T003" in tasks
     checks.append(
         check(
             "H2",
-            "预启动与派发：预启动、任务书送达，三个任务都进入执行",
-            bool(prestarted) and all(delivered.values()),
+            "预启动与派发：任务书送达，每个任务都进入执行" + ("，并有预启动" if prestart else ""),
+            (bool(prestarted) or not prestart) and all(delivered.values()),
             f"prestarted={prestarted}; delivered/bound={delivered}",
         )
     )
     reviews: dict[str, Any] = {}
-    for t in ("T001", "T002"):
+    for t in code:
         done = [e for e in evs if e["type"] == "review.completed" and e["task_id"] == t]
         started = [e for e in evs if e["type"] == "review.started" and e["task_id"] == t]
         finalize = first(evs, "review.decision", t, decision="finalize")
@@ -870,8 +921,8 @@ def host_verify(args: argparse.Namespace) -> int:
             reviews,
         )
     )
-    submitted = {t: last(evs, "worker.submitted", t) for t in ("T001", "T002")}
-    accepted = {t: seqs(evs, "task.accepted", t) for t in ("T001", "T002")}
+    submitted = {t: last(evs, "worker.submitted", t) for t in code}
+    accepted = {t: seqs(evs, "task.accepted", t) for t in code}
     checks.append(
         check(
             "H4",
@@ -883,7 +934,7 @@ def host_verify(args: argparse.Namespace) -> int:
             },
         )
     )
-    user_accepted = {t: seqs(evs, "task.user_accepted", t) for t in ("T001", "T002")}
+    user_accepted = {t: seqs(evs, "task.user_accepted", t) for t in code}
     checks.append(
         check(
             "H4u",
@@ -899,6 +950,9 @@ def host_verify(args: argparse.Namespace) -> int:
     checks.append(b2(evs))
     checks.append(scheduled_prompts(run, evs))
     checks.append(merged(run, evs, submitted))
+    # Only the checks the scenario lists (a check's id is the first word of its line).
+    wanted = {str(c).split()[0] for c in spec["checks"]} - (set() if prestart else {"H5"})
+    checks = [c for c in checks if c["id"] in wanted or c["id"].rstrip("u") in wanted]
     notes.append(hook_summary(run))
     entries = [e for e in run.manifest()["entries"] if e["kind"] == "claude-session"]
     notes.append(
@@ -911,7 +965,7 @@ def host_verify(args: argparse.Namespace) -> int:
     return 0 if write_results(run, "host-e2e", checks, notes) else 1
 
 
-def permission_rules(run: Run) -> dict[str, Any]:
+def permission_rules(run: Run, tasks: list[dict[str, Any]]) -> dict[str, Any]:
     """The permission rules tsw generated for the run's sessions (DN006 §6.3)."""
 
     def allow(path: Path) -> list[str]:
@@ -920,16 +974,16 @@ def permission_rules(run: Run) -> dict[str, Any]:
 
     main = allow(run.home / ".claude" / "settings.json")
     workers = {
-        t: allow(run.home / "work" / t / "a1" / ".claude" / "settings.local.json")
-        for t in ("T001", "T002", "T003")
+        str(t["task_id"]): allow(
+            run.home / "work" / str(t["task_id"]) / "a1" / ".claude" / "settings.local.json"
+        )
+        for t in tasks
     }
     merge = "Bash(gh pr merge:*)"
-    ok = (
-        "mcp__ccd_session__start_session" in main
-        and all("mcp__plugin_task-steward_tsw" in w for w in workers.values())
-        and merge in workers["T001"]
-        and merge in workers["T002"]
-        and merge not in workers["T003"]
+    ok = "mcp__ccd_session__start_session" in main and all(
+        "mcp__plugin_task-steward_tsw" in workers[str(t["task_id"])]
+        and (merge in workers[str(t["task_id"])]) == (t["kind"] == "code")
+        for t in tasks
     )
     return check(
         "P",
@@ -1173,7 +1227,9 @@ def main(argv: list[str] | None = None) -> int:
     rev.set_defaults(handler=reviewer_scenario)
     host = sub.add_parser("host-e2e", help="Claude app 全流程（需要用户在场）")
     steps = host.add_subparsers(dest="step", required=True)
-    steps.add_parser("prepare").set_defaults(handler=host_prepare)
+    prep = steps.add_parser("prepare")
+    prep.add_argument("--tasks", help="只用场景中的部分任务（逗号分隔，例如 T001,T002）")
+    prep.set_defaults(handler=host_prepare)
     ver = steps.add_parser("verify")
     ver.add_argument("run_id")
     ver.set_defaults(handler=host_verify)

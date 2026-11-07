@@ -17,7 +17,7 @@
     "UC-HOST-004"
   ],
   "modelCalls": {
-    "sessions": "主会话 1 个、worker 3 个（T003 恢复后可能多 1 个）",
+    "sessions": "主会话 1 个、每个任务 1 个 worker",
     "reviewer": "codex-app-server，T001 与 T002 各至少 1 轮，上限各 3 轮（review.max_rounds）"
   },
   "repository": "live/live-repo",
@@ -39,7 +39,7 @@
       "task_id": "T001",
       "title": "live：新增求和函数（会话内提问、worker 合并）",
       "kind": "code",
-      "goal": "在 live-repo 的 calc.py 中新增一个两数求和函数并补单元测试。函数名由用户决定：开始实现前用 ask_user 问用户“求和函数命名为 add 还是 plus？”，在本会话的回复里原样写出问题并结束这一轮；用户在本会话回答后，用 user_answer 引用 hook 给出的消息编号登记答复，按答复命名。做法：在执行目录中 git clone {origin} src，在 src 中新建分支、实现、提交，运行 python -m unittest；自评审（review_run）直到 finalize；git push origin <分支>；用 gh（本次运行中由 GitHub 替身代替：先运行 gh --version，输出含 live stub 才继续，否则停止并在报告中说明） 开 PR：gh pr create -R github.com/{repository} --head <分支> --title <标题>；按任务书的交付授权合并：gh pr merge <编号> -R github.com/{repository} --squash。提交时 merge 带 PR 链接、gh 打印的合并提交与合并的 head（即最后一轮评审的 HEAD）。",
+      "goal": "在 live-repo 的 calc.py 中新增一个两数求和函数并补单元测试。函数名由用户决定：开始实现前用 ask_user 问用户“求和函数命名为 add 还是 plus？”，在本会话的回复里原样写出问题并结束这一轮；用户在本会话回答后，用 user_answer 引用 hook 给出的消息编号登记答复，按答复命名。做法：在执行目录中 git clone {origin} src，在 src 中新建分支、实现、提交，运行 python -m unittest；自评审（review_run）直到 finalize；git push origin <分支>。本次运行的 GitHub 由替身代替，命令就是 {gh}（用这个完整路径，不要加 PATH 前缀或其他前置命令）：{gh} pr create -R github.com/{repository} --head <分支> --title <标题>，再按任务书的交付授权合并：{gh} pr merge <编号> -R github.com/{repository} --squash。提交时 merge 带 PR 链接、替身打印的合并提交与合并的 head（即最后一轮评审的 HEAD）。",
       "acceptance": [
         "calc.py 有按用户答复命名的求和函数与单元测试，python -m unittest 通过",
         "会话内问题经 user_answer 登记了用户原话",
@@ -48,42 +48,40 @@
     },
     {
       "task_id": "T002",
-      "title": "live：会话内问题超时转交",
+      "title": "live：README 加说明（worker 合并）",
       "kind": "code",
-      "goal": "在 live-repo 的 README.md 加一行项目说明，措辞由用户决定：开始前用 ask_user 问用户“说明写成‘四则运算示例’还是‘计算器示例’？”，在本会话的回复里原样写出问题。按 worker 指令用会话内的定时唤醒（ScheduleWakeup 或 CronCreate，提示按指令加 <scheduled-task> 标记）在 {timeout_plus} 分钟后再看一次；仍然没有回复就调用 input_handoff，并用 mcp__ccd_session_mgmt__send_message(session_id=\"parent\") 通知主会话；定时唤醒不可用时在报告中写明，然后结束这一轮。得到答复后按答复修改：git clone {origin} src，新建分支、提交、自评审直到 finalize、push；用 gh（本次运行中由 GitHub 替身代替：先运行 gh --version，输出含 live stub 才继续，否则停止并在报告中说明） 开 PR（gh pr create -R github.com/{repository} --head <分支> --title <标题>），再按交付授权 gh pr merge <编号> -R github.com/{repository} --squash；提交时带 merge。",
+      "goal": "在 live-repo 的 README.md 加一行项目说明“四则运算示例”。做法：在执行目录中 git clone {origin} src，新建分支、提交、自评审（review_run）直到 finalize、git push origin <分支>；本次运行的 GitHub 由替身代替，命令就是 {gh}（用这个完整路径，不要加 PATH 前缀或其他前置命令）：{gh} pr create -R github.com/{repository} --head <分支> --title <标题>，再按任务书的交付授权 {gh} pr merge <编号> -R github.com/{repository} --squash；提交时带 merge。",
       "acceptance": [
-        "README.md 按得到的答复加了说明",
-        "会话内问题在超时后转交主会话并得到处理",
+        "README.md 加了说明",
         "PR 由 worker 自行合并，合并的 head 等于最后一轮评审的 HEAD"
       ]
     },
     {
       "task_id": "T003",
-      "title": "live：暂停、恢复与取消",
+      "title": "live：预启动、暂停、恢复与取消",
       "kind": "research",
-      "goal": "本任务用于验证暂停、恢复与取消：收到任务书后调用 progress_note 记录“就绪”，然后结束这一轮，等待主会话的消息，不做其他工作。",
+      "goal": "本任务用于验证预启动、暂停、恢复与取消：收到任务书后调用 progress_note 记录“就绪”，然后结束这一轮，等待主会话的消息，不做其他工作。",
       "acceptance": [
-        "任务按用户要求暂停、恢复后取消"
+        "任务按用户要求预启动、派发、暂停、恢复后取消"
       ]
     }
   ],
   "operator": [
     "在 Claude 桌面 app 新建会话，文件夹选择本运行的数据目录 {home}（首次打开需要信任该文件夹），权限模式用 auto。",
-    "在该主会话中说：“执行 T001 和 T002；T003 先预启动一个待命会话，等我说再派发”。主会话规划、派发 T001、T002，并为 T003 预启动待命会话。",
+    "在该主会话中说：“执行 {code_tasks}”{prestart_step}。",
     "打开 T001 的 worker 会话，它会问求和函数的命名，直接在 worker 会话里回答（例如“用 add”）。",
-    "先不要回答 T002 worker 的问题。约 {timeout_plus} 分钟后它的定时唤醒会运行（worker 会话里能看到它醒来）；之后它转交主会话，主会话可以代为决定，也可以在主会话里问你。如果主会话问你，在主会话里回答。",
-    "在主会话中依次说：“派发 T003”，T003 的 worker 记录就绪后再说“暂停 T003”、“恢复 T003”、“取消 T003”。",
-    "T001 与 T002 提交后，主会话核验并技术验收；然后在主会话中说：“我验收 T001 和 T002”。",
+    "{life_step}",
+    "开发任务提交后，主会话核验并技术验收；然后在主会话中说：“我验收 {code_tasks}”。",
     "回到运行 live.py 的会话，运行 python tools/live.py host-e2e verify {run_id}，然后归档本次运行的会话并运行 cleanup。"
   ],
   "checks": [
     "H1 隔离：数据目录与产品仓库指向本运行，主会话在临时数据目录中持有调度租约",
-    "H2 预启动与派发：attempt.prestarted、attempt.brief_delivered / attempt.bound，三个任务都进入执行",
-    "H3 自评审：T001、T002 至少一轮 codex-app-server 评审完成并以 finalize 定稿",
-    "H4 提交与技术验收：T001、T002 的 worker.submitted 与 task.accepted",
-    "H5 取消与恢复：T003 的 task.paused、task.resumed、task.cancelled",
+    "P 权限规则：主会话放行会话管理与 tsw 工具，worker 放行 tsw 工具，只有授权合并的开发任务放行合并",
+    "H2 预启动与派发：任务书送达，每个任务都进入执行；运行包含 T003 时还有预启动",
+    "H3 自评审：每个开发任务至少一轮 codex-app-server 评审完成并以 finalize 定稿",
+    "H4 提交与技术验收：每个开发任务的 worker.submitted 与 task.accepted",
+    "H5 暂停、恢复与取消（运行包含 T003 时）：T003 的 task.paused、task.resumed、task.cancelled",
     "B1 会话内提问：T001 的 input.escalated（in_session）、hook 记录的 input.session_message（来自同一 worker 会话）、引用该消息的 input.resolved（in-session，source_kind=user）",
-    "B2 超时转交（可选：该流程由后续任务重新设计）：T002 的 input.handed_off，以及主会话的 handoff_resolve 或 input_relay；定时唤醒提示不被记为用户消息",
-    "C 自行合并：T001、T002 的 worker.submitted 带 merge，merged_head 等于提交 HEAD，替身记录的 PR 已合并且合并提交在 origin 的 main 上"
+    "C 自行合并：每个开发任务的最后一次提交带 merge，merged_head 等于提交 HEAD，替身记录的 PR 已合并且合并提交在 origin 的 main 上"
   ]
 }
