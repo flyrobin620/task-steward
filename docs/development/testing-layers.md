@@ -27,12 +27,23 @@ live 层级调用真实 app 与模型，有费用，并且需要用户在场（�
 
 | 改动范围 | 场景 |
 | --- | --- |
-| P1 宿主集成（插件清单、hooks、MCP 注册、角色解析、worker 指令） | `host-e2e`：预启动、派发、worker 自评审、提交、编排者验收、取消与恢复 |
+| P1 宿主集成（插件清单、hooks、MCP 注册、角色解析、worker 指令、生成的权限规则） | `host-e2e`：预启动、派发、worker 自评审、会话内提问与超时转交、worker 合并、提交、编排者验收、取消与恢复 |
 | P2 `claude-app` 适配器（会话创建、对账、投递、唤醒） | `host-e2e` |
-| P2 评审器适配器（`claude-headless`、`codex-app-server`）或评审协议（DN004） | `reviewer`：两种评审器在固定样例上各做一次全量评审与一次增量评审，核对只读（目标目录无写入）与输出 schema |
+| P2 评审器适配器（`claude-headless`、`codex-app-server`）或评审协议（DN004） | `reviewer`：每种已实现的评审器在固定样例上各做一次全量评审与一次增量评审，核对只读（目标目录无写入）与输出 schema；未实现的评审器报告为“未验证” |
 | 发布前 | 全部场景 |
 
 不能运行时（例如用户不在场），PR 中把对应层级写为“未验证”并说明原因；需要用户确认的合并不能以此跳过。
+
+运行方式：
+
+| 场景 | 命令 | 用户 |
+| --- | --- | --- |
+| `reviewer` | `python tools/live.py reviewer` | 不需要；结束时自动清理线程 |
+| `host-e2e` | `python tools/live.py host-e2e prepare`，用户按运行目录中的 `OPERATOR.md` 在 app 中操作，再 `python tools/live.py host-e2e verify <runId>` | 需要：以运行的数据目录新建主会话（信任文件夹）、发出操作步骤中的消息、在 worker 会话中回答问题 |
+| 收尾 | `python tools/live.py cleanup <runId> --archived <会话 ID>…`，`python tools/live.py discard <runId>` | 在 app 中归档本次运行的会话 |
+
+`verify` 逐项核对隔离账本中的事件（场景定义的 `checks`），把结果写进运行目录的 `result.json` 与可附在
+PR 中的 `evidence.md`，并分开标注模拟部分（GitHub 替身）。
 
 ## 编写测试
 

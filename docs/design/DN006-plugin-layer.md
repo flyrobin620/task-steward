@@ -200,7 +200,7 @@ class HostIntegration(Protocol):
 | 会话 | 设置文件 | 允许的动作 | 仍然生效的检查 |
 | --- | --- | --- | --- |
 | 主会话 | 数据目录的 `.claude/settings.json`（`render_instructions` 一并生成） | tsw MCP 工具；`start_session`、`send_message` / `SendMessage`、`stop_session`、`get_session`、`list_sessions`、`archive_session` | PreToolUse 对 `start_session` 核对落账的会话名与代次；tsw 工具按角色、守卫与用户来源校验 |
-| worker | 执行目录的 `.claude/settings.local.json`（会话将要创建时由 `attempt_start` 写入，已有内容按键合并） | tsw MCP 工具；`send_message` / `SendMessage`；`gh pr merge` | PreToolUse 核对合并授权（开发任务且 `delivery.merge`）与目标仓库；hook 的拒绝优先于允许规则 |
+| worker | 执行目录的 `.claude/settings.local.json`（执行目录在数据目录 `work/` 之下时，由 `attempt_start` 在会话创建前写入，已有内容按键合并；`work/` 之外的目录（如仓库 worktree）不写） | tsw MCP 工具；`send_message` / `SendMessage`；`gh pr merge` | PreToolUse 核对合并授权（开发任务且 `delivery.merge`）与目标仓库；hook 的拒绝优先于允许规则 |
 
 worker 能写自己的执行目录，所以 hooks 拒绝任何会话写入执行目录与数据目录中的 `.claude/settings*.json`（编辑工具与可识别的 shell 写法），避免会话给自己追加权限。允许规则只放行动作本身；动作的授权仍由账本、配置与用户来源决定，主会话代答也仍然不是用户批准（§8.1b）。
 

@@ -59,7 +59,7 @@ GIT_ID = (
     "-c",
     "user.name=live",
     "-c",
-    "user.email=live@example.invalid",
+    "user.email=live@example.com",
     "-c",
     "core.autocrlf=false",
     "-c",

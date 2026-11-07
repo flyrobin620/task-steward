@@ -211,7 +211,7 @@ def merge(values: dict[str, str], words: list[str], flags: set[str], state: dict
             "-c",
             "user.name=live-stub",
             "-c",
-            "user.email=live-stub@example.invalid",
+            "user.email=live-stub@example.com",
             "commit",
             "-q",
             "-m",
