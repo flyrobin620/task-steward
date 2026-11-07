@@ -674,7 +674,9 @@ def session_settings(run: Run, directory: Path) -> None:
 
     The user's own settings give every Claude Code session ``TSW_HOME`` (their real data
     directory). Project settings of the folder a session is opened in override it, so the run's
-    main session and workers resolve this run's data directory, never the real one.
+    main session and workers resolve this run's data directory, never the real one. ``PATH``
+    starts with the run's ``bin/``, so ``gh`` in these sessions is the stand-in. tsw adds its
+    permission rules to the same file when it creates a worker's session (keys are merged).
     """
     run.check_inside(directory)
     settings = directory / ".claude" / "settings.local.json"
@@ -684,13 +686,12 @@ def session_settings(run: Run, directory: Path) -> None:
         event: [{"hooks": [{"type": "command", "command": f'python -X utf8 "{capture}" {event}'}]}]
         for event in ("SessionStart", "UserPromptSubmit")
     }
-    settings.write_text(
-        json.dumps(
-            {"env": {"TSW_HOME": str(run.home), "TSW_LIVE_RUN": str(run.dir)}, "hooks": hooks},
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    env = {
+        "TSW_HOME": str(run.home),
+        "TSW_LIVE_RUN": str(run.dir),
+        "PATH": str(run.bin) + os.pathsep + os.environ.get("PATH", ""),
+    }
+    settings.write_text(json.dumps({"env": env, "hooks": hooks}, indent=2), encoding="utf-8")
 
 
 def host_prepare(args: argparse.Namespace) -> int:
@@ -797,6 +798,7 @@ def host_verify(args: argparse.Namespace) -> int:
             f"product_repo=<repo>; 主会话 {main_sessions}; 主会话事件 {len(orch)} 条",
         )
     )
+    checks.append(permission_rules(run))
     tasks = ("T001", "T002", "T003")
     workers: dict[str, list[str]] = {}
     for e in evs:
@@ -881,6 +883,34 @@ def host_verify(args: argparse.Namespace) -> int:
         "GitHub（push 目标、PR、合并）由运行目录内的 origin.git 与 gh 替身模拟，相关证据为模拟证据"
     )
     return 0 if write_results(run, "host-e2e", checks, notes) else 1
+
+
+def permission_rules(run: Run) -> dict[str, Any]:
+    """The permission rules tsw generated for the run's sessions (DN006 §6.3)."""
+
+    def allow(path: Path) -> list[str]:
+        data = read_json(path)
+        return [str(r) for r in (data.get("permissions") or {}).get("allow") or []]
+
+    main = allow(run.home / ".claude" / "settings.json")
+    workers = {
+        t: allow(run.home / "work" / t / "a1" / ".claude" / "settings.local.json")
+        for t in ("T001", "T002", "T003")
+    }
+    merge = "Bash(gh pr merge:*)"
+    ok = (
+        "mcp__ccd_session__start_session" in main
+        and all("mcp__plugin_task-steward_tsw" in w for w in workers.values())
+        and merge in workers["T001"]
+        and merge in workers["T002"]
+        and merge not in workers["T003"]
+    )
+    return check(
+        "P",
+        "权限规则：主会话放行会话管理与 tsw 工具，worker 放行 tsw 工具，只有授权合并的任务放行合并",
+        ok,
+        {"main": main, **workers},
+    )
 
 
 def hook_summary(run: Run) -> str:
@@ -1043,6 +1073,31 @@ def cleanup(args: argparse.Namespace) -> int:
     return 0 if done else 1
 
 
+def discard(args: argparse.Namespace) -> int:
+    """Delete a finished run's directory: only one with a manifest, only after its cleanup."""
+    run = Run.open(args.run_id)
+    left = [
+        e
+        for e in run.manifest()["entries"]
+        if e["kind"] in ("claude-session", "codex-thread")
+        and e.get("ref")
+        and e["state"] != "archived"
+    ]
+    if left:
+        names = ", ".join(f"{e['name']}={e['ref']}" for e in left)
+        raise SystemExit(f"live: 还有未确认归档的对象（{names}），先完成 cleanup")
+
+    def writable(func: Any, path: str, _exc: Any) -> None:
+        Path(path).chmod(0o700)  # git marks its objects read-only on Windows
+        func(path)
+
+    shutil.rmtree(run.dir, onexc=writable) if sys.version_info >= (3, 12) else shutil.rmtree(
+        run.dir, onerror=writable
+    )
+    print(f"已删除 {run.id}")
+    return 0
+
+
 def list_runs(args: argparse.Namespace) -> int:
     if not runs_dir().is_dir():
         return 0
@@ -1075,6 +1130,9 @@ def main(argv: list[str] | None = None) -> int:
     clean.add_argument("run_id")
     clean.add_argument("--archived", action="append", help="已归档并用 get_session 读回的会话 ID")
     clean.set_defaults(handler=cleanup)
+    drop = sub.add_parser("discard", help="删除已完成清理的运行目录")
+    drop.add_argument("run_id")
+    drop.set_defaults(handler=discard)
     sub.add_parser("list").set_defaults(handler=list_runs)
     args = parser.parse_args(argv)
     if args.runs_dir:

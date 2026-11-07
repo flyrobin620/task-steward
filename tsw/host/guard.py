@@ -92,12 +92,34 @@ def context(event: str, text: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------- pure rules
 
 
+SETTINGS = "claude-settings"
+
+
+def is_settings_file(home: Home, path: Path) -> bool:
+    """A Claude Code settings file in the data directory or an execution directory under it.
+
+    tsw writes the permission rules there (DN006 §6.3); a session that could edit them would
+    grant itself permissions.
+    """
+    return (
+        path.parent.name.lower() == ".claude"
+        and path.name.lower().startswith("settings")
+        and path.name.lower().endswith(".json")
+        and within(path, home.root)
+    )
+
+
 def owned_top(home: Home, path: Path) -> str | None:
-    """The tsw-owned top-level directory of the data directory that ``path`` is in, if any."""
+    """The tsw-owned top-level directory of the data directory that ``path`` is in, if any
+    (``claude-settings`` for the permission settings tsw generates)."""
+    if is_settings_file(home, path):
+        return SETTINGS
     return next((top for top in TSW_OWNED if within(path, home.root / top)), None)
 
 
 def owned_reason(top: str) -> str:
+    if top == SETTINGS:
+        return "数据目录与执行目录中的 .claude/settings*.json 由 tsw 生成，会话不能修改权限设置"
     if top == "config":
         return "数据目录的 config/ 只由 tsw 写入：主会话用 config_change / config_revert 修改配置"
     return f"数据目录的 {top}/ 只由 tsw 写入，请使用 tsw 工具"

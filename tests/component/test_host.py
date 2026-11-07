@@ -579,6 +579,72 @@ def test_a_prestarted_session_is_a_worker_from_its_first_listing(
     assert server.call("whoami", {})["role"] == "worker"
 
 
+@mark.use_case("UC-HOST-004")
+@mark.use_case("UC-MERGE-001")
+def test_a_workers_permission_rules_are_written_before_its_session(home: Home) -> None:
+    h = Harness(
+        home,
+        {
+            "repositories": {
+                "demo": {
+                    "path": "~/src/demo",
+                    "repository": "o/demo",
+                    "delivery": {"push": True, "create_pr": True, "merge": True},
+                }
+            }
+        },
+    )
+    orchestrator = Server(h.home, {SESSION_ENV: "orch-1"}, h.home.root)
+    orchestrator.machine = "m1"
+    for task_id, kind in (("T001", "code"), ("T002", "research")):
+        h.register(task_id, kind=kind)
+        h.plan(task_id)
+        orchestrator.call(
+            "attempt_start", {"task_id": task_id, "purpose": "prestart", "user_turn": True}
+        )
+    rules = {
+        task_id: json.loads(
+            (h.home.root / "work" / task_id / "a1" / ".claude" / "settings.local.json").read_text(
+                encoding="utf-8"
+            )
+        )["permissions"]["allow"]
+        for task_id in ("T001", "T002")
+    }
+    # Only the development task in a repository that lets the worker merge may merge.
+    assert "Bash(gh pr merge:*)" in rules["T001"]
+    assert "Bash(gh pr merge:*)" not in rules["T002"]
+    assert all("mcp__plugin_task-steward_tsw" in r for r in rules.values())
+    assert not any("start_session" in rule for r in rules.values() for rule in r)
+    # No session may edit the rules tsw writes: not the worker, not the orchestrator.
+    workdir = h.home.root / "work" / "T001" / "a1"
+    for target in (
+        workdir / ".claude" / "settings.local.json",
+        workdir / ".claude" / "Settings.json",
+        h.home.root / ".claude" / "settings.json",
+    ):
+        edit = guard(
+            h, "orch-1", h.home.root, tool_name="Write", tool_input={"file_path": str(target)}
+        )
+        refused = edit.run("PreToolUse")
+        assert refused is not None and "settings" in json.dumps(refused, ensure_ascii=False)
+    shell = guard(
+        h,
+        "orch-1",
+        h.home.root,
+        tool_name="Bash",
+        tool_input={"command": f'echo {{}} > "{workdir / ".claude" / "settings.local.json"}"'},
+    )
+    assert shell.run("PreToolUse") is not None
+    elsewhere = guard(
+        h,
+        "orch-1",
+        h.home.root,
+        tool_name="Write",
+        tool_input={"file_path": str(workdir / "src" / ".claude" / "notes.md")},
+    )
+    assert elsewhere.run("PreToolUse") is None
+
+
 @mark.use_case("UC-HOST-001")
 def test_default_and_home_relative_execution_directories_are_recognised(h: Harness) -> None:
     h.register("T001")

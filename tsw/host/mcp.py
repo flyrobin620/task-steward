@@ -25,11 +25,13 @@ from tsw.errors import ErrorCode, TswError, rejected
 from tsw.events import utc_now
 from tsw.home import Home, open_home, workdir_path
 from tsw.host import inbox as inbox_mod
+from tsw.host.claude_code import render_worker_settings
 from tsw.host.identity import Identity, resolve, within
 from tsw.host.maintenance import Maintenance
 from tsw.ledger import Ledger
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.config_tools import CONFIG_TOOLS
+from tsw.machine.guards import merge_authorized
 from tsw.machine.model import loads, row_dict, task
 from tsw.machine.runner import run_tool
 from tsw.machine.schemas import SCHEMAS, SOURCE
@@ -248,6 +250,8 @@ class Server:
         out = run_tool(ledger, usable, caller, name, dict(args))
         if name == "task_dispatch":
             self._prepare_workdir(args)
+        if name == "attempt_start":
+            self._session_settings(out, usable, ledger)
         return out
 
     def _prepare_workdir(self, args: Mapping[str, Any]) -> None:
@@ -255,6 +259,30 @@ class Server:
         workdir = workdir_path(self.home, str(args.get("workdir") or ""))
         if within(workdir, self.home.root / "work"):
             workdir.mkdir(parents=True, exist_ok=True)
+
+    def _session_settings(self, out: Any, config: EffectiveConfig, ledger: Ledger) -> None:
+        """Before the worker's session is created, write its permission rules (DN006 §6.3).
+
+        Only execution directories under ``work/`` get them: a directory elsewhere (a git
+        worktree of the repository) is not tsw's to write into.
+        """
+        events = out.get("events") if isinstance(out, dict) else None
+        if not events:
+            return  # a duplicate call: the first one wrote the rules
+        task_id, attempt_id = events[0].get("task_id"), events[0]["data"].get("attempt")
+        with ledger.view() as conn:
+            attempt = row_dict(
+                conn.execute(
+                    "SELECT workdir FROM attempts WHERE task_id = ? AND attempt = ?",
+                    (task_id, attempt_id),
+                ).fetchone()
+            )
+            row = task(conn, str(task_id))
+        recorded = (attempt or {}).get("workdir") or f"work/{task_id}/{attempt_id}"
+        workdir = workdir_path(self.home, str(recorded))
+        if within(workdir, self.home.root / "work"):
+            workdir.mkdir(parents=True, exist_ok=True)
+            render_worker_settings(workdir, merge=merge_authorized(config, row))
 
     def _host_tool(
         self,
