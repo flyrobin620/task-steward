@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="60b249154bc52859900f0946fd601d0e58fe61eb08527ddb46308636d51bb6b6">
+<meta name="tsw-source-sha256" content="1dca6dbde0b99189f2e8aa07584e3f421710f6794f74b258c81802ef31b1f961">
 <title>DN006 插件层：宿主集成、会话、人类渠道与数据存储</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -137,6 +137,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p><strong>权限规则</strong>（用户 2026-11-07 决定）：Claude app 的 auto 权限模式由分类器判断每次工具调用是否出自用户意图。它只认对话中用户本人的话，不认 tsw 的配置、账本与任务书，所以把派发 worker（<code>start_session</code>）、主会话代为决定、worker 按 <code>delivery.merge</code> 合并等 tsw 已经把关的动作当作未经授权而拒绝（live <code>host-e2e</code> 中出现）。对 tsw 自己把关的动作，<code>claude-code</code> 生成 Claude Code 的显式允许规则（<code>permissions.allow</code>），由 hooks 守卫与 MCP 工具的授权检查作为这些动作的门禁；其他一切仍由宿主的权限模式与分类器把关。</p>
 <table><thead><tr><th>会话</th><th>设置文件</th><th>允许的动作</th><th>仍然生效的检查</th></tr></thead><tbody><tr><td>主会话</td><td>数据目录的 <code>.claude/settings.json</code>（<code>render_instructions</code> 一并生成）</td><td>tsw MCP 工具；<code>start_session</code>、<code>send_message</code> / <code>SendMessage</code>、<code>stop_session</code>、<code>get_session</code>、<code>list_sessions</code>、<code>archive_session</code></td><td>PreToolUse 对 <code>start_session</code> 核对落账的会话名与代次；tsw 工具按角色、守卫与用户来源校验</td></tr><tr><td>worker</td><td>执行目录的 <code>.claude/settings.local.json</code>（执行目录在数据目录 <code>work/</code> 之下时，由 <code>attempt_start</code> 在会话创建前写入，已有内容按键合并；<code>work/</code> 之外的目录（如仓库 worktree）不写）</td><td>tsw MCP 工具；<code>send_message</code> / <code>SendMessage</code>；<code>gh pr merge</code></td><td>PreToolUse 核对合并授权（开发任务且 <code>delivery.merge</code>）与目标仓库；hook 的拒绝优先于允许规则</td></tr></tbody></table>
 <p><code>start_session</code> 与 <code>send_message</code> 等会话工具由 app 自己的分类器把关，不受 <code>permissions.allow</code> 约束（live 中允许规则已生效，带“worker 自行合并”的任务书正文仍被拦截）。用户 2026-11-07 决定：创建 worker 会话时 <code>prompt</code> 只写短指令（角色、attempt、任务书路径），<code>background</code> 只写任务标题、仓库与执行目录，任务书正文（含交付与合并方式）由 worker 从 <code>runs/</code> 读取；合并的把关点因此在 worker 实际合并时，由上表的允许规则与 hooks 守卫承担，而不是在创建会话时由 app 分类器判断。会话可能在 <code>attempt_reconcile</code> 之前开始第一轮（<code>whoami</code> 仍为 pending），主会话绑定后发消息通知它。</p>
+<p>Claude Code 对复合命令（<code>;</code>、<code>&amp;&amp;</code>、管道）逐段核对允许规则，有一段不在规则内就交给权限模式与分类器判断。live 中单独的 <code>gh pr merge … -R …</code> 命中规则后直接执行，而后面接了 <code>git fetch</code> 等命令的同一合并被分类器以“Merge Without Review”拒绝；worker 指令因此要求合并命令单独运行。</p>
 <p>worker 能写自己的执行目录，所以 hooks 拒绝任何会话写入执行目录与数据目录中的 <code>.claude/settings*.json</code>（编辑工具与可识别的 shell 写法），避免会话给自己追加权限。允许规则只放行动作本身；动作的授权仍由账本、配置与用户来源决定，主会话代答也仍然不是用户批准（§8.1b）。</p>
 <h2 id="7-p2-会话适配器session">7. P2 会话适配器（session）</h2>
 <h3 id="71-职责与能力">7.1 职责与能力</h3>
