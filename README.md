@@ -24,6 +24,7 @@
 | DN005 历史导入与 resume | [md](docs/design/DN005-history-import-and-resume.md) | [html](docs/design/DN005-history-import-and-resume.html) | 导入来源、分类规则、导入步骤、resume 资料包、验证与回退 |
 | DN006 插件层 | [md](docs/design/DN006-plugin-layer.md) | [html](docs/design/DN006-plugin-layer.html) | 宿主集成、会话适配器（含一次性评审）、人类渠道、存储后端四类插件的职责与接口；委托操作；主会话判断；数据目录；组合示例 |
 | DN007 账本与上下文检索 | [md](docs/design/DN007-ledger-and-context.md) | [html](docs/design/DN007-ledger-and-context.html) | 三层存储、写读路径与重建；任务卡片、检索工具、用户决定与偏好；主会话与 worker 的历史读取方式 |
+| DN008 校验原则 | [md](docs/design/DN008-guardrails.md) | [html](docs/design/DN008-guardrails.html) | 安全边界与信任假设；校验只为防错的原则；Claude Code 上逐项校验的保留 / 简化 / 删除 |
 
 图的结构来源是 `docs/design/diagrams/*.mmd`（状态、迁移编号与标签的权威来源），文档引用同名 `.svg`：
 
