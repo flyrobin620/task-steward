@@ -1,7 +1,7 @@
 # AGENTS.md
 
 TaskSteward（任务管家）：可插拔宿主的任务编排器。核心库与 CLI `tsw` 用 Python 3.10+ 标准库实现，
-默认宿主是 Claude Code 桌面 app。设计见 [docs/design/](docs/design/)（DN001–DN007）。
+默认宿主是 Claude Code 桌面 app。设计见 [docs/design/](docs/design/)（DN001–DN008）。
 
 本文件对所有任务生效。专题规则在第 2 节列出的文档里，开始某类工作前先读对应文档。规则变化时在规则
 所在位置修改，并记入 [docs/development/instructions-log.md](docs/development/instructions-log.md)；
