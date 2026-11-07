@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from tsw import __version__, lease
-from tsw.config import EffectiveConfig, load_config
+from tsw.config import EffectiveConfig, lease_minutes, load_config
 from tsw.errors import EXIT_CODES, ErrorCode, TswError
 from tsw.events import utc_now
 from tsw.home import Home, init_home, open_home, record_product_repo, resolve_home
@@ -29,6 +29,7 @@ from tsw.importer import renumber
 from tsw.importer.orchestrator_agent import run_import as run_import_orchestrator_agent
 from tsw.ledger import Ledger
 from tsw.machine.base import REGISTRY, Caller
+from tsw.machine.config_tools import CONFIG_TOOLS
 from tsw.machine.runner import run_tool
 from tsw.review.run import run_round
 from tsw.storage.fs import FsStorage, restore
@@ -179,12 +180,23 @@ def _cmd_lease_show(args: argparse.Namespace) -> dict[str, Any]:
     return {"lease": {**row, "expired": lease.is_expired(row, utc_now())}}
 
 
+def _lease_ledger(args: argparse.Namespace) -> tuple[Ledger, EffectiveConfig]:
+    """Lease commands work while the configuration is invalid: repairing it with
+    ``config_change`` needs the lease (DN003 §7.1)."""
+    home = _home(args)
+    config = load_config(home)
+    machine = getattr(args, "machine", None)
+    return (
+        _ledger_for(home, config, machine) if config.valid else Ledger(home, machine=machine)
+    ), config
+
+
 def _cmd_lease_acquire(args: argparse.Namespace) -> dict[str, Any]:
-    ledger, config = _writer(args)
+    ledger, config = _lease_ledger(args)
     command = lease.acquire(
         args.session,
         machine=args.machine,
-        lease_minutes=int(config.get("scheduling.lease_minutes")),
+        lease_minutes=lease_minutes(config),
         actor={"role": "orchestrator", "session_id": args.session},
         command_id=args.command_id,
     )
@@ -193,7 +205,7 @@ def _cmd_lease_acquire(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _cmd_lease_release(args: argparse.Namespace) -> dict[str, Any]:
-    ledger, _ = _writer(args)
+    ledger, _ = _lease_ledger(args)
     ledger.commit(
         lease.release(
             args.session,
@@ -205,7 +217,7 @@ def _cmd_lease_release(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _cmd_lease_takeover(args: argparse.Namespace) -> dict[str, Any]:
-    ledger, config = _writer(args)
+    ledger, config = _lease_ledger(args)
     try:
         source = json.loads(args.user_source)
     except json.JSONDecodeError as exc:
@@ -217,7 +229,7 @@ def _cmd_lease_takeover(args: argparse.Namespace) -> dict[str, Any]:
         machine=args.machine,
         from_session=args.from_session,
         user_source=source,  # pyright: ignore[reportUnknownArgumentType]
-        lease_minutes=int(config.get("scheduling.lease_minutes")),
+        lease_minutes=lease_minutes(config),
         from_machine=args.from_machine,
         actor={"role": "orchestrator", "session_id": args.session},
         command_id=args.command_id,
@@ -246,7 +258,11 @@ def _cmd_tool_run(args: argparse.Namespace) -> dict[str, Any]:
         raise TswError(ErrorCode.REJECTED, "--input 必须是 JSON 对象") from exc
     if not isinstance(payload, dict):
         raise TswError(ErrorCode.REJECTED, "--input 必须是 JSON 对象")
-    ledger, config = _writer(args)
+    if args.name in CONFIG_TOOLS:
+        # Configuration tools repair an invalid configuration; they validate their own result.
+        ledger, config = _lease_ledger(args)
+    else:
+        ledger, config = _writer(args)
     caller = Caller(role=args.role, session_id=args.session, machine=args.machine)
     return run_tool(ledger, config, caller, args.name, payload)  # pyright: ignore[reportUnknownArgumentType]
 

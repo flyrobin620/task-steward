@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from tsw.commands import CommitContext
+from tsw.confedit import apply_pending
 from tsw.host.status import write_status
 from tsw.projection import get_meta, projected_tail, set_meta
 from tsw.tasks import write_index
@@ -19,6 +20,8 @@ DerivedView = Callable[[CommitContext], None]
 DERIVED_VIEWS: tuple[tuple[str, DerivedView], ...] = (
     ("todo_index", write_index),
     ("status_page", write_status),
+    # Not generated from the projection: finishes a recorded configuration change (DN003 §7).
+    ("config_file", apply_pending),
 )
 
 

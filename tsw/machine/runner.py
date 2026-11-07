@@ -11,6 +11,7 @@ from tsw.config import EffectiveConfig
 from tsw.events import EventDraft
 from tsw.lease import parse_time
 from tsw.ledger import Ledger
+from tsw.machine import config_tools as _config_tools
 from tsw.machine import orchestrator as _orchestrator
 from tsw.machine import worker as _worker
 from tsw.machine.base import REGISTRY, Caller, Tool, ToolEnv, check_caller, check_version
@@ -18,7 +19,7 @@ from tsw.machine.guards import dependency_problems, invalidated, topological
 from tsw.machine.model import OCCUPYING, loads, next_item_id
 
 # Importing the tool modules registers their tools.
-TOOL_MODULES = (_orchestrator, _worker)
+TOOL_MODULES = (_orchestrator, _worker, _config_tools)
 
 SYNC = Tool(
     "sync", ("orchestrator", "system"), lambda inp, env: sync_command(env), description="系统规则"

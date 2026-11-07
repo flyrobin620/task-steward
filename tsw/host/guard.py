@@ -18,7 +18,7 @@ from typing import Any
 
 from tsw import lease
 from tsw.commands import Command, CommitContext
-from tsw.config import EffectiveConfig, load_config, resolve_repository
+from tsw.config import EffectiveConfig, lease_minutes, load_config, resolve_repository
 from tsw.events import EventDraft
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
@@ -94,6 +94,12 @@ def owned_top(home: Home, path: Path) -> str | None:
     return next((top for top in TSW_OWNED if within(path, home.root / top)), None)
 
 
+def owned_reason(top: str) -> str:
+    if top == "config":
+        return "数据目录的 config/ 只由 tsw 写入：主会话用 config_change / config_revert 修改配置"
+    return f"数据目录的 {top}/ 只由 tsw 写入，请使用 tsw 工具"
+
+
 def tsw_owned_path(home: Home, path: Path) -> bool:
     return owned_top(home, path) is not None
 
@@ -147,7 +153,7 @@ def bash_problem(
     for path in facts.writes:
         top = owned_top(home, path)
         if top is not None:
-            return f"数据目录的 {top}/ 只由 tsw 写入，请使用 tsw 工具"
+            return owned_reason(top)
         if writable_roots is not None and not any(within(path, r) for r in writable_roots):
             return f"只能写入本任务的可写路径（{path} 不在其中）"
     home_text = str(home.root).replace("\\", "/").lower()
@@ -155,7 +161,7 @@ def bash_problem(
     if home_text in normalized and _WRITE_WORDS.search(command):
         for top in TSW_OWNED:
             if f"{home_text}/{top}" in normalized:
-                return f"数据目录的 {top}/ 只由 tsw 写入，请使用 tsw 工具"
+                return owned_reason(top)
     for program in facts.programs:
         cli = tsw_cli_command(program)
         if cli is not None and cli not in HOST_CLI_COMMANDS:
@@ -264,21 +270,26 @@ class Guard:
                 '并用 mcp__ccd_session_mgmt__send_message(session_id="parent") 唤醒主会话。',
             )
         lines = [f"你是 TaskSteward 主会话（数据目录 {self.home.root}）。"]
-        if not self.config.valid:
-            lines.append("配置无效，所有写工具都会被拒绝：先运行 tsw config validate。")
-        else:
-            try:
-                self.ledger.commit(
-                    lease.acquire(
-                        str(who.session_id),
-                        machine=self.machine,
-                        lease_minutes=int(self.config.get("scheduling.lease_minutes")),
-                        actor={"role": "orchestrator", "session_id": who.session_id},
-                    )
+        try:
+            # Taken even with an invalid configuration: config_change needs the lease to repair
+            # it (DN003 §7.1).
+            self.ledger.commit(
+                lease.acquire(
+                    str(who.session_id),
+                    machine=self.machine,
+                    lease_minutes=lease_minutes(self.config),
+                    actor={"role": "orchestrator", "session_id": who.session_id},
                 )
-                lines.append("已持有调度租约。")
-            except Exception as exc:  # another orchestrator holds it: read-only
-                lines.append(f"未取得调度租约，本会话只读运行（{exc}）。")
+            )
+            lines.append("已持有调度租约。")
+        except Exception as exc:  # another orchestrator holds it: read-only
+            lines.append(f"未取得调度租约，本会话只读运行（{exc}）。")
+        if not self.config.valid:
+            lines.append(
+                "配置无效，除 config_change / config_revert 外的写工具都会被拒绝："
+                "用 config_show 查看问题，再用 config_change 修复。"
+            )
+        else:
             with self.ledger.view() as conn:
                 items = inbox_mod.attention(conn, self.ledger.storage, self.config)
             summary = "，".join(
@@ -310,11 +321,9 @@ class Guard:
             target = Path(str(tool_input.get(WRITE_TOOLS[tool]) or ""))
             if not target.is_absolute():
                 target = self.cwd / target
-            if tsw_owned_path(self.home, target):
-                return deny(
-                    "PreToolUse",
-                    "数据目录中的账本、任务书、报告与视图只由 tsw 写入，请使用 tsw 工具",
-                )
+            top = owned_top(self.home, target)
+            if top is not None:
+                return deny("PreToolUse", owned_reason(top))
             if who.role == "worker" and not any(
                 within(target, root) for root in who.writable_roots
             ):

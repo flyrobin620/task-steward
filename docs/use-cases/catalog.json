@@ -175,6 +175,32 @@
       }
     },
     {
+      "id": "UC-STORE-003",
+      "title": "主会话经 MCP 运行数据目录维护",
+      "actor": "主会话 / tsw",
+      "acceptance": "持有租约的主会话可以 home_backup（目标须在数据目录之外，记 maintenance.performed）、ledger_audit（只读）、ledger_rebuild（先审计，审计有问题时拒绝）与 import_orchestrator_agent 演练；正式导入须附用户原话并有同参数、在上次导入之后的演练；restore、quiesce / resume-writes、host render 不提供 MCP 入口",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "mcp:home_backup",
+        "mcp:ledger_audit",
+        "mcp:ledger_rebuild",
+        "mcp:import_orchestrator_agent"
+      ],
+      "component": "storage",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "unit": "规则都依赖数据目录与账本，在 component 层验证",
+        "conformance": "不经过插件接口",
+        "live": "不依赖宿主行为"
+      }
+    },
+    {
       "id": "UC-STORE-002",
       "title": "存储后端一致性（P4）",
       "actor": "插件实现者",
@@ -217,6 +243,32 @@
         "component": "配置只读取文件，unit 已在临时数据目录中覆盖",
         "conformance": "不经过插件接口",
         "live": "不依赖宿主与模型"
+      }
+    },
+    {
+      "id": "UC-CONFIG-002",
+      "title": "主会话经 tsw 工具修改与回退统一配置",
+      "actor": "主会话 / tsw",
+      "acceptance": "config_change 应用 set / unset 后按 DN003 §4 校验整份有效配置，无效时以 config_invalid 拒绝且不写文件、不记账；改动权限类键（扩大或收窄）须附绑定到修改前文件摘要的用户原话，否则以 g_user 拒绝；通过时先记 config.changed（前后全文、改动的键、理由、用户来源）再写文件，写入中断由下一次提交补写且不覆盖手改；config_revert 恢复某次修改之前的内容并同样记账；worker 与其他会话不能调用；hooks 拒绝直接编辑 config/ 并指向 config_change；当前配置无效时仍可经工具修复",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "tool:config_change",
+        "tool:config_revert",
+        "mcp:config_show",
+        "mcp:config_history"
+      ],
+      "component": "config",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不依赖宿主行为：MCP 与 hooks 经 surface 层的独立进程验证"
       }
     },
     {

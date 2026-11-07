@@ -413,10 +413,16 @@ def _read_layer(path: Path, problems: list[str]) -> dict[str, Any]:
     return raw
 
 
-def load_config(home: Home) -> EffectiveConfig:
+def load_config(home: Home, *, main_layer: dict[str, Any] | None = None) -> EffectiveConfig:
+    """The effective configuration; ``main_layer`` replaces the data directory's file (used to
+    validate a proposed change before it is written)."""
     problems: list[str] = []
     warnings: list[str] = []
-    main = _read_layer(home.path(CONFIG_FILE), problems)
+    main = (
+        copy.deepcopy(main_layer)
+        if main_layer is not None
+        else _read_layer(home.path(CONFIG_FILE), problems)
+    )
     local = _read_layer(home.path(LOCAL_FILE), problems)
 
     for dotted in REMOVED_WITH_WARNING:
@@ -586,6 +592,13 @@ def _validate_paths(values: dict[str, Any], problems: list[str], home: Home) -> 
     for dotted, value in templates:
         if isinstance(value, str) and not resolve_path(home, value).is_file():
             problems.append(f"{dotted}: 文件不存在 {value}")
+
+
+def lease_minutes(config: EffectiveConfig) -> int:
+    """The lease length; the default while the configuration is invalid, so that an orchestrator
+    can still hold the lease it needs to repair the configuration (DN003 §7.1)."""
+    source = config.values if config.valid else DEFAULTS
+    return int(get(source, "scheduling.lease_minutes"))
 
 
 def resolve_path(home: Home, value: str) -> Path:
