@@ -1,0 +1,14 @@
+{
+  "id": "reviewer",
+  "title": "评审器：固定样例上的全量评审与增量评审，核对只读与输出 schema",
+  "useCases": ["UC-REVIEW-001", "UC-REVIEW-002"],
+  "reviewers": ["codex-app-server", "claude-headless"],
+  "modelCalls": {"perReviewer": 2, "max": 4},
+  "operator": "无人值守：python tools/live.py reviewer",
+  "checks": [
+    "R1 每种评审器：第 1 轮全量评审（base..HEAD）完成，结果满足输出契约（verdict、summary、reviewed_head、findings）",
+    "R2 每种评审器：iterate 后的第 2 轮为增量评审（续用第 1 轮线程，范围为上一轮 HEAD..新 HEAD）且完成",
+    "R3 只读：每轮评审前后，执行目录（含 .git）的文件清单与内容摘要不变",
+    "R4 清理：本次创建的评审线程全部已归档并读回确认"
+  ]
+}
