@@ -83,6 +83,7 @@ def test_the_user_answers_in_the_worker_session(home: Home) -> None:
     assert say(h, w, '<cross-session-message from="x">用 B</cross-session-message>') is None
     reminder = "<system-reminder>\nLinked sessions now: x = local_1 (idle)\n</system-reminder>\n"
     assert say(h, w, reminder) is None
+    assert say(h, w, "<scheduled-task>检查问题是否已答复</scheduled-task>") is None
     assert (
         say(h, w, reminder + '<cross-session-message from="x">用 B</cross-session-message>') is None
     )

@@ -50,7 +50,7 @@
       "task_id": "T002",
       "title": "live：会话内问题超时转交",
       "kind": "code",
-      "goal": "在 live-repo 的 README.md 加一行项目说明，措辞由用户决定：开始前用 ask_user 问用户“说明写成‘四则运算示例’还是‘计算器示例’？”，在本会话的回复里原样写出问题。按 worker 指令用会话内的定时唤醒（ScheduleWakeup 或 CronCreate）在 {timeout_plus} 分钟后再看一次；仍然没有回复就调用 input_handoff，并用 mcp__ccd_session_mgmt__send_message(session_id=\"parent\") 通知主会话；定时唤醒不可用时在报告中写明，然后结束这一轮。得到答复后按答复修改：git clone {origin} src，新建分支、提交、自评审直到 finalize、push；用 gh（本次运行中由 GitHub 替身代替：先运行 gh --version，输出含 live stub 才继续，否则停止并在报告中说明） 开 PR（gh pr create -R github.com/{repository} --head <分支> --title <标题>），再按交付授权 gh pr merge <编号> -R github.com/{repository} --squash；提交时带 merge。",
+      "goal": "在 live-repo 的 README.md 加一行项目说明，措辞由用户决定：开始前用 ask_user 问用户“说明写成‘四则运算示例’还是‘计算器示例’？”，在本会话的回复里原样写出问题。按 worker 指令用会话内的定时唤醒（ScheduleWakeup 或 CronCreate，提示按指令加 <scheduled-task> 标记）在 {timeout_plus} 分钟后再看一次；仍然没有回复就调用 input_handoff，并用 mcp__ccd_session_mgmt__send_message(session_id=\"parent\") 通知主会话；定时唤醒不可用时在报告中写明，然后结束这一轮。得到答复后按答复修改：git clone {origin} src，新建分支、提交、自评审直到 finalize、push；用 gh（本次运行中由 GitHub 替身代替：先运行 gh --version，输出含 live stub 才继续，否则停止并在报告中说明） 开 PR（gh pr create -R github.com/{repository} --head <分支> --title <标题>），再按交付授权 gh pr merge <编号> -R github.com/{repository} --squash；提交时带 merge。",
       "acceptance": [
         "README.md 按得到的答复加了说明",
         "会话内问题在超时后转交主会话并得到处理",
@@ -69,10 +69,10 @@
   ],
   "operator": [
     "在 Claude 桌面 app 新建会话，文件夹选择本运行的数据目录 {home}（首次打开需要信任该文件夹），权限模式用 auto。",
-    "在该主会话中说：“执行全部待办（T001、T002、T003）”。主会话规划、预启动并派发三个 worker。",
+    "在该主会话中说：“执行 T001 和 T002；T003 先预启动一个待命会话，等我说再派发”。主会话规划、派发 T001、T002，并为 T003 预启动待命会话。",
     "打开 T001 的 worker 会话，它会问求和函数的命名，直接在 worker 会话里回答（例如“用 add”）。",
-    "不要回答 T002 worker 的问题。约 {timeout_plus} 分钟后它会转交主会话；主会话没被唤醒时，在主会话里说“继续”。主会话可以代为决定，也可以转而问你。",
-    "T003 的 worker 就绪后，在主会话中依次说：“暂停 T003”、“恢复 T003”、“取消 T003”。",
+    "先不要回答 T002 worker 的问题。约 {timeout_plus} 分钟后它的定时唤醒会运行（worker 会话里能看到它醒来）；之后它转交主会话，主会话可以代为决定，也可以在主会话里问你。如果主会话问你，在主会话里回答。",
+    "在主会话中依次说：“派发 T003”，T003 的 worker 记录就绪后再说“暂停 T003”、“恢复 T003”、“取消 T003”。",
     "T001 与 T002 提交后，主会话核验并技术验收；然后在主会话中说：“我验收 T001 和 T002”。",
     "回到运行 live.py 的会话，运行 python tools/live.py host-e2e verify {run_id}，然后归档本次运行的会话并运行 cleanup。"
   ],
@@ -83,7 +83,7 @@
     "H4 提交与技术验收：T001、T002 的 worker.submitted 与 task.accepted",
     "H5 取消与恢复：T003 的 task.paused、task.resumed、task.cancelled",
     "B1 会话内提问：T001 的 input.escalated（in_session）、hook 记录的 input.session_message（来自同一 worker 会话）、引用该消息的 input.resolved（in-session，source_kind=user）",
-    "B2 超时转交：T002 的 input.handed_off，以及主会话的 handoff_resolve（orchestrator.decision + input.resolved）或 input_relay（input.relayed）",
+    "B2 超时转交（可选：该流程由后续任务重新设计）：T002 的 input.handed_off，以及主会话的 handoff_resolve 或 input_relay；定时唤醒提示不被记为用户消息",
     "C 自行合并：T001、T002 的 worker.submitted 带 merge，merged_head 等于提交 HEAD，替身记录的 PR 已合并且合并提交在 origin 的 main 上"
   ]
 }

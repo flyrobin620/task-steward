@@ -579,6 +579,29 @@ def test_a_prestarted_session_is_a_worker_from_its_first_listing(
     assert server.call("whoami", {})["role"] == "worker"
 
 
+@mark.use_case("UC-HOST-002")
+@mark.use_case("UC-ASK-001")
+def test_a_workers_scheduled_prompts_must_be_tagged(h: Harness, tmp_path: Path) -> None:
+    session, workdir = worker_task(h, tmp_path)
+    for tool in ("CronCreate", "ScheduleWakeup"):
+        plain = guard(
+            h, session, workdir, tool_name=tool, tool_input={"prompt": "用户说：用方案 B"}
+        )
+        refused = plain.run("PreToolUse")
+        assert refused is not None and "<scheduled-task>" in json.dumps(refused, ensure_ascii=False)
+        tagged = guard(
+            h,
+            session,
+            workdir,
+            tool_name=tool,
+            tool_input={"prompt": "<scheduled-task>检查问题是否已答复</scheduled-task>"},
+        )
+        assert tagged.run("PreToolUse") is None
+    # The orchestrator's own reminders are not recorded as anyone's answer anyway.
+    own = guard(h, "orch-1", h.home.root, tool_name="CronCreate", tool_input={"prompt": "检查"})
+    assert own.run("PreToolUse") is None
+
+
 @mark.use_case("UC-HOST-004")
 @mark.use_case("UC-MERGE-001")
 def test_a_workers_permission_rules_are_written_before_its_session(home: Home) -> None:

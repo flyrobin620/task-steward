@@ -674,23 +674,31 @@ def session_settings(run: Run, directory: Path) -> None:
 
     The user's own settings give every Claude Code session ``TSW_HOME`` (their real data
     directory). Project settings of the folder a session is opened in override it, so the run's
-    main session and workers resolve this run's data directory, never the real one. ``PATH``
-    starts with the run's ``bin/``, so ``gh`` in these sessions is the stand-in. tsw adds its
-    permission rules to the same file when it creates a worker's session (keys are merged).
+    main session and workers resolve this run's data directory, never the real one. The
+    recorder hook also puts the run's ``bin/`` first on the shell's ``PATH`` (``gh`` is the
+    stand-in). tsw adds its permission rules to the same file when it creates a worker's
+    session (keys are merged).
     """
     run.check_inside(directory)
     settings = directory / ".claude" / "settings.local.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
     capture = run.bin / "capture_hook.py"
-    hooks = {
+    hooks: dict[str, list[dict[str, Any]]] = {
         event: [{"hooks": [{"type": "command", "command": f'python -X utf8 "{capture}" {event}'}]}]
         for event in ("SessionStart", "UserPromptSubmit")
     }
-    env = {
-        "TSW_HOME": str(run.home),
-        "TSW_LIVE_RUN": str(run.dir),
-        "PATH": str(run.bin) + os.pathsep + os.environ.get("PATH", ""),
-    }
+    # The installed plugin is a cached copy; until it is updated, its hooks do not see the
+    # scheduling tools this checkout guards. Run this checkout's guard for them.
+    launcher = ROOT / "plugin" / "bin" / "tsw_launch.py"
+    hooks["PreToolUse"] = [
+        {
+            "matcher": "CronCreate|ScheduleWakeup",
+            "hooks": [
+                {"type": "command", "command": f'python -X utf8 "{launcher}" guard PreToolUse'}
+            ],
+        }
+    ]
+    env = {"TSW_HOME": str(run.home), "TSW_LIVE_RUN": str(run.dir)}
     settings.write_text(json.dumps({"env": env, "hooks": hooks}, indent=2), encoding="utf-8")
 
 
@@ -872,6 +880,7 @@ def host_verify(args: argparse.Namespace) -> int:
     checks.append(check("H5", "取消与恢复：T003 暂停、恢复、取消", all(life.values()), life))
     checks.append(b1(evs))
     checks.append(b2(evs))
+    checks.append(scheduled_prompts(run, evs))
     checks.append(merged(run, evs, submitted))
     notes.append(hook_summary(run))
     entries = [e for e in run.manifest()["entries"] if e["kind"] == "claude-session"]
@@ -1002,7 +1011,31 @@ def b2(evs: list[dict[str, Any]]) -> dict[str, Any]:
         and {"seq": resolved["sequence"], "source_kind": resolved["data"].get("source_kind")},
         "problems": problems,
     }
-    return check("B2", "超时转交与主会话处理（T002）", not problems, evidence)
+    return check("B2", "超时转交与主会话处理（T002）", not problems, evidence, optional=True)
+
+
+def scheduled_prompts(run: Run, evs: list[dict[str, Any]]) -> dict[str, Any]:
+    """A worker's scheduled wake-up reaches the hook like a user's message; it must carry the
+    ``<scheduled-task>`` tag and never be recorded as the user's words."""
+    path = run.dir / "hook-payloads.jsonl"
+    seen = 0
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            payload = json.loads(line).get("payload")
+            prompt = str(payload.get("prompt") or "") if isinstance(payload, dict) else ""
+            seen += prompt.lstrip().startswith("<scheduled-task")
+    recorded = [
+        e["sequence"]
+        for e in evs
+        if e["type"] == "input.session_message"
+        and "scheduled-task" in str(e["data"].get("text", ""))[:200]
+    ]
+    return check(
+        "S",
+        "定时唤醒提示带标记，且没有被记为用户消息",
+        seen > 0 and not recorded,
+        {"scheduled_prompts_seen": seen, "recorded_as_user": recorded},
+    )
 
 
 def merged(

@@ -36,6 +36,9 @@ WRITE_TOOLS = {
     "NotebookEdit": "notebook_path",
 }
 START_SESSION = "mcp__ccd_session__start_session"
+# The host's session-scheduling tools, and the tag every scheduled prompt of a worker carries.
+SCHEDULERS = ("CronCreate", "ScheduleWakeup")
+SCHEDULED_TAG = "<scheduled-task"
 TSW_OWNED = ("ledger", "runs", "todo", "config", "outbox", "legacy", "views", "cache", "locks")
 _HASH = re.compile(
     r"\b(sha\d*sum|md5sum|shasum|certutil\s+-hashfile|get-filehash)\b", re.IGNORECASE
@@ -518,6 +521,18 @@ class Guard:
                 writable_roots=who.writable_roots if who.role == "worker" else None,
             )
             return None if problem is None else deny("PreToolUse", problem)
+        if tool in SCHEDULERS and who.role == "worker":
+            # A scheduled prompt reaches the session like a user's message. Untagged, the hook
+            # would record it as the user's words: a worker could answer its own question
+            # (found by the live host-e2e scenario, DN006 §8.1a).
+            prompt = str(tool_input.get("prompt") or "")
+            if not prompt.lstrip().startswith(SCHEDULED_TAG):
+                return deny(
+                    "PreToolUse",
+                    f"worker 的定时提示必须以 {SCHEDULED_TAG}> 开头（以 </scheduled-task> 结束），"
+                    "这样它不会被记录为用户消息",
+                )
+            return None
         if tool == START_SESSION and who.role == "orchestrator":
             name = str(tool_input.get("name") or "")
             with self.ledger.view() as conn:
