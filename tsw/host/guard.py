@@ -397,7 +397,8 @@ class Guard:
                 return context(
                     "SessionStart",
                     f"这个会话正在为 TaskSteward 任务 {who.task_id}（attempt {who.attempt}）创建，"
-                    "主会话随后会完成绑定。先调用 whoami：返回 role 为 worker 后再开始工作。",
+                    "主会话随后会完成绑定。先调用 whoami：返回 role 为 worker 后再开始工作；"
+                    "仍未绑定（pending）时结束这一轮，主会话完成绑定后会发消息通知你。",
                 )
             if who.pending and event == "PreToolUse":
                 tool = str(self.payload.get("tool_name") or "")

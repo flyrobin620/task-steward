@@ -202,6 +202,8 @@ class HostIntegration(Protocol):
 | 主会话 | 数据目录的 `.claude/settings.json`（`render_instructions` 一并生成） | tsw MCP 工具；`start_session`、`send_message` / `SendMessage`、`stop_session`、`get_session`、`list_sessions`、`archive_session` | PreToolUse 对 `start_session` 核对落账的会话名与代次；tsw 工具按角色、守卫与用户来源校验 |
 | worker | 执行目录的 `.claude/settings.local.json`（执行目录在数据目录 `work/` 之下时，由 `attempt_start` 在会话创建前写入，已有内容按键合并；`work/` 之外的目录（如仓库 worktree）不写） | tsw MCP 工具；`send_message` / `SendMessage`；`gh pr merge` | PreToolUse 核对合并授权（开发任务且 `delivery.merge`）与目标仓库；hook 的拒绝优先于允许规则 |
 
+`start_session` 与 `send_message` 等会话工具由 app 自己的分类器把关，不受 `permissions.allow` 约束（live 中允许规则已生效，带“worker 自行合并”的任务书正文仍被拦截）。用户 2026-11-07 决定：创建 worker 会话时 `prompt` 只写短指令（角色、attempt、任务书路径），`background` 只写任务标题、仓库与执行目录，任务书正文（含交付与合并方式）由 worker 从 `runs/` 读取；合并的把关点因此在 worker 实际合并时，由上表的允许规则与 hooks 守卫承担，而不是在创建会话时由 app 分类器判断。会话可能在 `attempt_reconcile` 之前开始第一轮（`whoami` 仍为 pending），主会话绑定后发消息通知它。
+
 worker 能写自己的执行目录，所以 hooks 拒绝任何会话写入执行目录与数据目录中的 `.claude/settings*.json`（编辑工具与可识别的 shell 写法），避免会话给自己追加权限。允许规则只放行动作本身；动作的授权仍由账本、配置与用户来源决定，主会话代答也仍然不是用户批准（§8.1b）。
 
 ## 7. P2 会话适配器（session）
@@ -270,7 +272,7 @@ interactive 动作映射（承载 worker 的实现）：
 | 动作 | `claude-app` | `codex-app-server`（暂不承载 worker，B7 解决后启用） | `copilot-app` | `remote-hub` |
 | --- | --- | --- | --- | --- |
 | create | `start_session`（fresh、cwd、use_worktree=false；预启动时 prompt 为待命说明） | `thread/start`（写入关联标记） | `create_session`（name = 会话名） | 创建 native session（intentId） |
-| deliver_brief | `SendMessage`（任何 turn 都可以；直接启动时任务书可放在 prompt 中，两阶段合一） | `turn/start` | `send_session_message` | 会话消息 API |
+| deliver_brief | `SendMessage`（任何 turn 都可以；直接启动时由 `start_session` 的短指令 prompt 指向任务书路径，两阶段合一；正文不放进 prompt，见 §6.3 权限规则） | `turn/start` | `send_session_message` | 会话消息 API |
 | send | `SendMessage` | `turn/start` | `send_session_message` | 会话消息 API |
 | stop | `stop_session` | 中断当前 turn（interrupt） | 会话停止 | 会话中断 |
 | observe | `get_session` | `thread/read` | `get_session` / `get_sessions_status` | 会话状态 / 事件 |
