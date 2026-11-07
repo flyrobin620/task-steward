@@ -780,6 +780,11 @@ def first(
     return None
 
 
+def last(evs: list[dict[str, Any]], type_: str, task: str) -> dict[str, Any] | None:
+    found = [e for e in evs if e["type"] == type_ and e["task_id"] == task]
+    return found[-1] if found else None
+
+
 def seqs(evs: Iterable[dict[str, Any]], kind: str, task: str | None = None) -> list[int]:
     return [
         e["sequence"] for e in evs if e["type"] == kind and (task is None or e["task_id"] == task)
@@ -853,7 +858,7 @@ def host_verify(args: argparse.Namespace) -> int:
             reviews,
         )
     )
-    submitted = {t: first(evs, "worker.submitted", t) for t in ("T001", "T002")}
+    submitted = {t: last(evs, "worker.submitted", t) for t in ("T001", "T002")}
     accepted = {t: seqs(evs, "task.accepted", t) for t in ("T001", "T002")}
     checks.append(
         check(
@@ -1050,8 +1055,9 @@ def merged(
         if sub is None:
             problems.append(f"{t} 没有提交")
             continue
-        merge = sub["data"].get("merge") or {}
-        head = sub["data"].get("head")
+        submission = sub["data"].get("submission") or sub["data"]
+        merge = submission.get("merge") or {}
+        head = submission.get("head")
         if not merge:
             problems.append(f"{t} 提交没有 merge 记录")
             continue
