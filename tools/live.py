@@ -661,6 +661,7 @@ def install_gh(run: Run) -> Path:
     run.bin.mkdir()
     gh = run.bin / "gh"
     shutil.copyfile(LIVE / "gh_stub.py", gh)
+    shutil.copyfile(LIVE / "capture_hook.py", run.bin / "capture_hook.py")
     (run.bin / "gh.cmd").write_text(f'@python -X utf8 "{gh}" %*\r\n', encoding="utf-8")
     (run.dir / "gh-state.json").write_text(
         json.dumps({"repository": None, "pulls": []}) + "\n", encoding="utf-8"
@@ -678,8 +679,16 @@ def session_settings(run: Run, directory: Path) -> None:
     run.check_inside(directory)
     settings = directory / ".claude" / "settings.local.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
+    capture = run.bin / "capture_hook.py"
+    hooks = {
+        event: [{"hooks": [{"type": "command", "command": f'python -X utf8 "{capture}" {event}'}]}]
+        for event in ("SessionStart", "UserPromptSubmit")
+    }
     settings.write_text(
-        json.dumps({"env": {"TSW_HOME": str(run.home), "TSW_LIVE_RUN": str(run.dir)}}, indent=2),
+        json.dumps(
+            {"env": {"TSW_HOME": str(run.home), "TSW_LIVE_RUN": str(run.dir)}, "hooks": hooks},
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
@@ -862,6 +871,7 @@ def host_verify(args: argparse.Namespace) -> int:
     checks.append(b1(evs))
     checks.append(b2(evs))
     checks.append(merged(run, evs, submitted))
+    notes.append(hook_summary(run))
     entries = [e for e in run.manifest()["entries"] if e["kind"] == "claude-session"]
     notes.append(
         "Claude 会话（清理时逐个归档并用 get_session 读回）："
@@ -871,6 +881,26 @@ def host_verify(args: argparse.Namespace) -> int:
         "GitHub（push 目标、PR、合并）由运行目录内的 origin.git 与 gh 替身模拟，相关证据为模拟证据"
     )
     return 0 if write_results(run, "host-e2e", checks, notes) else 1
+
+
+def hook_summary(run: Run) -> str:
+    """What the recorded hook payloads show (the prompts' leading tags, never their text)."""
+    path = run.dir / "hook-payloads.jsonl"
+    if not path.is_file():
+        return "没有记录到 hook payload（capture_hook 未运行）"
+    counts: dict[str, int] = {}
+    leading: dict[str, int] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        event = str(record.get("event"))
+        counts[event] = counts.get(event, 0) + 1
+        payload = record.get("payload")
+        prompt = str(payload.get("prompt") or "") if isinstance(payload, dict) else ""
+        if event == "UserPromptSubmit":
+            text = prompt.lstrip()
+            tag = text[: text.find(">") + 1] if text.startswith("<") else "（用户文字）"
+            leading[tag] = leading.get(tag, 0) + 1
+    return f"hook payload：{counts}；UserPromptSubmit 的开头：{leading}"
 
 
 def b1(evs: list[dict[str, Any]]) -> dict[str, Any]:
