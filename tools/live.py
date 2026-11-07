@@ -335,7 +335,11 @@ def scrub(text: str, run: Run) -> str:
 
 
 def write_results(run: Run, title: str, checks: list[dict[str, Any]], notes: list[str]) -> bool:
-    passed = all(c["status"] == "passed" for c in checks if not c.get("optional"))
+    passed = all(
+        c["status"] == "passed"
+        for c in checks
+        if not c.get("optional") and c["status"] != NOT_VERIFIED
+    )
     result = {"runId": run.id, "time": utc(), "passed": passed, "checks": checks, "notes": notes}
     text = json.dumps(result, ensure_ascii=False, indent=2)
     (run.dir / "result.json").write_text(text + "\n", encoding="utf-8")
@@ -344,13 +348,18 @@ def write_results(run: Run, title: str, checks: list[dict[str, Any]], notes: lis
         "",
         f"- 产品 HEAD：`{run.manifest()['productHead']}`"
         + ("（工作树有未提交改动）" if run.manifest().get("productDirty") else ""),
-        f"- 结果：{'通过' if passed else '未通过'}",
+        f"- 结果：{'通过' if passed else '未通过'}"
+        + ("（另有未验证项，见下表）" if any(c["status"] == NOT_VERIFIED for c in checks) else ""),
         "",
         "| 检查 | 结果 | 证据 |",
         "| --- | --- | --- |",
     ]
     for c in checks:
-        mark = str({"passed": "通过", "failed": "未通过"}.get(c["status"], c["status"]))
+        mark = str(
+            {"passed": "通过", "failed": "未通过", NOT_VERIFIED: "未验证（NOT VERIFIED）"}.get(
+                c["status"], c["status"]
+            )
+        )
         if c.get("optional"):
             mark += "（可选）"
         evidence = str(c.get("evidence", "")).replace("|", "\\|").replace("\n", " ")
@@ -397,7 +406,9 @@ def review_with(run: Run, reviewer: str, budget: int, notes: list[str]) -> list[
     if reviewer not in REVIEWERS:
         reason = f"本版本没有 {reviewer} 评审适配器（tsw.review.run.REVIEWERS），无法运行"
         notes.append(f"{reviewer}：未验证（NOT VERIFIED）——{reason}")
-        return [check(f"{prefix}0", f"{reviewer} 可运行", False, reason)]
+        return [
+            {**check(f"{prefix}0", f"{reviewer} 可运行", False, reason), "status": NOT_VERIFIED}
+        ]
     tsw(run, "init")
     base = init_repo(run, REPO_FILES)
     write_config(
@@ -540,6 +551,7 @@ def review_with(run: Run, reviewer: str, budget: int, notes: list[str]) -> list[
     return results
 
 
+NOT_VERIFIED = "not_verified"  # could not run at all: reported, never counted as passed
 RESULT_KEYS = {"verdict", "summary", "reviewed_head", "findings"}
 
 

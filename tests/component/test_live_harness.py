@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from tools import live
 
 STUB = Path(live.LIVE / "gh_stub.py")
@@ -155,3 +157,23 @@ def test_scenario_definitions_are_complete() -> None:
         assert spec["useCases"] and spec["checks"]
     host = live.scenario("host-e2e")
     assert {t["task_id"] for t in host["tasks"]} == {"T001", "T002", "T003"}
+
+
+def test_a_reviewer_that_cannot_run_is_reported_not_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    run = live.Run.create("reviewer")
+    checks = [
+        live.check("X1", "全量评审", True, "ok"),
+        {
+            **live.check("C0", "claude-headless 可运行", False, "未实现"),
+            "status": live.NOT_VERIFIED,
+        },
+    ]
+    assert live.write_results(run, "reviewer", checks, [])
+    evidence = (run.dir / "evidence.md").read_text(encoding="utf-8")
+    assert "未验证（NOT VERIFIED）" in evidence and "另有未验证项" in evidence
+    checks.append(live.check("X2", "增量评审", False, "失败"))
+    assert not live.write_results(run, "reviewer", checks, [])
