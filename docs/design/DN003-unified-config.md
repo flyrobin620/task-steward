@@ -7,7 +7,7 @@
 ## 1. 原则
 
 1. **一个文件**：所有可调参数都在数据目录（`TSW_HOME`，DN006 §9）的 `config/task-steward.json` 中，包括各角色的模型、effort、权限模式、评审器、调度、仓库、账号引用、通知和策略。不再分散在 `model-settings.json`、`repositories.json`、`.codex/config.toml`、平台参考文档等多处。
-2. **请求值与回执分开**：配置是“请求值”；子会话实际的模型、effort、权限以平台回执（`get_session`）为准，并记录在 attempt 事件中。拿不到回执时记为“未知”，不反复追问子会话。比较请求值与回执时先规范化模型 ID：平台可能追加上下文后缀（例如请求 `claude-sonnet-5-5`，回执为 `claude-sonnet-5-5[1m]`）。
+2. **请求值与回执分开**：配置是“请求值”；子会话实际的模型、effort、权限以平台回执（会话适配器的 `observe`）为准，并记录在 attempt 事件中。拿不到回执时记为“未知”，不反复追问子会话。比较请求值与回执时先规范化模型 ID：平台可能追加上下文后缀（例如请求 `claude-sonnet-5-5`，回执为 `claude-sonnet-5-5[1m]`）。
 3. **不含秘密**：凭据、令牌只按名称引用系统凭据库或 `.local` 中的认证目录，配置里不出现秘密值。
 4. **本机覆盖受限**：数据目录中的 `config/task-steward.local.json` 只能覆盖白名单中的本机路径类字段（§5），不能改模型、策略、交付授权。
 5. **显式生效**：修改配置后只影响新创建的会话和新调用；已有子会话不自动切换模型。需要切换时由主会话调用 `set_session_model` / `set_session_effort`，并记录事件。
@@ -155,8 +155,8 @@
 | `orchestrator.model` / `effort` | 模型 ID / `low`…`max` | 主会话由用户在宿主中打开，tsw 只校验并在启动时提示不一致，不能替主会话改模型 |
 | `orchestrator.permission_mode` | 中性取值 `ask` / `edits` / `auto` / `full` | 主会话的建议模式；子会话的模式不能高于它。由会话适配器映射为宿主名称（DN006 §7） |
 | `worker.session` | 会话适配器名 | 承载 worker 的会话适配器，须具备 `interactive`；delegated 适配器必须与主会话同一宿主 |
-| `worker.model` / `effort` | 同上 | 经会话适配器传给宿主（例如 Claude app 的 `start_session`） |
-| `worker.permission_mode` | 同上 | 经会话适配器映射后传给宿主（例如 Claude app 的 `start_session.permission_mode`）；高于主会话时 tsw 在派发前拒绝并提示 |
+| `worker.model` / `effort` | 同上 | 经会话适配器传给宿主（Claude Code 见 CC001 §3） |
+| `worker.permission_mode` | 同上 | 经会话适配器映射后传给宿主（Claude Code 见 CC006 §3）；高于主会话时 tsw 在派发前拒绝并提示 |
 | `worker.context` | `fresh` | 固定 fresh；`fork` 会把主会话长上下文带入，不允许 |
 | `worker.prompt_template` | 路径 | worker 启动指令模板，可用变量：`{task_id}` `{attempt}` `{brief_path}` `{writable_roots}` `{report_paths}` |
 | `worker.allow_in_task_subagents` | 布尔 | worker 能否在自己任务内使用 Agent 子代理 |
@@ -221,7 +221,7 @@
 
 - `max_workers`：活动任务上限（DN002 G-SLOT）。实际并发取它与平台可用额度的较小值。
 - `prestart.enabled` / `prestart.max_standby`：是否在用户 turn 中为已规划任务预启动 worker 会话，以及同时待命的会话上限（DN002 §5.6）。关闭预启动时，自动 turn 中变为可派发的任务都要等用户下一次发消息才能创建会话。
-- `wake.worker_message_parent`：reportable 事件发生时，worker 是否同时用 `mcp__ccd_session_mgmt__send_message(session_id="parent")` 给父会话发消息（DN001 §6.3）。
+- `wake.worker_message_parent`：reportable 事件发生时，worker 是否同时用宿主的父会话消息工具给父会话发消息（DN001 §6.3；Claude Code 见 CC001 §4）。
 - `sessions.archive_on_accept`：验收后是否归档子会话。默认 `false`，保留以便用户回看；归档时须有工具回执。
 
 ### 3.4 `repositories` 与 `accounts`
@@ -234,7 +234,7 @@
 
 | 字段 | 来源约定 | 执行点 |
 | --- | --- | --- |
-| `executable_hashing` | 用户 2026-10-30：默认不做可执行文件哈希 | worker PreToolUse hook 拦截 |
+| `executable_hashing` | 用户 2026-10-30：默认不做可执行文件哈希 | 宿主护栏（Claude Code 的 CC008 建议删除该规则，待用户决定） |
 | `email` | 邮件默认只存草稿 | 发送类 MCP 工具调用前的 hook |
 | `pr_default_state` | 以合并为目的的 PR 默认 ready-for-review | `pr_link` 登记校验 |
 | `user_acceptance_source_required` | 用户验收须有真实来源 | `user_accept` 门禁 |
