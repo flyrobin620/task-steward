@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="ec85343dc5d32c15187d7c1c5b1dc65775000195f7d05e66e2ced8ac117ffd0e">
+<meta name="tsw-source-sha256" content="27bae53bb3903fbb555a5f31f1e85431014a7e1fdb73b6ed80d257a150d17913">
 <title>DN008 校验原则：只为防错的确定性护栏</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -61,7 +61,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <ol><li><strong>护栏不用 LLM。</strong> 要防的正是 LLM 的错误，用 LLM 判断就是套娃。每条护栏都是脚本或程序中写死的规则（类似专家系统）：输入相同，结论相同，可以测试，可以解释。</li><li><strong>LLM 可以产出内容，但不做把关。</strong> 评审器给出意见（数据），是否完成了评审由确定性的门禁判断（G-SUBMIT）；主会话可以综合判断（DN006 §8.2），但它能做的决定由确定性的硬边界限定（不满足 G-USER、不能回答 <code>reserved</code> 的问题）。</li><li><strong>宿主的 LLM 保护不是 tsw 的护栏。</strong> 宿主自己的分类器（例如 Claude Code 的 auto 模式）判断一般意义上的危险与用户意图，tsw 利用它，但不把 tsw 特有的规则交给它，也不依赖它来满足本文。</li></ol>
 <h2 id="5-易用性优先block-list简单可-escape">5. 易用性优先：block list、简单、可 escape</h2>
 <p>在易用性与防错完备之间，<strong>取易用性</strong>：不频繁打断用户的任务，宁可漏掉一些没有预料到的错误。</p>
-<ol><li><strong>block list，不用 allow list。</strong> 护栏只列出已知会错的具体动作（例如“写进数据目录的 <code>ledger/</code>”“没有合并授权时运行合并命令”），其余一律放行。不写“只能做这些”式的规则。</li><li><strong>规则少而简单。</strong> 一条规则只看一两个明确的特征（工具名、目标路径前缀、命令的程序与子命令），不做完整的语法解析，不为规避写法扩展。规则越少，规则本身出错的机会越少。</li><li><strong>只管 tsw 特有的事。</strong> 宿主已经能判断的一般风险（删除文件、写到奇怪的地方、危险命令）留给宿主；tsw 只写宿主不知道的规则：数据目录中哪些是 tsw 自有、任务的交付授权是什么、会话是什么角色、流程走到了哪一步。</li><li><strong>每条规则都有 escape</strong>，合理的任务不需要等插件或系统更新才能继续：<ul><li><strong>正确路径</strong>：拒绝信息写出规则编号和正确做法（用哪个工具、补什么参数）；</li><li><strong>关闭规则</strong>：用户可以在统一配置中关闭某条规则（<code>guardrails.disabled</code>，列出规则编号；它是权限类键，修改须附用户原话，DN003 §7.2）。worker 遇到确实需要关闭的规则时，在自己的会话中问用户（DN006 §8.1a），由主会话按用户的话修改配置；</li><li><strong>用户自己做</strong>：用户总可以在会话外自己执行被拦下的动作。</li></ul></li><li><strong>事后核对兜底。</strong> block list 必然有漏网的错误；技术验收（G-ACCEPT）核对 diff、PR 与合并结果，账本摘要链发现意外修改。</li></ol>
+<ol><li><strong>block list，不用 allow list。</strong> 护栏只列出已知会错的具体动作（例如“写进数据目录的 <code>ledger/</code>”“没有合并授权时运行合并命令”），其余一律放行。不写“只能做这些”式的规则。</li><li><strong>规则少而简单。</strong> 一条规则只看一两个明确的特征（工具名、目标路径前缀、命令的程序与子命令），不做完整的语法解析，不为规避写法扩展。规则越少，规则本身出错的机会越少。</li><li><strong>只管 tsw 特有的事。</strong> 宿主已经能判断的一般风险（删除文件、写到奇怪的地方、危险命令）留给宿主；tsw 只写宿主不知道的规则：数据目录中哪些是 tsw 自有、任务的交付授权是什么、会话是什么角色、流程走到了哪一步。</li><li><strong>每条规则都有 escape</strong>，合理的任务不需要等插件或系统更新才能继续：<ul><li><strong>正确路径</strong>：拒绝信息写出规则编号和正确做法（用哪个工具、补什么参数）；</li><li><strong>就地放行</strong>：agent 被拦下、而动作确属任务需要时，在被拦下的会话中问用户；用户同意后，agent 用宿主记录的用户原话登记对这条规则的放行，范围只限本 attempt（worker 经 <code>ask_user</code> / <code>user_answer</code>，DN006 §8.1a）。不需要改全局配置，也不需要转交主会话；</li><li><strong>关闭规则</strong>：用户可以在统一配置中长期关闭某条规则（<code>guardrails.disabled</code>，列出规则编号；它是权限类键，由主会话按用户在主会话或其他渠道的原话修改，DN003 §7.2）；</li><li><strong>用户自己做</strong>：用户总可以在会话外自己执行被拦下的动作。</li></ul></li><li><strong>接受漏网。</strong> block list 必然漏掉一些错误，这是易用性优先的代价。之后能发现它们的有两类：确定性的（账本摘要链发现账本的意外修改；G-SUBMIT / G-ACCEPT 检查证据的结构、提交与登记是否一致），以及主会话验收时对证据内容的判断。后者是 LLM 的判断，不是护栏，也不保证发现所有问题。</li></ol>
 <h2 id="6-状态机与工具接口">6. 状态机与工具接口</h2>
 <p>状态机守卫（DN002 §4 的 G-*）、按角色列出的工具、<code>expected_version</code> 与 <code>command_id</code> 是 tsw 自己的接口语义，不是对宿主动作的拦截：一个迁移要么在状态机中定义，要么不存在。它们同样是确定性规则，适用 §4 与 §7，但不适用 §5 第 1 条的 block list 要求。它们的 escape 是状态机本身提供的迁移（暂停、取消、需求变更、用户决定）。</p>
 <h2 id="7-保留简化与删除的标准">7. 保留、简化与删除的标准</h2>

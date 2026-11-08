@@ -19,7 +19,7 @@
 | tsw 生成的允许规则 | 把“授权记录在 tsw 中、由 tsw 把关”的动作从分类器的判断中移出 | 否 | `permissions.allow`（§6） |
 | tsw hooks 的 block list | tsw 特有的已知错误（§3） | 否 | `PreToolUse` 调用 `tsw guard` |
 | tsw MCP 与状态机 | 角色、任务、租约、版本、G-*、用户来源（DN008 §6） | 否 | MCP server 按角色列出工具；`run_tool` 的检查与各工具的守卫 |
-| 事后核对 | 漏网的偏差 | 否 | G-ACCEPT 核对 diff、PR 与合并后的 CI；`ledger audit` |
+| 事后发现 | 漏网的偏差（不保证发现） | 部分 | 确定性：`ledger audit` 的摘要链、G-SUBMIT / G-ACCEPT 对证据结构、提交与登记的检查。LLM：主会话验收时核对 diff、PR 与合并后的 CI（证据内容的判断，不是护栏） |
 
 权限模式为 `bypassPermissions` 时没有分类器，一般风险没有宿主保护；这是用户自己的选择，tsw 不补上。
 
@@ -40,7 +40,12 @@
 | CC-B9 | 主会话 | `start_session` 的会话名不是已落账、代次有效的 attempt | 没有先 `attempt_start` 就建会话，或重复建会话 | 先 `attempt_start`，用返回的会话名 |
 | CC-B10 | 已撤销 / 待绑定 | 编辑类工具、Bash、`start_session` | 已被替换的会话继续写；绑定前就开始工作（状态漂移） | 已撤销：回到主会话；待绑定：等主会话绑定后的消息 |
 
-**escape**（DN008 §5 第 4 条）：每条拒绝信息以规则编号开头，写出上表的正确做法，并写明“确需执行时请用户决定：在配置 `guardrails.disabled` 中关闭该规则，或由用户自己执行”。`guardrails.disabled` 是新的权限类键（DN003 §7.2），hook 读取它，列出的规则不再拦截。
+**escape**（DN008 §5 第 4 条）：每条拒绝信息以规则编号开头，写出上表的正确做法，并写明“动作确属任务需要时，问用户；用户同意后用 `user_answer` 登记放行这条规则”。具体做法：
+
+1. **就地放行（worker）**：worker 用 `ask_user` 说明被拦下的动作与理由；用户在 worker 会话中回复后，worker 调用 `user_answer`，除答复外带上 `waive_rules`（如 `["CC-B4"]`）。tsw 用 hook 记录的用户原话记录 `guardrail.waived`（规则编号、attempt、用户来源）。hook 对该 attempt 不再执行这些规则；attempt 结束即失效。这与评审预算追加的做法相同（DN006 §8.1a），不需要主会话参与。
+2. **长期关闭（用户）**：配置 `guardrails.disabled` 列出的规则对所有会话不再拦截。它是新的权限类键（DN003 §7.2），由主会话按用户在主会话或其他渠道的原话修改；worker 会话中的原话只用于就地放行，不改全局配置。
+3. **主会话被拦下**（CC-B1、CC-B2、CC-B9）：在主会话中问用户，按用户的话用 `config_change` 写入 `guardrails.disabled`，或由用户自己执行。
+4. **用户自己做**：用户总可以在会话外自己执行被拦下的动作。
 
 **失败方式**：hook 内部异常时放行并在 stderr 报告（现状不变）。
 
@@ -63,8 +68,8 @@
 | 现有校验 | 归类 | 理由 |
 | --- | --- | --- |
 | worker 编辑类工具的目标必须在可写根内 | 改写为 CC-B1、CC-B3 | allow list；改为只拦已知的错误目标（数据目录自有目录、主仓库检出），写到临时目录、缓存等不再被拦 |
-| Bash 写入路径必须在可写根内（`tsw/host/shell.py` 解析重定向、文件命令、PowerShell cmdlet、`cd`、嵌套 shell） | 删除 | allow list，解析复杂；删除、移动、写到意外位置属于一般风险，交给 auto 分类器；漏网的由 G-ACCEPT 的 diff 核对发现。`shell.py` 只保留分词与程序、子命令识别（CC-B4–CC-B7 用） |
-| Bash 写入 tsw 自有目录（解析出的路径） | 删除 | 同上；账本被意外改动时由摘要链与 `ledger audit` 发现 |
+| Bash 写入路径必须在可写根内（`tsw/host/shell.py` 解析重定向、文件命令、PowerShell cmdlet、`cd`、嵌套 shell） | 删除 | allow list，解析复杂；删除、移动、写到意外位置属于一般风险，交给 auto 分类器；漏网的可能在主会话验收核对 diff 时发现，也可能漏掉，按易用性优先接受（DN008 §5 第 5 条）。`shell.py` 只保留分词与程序、子命令识别（CC-B4–CC-B7 用） |
+| Bash 写入 tsw 自有目录（解析出的路径） | 删除 | 同上；账本被意外改动时由摘要链与 `ledger audit` 发现（确定性）；其他自有目录的意外改动可能漏掉 |
 | 文本兜底：命令中出现数据目录路径加自有目录名，且出现 `>` `rm` `cp` 等写入词就拒绝 | 删除 | 误拦只读命令：`grep … runs/…/brief.md > work/…/x.txt`、`cp runs/…/brief.md work/…/` 都被拒（本任务用临时目录实测） |
 | `.claude/settings*.json` 不能写（T241，编辑类工具与 shell 写法） | 简化为 CC-B2 | 只看编辑类工具；理由改为越过用户的权限选择与被覆盖，不再写“防止会话给自己追加权限” |
 | `git push` / `gh pr create` 对照 `delivery.push` / `create_pr` | 保留为 CC-B4、CC-B5 | 授权记录在 tsw 中，宿主不知道 |
@@ -115,7 +120,7 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 | `VerifiedSource` 必需 `channel` `principal` `message_ref` `text` 与一致的 `target` | 简化 | `principal` 可选（DN008 §9） |
 | 主会话代答、worker 回执、超时不满足 G-USER | 保留 | — |
 | `user_answer` 必须引用 hook 记录的、同一任务同一问题同一会话的消息 | 保留 | 理由改为“答复以用户原话为准”，删去“worker 不能伪造答复” |
-| 主会话不能记录 `in-session` 来源；worker 会话中的原话不能授权改配置 | 保留 | 对象错误 |
+| 主会话不能记录 `in-session` 来源；worker 会话中的原话不能授权改配置 | 保留 | 对象错误：用户在 worker 会话中回答的是本任务的问题；需要放行护栏时用本任务范围的就地放行（§3） |
 | `teams-chat`：按消息 ID 精确读回、发送者为本人（未实现） | 删除 | 只对抗他人冒充；答复登记只核对“问题仍待答、回复对应到问题编号”（DN008 §9） |
 | `hub-portal`：owner 认证（未实现） | 简化 | owner 认证是门户自己的访问控制，不属于 tsw |
 | 只有 `pending` 且上下文绑定一致时 T12 生效，其余记为迟到答复 | 保留 | 即“问题仍待答” |
@@ -144,19 +149,19 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 
 | 位置 | 修订 |
 | --- | --- |
-| DN003 §3.5 `executable_hashing` 执行点、DN003 §7.2 `source_reused`、DN003 新增 `guardrails.disabled` | 按 §3、§5 |
+| DN003 §3.5 `executable_hashing` 执行点、DN003 §7.2 `source_reused`、DN003 新增 `guardrails.disabled`；DN006 §8.1a `user_answer` 新增 `waive_rules` 与事件 `guardrail.waived` | 按 §3、§5 |
 | DN006 §8.1b 定时提示段（T241）中“伪造”；§8.5 `verify` 与 `principal`；§8.6 Teams 核实；§8.8 Portal；§9.7 导入授权 | 按 DN008 §9 与 §5.5 |
 | 代码注释：`guard.py` 模块说明“Hooks are the enforced boundary”；`identity.py`、`cli.py`、`guard.py` 中“could claim / invent”式注释 | 改为护栏的说法 |
 | 宿主能力 `enforcement: enforced \| advisory` | 取值不变（契约），解释为机械检查覆盖的程度 |
 
-兼容性：`VerifiedSource.principal` 从必需改为可选，旧事件与旧调用照常有效；导入授权的旧决定对象在过渡期仍接受；删除的只是拒绝，不删除工具、事件、字段或命令；`guardrails.disabled` 是新增的配置键。
+兼容性：`VerifiedSource.principal` 从必需改为可选，旧事件与旧调用照常有效；导入授权的旧决定对象在过渡期仍接受；删除的只是拒绝，不删除工具、事件、字段或命令；新增的只有配置键 `guardrails.disabled`、`user_answer` 的可选参数 `waive_rules` 与事件类型 `guardrail.waived`。
 
 ## 8. 实现拆分（由用户决定）
 
 一种可行的拆分：
 
 1. **措辞**（只改文档与注释）：§7。
-2. **hooks 改为 block list**（行为变化，需测试与 live `host-e2e`）：CC-B1–CC-B10、规则编号与 escape 信息、`guardrails.disabled`；删除 shell 路径解析、文本兜底、tsw CLI 与 `import tsw` 识别、哈希规则、hook 侧目录一致性检查。
+2. **hooks 改为 block list**（行为变化，需测试与 live `host-e2e`）：CC-B1–CC-B10、规则编号与 escape 信息、就地放行（`waive_rules`、`guardrail.waived`）与 `guardrails.disabled`；删除 shell 路径解析、文本兜底、tsw CLI 与 `import tsw` 识别、哈希规则、hook 侧目录一致性检查。
 3. **用户来源与授权**（契约兼容变化）：`principal` 可选、删除 `source_reused`、导入授权对象加参数摘要。
 
 第 2、3 项涉及 hooks 守卫与 MCP 写工具授权，按 `AGENTS.md` 第 4 节须用户确认后合并。T241 中的 CC-B2、CC-B8、CC-S2 与 §6 在 T241 合并后按本文调整措辞与归类。

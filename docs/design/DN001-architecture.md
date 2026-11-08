@@ -42,7 +42,7 @@
 | 产品仓库 | 本仓库 `task-steward`：插件、tsw core、MCP server、hooks、文档 |
 | tsw | TaskSteward 的核心库与 CLI（Python 3.10+ 标准库） |
 | 主会话 / orchestrator | 在数据目录打开的 Claude app 会话，持有调度租约 |
-| worker 子会话 | 主会话用 `start_session` 启动的关联会话，一个 attempt 一个 |
+| worker 子会话 | 主会话经会话适配器启动的关联会话，一个 attempt 一个 |
 | attempt | 一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行目录 |
 | 执行目录 | 设计 / 开发任务的独立 worktree，或研究任务的工作目录 `work/Txxx/aN/`；设计 / 开发任务另以 `work/Txxx/aN/` 作为草稿可写根（DN006 §9.4） |
 | reportable 事件 | 需要主会话处理的事件：提交、提问、评审受阻、明确停止、`[report]` 回传 |
@@ -88,17 +88,17 @@
 
 ### 6.2 worker 子会话的创建
 
-worker 会话分两步启动（DN006 §4.1）：先**创建**会话，再**投递任务书**。创建只能在用户本人的 turn 中进行（§6.3），所以主会话在用户要求执行一批任务时就为它们**预启动**会话：准备执行目录、创建会话，让会话以待命说明启动后进入 `standby`。任务可以派发时（DN002 T07），主会话按 R-ATTEMPT（DN002 §5.5）给待命会话投递任务书；没有可用会话时才新建。创建时的参数全部来自统一配置的 `roles.worker`，不继承主会话。先写 `attempt.start_requested` 事件，再调用会话适配器的创建动作（DN006 §7.2）；结果未知时按会话名对账，不再次创建（DN002 §6 `starting` 阶段）。Claude Code app 上的创建参数见 [CC001 §3](claude-code/CC001-sessions-and-hooks.md)。
+worker 会话分两步启动（DN006 §4.1）：先**创建**会话，再**投递任务书**。会话适配器声明创建时机受限（`dispatch_window`）时，创建只能在允许的 turn 中进行（§6.3），所以主会话在用户要求执行一批任务时就为它们**预启动**会话：准备执行目录、创建会话，让会话以待命说明启动后进入 `standby`。任务可以派发时（DN002 T07），主会话按 R-ATTEMPT（DN002 §5.5）给待命会话投递任务书；没有可用会话时才新建。创建时的参数全部来自统一配置的 `roles.worker`，不继承主会话。先写 `attempt.start_requested` 事件，再调用会话适配器的创建动作（DN006 §7.2）；结果未知时按会话名对账，不再次创建（DN002 §6 `starting` 阶段）。Claude Code app 上的创建参数见 [CC001 §3](claude-code/CC001-sessions-and-hooks.md)。
 
 ### 6.3 平台约束与派发策略
 
-会话适配器声明的能力（DN006 §7.1 的 `dispatch_window`、`prestart`、`wake`）决定派发策略。默认宿主 Claude Code app 的实测约束见 [CC001 §4](claude-code/CC001-sessions-and-hooks.md)：只有用户本人消息所在的 turn 能在任务目录创建会话，任何 turn 都能给已有会话发消息，worker 能向父会话发消息唤醒它。
+会话适配器声明的能力（DN006 §7.1 的 `dispatch_window`、`prestart`、`wake`）决定派发策略。默认宿主 Claude Code app 的实测约束见 [CC001 §4](claude-code/CC001-sessions-and-hooks.md)。
 
-因此派发与唤醒策略为：
+适配器声明 `dispatch_window` 与 `prestart` 时，派发与唤醒策略为：
 
 - **预启动 + 后投递**：用户要求执行一批任务时，主会话在这个 turn 中为其中已规划的任务（`ready`，以及在 `scheduling.prestart.max_standby` 范围内的 `waiting_dependency`）预启动 worker 会话。前序任务完成、名额可用时，主会话在任何 turn 中给待命会话投递任务书，依次执行一串有依赖的任务不需要用户再次发消息。
 - **没有待命会话的任务**：在自动 turn 中变为可派发、但没有待命会话的任务（例如新拆出的任务）保持 `ready` 并标记“待启动”，STATUS 页显示数量；用户下一次发消息时主会话为它们创建会话。
-- **唤醒**：worker 产生 reportable 事件时，必须同时调用 tsw 工具落账**并**用宿主的父会话消息工具向父会话发送一行带事件 ID 的短消息（主唤醒路径，见 §9 时序第 16 步）。这样即使其他 worker 仍在工作，主会话也能被唤醒。由消息触发的 turn 不能创建会话，但可以给待命会话投递任务书，与预启动配合即可推进依赖链。宿主的兜底唤醒（Claude Code 的 `side-sessions-event`）作为兜底。
+- **唤醒**：worker 产生 reportable 事件时，必须同时调用 tsw 工具落账**并**用宿主的父会话消息工具向父会话发送一行带事件 ID 的短消息（主唤醒路径，见 §9 时序第 16 步）。这样即使其他 worker 仍在工作，主会话也能被唤醒。不允许创建会话的 turn 仍可以给待命会话投递任务书，与预启动配合即可推进依赖链。宿主若有兜底唤醒，作为兜底。
 - **处理范围**：被唤醒后，主会话只读取 `inbox` 中未处理的 reportable 事件（按事件 ID 去重并 ack）。普通进度、无回传的 idle、interactive 超时都不触发查询、催办或改账本（沿用用户 2026-10-13 的约定）。
 
 ### 6.4 调度租约

@@ -25,19 +25,7 @@
 | P3 | 人类渠道（human channel） | 把需要人类的请求送到人面前，并把核实过的答复取回 | 主会话决定交给人类时 |
 | P4 | 存储后端（storage） | 数据目录的读写、加锁、备份 | 每次写账本或产物时 |
 
-与 Claude 耦合的设计元素与归属：
-
-| 设计元素 | Claude 实现 | 归属 |
-| --- | --- | --- |
-| 主会话与 worker 的指令、skill、工具注册 | `CLAUDE.md`、`.claude-plugin`、skills、`.mcp.json` | P1 |
-| 写入范围、危险命令拦截、结束前检查 | Claude Code hooks | P1 |
-| 创建、续用、停止、观察 worker 会话 | `start_session`、`SendMessage`、`list_sessions`、`get_session`、`stop_session` | P2 |
-| 唤醒主会话 | worker→父会话 `send_message(session_id="parent")`、side-sessions-event | P2（唤醒能力） |
-| 派发窗口与预启动（G-WINDOW、attempt `standby`） | 只有用户本人的 turn 能在任务目录创建会话；任何 turn 都能给已有会话发消息 | P2（能力声明） |
-| 权限模式名称 | `default` / `acceptEdits` / `auto` / `bypassPermissions` | P2（映射表） |
-| 评审器 | Codex App Server 一次性线程 | P2 的 oneshot 能力 + `roles.reviewer.session` |
-| 待答问题的投递与回收 | 用户在子会话直接答复 | P3 |
-| 控制根 = 私有 Git 仓库 | ledger、runs 随仓库提交 | P4 + 数据目录 |
+宿主相关的设计元素按上面四类插件归属；默认宿主 Claude Code 的对应关系见 [CC006 §1](claude-code/CC006-plugins.md)。
 
 不变的部分：状态集合与迁移（DN002）、守卫语义、评审必经与提交周期（DN004）、导入规则（DN005）、事件格式。DN002 中只有 G-WINDOW 与预启动（attempt `standby`）依赖宿主能力：会话适配器声明 `dispatch_window=false` 时 G-WINDOW 永远满足，声明 `prestart=false` 时不做预启动。
 
@@ -65,41 +53,7 @@
 
 这一模式沿用 orchestrator-agent 通知队列已验证的“claim → 主会话执行工具 → receipt”做法：产品只生成中性操作，主会话按当前宿主调用对应工具。
 
-委托操作示例：派发 T241 的 worker（Claude app 宿主）。
-
-```json
-{
-  "operation_id": "op-T241-a1-g1-start",
-  "kind": "session.start",
-  "task_id": "T241",
-  "attempt": "a1",
-  "generation": 1,
-  "action": {
-    "neutral": "start_worker_session",
-    "tool": "mcp__ccd_session__start_session",
-    "params": {
-      "initiation": "user_asked",
-      "context": "fresh",
-      "cwd": "~/tsw-worktrees/example-app/T241-a1",
-      "use_worktree": false,
-      "name": "t241-a1-g1",
-      "model": "claude-opus-5-5",
-      "effort": "high",
-      "permission_mode": "auto",
-      "prompt": "按 runs/T241/a1/brief.md 执行。工具、评审与回传协议见 brief 第 1 节。",
-      "background": "为 example-app 的报表页增加 CSV 导出：在任务 worktree 中实现服务端流式导出接口与界面上的导出按钮，支持十万行分页与导出链接过期，补齐单元测试与端到端测试，完成后用配置的评审器自评审，再按 brief 提交报告。"
-    }
-  },
-  "expects_receipt": {"fields": ["session_id"], "on_unknown": "reconcile_by_name"},
-  "expires_at": "2026-11-05T12:00:00Z"
-}
-```
-
-回执：
-
-```json
-{"operation_id": "op-T241-a1-g1-start", "outcome": "ok", "result": {"session_id": "local_6c1f…"}, "evidence": "tool result"}
-```
+委托操作的示例（Claude app 宿主派发 worker）见 [CC006 §5](claude-code/CC006-plugins.md)。
 
 约定：
 
@@ -251,7 +205,7 @@ class SessionAdapter(Protocol):
     def close_oneshot(self, thread: str) -> Result[None]: ...
 ```
 
-`StartRequest` 只含中性字段：`name`（`txxx-aN-gK`）、`cwd`、额外可写根、`model`、`effort`、`permission`（中性：`ask` / `edits` / `auto` / `full`，与 DN003 `roles.*.permission_mode` 同一套取值）、`prompt`、`background`。`map_permission` 把中性值映射为宿主名称，例如 `claude-app`：ask→default、edits→acceptEdits、auto→auto、full→bypassPermissions。
+`StartRequest` 只含中性字段：`name`（`txxx-aN-gK`）、`cwd`、额外可写根、`model`、`effort`、`permission`（中性：`ask` / `edits` / `auto` / `full`，与 DN003 `roles.*.permission_mode` 同一套取值）、`prompt`、`background`。`map_permission` 把中性值映射为宿主名称（Claude Code 见 CC006 §3）。
 
 `OneshotRequest` 含 `cwd`、`model`、`effort`、`read_only=true`、提示正文、超时；只读由适配器用宿主机制强制，不用中性权限取值。
 
@@ -259,7 +213,7 @@ class SessionAdapter(Protocol):
 
 | 实现 | 方式 | interactive | oneshot（只读方式） | 增量续用 | 用户直接对话 | dispatch_window |
 | --- | --- | --- | --- | --- | --- | --- |
-| `claude-app` | delegated | 是：`start_session` / `SendMessage` / `get_session` / `stop_session`，按会话名对账；支持预启动 | 否（只能由模型调用，tsw 无法同步等结果） | — | 是（侧栏子会话） | 是 |
+| `claude-app` | delegated | 是（做法见 [CC006 §3](claude-code/CC006-plugins.md)）；支持预启动 | 否（只能由模型调用，tsw 无法同步等结果） | — | 是（侧栏子会话） | 是 |
 | `claude-headless` | direct | 待验证（Agent SDK 会话） | 是：`claude -p`，严格只读工具白名单（调用约定见 [CC004](claude-code/CC004-reviewer.md)） | 是（`--resume`） | 否 | 否 |
 | `codex-app-server` | direct | 暂不承载 worker（B7：不能按名称或目录及时找回线程） | 是：一次性线程，`sandbox=read-only` | 是（keep / resume thread） | 是（受管独立线程） | 否 |
 | `codex-exec` | direct | 否 | 是：`codex exec`，`--sandbox read-only` | 否（每轮全量 + 上轮意见） | 否 | 否 |
@@ -267,7 +221,7 @@ class SessionAdapter(Protocol):
 | `copilot-cli` | direct | 否 | 待验证（B2） | 待验证 | 否 | 否 |
 | `remote-hub` | direct | 是：`POST /api/sessions`（intentId 关联） | 否 | — | 是（Portal 会话页） | 否 |
 
-interactive 动作映射（承载 worker 的实现）：
+interactive 动作（`create`、`deliver_brief`、`send`、`stop`、`observe`、`find` 与唤醒主会话）在各宿主上的做法见实现文档：`claude-app` 见 [CC006 §3](claude-code/CC006-plugins.md)。尚无实现文档的宿主（`codex-app-server`、`copilot-app`、`remote-hub`）的映射暂列于此，建立实现文档时移出：
 
 | 动作 | `claude-app` | `codex-app-server`（暂不承载 worker，B7 解决后启用） | `copilot-app` | `remote-hub` |
 | --- | --- | --- | --- | --- |
@@ -448,7 +402,7 @@ T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与
 
 | 实现 | 能力 | 发送 | 回收 | 核实 |
 | --- | --- | --- | --- | --- |
-| `in-session` | request_response，push（不支持 notify） | 无需发送：worker 用 `ask_user` 记录后在自己的会话里提问（§8.1a） | `UserPromptSubmit` hook 记录用户消息原文（`input.session_message`），worker 用 `user_answer` 引用消息编号登记 | 宿主会话消息归属：消息由 hook 在该 worker 会话中取得，注入的其他会话消息不记录 |
+| `in-session` | request_response，push（不支持 notify） | 无需发送：worker 用 `ask_user` 记录后在自己的会话里提问（§8.1a） | 宿主集成记录用户消息原文（`input.session_message`，Claude Code 见 CC006 §4），worker 用 `user_answer` 引用消息编号登记 | 只核对问题仍待答、消息属于该 worker 会话的这个问题；注入的其他会话消息不记录（DN008 §9） |
 | `teams-chat` | request_response，notify，poll，delegated | 主会话经 Teams MCP 工具 向本人 self chat 发送带请求 ID 的卡片 | 主会话被唤醒时（或按 `teams_poll` 间隔）读取 self chat 中发送后的新消息，取 Teams 回复（replyTo 该消息）或含请求 ID 的消息 | 按消息 ID 精确 GET 读回，发送者为本人 |
 | `hub-portal` | request_response，notify（Portal 通知卡片），push，direct | tsw 把请求发布到 Hub 门户（问题卡片） | Portal 用户提交答复，经认证回调写回 tsw | Portal 的 owner 认证 + 请求 ID |
 | `email-draft` | notify_only | 在邮箱生成草稿（默认不发送，沿用邮件约定） | — | — |

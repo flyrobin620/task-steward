@@ -82,15 +82,15 @@
 | T09 | dispatching | ready | `attempt.dispatch_abandoned` | O | 有证据确认会话未创建（`attempt.not_created`）；`starting` 阶段结果未知时不能走 T09，须先对账 | 当前创建代次标为失效；attempt 回到 `planned`（同一编号，未产生过会话）；释放名额与资源，保留执行目录 |
 | T10 | dispatching | paused | `task.paused` | O | 执行目录冲突（分支已存在且内容不明等）需要用户决定 | 类别 `workdir_conflict`；释放名额，保留现场 |
 | T11 | in_progress | waiting_user | `input.escalated` | W / O | worker 在本会话直接问用户（`ask_user`，DN006 §8.1a：任务内的提问、评审预算用完、阻断项延后请求、评审器不可用）；或主会话对跨任务事项判断后决定交给人类，或 `input.triage=human_direct` 时直接交给人类 | worker 提问：问题留在 worker 会话，记录转交时间，不进入主会话 inbox；主会话交给人类：生成 InputRequest（含主会话的分析），按 `input.channels` 投递人类渠道 |
-| T12 | waiting_user | in_progress | `input.resolved` | U / O | 第一个生效的答复：任一人类渠道中通过核实的用户答复（worker 会话中由 hook 记录、worker 引用的原话，主会话消息、Teams 回复、Portal 提交）；或问题已转交主会话（`input.handed_off`，DN006 §8.1b）且不属于保留事项时，主会话在授权边界内代答（`handoff_resolve`，不满足 G-USER）。超时不是答复；转交前主会话不能代答 | 等待期间 revision 未变：回到离开时的子状态，周期不变；revision 已变：进入 `executing`，旧评审失效，开启新周期 |
-| T13 | in_progress | verifying | `worker.submitted` | W | G-SUBMIT（含 §3.5 的合并要求） | 冻结提交 HEAD、报告路径、评审证据与合并记录；worker 同时用 `mcp__ccd_session_mgmt__send_message(session_id="parent")` 唤醒主会话 |
+| T12 | waiting_user | in_progress | `input.resolved` | U / O | 第一个生效的答复：任一人类渠道中通过核实的用户答复（worker 会话中由宿主集成记录、worker 引用的原话，主会话消息、Teams 回复、Portal 提交）；或问题已转交主会话（`input.handed_off`，DN006 §8.1b）且不属于保留事项时，主会话在授权边界内代答（`handoff_resolve`，不满足 G-USER）。超时不是答复；转交前主会话不能代答 | 等待期间 revision 未变：回到离开时的子状态，周期不变；revision 已变：进入 `executing`，旧评审失效，开启新周期 |
+| T13 | in_progress | verifying | `worker.submitted` | W | G-SUBMIT（含 §3.5 的合并要求） | 冻结提交 HEAD、报告路径、评审证据与合并记录；worker 同时用宿主的父会话消息工具唤醒主会话（DN001 §6.3） |
 | T14 | in_progress | paused | `task.paused` | O / W | G-PAUSE；worker 已停（外部等待、用户 park，或已核实失败且后台命令已停） | 释放名额；资源占用不释放 |
 | T15 | in_progress | ready | `attempt.lost` | O / P | 子会话不存在或已归档，且核实执行目录没有继续写入 | 原 attempt 记为 `replaced`；释放名额；再次派发时新建 attempt 复用现场 |
 | T16 | dispatching、in_progress、waiting_user、verifying | waiting_dependency | `dependency.invalidated` | S / O | 任一依赖不再满足 G-DEP；执行中的 worker 已收到通知并停止；从 `dispatching` 离开时须先收口派发：`starting` 先对账（已创建则按 `live` 停止，未创建则回到 `planned`）；`standby` 的待命会话保留，供依赖恢复后投递 | 释放名额；撤回进行中的集成；核实 worker 已停后释放本任务的独占资源（`resource.released`，下次 T07 重新占用），停止事实未知时保留占用并生成待用户决定的输入请求；原 attempt 保留供 R-ATTEMPT 续用 |
-| T17 | verifying | in_progress | `orchestrator.feedback` / `task.requirement_changed` | O / U | 主会话列出具体剩余工作（worker 已合并时，修复以新的 PR 进行）；或集成冲突需要 worker 解决；或用户实质修改需求（revision+1，撤回提交） | SendMessage 给同一 worker；开启新的提交周期；需求变更时旧评审失效 |
+| T17 | verifying | in_progress | `orchestrator.feedback` / `task.requirement_changed` | O / U | 主会话列出具体剩余工作（worker 已合并时，修复以新的 PR 进行）；或集成冲突需要 worker 解决；或用户实质修改需求（revision+1，撤回提交） | 经会话适配器给同一 worker 发消息（`send`）；开启新的提交周期；需求变更时旧评审失效 |
 | T18 | verifying | done | `task.accepted` | O | G-ACCEPT | 写入 `review.md` / `review.html`（worker 已合并时含“合并后核对”）、登记 PR 与产出、记录集成提交；释放名额与资源；通知用户 |
 | T19 | verifying | paused | `task.paused` | O | 集成或组合验证受阻（CI 环境故障、外部审批未到等），G-PAUSE | 类别 `integration_blocked` 或 `failure`，`resume_target=verifying`；冻结的提交证据保留；释放名额，集成占用保留或撤回并记录 |
-| T20 | paused | in_progress | `task.resumed` | O | resume_condition 已满足；`resume_target` 不是 `verifying`，或其提交证据已失效；原子会话可用且可控；G-SLOT、G-RES、G-DEP（与名额占用在同一事件中原子完成） | 重新占用名额，SendMessage 继续；开启新的提交周期 |
+| T20 | paused | in_progress | `task.resumed` | O | resume_condition 已满足；`resume_target` 不是 `verifying`，或其提交证据已失效；原子会话可用且可控；G-SLOT、G-RES、G-DEP（与名额占用在同一事件中原子完成） | 重新占用名额，经会话适配器发消息（`send`）继续；开启新的提交周期 |
 | T21 | paused | ready | `task.resumed` | O | resume_condition 已满足；`resume_target` 不是 `verifying`（或其提交证据已失效）；原会话不可用、导入交接已核实，或名额不足需要排队 | 下次派发按 R-ATTEMPT 处理 |
 | T27 | paused | verifying | `task.resumed` | O | `resume_target=verifying`；resume_condition 已满足；冻结的提交证据仍有效（revision 与依赖绑定未变）；G-SLOT、G-RES、G-DEP | 重新占用名额，主会话继续核验与集成；不重新提交、不重新评审 |
 | T22 | done | accepted | `task.user_accepted` | U | G-USER；revision 与当前一致；没有未解决的 `stale` 标记（已有来源记录 `dependency.stale_cleared`）；没有待答输入请求 | 记录 `accepted_at` 与用户原话 |
@@ -168,7 +168,7 @@
 | G-LEASE | 当前主会话持有调度租约（DN001 §6.4） |
 | G-SLOT | 占用名额的任务数（`dispatching` + `in_progress` + `waiting_user` + `verifying`）< `scheduling.max_workers`；检查与占用在同一事件中原子完成 |
 | G-RES | 任务声明的独占资源没有**其他任务**未释放的占用记录；本任务自己保留的占用可直接续用（幂等，不重复建立）。占用在首次 T07 建立，只在释放事件时解除（T18 完成、取消后核实停止、`resource.released`）；暂停、失败、停止事实未知、退役保留的占用都继续有效 |
-| G-WINDOW | 当前 turn 允许在任务目录创建会话：用户本人消息所在的 turn（DN001 §6.3）。只在会话适配器声明 `dispatch_window=true` 时适用（DN006 §7.3），只约束“创建”，不约束“投递任务书”与续用 |
+| G-WINDOW | 当前 turn 允许在任务目录创建会话：会话适配器声明的创建时机限制（DN001 §6.3；Claude Code 为用户本人消息所在的 turn，CC001 §4）。只在会话适配器声明 `dispatch_window=true` 时适用（DN006 §7.3），只约束“创建”，不约束“投递任务书”与续用 |
 | G-ONE-ATTEMPT | 该任务没有其他处于 `standby` / `starting` / `live` / `stopped` 阶段的 attempt |
 | G-PAUSE | 记录了 owner、next_action、resume_condition 和类别 |
 | G-SUBMIT | 以下均针对当前 revision 与当前提交周期：报告的 md 与 html 都存在；本周期至少完成一轮由 `roles.reviewer.session` 指定的只读评审器（默认 Codex `gpt-6-astra` / `medium`）给出的评审；最后一轮评审的 HEAD 等于提交 HEAD；最后的评审决定为 `finalize`；仓库授权 worker 合并的开发任务（§3.5）已合并 PR 且合并的 head 等于提交 HEAD，或以 `merge_skipped` 写明由他人合并的原因；未授权时不能带合并记录；每个阻断项都已处置：`fix`（已验证：worker 记录了验证说明，或本周期之后又完成了一轮增量评审）、有据 `reject`、主会话认定不成立（`review.finding_overruled`），或经主会话 / 用户批准延后（`review.defer_approved`，且列入报告“已知问题”）；工作树干净或差异已说明。评审为必经环节，不能由配置或主会话关闭 |
@@ -222,10 +222,10 @@
 | --- | --- |
 | 没有原 attempt | 新建 attempt `a1` |
 | `planned`（从未产生会话） | 沿用同一 attempt 编号，创建代次 +1 后重新请求创建 |
-| `standby`，会话存在且由**当前主会话**创建（可控） | 先把执行目录更新到最新基线（尚无改动，可快进或重建），再投递任务书（`attempt.brief_delivered`），不调用 `start_session` |
+| `standby`，会话存在且由**当前主会话**创建（可控） | 先把执行目录更新到最新基线（尚无改动，可快进或重建），再投递任务书（`attempt.brief_delivered`），不再创建会话 |
 | `standby`，但会话已不存在，或由旧主会话创建（接管后不可控） | 不投递；核实会话已停止（或已不存在）后记为 `replaced`；任务保持 `ready` 并标记“待启动”，在下一次用户 turn 中重新预启动或直接新建 |
 | `starting` | 不能派发、也不能再次预启动：先按会话名对账；派发中的创建经 T09 回到 `planned`，预启动中的创建按 §5.6 收口 |
-| `live` 或 `stopped`，执行目录有效，且由**当前主会话**启动（可控） | 续用原 attempt 与原子会话：`stopped` 先经平台恢复为 `live`，再发送带新 brief 的消息（`attempt.continued`），不调用 `start_session` |
+| `live` 或 `stopped`，执行目录有效，且由**当前主会话**启动（可控） | 续用原 attempt 与原子会话：`stopped` 先经平台恢复为 `live`，再发送带新 brief 的消息（`attempt.continued`），不再创建会话 |
 | `live` 或 `stopped`，但由旧主会话启动（接管后不可控，DN001 §6.4） | 不发消息；核实旧会话已停止、执行目录无新写入后记为 `replaced`，新建 attempt `aN+1` 复用同一执行目录 |
 | `replaced` / `closed`，或导入的旧 Codex / Copilot worker | 新建 attempt `aN+1` 复用同一执行目录（导入交接须已有停止证据） |
 
@@ -233,7 +233,7 @@
 
 ### 5.6 预启动
 
-在用户本人消息所在的 turn 中（满足 G-WINDOW），主会话可以为已规划的任务预启动 worker 会话。预启动只改变 attempt 阶段，**任务状态始终不变**（仍为 `ready` 或 `waiting_dependency`），不占用名额与资源。
+在满足 G-WINDOW 的 turn 中，主会话可以为已规划的任务预启动 worker 会话。预启动只改变 attempt 阶段，**任务状态始终不变**（仍为 `ready` 或 `waiting_dependency`），不占用名额与资源。
 
 **入口检查**（与 `attempt.start_requested` 在同一事件中原子完成）：
 
@@ -251,7 +251,7 @@
 | 结果未知 | 按当前代次的会话名对账，绝不再次创建；对账前该任务不能派发，也不能再次预启动 | 保持 `starting` |
 | 迟到会话 | 失效代次的会话按 §5.4 停止，不影响任务状态 | — |
 | 任务被取消（T25） | `starting` 先对账；可控的 `standby` 会话按 `sessions.archive_on_archive` 处置后为 `closed`；会话已不存在或由旧主会话创建时核实停止后为 `replaced` | `closed` 或 `replaced` |
-| 会话丢失或被用户归档 | `get_session` 不存在 / archived 时记为 `replaced`；下一次用户 turn 重新预启动 | `replaced` |
+| 会话丢失或被用户归档 | 观察（`observe`）结果为不存在或已归档时记为 `replaced`；下一次满足 G-WINDOW 的 turn 重新预启动 | `replaced` |
 
 派发时（T07）按 R-ATTEMPT 给待命会话投递任务书；投递前把执行目录更新到最新基线（例如前序任务已合并的结果）。任务书在投递时才生成，因此需求变更不影响待命会话；依赖失效也不影响待命会话。新目录的信任确认在预启动所在的用户 turn 中完成。
 
@@ -263,9 +263,9 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 | --- | --- | --- | --- |
 | `planned` | 已生成 attempt，尚未请求创建会话（或确认当前代次未创建会话后回退至此） | dispatching、ready、waiting_dependency | T07 新建；预启动开始；T09 回退 |
 | `standby` | 预启动的会话已创建并以待命说明启动，尚未投递任务书；不占用名额 | waiting_dependency、ready | 预启动（§5.6） |
-| `starting` | 已落账 `attempt.start_requested`（创建代次 +1）并调用 `start_session`；结果未知时按当前代次的会话名对账（`list_sessions {linked:true}`），绝不再次创建 | dispatching；预启动时为 ready、waiting_dependency | 调用工具前 |
+| `starting` | 已落账 `attempt.start_requested`（创建代次 +1）并调用会话适配器的创建动作（`create`）；结果未知时按当前代次的会话名对账（`find`），绝不再次创建 | dispatching；预启动时为 ready、waiting_dependency | 调用工具前 |
 | `live` | 子会话存在且绑定；平台事实 working / idle / awaiting_input 只作观察，不改变任务状态 | in_progress、waiting_user、verifying（续用时也可在 ready、waiting_dependency 中保持） | T08、`attempt.continued` |
-| `stopped` | 子会话被停止但仍存在；可控时可续用 | paused、ready、waiting_dependency | `stop_session` 或用户停止 |
+| `stopped` | 子会话被停止但仍存在；可控时可续用 | paused、ready、waiting_dependency | 会话适配器的 `stop` 或用户停止 |
 | `replaced` | 已核实停止或已不存在，由新 attempt 接手同一执行目录；也用于待命会话丢失、取消时会话已不存在或不可控 | — | R-ATTEMPT、T15、§5.6（丢失；T25 取消时会话不可控或已不存在） |
 | `closed` | 任务验收、归档或取消后按配置处置会话（须有工具回执）；取消时可控的待命会话按 `sessions.archive_on_archive` 处置后进入此阶段 | done、accepted、archived、cancelled | T18 之后、T24、T25（§5.6） |
 
@@ -305,13 +305,13 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 
 | 场景 | 检测 | 处理 |
 | --- | --- | --- |
-| `start_session` 结果未知 | 调用超时或主会话中断 | attempt `starting` 阶段按会话名对账，绝不盲目再次创建 |
+| 创建会话（`create`）结果未知 | 调用超时或主会话中断 | attempt `starting` 阶段按会话名对账，绝不盲目再次创建 |
 | 自动 turn 中需要新建会话 | G-WINDOW 不满足、没有待命会话 | 不执行 T07，任务保持 `ready` 并标记“待启动”；用户下一次发消息时创建会话 |
-| 待命会话丢失或被用户归档 | `get_session` 不存在 / archived | attempt 记为 `replaced`，下次在用户 turn 中重新预启动 |
-| worker 子会话被归档或删除 | `get_session` 不存在 / archived | T15，再派发时新建 attempt 接手同一执行目录 |
+| 待命会话丢失或被用户归档 | `observe` 结果为不存在或已归档 | attempt 记为 `replaced`，下次在满足 G-WINDOW 的 turn 中重新预启动 |
+| worker 子会话被归档或删除 | `observe` 结果为不存在或已归档 | T15，再派发时新建 attempt 接手同一执行目录 |
 | 评审器不可用 | 评审调用失败 | E02 重试；超限记录 `review.unavailable` 交主会话判断，不能跳过评审 |
 | 评审预算用完 | 本周期轮次达到预算仍有阻断项 | `review.budget_exhausted` 交主会话判断（§3.3a） |
-| 主会话重启或更换 | 新会话 SessionStart | 读取账本与 inbox 游标；租约过期后可领取，未过期须 `controller_takeover`，并逐项处理受影响的 attempt |
+| 主会话重启或更换 | 新会话启动 | 读取账本与 inbox 游标；租约过期后可领取，未过期须 `controller_takeover`，并逐项处理受影响的 attempt |
 | 需求变更 | `task.requirement_changed` | 按 §5.1 |
 | 上游退回或取消 | `dependency.invalidated` | 按 §5.2 |
 | 恢复时名额已满 | G-SLOT 不满足 | 保持 `paused` 并标记 `resume_ready`，或 T21 进入 `ready` 排队 |
