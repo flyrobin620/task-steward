@@ -1161,6 +1161,12 @@ def scheduled_prompts(run: Run, evs: list[dict[str, Any]]) -> dict[str, Any]:
     )
 
 
+def same_commit(a: Any, b: Any) -> bool:
+    """Two commit IDs name the same commit (a worker may record an abbreviated one)."""
+    x, y = str(a or "").lower(), str(b or "").lower()
+    return len(min(x, y, key=len)) >= 7 and (x.startswith(y) or y.startswith(x))
+
+
 def merged(
     run: Run, evs: list[dict[str, Any]], submitted: Mapping[str, dict[str, Any] | None]
 ) -> dict[str, Any]:
@@ -1182,13 +1188,15 @@ def merged(
         number = int(str(merge.get("pr", "0")).rstrip("/").rsplit("/", 1)[-1] or 0)
         pr = pulls.get(number)
         evidence[t] = {"pr": number, "merge_commit": merge.get("merge_commit"), "head": head}
-        if merge.get("merged_head") != head:
+        if not same_commit(merge.get("merged_head"), head):
             problems.append(f"{t} merged_head 不等于提交 HEAD")
         if pr is None or pr["state"] != "MERGED":
             problems.append(f"{t} 替身中 PR #{number} 未合并")
-        elif pr["merge_commit"] != merge.get("merge_commit") or pr["merged_head"] != head:
+        elif not same_commit(pr["merge_commit"], merge.get("merge_commit")) or not same_commit(
+            pr["merged_head"], head
+        ):
             problems.append(f"{t} 替身记录的合并与提交不一致")
-        if merge.get("merge_commit") not in main_log:
+        if not any(same_commit(c, merge.get("merge_commit")) for c in main_log):
             problems.append(f"{t} 合并提交不在 origin 的 main 上")
     return check(
         "C",

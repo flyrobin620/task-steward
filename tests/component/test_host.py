@@ -581,6 +581,20 @@ def test_a_prestarted_session_is_a_worker_from_its_first_listing(
 
 
 @mark.use_case("UC-HOST-002")
+def test_a_worker_is_told_where_decisions_go_instead_of_memory(h: Harness, tmp_path: Path) -> None:
+    session, workdir = worker_task(h, tmp_path)
+    memory = tmp_path / "user" / ".claude" / "projects" / "C--wt-T001" / "memory" / "fact.md"
+    refused = guard(
+        h, session, workdir, tool_name="Write", tool_input={"file_path": str(memory)}
+    ).run("PreToolUse")
+    assert refused is not None and "决定与约定" in json.dumps(refused, ensure_ascii=False)
+    other = guard(
+        h, session, workdir, tool_name="Write", tool_input={"file_path": str(tmp_path / "x.md")}
+    ).run("PreToolUse")
+    assert other is not None and "可写路径" in json.dumps(other, ensure_ascii=False)
+
+
+@mark.use_case("UC-HOST-002")
 @mark.use_case("UC-ASK-001")
 def test_a_workers_scheduled_prompts_must_be_tagged(h: Harness, tmp_path: Path) -> None:
     session, workdir = worker_task(h, tmp_path)

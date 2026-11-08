@@ -96,6 +96,19 @@ def context(event: str, text: str) -> dict[str, Any]:
 
 
 SETTINGS = "claude-settings"
+MEMORY_REASON = (
+    "worker 不写 Claude Code 的记忆目录：它按会话目录分开，以后的会话读不到，还会成为留给后续会话的"
+    "指令入口。需要以后记住的决定与约定，写进报告的“决定与约定”一节，由主会话验收时转记"
+)
+
+
+def is_memory_file(path: Path) -> bool:
+    """A file in a Claude Code memory directory (``~/.claude/projects/<folder>/memory/``)."""
+    parts = [p.lower() for p in path.parts]
+    return any(
+        parts[i] == ".claude" and parts[i + 1] == "projects" and "memory" in parts[i + 3 : i + 4]
+        for i in range(len(parts) - 3)
+    )
 
 
 def is_settings_file(home: Home, path: Path) -> bool:
@@ -498,6 +511,8 @@ class Guard:
             if who.role == "worker" and not any(
                 within(target, root) for root in who.writable_roots
             ):
+                if is_memory_file(target):
+                    return deny("PreToolUse", MEMORY_REASON)
                 return deny(
                     "PreToolUse",
                     f"只能写入本任务的可写路径：{'、'.join(str(p) for p in who.writable_roots)}",
