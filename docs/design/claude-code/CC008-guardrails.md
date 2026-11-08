@@ -107,8 +107,8 @@
 | worker 写工具要求会话目录一致（`cwd_mismatch`） | 保留 | 会话建在了错误目录（绑定错误） |
 | 主会话写工具要求租约（G-LEASE） | 保留 | — |
 | `expected_version`、`command_id` 内容不同则拒绝 | 保留 | — |
-| 权限类配置键须附用户原话，绑定修改前文件摘要；一条原话只能授权一次修改（`source_reused`） | 简化 | 删除 `source_reused`：摘要绑定已防住对象错误 |
-| 正式导入须先同参数演练、附用户原话；一条原话只授权一次导入 | 简化 | 决定对象改为 `["import", "orchestrator-agent", <摘要>]`，摘要覆盖导入参数与快照内容（`snapshot_sha256`）；演练、用户批准与正式导入须对应同一份快照，换了快照就要重新演练并重新问用户（对象错误）。对新对象删除“只用一次”的扫描；旧对象（不含摘要）在过渡期仍接受，但保留一次性检查，否则对快照 A 的批准可以在对 B 演练后再次授权 B |
+| 权限类配置键须附用户原话，绑定修改前文件摘要；一条原话只能授权一次修改（`source_reused`） | 保留 | 摘要绑定不够：用户批准开启推送、随后撤销并回退后，文件回到原内容，旧批准的摘要再次匹配，agent 可能误用已撤销的批准（对象错误，现有测试覆盖这一序列）。一次性检查防住它 |
+| 正式导入须先同参数演练、附用户原话；一条原话只授权一次导入 | 简化 | 决定对象改为 `["import", "orchestrator-agent", <摘要>]`，摘要覆盖导入参数与快照内容（`snapshot_sha256`）；演练、用户批准与正式导入须对应同一份快照，换了快照就要重新演练并重新问用户（对象错误）。“一条原话只授权一次导入”的检查保留（与配置修改相同）；旧对象（不含摘要）在过渡期仍接受 |
 | 接管须附用户原话；配置无效时只开放配置工具；worker 不能改配置 | 保留 | — |
 
 ### 5.4 状态机守卫（`tsw/machine/guards.py`）
@@ -160,20 +160,20 @@ worker 能写自己的执行目录，所以 CC-B2 拦下编辑类工具对执行
 
 | 位置 | 修订 |
 | --- | --- |
-| DN003 §3.5 `executable_hashing` 执行点、DN003 §7.2 `source_reused`、DN003 新增 `guardrails.disabled`；DN006 §8.1a `user_answer` 新增 `waive_rules` 与事件 `guardrail.waived` | 按 §3、§5 |
+| DN003 §3.5 `executable_hashing` 执行点、DN003 新增 `guardrails.disabled`；DN006 §8.1a `user_answer` 新增 `waive_rules` 与事件 `guardrail.waived` | 按 §3、§5 |
 | DN006 §8.5 `verify` 与 `principal`；§8.6 Teams 核实；§8.8 Portal；§9.7 导入授权 | 按 DN008 §9 与 §5.5 |
 | 代码注释：`guard.py` 模块说明“Hooks are the enforced boundary”；`identity.py`、`cli.py`、`guard.py` 中“could claim / invent”式注释 | 改为护栏的说法 |
 | 代码、指令与工具中指向 DN006 §6.3 权限规则的引用（`tsw/host/claude_code.py`、`guard.py`、`mcp.py`、`tools/live.py`，以及 `orchestrate_skill.md`、`plugin/roles/worker.md` 中的相关说明） | 改为指向本文 §6 |
 | 宿主能力 `enforcement: enforced \| advisory` | 取值不变（契约），解释为机械检查覆盖的程度 |
 
-兼容性：`VerifiedSource.principal` 从必需改为可选，旧事件与旧调用照常有效；导入授权的旧决定对象在过渡期仍接受，并保留一次性检查；删除的只是拒绝，不删除工具、事件、字段或命令；新增的只有配置键 `guardrails.disabled`、`user_answer` 的可选参数 `waive_rules` 与事件类型 `guardrail.waived`。
+兼容性：`VerifiedSource.principal` 从必需改为可选，旧事件与旧调用照常有效；导入授权的旧决定对象在过渡期仍接受；配置与导入授权都保留一次性检查；删除的只是拒绝，不删除工具、事件、字段或命令；新增的只有配置键 `guardrails.disabled`、`user_answer` 的可选参数 `waive_rules` 与事件类型 `guardrail.waived`。
 
 ## 8. 实现拆分（由用户决定）
 
 一种可行的拆分：
 
 1. **措辞**（只改文档与注释）：§7。
-2. **hooks 改为 block list**（行为变化，需测试与 live `host-e2e`）：CC-B1–CC-B10、规则编号与 escape 信息、就地放行（`waive_rules`、`guardrail.waived`）与 `guardrails.disabled`；删除 shell 路径解析、文本兜底、tsw CLI 与 `import tsw` 识别、哈希规则、hook 侧目录一致性检查。
-3. **用户来源、授权与读取范围**（契约兼容变化）：`principal` 可选、删除 `source_reused`、导入授权对象加参数与快照内容摘要（旧对象保留一次性检查）；worker 的检索与 `task_read` 放宽为可读全部任务（DN007 §7.2）。
+2. **hooks 改为 block list**（行为变化，需测试与 live `host-e2e`）：CC-B1–CC-B10、规则编号与 escape 信息、就地放行（`waive_rules`、`guardrail.waived`）与 `guardrails.disabled`；删除 shell 路径解析（包括 T241 的 settings 守卫中的 shell 写入检查，CC-B2 只看编辑类工具）、文本兜底、tsw CLI 与 `import tsw` 识别、哈希规则、hook 侧目录一致性检查；CC-B6 只匹配 REST / GraphQL 合并调用。
+3. **用户来源、授权与读取范围**（契约兼容变化）：`principal` 可选、导入授权对象加参数与快照内容摘要；worker 的检索与 `task_read` 放宽为可读全部任务（DN007 §7.2）。
 
-第 2、3 项涉及 hooks 守卫与 MCP 写工具授权，按 `AGENTS.md` 第 4 节须用户确认后合并。T241 引入的 CC-B2、CC-B8、CC-S2 与 §6 只需按本文调整代码注释与拒绝信息的措辞（第 1 项）。
+第 2、3 项涉及 hooks 守卫与 MCP 写工具授权，按 `AGENTS.md` 第 4 节须用户确认后合并。T241 引入的 CC-B8、CC-S2 与 §6 只需按本文调整代码注释与拒绝信息的措辞（第 1 项）；CC-B2 去掉 shell 写入检查属于第 2 项的行为改动。
