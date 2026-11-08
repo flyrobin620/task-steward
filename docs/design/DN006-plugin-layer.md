@@ -143,26 +143,7 @@ class HostIntegration(Protocol):
 
 宿主声明为 `advisory` 时，STATUS 页和任务报告标注“规则为提示级”，并要求主会话在 G-ACCEPT 中额外核对写入范围（`git status` 与 diff 范围检查）。
 
-`claude-code` 的 enforced 有边界：编辑类工具（Write、Edit 等）的目标路径可以精确检查；Bash 命令只能尽力解析——识别重定向、`tee`、`cp`/`mv`/`rm`/`mkdir`、`sed -i`、PowerShell 的 `Set-Content`/`Out-File`/`New-Item` 等常见写法，跟踪 `cd`，并递归读取 `bash -c`、`powershell -Command`、`cmd /c`；变量、脚本内部的写入看不到。因此 G-ACCEPT 对 `claude-code` 同样核对 diff 是否落在可写根内。git/gh 的推送、建 PR、合并按程序名识别（忽略路径与 `.exe` 后缀），分别对照仓库的 `delivery.push`、`create_pr`、`merge` 授权；合并还核对目标仓库（`-R` / `--repo`、PR 链接、REST 合并路径）是本任务的仓库。
-
-`claude-code` 的插件按用户级启用，任何目录的会话（主会话、`~/tsw-worktrees` 或 `work/<任务>/<attempt>` 中的 worker、无关会话）都会加载它，所以插件只携带每个会话都需要的 MCP 注册与 hooks。主会话的流程说明不放进插件：`render_instructions` 把 `CLAUDE.md` 和 `orchestrate` skill 写进数据目录，后者是 Claude Code 的项目 skill（`<cwd>/.claude/skills/`），只有以数据目录为工作目录的会话会发现它。Claude Code 也从上级目录加载 `CLAUDE.md` 与项目 skill，执行目录在数据目录之下（`work/<任务>/<attempt>`）的 worker 同样会看到二者，所以二者都写明：`whoami` 的角色不是 orchestrator 时忽略。skill 的来源在产品代码中（`tsw/host/orchestrate_skill.md`），产品更新后重新运行 `tsw host render`。
-
-插件由 Claude Code 复制到插件缓存运行，缓存里没有 `tsw` 运行时。启动器按顺序查找：`TSW_REPO` 环境变量、插件所在的产品仓库（源码树或原地使用的本地市场）、`tsw init` 写入数据目录标记文件的 `product_repo`；都找不到时 MCP server 报错退出，hooks 静默放行。
-
-**权限规则**（用户 2026-11-07 决定）：Claude app 的 auto 权限模式由分类器判断每次工具调用是否出自用户意图。它只认对话中用户本人的话，不认 tsw 的配置、账本与任务书，所以把派发 worker（`start_session`）、主会话代为决定、worker 按 `delivery.merge` 合并等 tsw 已经把关的动作当作未经授权而拒绝（live `host-e2e` 中出现）。对 tsw 自己把关的动作，`claude-code` 生成 Claude Code 的显式允许规则（`permissions.allow`），由 hooks 守卫与 MCP 工具的授权检查作为这些动作的门禁；其他一切仍由宿主的权限模式与分类器把关。
-
-| 会话 | 设置文件 | 允许的动作 | 仍然生效的检查 |
-| --- | --- | --- | --- |
-| 主会话 | 数据目录的 `.claude/settings.json`（`render_instructions` 一并生成） | tsw MCP 工具；`start_session`、`send_message` / `SendMessage`、`stop_session`、`get_session`、`list_sessions`、`archive_session` | PreToolUse 对 `start_session` 核对落账的会话名与代次；tsw 工具按角色、守卫与用户来源校验 |
-| worker | 执行目录的 `.claude/settings.local.json`（执行目录在数据目录 `work/` 之下时，由 `attempt_start` 在会话创建前写入，已有内容按键合并；`work/` 之外的目录（如仓库 worktree）不写） | tsw MCP 工具；`send_message` / `SendMessage`；`gh pr merge` | PreToolUse 核对合并授权（开发任务且 `delivery.merge`）与目标仓库；hook 的拒绝优先于允许规则 |
-
-`start_session` 与 `send_message` 等会话工具由 app 自己的分类器把关，不受 `permissions.allow` 约束（live 中允许规则已生效，带“worker 自行合并”的任务书正文仍被拦截）。用户 2026-11-07 决定：创建 worker 会话时 `prompt` 只写短指令（角色、attempt、任务书路径），`background` 只写任务标题、仓库与执行目录，任务书正文（含交付与合并方式）由 worker 从 `runs/` 读取；合并的把关点因此在 worker 实际合并时，由上表的允许规则与 hooks 守卫承担，而不是在创建会话时由 app 分类器判断。会话可能在 `attempt_reconcile` 之前开始第一轮（`whoami` 仍为 pending），主会话绑定后发消息通知它。
-
-auto 模式分类器另有自己的规则（`autoMode.allow` / `soft_deny`），其中“Merge Without Review”把 worker 合并自己的 PR 判为未经评审的合并（live 中即使命中允许规则的合并也出现过被拒）。Claude Code 只从用户设置、命令行设置与托管设置读取 `autoMode`，项目设置与本地设置中的一律忽略（Claude Code 2.1.302 中核实），所以 tsw 不能把它与允许规则一起生成：`tsw host install-hint` 给出两条规则，由用户加入自己的用户设置（用户 2026-11-08 决定：凡是 tsw 已把关、分类器仍会误拦的动作，都用 auto 模式规则在策略层放行）：“TaskSteward Worker Dispatch”（主会话以 `attempt_start` 返回的会话名与 `cwd`、只指向任务书的短指令创建 worker 会话；live 中同样的短指令创建曾被分类器以“Blocked by classifier”拒绝一次，用户重试后通过）与“TaskSteward Worker Merge”（限 worker 会话、本任务的 PR、单独的 `gh pr merge … -R …`，不含 `--admin` 与绕过检查）。`attempt_start` 同时返回执行目录在磁盘上的实际写法 `cwd`：app 拒绝大小写不同的同一目录。
-
-Claude Code 对复合命令（`;`、`&&`、管道）逐段核对允许规则，有一段不在规则内就交给权限模式与分类器判断。live 中单独的 `gh pr merge … -R …` 命中规则后直接执行，而后面接了 `git fetch` 等命令的同一合并被分类器以“Merge Without Review”拒绝；worker 指令因此要求合并命令单独运行。
-
-worker 能写自己的执行目录，所以 hooks 拒绝任何会话写入执行目录与数据目录中的 `.claude/settings*.json`（编辑工具与可识别的 shell 写法），避免会话给自己追加权限。允许规则只放行动作本身；动作的授权仍由账本、配置与用户来源决定，主会话代答也仍然不是用户批准（§8.1b）。
+各宿主集成的具体做法见实现文档：Claude Code 见 [CC006 §2](claude-code/CC006-plugins.md)，它的护栏与权限规则见 [CC008](claude-code/CC008-guardrails.md)。规则强度描述的是机械检查覆盖的程度，不是安全强度（DN008）：`enforced` 表示宿主上有确定性的护栏，`advisory` 表示只能靠指令与事后核对。
 
 ## 7. P2 会话适配器（session）
 
@@ -225,17 +206,17 @@ class SessionAdapter(Protocol):
 | `copilot-cli` | direct | 否 | 待验证（B2） | 待验证 | 否 | 否 |
 | `remote-hub` | direct | 是：`POST /api/sessions`（intentId 关联） | 否 | — | 是（Portal 会话页） | 否 |
 
-interactive 动作映射（承载 worker 的实现）：
+interactive 动作（`create`、`deliver_brief`、`send`、`stop`、`observe`、`find` 与唤醒主会话）在各宿主上的做法见实现文档：`claude-app` 见 [CC006 §3](claude-code/CC006-plugins.md)。尚无实现文档的宿主（`codex-app-server`、`copilot-app`、`remote-hub`）的映射暂列于此，建立实现文档时移出：
 
-| 动作 | `claude-app` | `codex-app-server`（暂不承载 worker，B7 解决后启用） | `copilot-app` | `remote-hub` |
-| --- | --- | --- | --- | --- |
-| create | `start_session`（fresh、cwd、use_worktree=false；预启动时 prompt 为待命说明） | `thread/start`（写入关联标记） | `create_session`（name = 会话名） | 创建 native session（intentId） |
-| deliver_brief | `SendMessage`（任何 turn 都可以；直接启动时由 `start_session` 的短指令 prompt 指向任务书路径，两阶段合一；正文不放进 prompt，见 §6.3 权限规则） | `turn/start` | `send_session_message` | 会话消息 API |
-| send | `SendMessage` | `turn/start` | `send_session_message` | 会话消息 API |
-| stop | `stop_session` | 中断当前 turn（interrupt） | 会话停止 | 会话中断 |
-| observe | `get_session` | `thread/read` | `get_session` / `get_sessions_status` | 会话状态 / 事件 |
-| find | `list_sessions {linked:true}` 按名称 | 按关联标记检索（B7） | 按会话名列出 | 按 intentId 读取 |
-| 唤醒主会话 | push：worker `mcp__ccd_session_mgmt__send_message(session_id="parent")`；兜底 side-sessions-event | push：turn completed 事件（tsw 监听进程） | push：跨会话消息、idle 通知 | push：会话停止事件 |
+| 动作 | `codex-app-server`（暂不承载 worker，B7 解决后启用） | `copilot-app` | `remote-hub` |
+| --- | --- | --- | --- |
+| create | `thread/start`（写入关联标记） | `create_session`（name = 会话名） | 创建 native session（intentId） |
+| deliver_brief | `turn/start` | `send_session_message` | 会话消息 API |
+| send | `turn/start` | `send_session_message` | 会话消息 API |
+| stop | 中断当前 turn（interrupt） | 会话停止 | 会话中断 |
+| observe | `thread/read` | `get_session` / `get_sessions_status` | 会话状态 / 事件 |
+| find | 按关联标记检索（B7） | 按会话名列出 | 按 intentId 读取 |
+| 唤醒主会话 | push：turn completed 事件（tsw 监听进程） | push：跨会话消息、idle 通知 | push：会话停止事件 |
 
 ### 7.4 三个角色各自选用会话适配器
 
@@ -287,7 +268,7 @@ interactive 动作映射（承载 worker 的实现）：
 | --- | --- |
 | 超时 | `input.in_session_timeout_minutes`（DN003 §3.1a，默认 10 分钟），从 `ask_user` 起算 |
 | 转交条件 | 问题仍未答复、尚未转交，且在这段时间内用户没有在 worker 会话中发过任何消息 |
-| 谁来触发 | (1) worker：问完后用宿主的定时唤醒（Claude Code 的会话内定时任务）在超时后检查（定时提示以 `<scheduled-task>` 标记，见下），仍无回复就调用 `input_handoff`，再用 `send_message(session_id="parent")` 唤醒主会话；(2) 系统规则：`sync` 把已到期的问题一并转交（`by: system`）。主会话结束一轮前，Stop hook 发现有到期未转交的问题时提示运行 `sync`；`attention` 的 `handoff_due` 也列出它们 |
+| 谁来触发 | (1) worker：问完后用宿主的定时唤醒（Claude Code 见 CC008 的 CC-B8）在超时后检查，仍无回复就调用 `input_handoff`，再用 `send_message(session_id="parent")` 唤醒主会话；(2) 系统规则：`sync` 把已到期的问题一并转交（`by: system`）。主会话结束一轮前，Stop hook 发现有到期未转交的问题时提示运行 `sync`；`attention` 的 `handoff_due` 也列出它们 |
 | 事件 | `input.handed_off`（问题编号、触发者、转交时间），默认在 `scheduling.wake.reportable_events` 中，进入主会话 inbox。任务状态不变，仍为 `waiting_user` |
 
 转交之后，主会话可以：
@@ -296,7 +277,7 @@ interactive 动作映射（承载 worker 的实现）：
 - **转达给用户**（`input_relay`）：渠道为主会话本身（`main-session`，例如在主会话中向用户提问）或已加载、支持 `request_response` 的其他人类渠道（如 Teams，§8.6）。记录 `input.relayed`。用户经该渠道的答复由主会话用 `input_resolve` 记录，来源是该渠道核实过的 `VerifiedSource`（主会话消息、Teams 回复等），满足 G-USER，经 T12 让 worker 继续。worker 会话中的原话只能由 worker 经 `user_answer` 登记，主会话不能用 `input_resolve` 代为记录 `in-session` 来源。
 - **继续等待**：什么都不做，问题保持待答。
 
-定时提示到达会话的方式与用户消息相同，`UserPromptSubmit` 的 payload 中没有区分来源的字段（live `host-e2e` 中，worker 用 CronCreate 设的唤醒提示被记成了用户消息，转交因此以 `user_responded` 被拒；同一途径也能让 worker 用定时提示伪造用户答复）。因此 worker 调用宿主的定时工具（`CronCreate`、`ScheduleWakeup`）时，提示必须以 `<scheduled-task>` 开头，PreToolUse hook 拒绝其他写法；带这个标记的消息与其他注入消息一样不记录。由谁在超时后发现并转交问题的重新设计见后续任务（例行会话与 `teams-chat` 渠道）。
+由谁在超时后发现并转交问题的重新设计见后续任务（例行会话与 `teams-chat` 渠道）。
 
 ### 8.1c 迟到的答复
 

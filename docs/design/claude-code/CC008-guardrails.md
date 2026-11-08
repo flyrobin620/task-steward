@@ -9,14 +9,14 @@
 
 按 DN008 在 Claude Code（桌面 app 与命令行）上实现护栏，**尽可能薄**：一般风险交给 Claude Code 自己的权限模式与 auto 分类器；tsw 只加宿主不知道的、确定性的 block list 规则。规则越少，规则本身出错的机会越少。
 
-“现状”指 `main` 与 T241 分支（`tools/live.py`、host-e2e，未合并）上的实现。
+“现状”指 `main`（含 T241，#18）上的实现。
 
 ## 2. 分工
 
 | 层 | 判断什么 | 是否 LLM | 在 Claude Code 中 |
 | --- | --- | --- | --- |
 | Claude Code 权限模式与 auto 分类器 | 一般风险：删除、写到意外的位置、危险命令；一次调用是否出自用户意图 | 是（宿主的保护，不是 tsw 的护栏，DN008 §4 第 3 条） | 会话的权限模式；worker 建议使用 `auto`（`roles.worker.permission_mode`） |
-| tsw 生成的允许规则 | 把“授权记录在 tsw 中、由 tsw 把关”的动作从分类器的判断中移出 | 否 | `permissions.allow`（§6） |
+| tsw 生成的允许规则与 auto 模式规则 | 把“授权记录在 tsw 中、由 tsw 把关”的动作从分类器的判断中移出 | 否 | 生成的 `permissions.allow`；用户加入用户设置的 `autoMode.allow` 规则（install hint 给出，§6） |
 | tsw hooks 的 block list | tsw 特有的已知错误（§3） | 否 | `PreToolUse` 调用 `tsw guard` |
 | tsw MCP 与状态机 | 角色、任务、租约、版本、G-*、用户来源（DN008 §6） | 否 | MCP server 按角色列出工具；`run_tool` 的检查与各工具的守卫 |
 | 事后发现 | 漏网的偏差（不保证发现） | 部分 | 流程（确定性）：`ledger audit` 的摘要链、G-SUBMIT / G-ACCEPT 对提交、登记与处置记录的检查。内容（LLM）：主会话验收时判断 diff、PR 与合并后的 CI，不是护栏 |
@@ -46,6 +46,8 @@
 2. **长期关闭（用户）**：配置 `guardrails.disabled` 列出的规则对所有会话不再拦截。它是新的权限类键（DN003 §7.2），由主会话按用户在主会话或其他渠道的原话修改；worker 会话中的原话只用于就地放行，不改全局配置。
 3. **主会话被拦下**（CC-B1、CC-B2）：在主会话中问用户，按用户的话用 `config_change` 写入 `guardrails.disabled`，或由用户自己执行。CC-B9 不可关闭：先 `attempt_start`，再用返回的会话名创建会话。
 4. **用户自己做**：用户总可以在会话外自己执行被拦下的动作。
+
+**CC-B8 的背景**（自 DN006 §8.1b 移入）：定时提示到达会话的方式与用户消息相同，`UserPromptSubmit` 的 payload 中没有区分来源的字段（live `host-e2e` 中，worker 用 CronCreate 设的唤醒提示被记成了用户消息，转交因此以 `user_responded` 被拒）。因此 worker 调用宿主的定时工具（`CronCreate`、`ScheduleWakeup`）时，提示必须以 `<scheduled-task>` 开头，PreToolUse hook 拒绝其他写法；带这个标记的消息与其他注入消息一样不记录。
 
 **失败方式**：hook 内部异常时放行并在 stderr 报告（现状不变）。
 
@@ -132,26 +134,36 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 | 摘要链（`checksum` / `prev`）、`ledger audit`、投影与账本不一致时拒绝写、重建前审计、备份 manifest、未知事件类型停止归约 | 保留 | 措辞改为“检测截断、损坏与意外修改”，删去“防篡改” |
 | 报告草稿须在本 attempt 的 `work/` 中；评审输出按 schema 解析；评审模型须与配置一致；导入快照路径不越界；配置与任务书的输入校验 | 保留 | 对象错误、跳过评审、输入错误 |
 
-## 6. 允许规则（T241）
+## 6. 允许规则与 auto 模式规则
 
-| 会话 | 设置文件 | 允许 | 由谁把关 |
+用户 2026-11-07 决定：Claude app 的 auto 权限模式由分类器判断每次工具调用是否出自用户意图。它只认对话中用户本人的话，不认 tsw 的配置、账本与任务书，所以把派发 worker（`start_session`）、主会话代为决定、worker 按 `delivery.merge` 合并等 tsw 已经把关的动作当作未经授权而拒绝（live `host-e2e` 中出现）。对 tsw 自己把关的动作，`claude-code` 生成 Claude Code 的显式允许规则（`permissions.allow`），由 hooks 守卫与 MCP 工具的授权检查作为这些动作的门禁；其他一切仍由宿主的权限模式与分类器把关。
+
+| 会话 | 设置文件 | 允许的动作 | 仍然生效的检查 |
 | --- | --- | --- | --- |
-| 主会话 | 数据目录 `.claude/settings.json` | tsw MCP 工具；`start_session`、`send_message` / `SendMessage`、`stop_session`、`get_session`、`list_sessions`、`archive_session` | CC-B9；tsw 工具的角色、租约、守卫 |
-| worker | 执行目录（在数据目录 `work/` 之下时）`.claude/settings.local.json` | tsw MCP 工具；`send_message` / `SendMessage`；有合并授权时 `Bash(gh pr merge:*)` | CC-B6、CC-B7；hook 的拒绝优先于允许规则 |
+| 主会话 | 数据目录的 `.claude/settings.json`（`render_instructions` 一并生成） | tsw MCP 工具；`start_session`、`send_message` / `SendMessage`、`stop_session`、`get_session`、`list_sessions`、`archive_session` | CC-B9；tsw 工具按角色、守卫与用户来源校验 |
+| worker | 执行目录的 `.claude/settings.local.json`（执行目录在数据目录 `work/` 之下时，由 `attempt_start` 在会话创建前写入，已有内容按键合并；`work/` 之外的目录（如仓库 worktree）不写） | tsw MCP 工具；`send_message` / `SendMessage`；`gh pr merge` | CC-B6、CC-B7；hook 的拒绝优先于允许规则 |
 
-- `start_session` 由 app 自己的分类器把关、不受允许规则约束，所以创建 worker 会话时 `prompt` 只写短指令、`background` 只写标题与目录，任务书正文由 worker 从 `runs/` 读取（T241 实测：正文中的“自行合并”被分类器误判）。
+`start_session` 与 `send_message` 等会话工具由 app 自己的分类器把关，不受 `permissions.allow` 约束（live 中允许规则已生效，带“worker 自行合并”的任务书正文仍被拦截）。用户 2026-11-07 决定：创建 worker 会话时 `prompt` 只写短指令（角色、attempt、任务书路径），`background` 只写任务标题、仓库与执行目录，任务书正文（含交付与合并方式）由 worker 从 `runs/` 读取；合并的把关点因此在 worker 实际合并时，由上表的允许规则与 hooks 守卫承担，而不是在创建会话时由 app 分类器判断。会话可能在 `attempt_reconcile` 之前开始第一轮（`whoami` 仍为 pending），主会话绑定后发消息通知它。
+
+auto 模式分类器另有自己的规则（`autoMode.allow` / `soft_deny`），其中“Merge Without Review”把 worker 合并自己的 PR 判为未经评审的合并（live 中即使命中允许规则的合并也出现过被拒）。Claude Code 只从用户设置、命令行设置与托管设置读取 `autoMode`，项目设置与本地设置中的一律忽略（Claude Code 2.1.302 中核实），所以 tsw 不能把它与允许规则一起生成：`tsw host install-hint` 给出两条规则，由用户加入自己的用户设置（用户 2026-11-08 决定：凡是 tsw 已把关、分类器仍会误拦的动作，都用 auto 模式规则在策略层放行）：“TaskSteward Worker Dispatch”（主会话以 `attempt_start` 返回的会话名与 `cwd`、只指向任务书的短指令创建 worker 会话；live 中同样的短指令创建曾被分类器以“Blocked by classifier”拒绝一次，用户重试后通过）与“TaskSteward Worker Merge”（限 worker 会话、本任务的 PR、单独的 `gh pr merge … -R …`，不含 `--admin` 与绕过检查）。`attempt_start` 同时返回执行目录在磁盘上的实际写法 `cwd`：app 拒绝大小写不同的同一目录。
+
+Claude Code 对复合命令（`;`、`&&`、管道）逐段核对允许规则，有一段不在规则内就交给权限模式与分类器判断。live 中单独的 `gh pr merge … -R …` 命中规则后直接执行，而后面接了 `git fetch` 等命令的同一合并被分类器以“Merge Without Review”拒绝；worker 指令因此要求合并命令单独运行。
+
+worker 能写自己的执行目录，所以 CC-B2 拦下编辑类工具对执行目录与数据目录中 `.claude/settings*.json` 的修改：遇到权限拒绝时不自行添加允许规则，而是告诉用户；这些文件也会被 tsw 重新生成覆盖。允许规则只放行动作本身；动作的授权仍由账本、配置与用户来源决定，主会话代答也仍然不是用户批准（DN006 §8.1b）。
+
 - 其余一切动作仍由 Claude Code 的权限模式与分类器判断：tsw 不放宽它不检查的动作。
 - 已知缺口：执行目录不在 `work/` 之下（例如数据目录外的仓库 worktree）时不写允许规则，那里的 worker 合并时可能被分类器拦下；由用户在该目录自行配置，或把 worktree 放在 `work/` 之下。
 
 ## 7. 对其他文档与代码的影响
 
-本次已随文档拆分修订的：DN001 §1、§4、§7、§8.2、§10、§11 的措辞，DN002 §3.5 的合并目标，DN006 §6.3 的规则强度与 §8.1a 第 3、4 步。其余待实现时修订：
+本次已随文档拆分修订的：DN001 §1、§4、§7、§8.2、§10、§11 的措辞，DN002 §3.5 的合并目标，DN006 §6.3 的规则强度、§8.1a 第 3、4 步与 §8.1b 定时提示段（移入本文 §3）。其余待实现时修订：
 
 | 位置 | 修订 |
 | --- | --- |
 | DN003 §3.5 `executable_hashing` 执行点、DN003 §7.2 `source_reused`、DN003 新增 `guardrails.disabled`；DN006 §8.1a `user_answer` 新增 `waive_rules` 与事件 `guardrail.waived` | 按 §3、§5 |
-| DN006 §8.1b 定时提示段（T241）中“伪造”；§8.5 `verify` 与 `principal`；§8.6 Teams 核实；§8.8 Portal；§9.7 导入授权 | 按 DN008 §9 与 §5.5 |
+| DN006 §8.5 `verify` 与 `principal`；§8.6 Teams 核实；§8.8 Portal；§9.7 导入授权 | 按 DN008 §9 与 §5.5 |
 | 代码注释：`guard.py` 模块说明“Hooks are the enforced boundary”；`identity.py`、`cli.py`、`guard.py` 中“could claim / invent”式注释 | 改为护栏的说法 |
+| 代码、指令与工具中指向 DN006 §6.3 权限规则的引用（`tsw/host/claude_code.py`、`guard.py`、`mcp.py`、`tools/live.py`，以及 `orchestrate_skill.md`、`plugin/roles/worker.md` 中的相关说明） | 改为指向本文 §6 |
 | 宿主能力 `enforcement: enforced \| advisory` | 取值不变（契约），解释为机械检查覆盖的程度 |
 
 兼容性：`VerifiedSource.principal` 从必需改为可选，旧事件与旧调用照常有效；导入授权的旧决定对象在过渡期仍接受；删除的只是拒绝，不删除工具、事件、字段或命令；新增的只有配置键 `guardrails.disabled`、`user_answer` 的可选参数 `waive_rules` 与事件类型 `guardrail.waived`。
@@ -164,4 +176,4 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 2. **hooks 改为 block list**（行为变化，需测试与 live `host-e2e`）：CC-B1–CC-B10、规则编号与 escape 信息、就地放行（`waive_rules`、`guardrail.waived`）与 `guardrails.disabled`；删除 shell 路径解析、文本兜底、tsw CLI 与 `import tsw` 识别、哈希规则、hook 侧目录一致性检查。
 3. **用户来源、授权与读取范围**（契约兼容变化）：`principal` 可选、删除 `source_reused`、导入授权对象加参数摘要；worker 的检索与 `task_read` 放宽为可读全部任务（DN007 §7.2）。
 
-第 2、3 项涉及 hooks 守卫与 MCP 写工具授权，按 `AGENTS.md` 第 4 节须用户确认后合并。T241 中的 CC-B2、CC-B8、CC-S2 与 §6 在 T241 合并后按本文调整措辞与归类。
+第 2、3 项涉及 hooks 守卫与 MCP 写工具授权，按 `AGENTS.md` 第 4 节须用户确认后合并。T241 引入的 CC-B2、CC-B8、CC-S2 与 §6 只需按本文调整代码注释与拒绝信息的措辞（第 1 项）。
