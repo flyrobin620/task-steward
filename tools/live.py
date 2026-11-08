@@ -138,7 +138,8 @@ class Run:
         manifest = self.manifest()
         for entry in manifest["entries"]:
             if entry["kind"] == kind and entry["name"] == name:
-                if entry.get("state") == "archived" and fields.get("state") == "created":
+                same = fields.get("ref") in (None, entry.get("ref"))
+                if entry.get("state") == "archived" and fields.get("state") == "created" and same:
                     fields = {k: v for k, v in fields.items() if k != "state"}  # never undo cleanup
                 entry.update(fields)
                 break
@@ -147,6 +148,27 @@ class Run:
             manifest["entries"].append(entry)
         self.save(manifest)
         return dict(entry)
+
+    def bind_main(self, session: str) -> None:
+        """Give a main session found in the ledger its own entry, keyed by its ID: the first
+        one fills the ``main`` placeholder written at prepare, later ones get ``main:<ID>``."""
+        manifest = self.manifest()
+        entries = [e for e in manifest["entries"] if e["kind"] == "claude-session"]
+        if any(e.get("ref") == session for e in entries):
+            return
+        placeholder = next((e for e in entries if e["name"] == "main" and not e.get("ref")), None)
+        if placeholder is not None:
+            placeholder.update(state="created", ref=session)
+        else:
+            manifest["entries"].append(
+                {
+                    "kind": "claude-session",
+                    "name": f"main:{session}",
+                    "state": "created",
+                    "ref": session,
+                }
+            )
+        self.save(manifest)
 
     @classmethod
     def create(cls, scenario_id: str) -> Run:
@@ -863,9 +885,8 @@ def host_verify(args: argparse.Namespace) -> int:
         e for e in evs if e["actor"].get("role") == "orchestrator" and e["actor"].get("session_id")
     ]
     main_sessions = sorted({str(e["actor"]["session_id"]) for e in orch})
-    for index, sid in enumerate(main_sessions):
-        name = "main" if index == 0 else f"main-{index + 1}"
-        run.record("claude-session", name, state="created", ref=sid)
+    for sid in main_sessions:
+        run.bind_main(sid)
     checks.append(
         check(
             "H1",

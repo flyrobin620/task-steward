@@ -265,3 +265,23 @@ def test_unknown_sessions_block_cleanup(tmp_path: Path, monkeypatch: pytest.Monk
     assert (entry["state"], entry["ref"]) == ("created", "local_1")
     with pytest.raises(SystemExit):
         live.discard(argparse.Namespace(run_id=run.id))
+
+
+def test_a_new_main_session_never_inherits_an_archived_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    run = live.Run.create("host-e2e")
+    run.record("claude-session", "main")
+    run.bind_main("local_z")
+    run.record("claude-session", "main", state="archived")
+    # A later verify finds another main session that sorts first.
+    for sid in ("local_a", "local_z"):
+        run.bind_main(sid)
+    states = {e["ref"]: e["state"] for e in run.manifest()["entries"]}
+    assert states == {"local_z": "archived", "local_a": "created"}
+    assert [e["ref"] for e in live.unresolved(run)] == ["local_a"]
+    # Recording a different session under an archived name does not keep the archive mark.
+    run.record("claude-session", "main", state="created", ref="local_b")
+    assert next(e for e in run.manifest()["entries"] if e["name"] == "main")["state"] == "created"
