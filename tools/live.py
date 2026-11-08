@@ -2,7 +2,8 @@
 
     python tools/live.py reviewer [--reviewer codex-app-server]   run the reviewer scenario
     python tools/live.py host-e2e prepare                          set up a run for the Claude app
-    python tools/live.py host-e2e verify RUN_ID                    check the run's ledger
+    python tools/live.py host-e2e verify RUN_ID [--trust-prompted yes|no] [--blocked yes|no]
+                                                                  check the run's ledger
     python tools/live.py cleanup RUN_ID [--archived SESSION ...]   finish a run's cleanup
     python tools/live.py list                                       runs and their state
 
@@ -959,6 +960,7 @@ def host_verify(args: argparse.Namespace) -> int:
     checks.append(b2(evs))
     checks.append(scheduled_prompts(run, evs))
     checks.append(merged(run, evs, submitted))
+    checks.append(observed(args))
     # Only the checks the scenario lists (a check's id is the first word of its line).
     wanted = {str(c).split()[0] for c in spec["checks"]} - (set() if prestart else {"H5"})
     checks = [c for c in checks if c["id"] in wanted or c["id"].rstrip("u") in wanted]
@@ -972,6 +974,23 @@ def host_verify(args: argparse.Namespace) -> int:
         "GitHub（push 目标、PR、合并）由运行目录内的 origin.git 与 gh 替身模拟，相关证据为模拟证据"
     )
     return 0 if write_results(run, "host-e2e", checks, notes) else 1
+
+
+def observed(args: argparse.Namespace) -> dict[str, Any]:
+    """What only the operator sees in the app (decision 0003): whether creating a worker session
+    asked to trust its execution directory, and whether a worker's tsw tool, message to the
+    main session or merge was held for a permission prompt or refused by the classifier."""
+    trust, blocked = getattr(args, "trust_prompted", None), getattr(args, "blocked", None)
+    return check(
+        "O",
+        "操作者观察：worker 会话创建时没有信任确认；worker 的 tsw 工具、发消息与合并没有被拦",
+        trust == "no" and blocked == "no",
+        {
+            "trust_prompted": trust or "未记录",
+            "blocked": blocked or "未记录",
+            "evidence": "操作者在 app 中的观察（verify 的 --trust-prompted / --blocked）",
+        },
+    )
 
 
 def permission_rules(run: Run, tasks: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1280,6 +1299,16 @@ def main(argv: list[str] | None = None) -> int:
     prep.set_defaults(handler=host_prepare)
     ver = steps.add_parser("verify")
     ver.add_argument("run_id")
+    ver.add_argument(
+        "--trust-prompted",
+        choices=("yes", "no"),
+        help="操作者观察：创建 worker 会话时 app 是否要求信任执行目录",
+    )
+    ver.add_argument(
+        "--blocked",
+        choices=("yes", "no"),
+        help="操作者观察：worker 的 tsw 工具、发给主会话的消息或合并是否出现权限确认或分类器拒绝",
+    )
     ver.set_defaults(handler=host_verify)
     clean = sub.add_parser("cleanup", help="记录已归档的会话并报告剩余对象")
     clean.add_argument("run_id")

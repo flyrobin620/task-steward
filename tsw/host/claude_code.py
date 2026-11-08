@@ -81,9 +81,10 @@ def render_instructions(home: Home) -> list[Path]:
 def clear_worker_settings(workdir: Path) -> bool:
     """Remove the permission rules tsw once generated in a worker's execution directory.
 
-    Only a file that holds nothing but tsw's own rules goes (and ``.claude/`` when it is left
-    empty); a file with anything else, such as rules the user allowed in that session, is the
-    user's and stays as it is. Returns whether a file was removed.
+    Only a file that is exactly what tsw wrote goes (and ``.claude/`` when it is left empty):
+    the worker rules, with or without the merge rule, and nothing else. A file with anything
+    more or less, such as rules the user allowed in that session, may be the user's and stays
+    as it is. Returns whether a file was removed.
     """
     settings = workdir / WORKER_SETTINGS_PATH
     if not settings.is_file():
@@ -98,8 +99,11 @@ def clear_worker_settings(workdir: Path) -> bool:
     if not isinstance(permissions, dict) or set(cast("dict[str, Any]", permissions)) != {"allow"}:
         return False
     rules: Any = cast("dict[str, Any]", permissions)["allow"]
-    ours = {*WORKER_ALLOW, *WORKER_MERGE_ALLOW}
-    if not isinstance(rules, list) or not all(r in ours for r in cast("list[Any]", rules)):
+    if not isinstance(rules, list):
+        return False
+    found = cast("list[Any]", rules)
+    written = ({*WORKER_ALLOW}, {*WORKER_ALLOW, *WORKER_MERGE_ALLOW})
+    if len(found) != len(set(map(str, found))) or set(map(str, found)) not in written:
         return False
     settings.unlink()
     with contextlib.suppress(OSError):

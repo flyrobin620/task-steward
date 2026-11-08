@@ -68,11 +68,12 @@
   ],
   "operator": [
     "在 Claude 桌面 app 新建会话，文件夹选择本运行的数据目录 {home}（首次打开需要信任该文件夹），权限模式用 auto。",
+    "主会话预启动或派发 worker 时，留意 app 是否为 work/ 下的执行目录弹出“信任此文件夹”的确认；worker 工作时留意它的 tsw 工具、发给主会话的消息与合并是否出现权限确认或分类器拒绝。记下来，最后 verify 时填写。",
     "在该主会话中说：“执行 {code_tasks}”{prestart_step}。",
     "T001 的 worker 会话会在侧栏标为等你回答，下一步框里有问题和按钮；点按钮回答（例如“用 add”）。",
     "{life_step}",
     "交付任务提交后，主会话核验并技术验收；然后在主会话中说：“我验收 {code_tasks}”。",
-    "回到运行 live.py 的会话，运行 python tools/live.py host-e2e verify {run_id}，然后归档本次运行的会话并运行 cleanup。"
+    "回到运行 live.py 的会话，运行 python tools/live.py host-e2e verify {run_id} --trust-prompted <yes|no> --blocked <yes|no>（按你在 app 中看到的填写），然后归档本次运行的会话并运行 cleanup。"
   ],
   "checks": [
     "H1 隔离：数据目录与产品仓库指向本运行，主会话在临时数据目录中持有调度租约",
@@ -82,7 +83,8 @@
     "H4 提交与技术验收：每个交付任务的 worker.submitted 与 task.accepted",
     "H5 暂停、恢复与取消（运行包含 T003 时）：T003 的 task.paused、task.resumed、task.cancelled",
     "B1 会话内提问：T001 的 input.escalated（in_session）、hook 记录的 input.session_message（来自同一 worker 会话）、引用该消息的 input.resolved（in-session，source_kind=user）；问题在下一步框中以按钮呈现，点按钮的回答同样被 hook 记录",
-    "C 自行合并：每个交付任务（不论类型）的最后一次提交带 merge，merged_head 等于提交 HEAD，替身记录的 PR 已合并且合并提交在 origin 的 main 上；merge.ci 是替身为该合并提交记录的运行，merge.live 写明了结果或原因"
+    "C 自行合并：每个交付任务（不论类型）的最后一次提交带 merge，merged_head 等于提交 HEAD，替身记录的 PR 已合并且合并提交在 origin 的 main 上；merge.ci 是替身为该合并提交记录的运行，merge.live 写明了结果或原因",
+    "O 操作者观察：worker 会话创建时没有弹出信任确认；worker 的 tsw 工具、发给主会话的消息与合并没有出现权限确认或分类器拒绝（verify 的 --trust-prompted no --blocked no）"
   ],
   "prerequisites": [
     "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则“TaskSteward Worker Merge”与“TaskSteward Worker Dispatch”（worker 的执行目录不带权限规则，合并与派发依赖它们；Claude Code 不读取项目设置中的 autoMode）。",

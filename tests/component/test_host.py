@@ -884,14 +884,21 @@ def test_a_workers_execution_directory_gets_no_permission_rules(home: Home) -> N
     )
     orchestrator = Server(h.home, {SESSION_ENV: "orch-1"}, h.home.root)
     orchestrator.machine = "m1"
-    # Directories an earlier tsw readied: T002's holds only tsw's rules, T003's the user's too.
-    ours = {"permissions": {"allow": ["mcp__plugin_task-steward_tsw", "Bash(gh pr merge:*)"]}}
-    theirs = {"permissions": {"allow": ["mcp__plugin_task-steward_tsw", "Bash(ls:*)"]}}
-    for task_id, earlier in (("T002", ours), ("T003", theirs)):
+    # Directories an earlier tsw readied: T002's and T004's hold exactly what tsw wrote (with
+    # and without the merge rule); T003's and T005's may be the user's (more, or fewer, rules).
+    worker = ["mcp__plugin_task-steward_tsw", "SendMessage", "mcp__ccd_session_mgmt__send_message"]
+    earlier = {
+        "T002": {"permissions": {"allow": [*worker, "Bash(gh pr merge:*)"]}},
+        "T003": {"permissions": {"allow": [*worker, "Bash(ls:*)"]}},
+        "T004": {"permissions": {"allow": worker}},
+        "T005": {"permissions": {"allow": ["SendMessage"]}},
+    }
+    for task_id, content in earlier.items():
         settings = h.home.root / "work" / task_id / "a1" / ".claude" / "settings.local.json"
         settings.parent.mkdir(parents=True)
-        settings.write_text(json.dumps(earlier), encoding="utf-8")
-    for task_id, kind in (("T001", "code"), ("T002", "research"), ("T003", "design")):
+        settings.write_text(json.dumps(content), encoding="utf-8")
+    kinds = {"T001": "code", "T002": "research", "T003": "design", "T004": "code", "T005": "code"}
+    for task_id, kind in kinds.items():
         h.register(task_id, kind=kind)
         h.plan(task_id)
         started = orchestrator.call(
@@ -902,10 +909,11 @@ def test_a_workers_execution_directory_gets_no_permission_rules(home: Home) -> N
         assert started["cwd"] == expected
     # A folder with its own permission rules asks for trust again, so tsw writes none; the
     # worker's actions are allowed by the user's auto-mode rules (decision 0003).
-    assert not (h.home.root / "work" / "T001" / "a1" / ".claude").exists()
-    assert not (h.home.root / "work" / "T002" / "a1" / ".claude").exists()
-    kept = h.home.root / "work" / "T003" / "a1" / ".claude" / "settings.local.json"
-    assert json.loads(kept.read_text(encoding="utf-8")) == theirs
+    for task_id in ("T001", "T002", "T004"):
+        assert not (h.home.root / "work" / task_id / "a1" / ".claude").exists()
+    for task_id in ("T003", "T005"):
+        kept = h.home.root / "work" / task_id / "a1" / ".claude" / "settings.local.json"
+        assert json.loads(kept.read_text(encoding="utf-8")) == earlier[task_id]
     # No session may edit the settings files: not the worker, not the orchestrator.
     workdir = h.home.root / "work" / "T001" / "a1"
     for target in (
