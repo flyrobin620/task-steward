@@ -280,8 +280,8 @@ class Server:
             row = task(conn, str(task_id))
         recorded = (attempt or {}).get("workdir") or f"work/{task_id}/{attempt_id}"
         workdir = workdir_path(self.home, str(recorded))
-        if within(workdir, self.home.root / "work"):
-            workdir.mkdir(parents=True, exist_ok=True)
+        # attempt_start has created the directory (wherever it is).
+        if within(workdir, self.home.root / "work") and workdir.is_dir():
             render_worker_settings(workdir, merge=merge_authorized(config, row))
         if workdir.is_dir():
             # The app refuses a cwd spelled differently from the folder on disk (``A1`` for

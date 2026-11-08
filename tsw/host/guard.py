@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -25,9 +26,10 @@ from tsw.host import inbox as inbox_mod
 from tsw.host import shell
 from tsw.host.identity import HOST_CLI_COMMANDS, Identity, resolve, within
 from tsw.ledger import Ledger
-from tsw.machine.ask_user import handoff_due, session_message
+from tsw.machine.ask_user import handoff_due, is_automated, session_message
 from tsw.machine.guards import merge_authorized
 from tsw.machine.model import row_dict
+from tsw.storage.fs import atomic_write
 
 WRITE_TOOLS = {
     "Edit": "file_path",
@@ -39,6 +41,8 @@ START_SESSION = "mcp__ccd_session__start_session"
 # The host's session-scheduling tools, and the tag every scheduled prompt of a worker carries.
 SCHEDULERS = ("CronCreate", "ScheduleWakeup")
 SCHEDULED_TAG = "<scheduled-task"
+# Under the data directory's cache/: whether each orchestrator session's current turn is the user's.
+TURNS_DIR = "turns"
 TSW_OWNED = ("ledger", "runs", "todo", "config", "outbox", "legacy", "views", "cache", "locks")
 _HASH = re.compile(
     r"\b(sha\d*sum|md5sum|shasum|certutil\s+-hashfile|get-filehash)\b", re.IGNORECASE
@@ -568,6 +572,9 @@ class Guard:
 
     def on_UserPromptSubmit(self, who: Identity) -> dict[str, Any] | None:
         prompt = str(self.payload.get("prompt") or "")
+        if who.role == "orchestrator":
+            self._mark_turn(who, user=not is_automated(prompt))
+            return None
         if who.role != "worker":
             return None
         notes: list[str] = []
@@ -613,24 +620,38 @@ class Guard:
     def on_Stop(self, who: Identity) -> dict[str, Any] | None:
         again = bool(self.payload.get("stop_hook_active"))
         if who.role == "orchestrator":
+            user_turn = self._take_turn(who)
             if again or not self.config.valid:
                 return None
+            reasons: list[str] = []
             with self.ledger.view() as conn:
                 pending = inbox_mod.inbox(conn, self.ledger.storage, self.config)
                 due = handoff_due(conn, utc_now())
+                # Only the user's own turn can create sessions (G-WINDOW): elsewhere a reminder
+                # could not be acted on. A session reading while another holds the lease neither.
+                prestart = (
+                    inbox_mod.needs_prestart(conn, self.config)
+                    if user_turn and self._may_dispatch(conn, who)
+                    else []
+                )
             if pending:
-                return {
-                    "decision": "block",
-                    "reason": f"还有 {len(pending)} 条未处理的回传，"
-                    "先调用 inbox 处理并 inbox_ack。",
-                }
+                reasons.append(
+                    f"还有 {len(pending)} 条未处理的回传，先调用 inbox 处理并 inbox_ack。"
+                )
             if due:
-                return {
-                    "decision": "block",
-                    "reason": f"有 {len(due)} 个 worker 会话中的问题已超时无人回复："
-                    "运行 sync 转交，再按 inbox 处理。",
-                }
-            return None
+                reasons.append(
+                    f"有 {len(due)} 个 worker 会话中的问题已超时无人回复："
+                    "运行 sync 转交，再按 inbox 处理。"
+                )
+            if prestart:
+                names = "、".join(str(item["task_id"]) for item in prestart)
+                reasons.append(
+                    f"这是用户的 turn，结束后就不能再创建会话：{names} 还没有会话（attention 的 "
+                    "needs_prestart）。按 orchestrate skill 为它们预启动：attempt_start"
+                    "（purpose: prestart，user_turn: true）→ start_session → attempt_reconcile。"
+                    "确实不该现在预启动时（例如用户要求先不开始），说明原因后直接结束。"
+                )
+            return {"decision": "block", "reason": "".join(reasons)} if reasons else None
         with self.ledger.view() as conn:
             row = row_dict(
                 conn.execute(
@@ -649,6 +670,42 @@ class Guard:
                 "（或用 review_complete / review_fail 记录结果）后再结束。",
             }
         return None
+
+    def _turn_file(self, who: Identity) -> Path:
+        name = re.sub(r"[^A-Za-z0-9_.-]", "_", str(who.session_id or "none"))
+        return self.home.cache_dir / TURNS_DIR / f"{name}.json"
+
+    def _mark_turn(self, who: Identity, *, user: bool) -> None:
+        """Remember whether the orchestrator's current turn is the user's own (``UserPromptSubmit``
+        sees every turn's prompt; the ``Stop`` hook does not). A cache file, not a ledger event:
+        it only steers the reminder at the end of this turn."""
+        path = self._turn_file(who)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(path, json.dumps({"user_turn": user, "at": utc_now()}).encode("utf-8"))
+        except OSError as exc:  # a missed mark only skips a reminder
+            print(f"tsw guard: turn not recorded: {exc}", file=sys.stderr)
+
+    def _take_turn(self, who: Identity) -> bool:
+        """Whether the turn that is ending was the user's; the mark is used up either way, so a
+        later turn the hook did not see (no ``UserPromptSubmit``) never counts as the user's."""
+        path = self._turn_file(who)
+        try:
+            user = bool(json.loads(path.read_text(encoding="utf-8")).get("user_turn"))
+        except (OSError, ValueError, AttributeError):
+            return False
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return user
+
+    def _may_dispatch(self, conn: sqlite3.Connection, who: Identity) -> bool:
+        """No other session holds a valid scheduling lease (G-LEASE would refuse a prestart)."""
+        held = lease.lease_row(conn)
+        if held is None or lease.is_expired(held, utc_now()):
+            return True
+        return held["holder_session"] == who.session_id and held["machine"] == self.machine
 
     def _returns_to_root(self, command: str, who: Identity) -> bool:
         """A bare ``cd`` into a writable root is how a drifted worker gets back."""

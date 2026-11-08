@@ -14,7 +14,7 @@ from tsw.commands import Command, CommitContext
 from tsw.config import EffectiveConfig, resolve_repository
 from tsw.errors import rejected
 from tsw.events import EventDraft, digest
-from tsw.home import same_dir
+from tsw.home import Home, same_dir, workdir_path
 from tsw.importer.resume import resume_package
 from tsw.machine import guards
 from tsw.machine.base import (
@@ -556,6 +556,17 @@ def _session_name(env: ToolEnv, task_id: str, attempt_id: str, generation: int) 
     )
 
 
+def _ensure_dir(home: Home, recorded: str) -> None:
+    """Create the execution directory a session is about to be created in, if it is missing."""
+    path = workdir_path(home, recorded)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise rejected(
+            "无法创建执行目录", reason="workdir_unavailable", workdir=recorded, error=str(exc)
+        ) from exc
+
+
 @tool(
     "attempt_start", "orchestrator", description="请求创建会话（attempt.start_requested，含预启动）"
 )
@@ -612,6 +623,9 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         # Every prestart generation records its directory, the default included, so a retry
         # never inherits the directory of a generation that was not created.
         workdir = given_workdir or f"work/{task_id}/{attempt_id}"
+        # The host creates the session in this directory and fails when it does not exist.
+        recorded = current["workdir"] if purpose == "dispatch" and current is not None else None
+        _ensure_dir(ctx.home, str(recorded or workdir))
         generation = (int(previous["generation"]) if previous else 0) + 1
         return [
             EventDraft(

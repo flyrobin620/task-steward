@@ -267,6 +267,115 @@ def test_stop_blocks_on_unhandled_reports_and_unfinished_reviews(
     )
 
 
+def prompt_then_stop(h: Harness, prompt: str | None, session: str = "orch-1") -> Any:
+    """One orchestrator turn: the prompt that starts it (``None``: a turn the hook did not see)
+    and the ``Stop`` hook that ends it."""
+    if prompt is not None:
+        assert guard(h, session, h.home.root, prompt=prompt).run("UserPromptSubmit") is None
+    return guard(h, session, h.home.root).run("Stop")
+
+
+@mark.use_case("UC-HOST-002")
+@mark.use_case("UC-HOST-003")
+def test_a_user_turn_does_not_end_while_tasks_wait_for_a_session(h: Harness) -> None:
+    h.register("T001")
+    h.register("T002")
+    h.plan("T001")
+    h.plan("T002", deps=["T001"])
+    with h.ledger.view() as conn:
+        listed = inbox_mod.attention(conn, h.ledger.storage, h.config)["needs_prestart"]
+    assert listed == [
+        {"task_id": "T001", "status": "ready"},
+        {"task_id": "T002", "status": "waiting_dependency", "waiting_on": ["T001"]},
+    ]
+    stop = prompt_then_stop(h, "执行 T001 和 T002")
+    assert stop is not None and stop["decision"] == "block"
+    assert "T001、T002" in stop["reason"] and "attempt_start" in stop["reason"]
+    # Blocked once: the stop that follows in the same turn goes through.
+    assert guard(h, "orch-1", h.home.root, stop_hook_active=True).run("Stop") is None
+    # The app puts its own reminders in front of the user's words: still the user's turn.
+    reminded = prompt_then_stop(h, "<system-reminder>linked sessions</system-reminder>\n继续")
+    assert reminded is not None and reminded["decision"] == "block"
+    # Turns that cannot create sessions are not reminded.
+    for injected in (
+        '<cross-session-message from="w">done</cross-session-message>',
+        "<side-sessions-event>t001 ended</side-sessions-event>",
+        "<scheduled-task>check</scheduled-task>",
+        "<system-reminder>only a reminder</system-reminder>",
+    ):
+        assert prompt_then_stop(h, injected) is None
+    assert prompt_then_stop(h, None) is None  # the user's mark was used up by the last stop
+    # Another session reads while this one holds the lease: it could not prestart either.
+    assert prompt_then_stop(h, "执行", session="orch-2") is None
+    # Once both have a session, the user's turn ends normally.
+    for task_id in ("T001", "T002"):
+        started = h.run("attempt_start", task_id=task_id, purpose="prestart", user_turn=True)
+        assert (h.home.root / "work" / task_id / "a1").is_dir()
+        h.run(
+            "attempt_reconcile",
+            task_id=task_id,
+            attempt="a1",
+            generation=started["events"][0]["data"]["generation"],
+            outcome="created",
+            session_ref=f"w-{task_id}",
+        )
+    assert prompt_then_stop(h, "执行") is None
+
+
+@mark.use_case("UC-HOST-003")
+def test_needs_prestart_respects_the_standby_limit(home: Home) -> None:
+    h = Harness(home, {"scheduling": {"prestart": {"enabled": True, "max_standby": 2}}})
+    for task_id in ("T001", "T002", "T003"):
+        h.register(task_id)
+        h.plan(task_id)
+    h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+
+    def listed() -> list[str]:
+        with h.ledger.view() as conn:
+            items = inbox_mod.attention(conn, h.ledger.storage, h.config)["needs_prestart"]
+        return [item["task_id"] for item in items]
+
+    assert listed() == ["T002"]  # one place left; T001 is being created
+    h.run("attempt_start", task_id="T002", purpose="prestart", user_turn=True)
+    assert listed() == []
+    assert prompt_then_stop(h, "执行") is None  # nothing can be prestarted now
+
+
+@mark.use_case("UC-DISPATCH-001")
+def test_attempt_start_creates_the_execution_directory_anywhere(
+    h: Harness, tmp_path: Path
+) -> None:
+    h.register("T001")
+    h.plan("T001")
+    h.register("T002")
+    h.plan("T002")
+    elsewhere = tmp_path / "worktrees" / "T001"
+    h.run(
+        "attempt_start", task_id="T001", purpose="prestart", user_turn=True, workdir=str(elsewhere)
+    )
+    assert elsewhere.is_dir()
+    dispatched = tmp_path / "worktrees" / "T002"
+    h.run("task_dispatch", task_id="T002", workdir=str(dispatched), user_turn=True)
+    assert not dispatched.exists()
+    h.run("attempt_start", task_id="T002", purpose="dispatch", user_turn=True)
+    assert dispatched.is_dir()
+    # A directory that cannot be created is refused before anything is recorded.
+    h.register("T003")
+    h.plan("T003")
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x", encoding="utf-8")
+    with pytest.raises(TswError) as refused:
+        h.run(
+            "attempt_start",
+            task_id="T003",
+            purpose="prestart",
+            user_turn=True,
+            workdir=str(blocker / "T003"),
+        )
+    assert refused.value.details["reason"] == "workdir_unavailable"
+    assert h.query("SELECT * FROM attempts WHERE task_id = 'T003'") == []
+
+
 def ack(h: Harness, sequences: list[int], session: str = "orch-1") -> Any:
     return inbox_mod.ack(
         sequences,
@@ -695,13 +804,13 @@ def test_default_and_home_relative_execution_directories_are_recognised(h: Harne
     # A prestart without a directory creates the session in work/<task>/<attempt>.
     h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
     default = h.home.root / "work" / "T001" / "a1"
-    default.mkdir(parents=True)
+    assert default.is_dir()  # attempt_start created it
     assert Server(h.home, {SESSION_ENV: "w-1"}, default).identity().pending
     # A dispatch may record its directory relative to the data directory.
     h.run("task_dispatch", task_id="T002", workdir="work/T002-wt", user_turn=True)
     h.run("attempt_start", task_id="T002", purpose="dispatch", user_turn=True)
     relative = h.home.root / "work" / "T002-wt"
-    relative.mkdir(parents=True)
+    assert relative.is_dir()
     who = Server(h.home, {SESSION_ENV: "w-2"}, relative).identity()
     assert (who.pending, who.task_id) == (True, "T002")
 
@@ -726,7 +835,7 @@ def test_a_prestart_retry_without_a_directory_uses_the_default(h: Harness, tmp_p
     )
     again = h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
     default = h.home.root / "work" / "T001" / "a1"
-    default.mkdir(parents=True)
+    assert default.is_dir()
     assert Server(h.home, {SESSION_ENV: "w-1"}, default).identity().pending
     h.run(
         "attempt_reconcile",
