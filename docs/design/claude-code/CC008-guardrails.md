@@ -34,13 +34,13 @@
 | CC-B3 | worker | 编辑类工具的目标在本任务仓库的主检出（`repositories.<repo>.path`）中，而执行目录不在其中 | 写进主仓库检出而不是任务 worktree（对象错误） | 在执行目录（任务 worktree）中修改 |
 | CC-B4 | worker | `git … push`，仓库没有 `delivery.push` | 未授权的远端动作 | 不推送；提交时说明 |
 | CC-B5 | worker | `gh pr create`，仓库没有 `delivery.create_pr` | 同上 | 同上 |
-| CC-B6 | worker | `gh pr merge`，或 `gh api` 且参数含 `merge`；任务不是开发任务或仓库没有 `delivery.merge` | 不该由 worker 合并时合并，主会话流程随之错乱 | 提交时用 `merge_skipped` 说明，由主会话合并 |
+| CC-B6 | worker | `gh pr merge`，或 `gh api` 且参数含 `merge`；任务不是开发任务或仓库没有 `delivery.merge` | 不该由 worker 合并时合并，主会话流程随之错乱 | 提交时用 `merge_skipped` 说明，由主会话合并。**不可放行**：它是 G-SUBMIT 合并授权的镜像，放行后合并记录仍会被 G-SUBMIT 拒绝；需要 worker 合并时由用户授权修改 `delivery.merge`（主会话 `config_change`） |
 | CC-B7 | worker | 有合并授权，但 `gh pr merge` 没有 `-R HOST/OWNER/NAME` 或本仓库的 PR 链接与配置的 `host`（默认 `github.com`）、`repository` 一致；或用 `gh api` 合并 | 按当前目录或遗留的 `GH_HOST` 合并了别的仓库或别的主机的 PR（目标错误） | `gh pr merge <编号> -R github.com/<owner>/<name>`，或该仓库的 PR 链接 |
 | CC-B8 | worker | `CronCreate` / `ScheduleWakeup` 的提示不以 `<scheduled-task>` 开头 | 定时提示到达时与用户消息无法区分，被记成用户答复（live `host-e2e` 实测，误认来源） | 提示以 `<scheduled-task>` 开头、`</scheduled-task>` 结束 |
-| CC-B9 | 主会话 | `start_session` 的会话名不是已落账、代次有效的 attempt | 没有先 `attempt_start` 就建会话，或重复建会话 | 先 `attempt_start`，用返回的会话名 |
+| CC-B9 | 主会话 | `start_session` 的会话名不是已落账、代次有效的 attempt | 没有先 `attempt_start` 就建会话，或重复建会话 | 先 `attempt_start`，用返回的会话名。**不可放行**：没有落账的会话无法绑定到 attempt（DN002 §6） |
 | CC-B10 | 已撤销 / 待绑定 | 编辑类工具、Bash、`start_session` | 已被替换的会话继续写；绑定前就开始工作（状态漂移） | 已撤销：回到主会话；待绑定：等主会话绑定后的消息 |
 
-**escape**（DN008 §5 第 4 条）：每条拒绝信息以规则编号开头，写出上表的正确做法，并写明“动作确属任务需要时，问用户；用户同意后用 `user_answer` 登记放行这条规则”。具体做法：
+**escape**（DN008 §5 第 4 条）：每条拒绝信息以规则编号开头，写出上表的正确做法；可放行的规则还写明“动作确属任务需要时，问用户；用户同意后用 `user_answer` 登记放行这条规则”。CC-B6、CC-B9 是状态机守卫的镜像，不能放行或关闭（`waive_rules` 与 `guardrails.disabled` 中出现它们时以 `invalid_input` 拒绝），只给出状态机的路径。其余规则的做法：
 
 1. **就地放行（worker）**：worker 用 `ask_user` 说明被拦下的动作与理由；用户在 worker 会话中回复后，worker 调用 `user_answer`，除答复外带上 `waive_rules`（如 `["CC-B4"]`）。tsw 用 hook 记录的用户原话记录 `guardrail.waived`（规则编号、attempt、用户来源）。hook 对该 attempt 不再执行这些规则；attempt 结束即失效。这与评审预算追加的做法相同（DN006 §8.1a），不需要主会话参与。
 2. **长期关闭（用户）**：配置 `guardrails.disabled` 列出的规则对所有会话不再拦截。它是新的权限类键（DN003 §7.2），由主会话按用户在主会话或其他渠道的原话修改；worker 会话中的原话只用于就地放行，不改全局配置。
