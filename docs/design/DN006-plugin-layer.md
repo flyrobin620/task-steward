@@ -2,7 +2,7 @@
 
 - 状态：设计草案（T233 r5，已按 PoC 结果修订）
 - 日期：2026-11-05
-- 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md)
+- 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN008 校验原则](DN008-guardrails.md) · 实现：[CC006 Claude Code 插件](claude-code/CC006-plugins.md)
 
 ## 1. 目标
 
@@ -189,11 +189,7 @@ class HostIntegration(Protocol):
 
 宿主声明为 `advisory` 时，STATUS 页和任务报告标注“规则为提示级”，并要求主会话在 G-ACCEPT 中额外核对写入范围（`git status` 与 diff 范围检查）。
 
-`claude-code` 的 enforced 有边界：编辑类工具（Write、Edit 等）的目标路径可以精确检查；Bash 命令只能尽力解析——识别重定向、`tee`、`cp`/`mv`/`rm`/`mkdir`、`sed -i`、PowerShell 的 `Set-Content`/`Out-File`/`New-Item` 等常见写法，跟踪 `cd`，并递归读取 `bash -c`、`powershell -Command`、`cmd /c`；变量、脚本内部的写入看不到。因此 G-ACCEPT 对 `claude-code` 同样核对 diff 是否落在可写根内。git/gh 的推送、建 PR、合并按程序名识别（忽略路径与 `.exe` 后缀），分别对照仓库的 `delivery.push`、`create_pr`、`merge` 授权；合并还核对目标仓库（`-R` / `--repo`、PR 链接、REST 合并路径）是本任务的仓库。
-
-`claude-code` 的插件按用户级启用，任何目录的会话（主会话、`~/tsw-worktrees` 或 `work/<任务>/<attempt>` 中的 worker、无关会话）都会加载它，所以插件只携带每个会话都需要的 MCP 注册与 hooks。主会话的流程说明不放进插件：`render_instructions` 把 `CLAUDE.md` 和 `orchestrate` skill 写进数据目录，后者是 Claude Code 的项目 skill（`<cwd>/.claude/skills/`），只有以数据目录为工作目录的会话会发现它。Claude Code 也从上级目录加载 `CLAUDE.md` 与项目 skill，执行目录在数据目录之下（`work/<任务>/<attempt>`）的 worker 同样会看到二者，所以二者都写明：`whoami` 的角色不是 orchestrator 时忽略。skill 的来源在产品代码中（`tsw/host/orchestrate_skill.md`），产品更新后重新运行 `tsw host render`。
-
-插件由 Claude Code 复制到插件缓存运行，缓存里没有 `tsw` 运行时。启动器按顺序查找：`TSW_REPO` 环境变量、插件所在的产品仓库（源码树或原地使用的本地市场）、`tsw init` 写入数据目录标记文件的 `product_repo`；都找不到时 MCP server 报错退出，hooks 静默放行。
+各宿主集成的具体做法见实现文档：Claude Code 见 [CC006 §2](claude-code/CC006-plugins.md)，它的护栏见 [CC008](claude-code/CC008-guardrails.md)。规则强度描述的是机械检查覆盖的程度，不是安全强度（DN008）：`enforced` 表示宿主上有确定性的护栏，`advisory` 表示只能靠指令与事后核对。
 
 **权限规则**（用户 2026-11-07 决定）：Claude app 的 auto 权限模式由分类器判断每次工具调用是否出自用户意图。它只认对话中用户本人的话，不认 tsw 的配置、账本与任务书，所以把派发 worker（`start_session`）、主会话代为决定、worker 按 `delivery.merge` 合并等 tsw 已经把关的动作当作未经授权而拒绝（live `host-e2e` 中出现）。对 tsw 自己把关的动作，`claude-code` 生成 Claude Code 的显式允许规则（`permissions.allow`），由 hooks 守卫与 MCP 工具的授权检查作为这些动作的门禁；其他一切仍由宿主的权限模式与分类器把关。
 
@@ -264,7 +260,7 @@ class SessionAdapter(Protocol):
 | 实现 | 方式 | interactive | oneshot（只读方式） | 增量续用 | 用户直接对话 | dispatch_window |
 | --- | --- | --- | --- | --- | --- | --- |
 | `claude-app` | delegated | 是：`start_session` / `SendMessage` / `get_session` / `stop_session`，按会话名对账；支持预启动 | 否（只能由模型调用，tsw 无法同步等结果） | — | 是（侧栏子会话） | 是 |
-| `claude-headless` | direct | 待验证（Agent SDK 会话） | 是：`claude -p`，严格只读工具白名单（调用约定见 DN004 §3.3） | 是（`--resume`） | 否 | 否 |
+| `claude-headless` | direct | 待验证（Agent SDK 会话） | 是：`claude -p`，严格只读工具白名单（调用约定见 [CC004](claude-code/CC004-reviewer.md)） | 是（`--resume`） | 否 | 否 |
 | `codex-app-server` | direct | 暂不承载 worker（B7：不能按名称或目录及时找回线程） | 是：一次性线程，`sandbox=read-only` | 是（keep / resume thread） | 是（受管独立线程） | 否 |
 | `codex-exec` | direct | 否 | 是：`codex exec`，`--sandbox read-only` | 否（每轮全量 + 上轮意见） | 否 | 否 |
 | `copilot-app` | delegated | 是：`create_session` / `send_session_message`（interactive），按会话名对账 | 否 | — | 是（app 独立会话） | 待验证 |
@@ -320,8 +316,8 @@ interactive 动作映射（承载 worker 的实现）：
 
 1. worker 调用 `ask_user`（问题全文；可带上评审升级等待处理事项的编号；只有用户本人能决定的事——凭据、验收、`reserved_for_user` 中的决定——标 `reserved`）。tsw 记录 `input.escalated`（`kind: in_session`，渠道 `in-session`，记下 worker 会话与转交时间），任务经 T11 进入 `waiting_user`，名额保持。
 2. worker 在本会话的回复中把问题原样写给用户，结束这一轮。这个问题**不进入主会话 inbox**：主会话的 `attention` 只显示“某任务有一个会话内问题、何时转交”，不显示问题内容；STATUS 页是给用户看的，显示问题与转交时间。
-3. 用户在 worker 会话中发消息时，`UserPromptSubmit` hook 把消息原文记为观察事件 `input.session_message`（消息编号 `M-…`），并把编号告诉 worker。其他会话或 app 注入的消息（`<cross-session-message>`、`<side-sessions-event>`、定时任务等）不记录。只有该会话最新的一个问题接收消息：它已由用户在本会话答复、被更新的问题取代，或任务 revision 已变时，不再记录。hook 入口只由宿主调用：任何会话在命令行运行 `tsw guard` 都被 hooks 拒绝，否则会话可以自己编造“用户消息”。
-4. 消息回答了问题时，worker 调用 `user_answer`，必须引用 hook 记录的消息编号，且该消息来自同一 worker 会话。tsw 用记录中的原文构造 `VerifiedSource`（渠道 `in-session`），记录 `input.resolved`，经 T12 回到离开时的子状态。同一次答复可以带上用户批准的追加评审轮次（`source = user`，没有累计上限）、批准延后或认定不成立的阻断项。用户原话来自 hook，不来自 worker 的转述，所以 worker 不能伪造答复。
+3. 用户在 worker 会话中发消息时，宿主集成把消息原文记为观察事件 `input.session_message`（消息编号 `M-…`），并把编号告诉 worker（Claude Code 用 `UserPromptSubmit` hook，见 [CC001 §6](claude-code/CC001-sessions-and-hooks.md)）。其他会话、app 或定时任务注入的消息不记录。只有该会话最新的一个问题接收消息：它已由用户在本会话答复、被更新的问题取代，或任务 revision 已变时，不再记录。
+4. 消息回答了问题时，worker 调用 `user_answer`，必须引用 hook 记录的消息编号，且该消息来自同一 worker 会话。tsw 用记录中的原文构造 `VerifiedSource`（渠道 `in-session`），记录 `input.resolved`，经 T12 回到离开时的子状态。同一次答复可以带上用户批准的追加评审轮次（`source = user`，没有累计上限）、批准延后或认定不成立的阻断项。答复以记录的用户原话为准，不以 worker 的转述为准（DN008 §9）。
 
 用户回复了但还没有回答问题（例如“让我想想”）时，worker 在会话中继续与用户交流；问题不会因超时转交。
 
@@ -678,4 +674,4 @@ worker 用 direct 的 remote-hub 会话，主会话可以在任何宿主：
 | B5 | Codex App Server 的 `workspace-write` 可写根足以作为 worker 写入边界 | 降级为 advisory，并在 G-ACCEPT 核对 |
 | B6 | Claude Code 会话内的定时唤醒可用于 Teams 轮询 | 只在主会话被事件或用户唤醒时轮询 |
 | B7 | Codex App Server 创建线程时可写入可检索的标题或元数据 | **PoC 部分成立**：`thread/name/set` 可写可读，但未归档线程在 30 秒以上都不能按名称或目录列出（线程来源记为 `vscode`）。`codex-app-server` 暂只做评审，tsw 以 `thread/start` 的同步返回值登记线程 ID |
-| B8 | `claude -p` 能只读、非交互地运行，并可用 `--resume` 续用 | **PoC 成立，需特定参数**：清除宿主环境变量、严格工具白名单、显式模型（DN004 §3.3） |
+| B8 | `claude -p` 能只读、非交互地运行，并可用 `--resume` 续用 | **PoC 成立，需特定参数**：清除宿主环境变量、严格工具白名单、显式模型（[CC004](claude-code/CC004-reviewer.md)） |

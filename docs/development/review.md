@@ -7,7 +7,7 @@
 - PR 一开就启动独立评审，与 CI 并行；串行会让等待时间翻倍。
 - 评审者使用与作者不同的模型：同一模型有相同的盲点。默认评审器是 Codex `gpt-6-astra`（推理强度
   medium，只读沙箱），与 TaskSteward 自己的 worker 自评审一致（DN004）；作者本身是 Codex 时改用
-  Claude 只读评审（`claude -p`，调用约定见 DN004 §3.3）。
+  Claude 只读评审（`claude -p`，调用约定见 `docs/design/claude-code/CC004-reviewer.md`）。
 - 评审请求写明意图、必须保持的不变量、刻意的取舍，以及评审的提交 SHA，避免取舍被当作问题反复提出。
 - 评审意见是假设。核对：
   - 能否经受支持的入口触发，包括它需要的并发、失败或恢复序列；
