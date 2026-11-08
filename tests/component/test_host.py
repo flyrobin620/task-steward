@@ -12,9 +12,11 @@ from typing import Any
 
 import pytest
 
-from tests.machine_harness import Harness
+from tests.machine_harness import ORCH, Harness
 from tsw.cli import main as cli_main
+from tsw.commands import Command
 from tsw.errors import TswError
+from tsw.events import EventDraft
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
 from tsw.host.guard import Guard
@@ -447,6 +449,61 @@ def test_a_prestarted_session_has_a_brief_that_follows_the_requirement(
     assert at_work["brief"]["session_ref"] == "w-2" and at_work["brief"]["revision"] == 3
     assert "第三版目标" in brief.read_text(encoding="utf-8")
     assert server.call("whoami", {})["brief_revision"] == 3
+
+
+@mark.use_case("UC-DISPATCH-001")
+def test_a_session_prestarted_before_briefs_gets_one_on_the_next_change(h: Harness) -> None:
+    h.register("T001")
+    h.plan("T001")
+    # attempt.start_requested as written before prestart wrote briefs: no brief fields.
+    h.ledger.commit(
+        Command(
+            actor=ORCH.actor(),
+            input={"op": "old_prestart"},
+            build=lambda _ctx: [
+                EventDraft(
+                    type="attempt.start_requested",
+                    task_id="T001",
+                    revision=1,
+                    attempt="a1",
+                    data={
+                        "attempt": "a1",
+                        "generation": 1,
+                        "session_name": "t001-a1-g1",
+                        "purpose": "prestart",
+                        "controller": "orch-1",
+                        "adapter": "claude-app",
+                        "workdir": "work/T001/a1",
+                    },
+                )
+            ],
+        )
+    )
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=1,
+        outcome="created",
+        session_ref="w-1",
+    )
+    assert h.query("SELECT brief_path FROM attempts")[0]["brief_path"] is None
+    updated = change(h, "T001", 1, "补写的目标")
+    assert updated["brief"] == {
+        "attempt": "a1",
+        "revision": 2,
+        "path": "runs/T001/a1/brief.md",
+        "read_set": ["T001"],
+        "session_ref": "w-1",
+    }
+    row = h.query("SELECT brief_path, brief_revision, read_set FROM attempts")[0]
+    assert row == {
+        "brief_path": "runs/T001/a1/brief.md",
+        "brief_revision": 2,
+        "read_set": '["T001"]',
+    }
+    brief = h.home.root / "runs" / "T001" / "a1" / "brief.md"
+    assert "补写的目标" in brief.read_text(encoding="utf-8")
 
 
 def ack(h: Harness, sequences: list[int], session: str = "orch-1") -> Any:

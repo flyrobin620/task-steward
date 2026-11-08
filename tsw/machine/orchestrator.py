@@ -334,28 +334,31 @@ def task_update(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             "user_source": source,
         }
         current = current_attempt(ctx.conn, task_id)
-        if (
+        # A session prestarted before briefs were written at prestart has none yet: it gets one.
+        unwritten = (
             current is not None
-            and current["brief_path"]
-            and current["phase"] not in ("replaced", "closed")
+            and not current["brief_path"]
+            and current["purpose"] == "prestart"
+            and current["phase"] in ("starting", "standby")
+        )
+        if current is not None and (
+            unwritten or (current["brief_path"] and current["phase"] not in ("replaced", "closed"))
         ):
             # DN002 §5.1: the brief of the task's session (prestarted, being dispatched or at
             # work) is brought to the new revision; the orchestrator tells a session that has
             # one, and dispatch rewrites it again from the latest revision.
+            attempt_id = str(current["attempt"])
+            path = str(current["brief_path"] or _brief_path(task_id, attempt_id))
+            read_set = _read_set(ctx.conn, task_id) if unwritten else loads(current["read_set"], [])
+            workdir = str(current["workdir"] or f"work/{task_id}/{attempt_id}")
             updated = {**row, "revision": revision, "goal": goal, "acceptance": dumps(acceptance)}
-            body = _brief(
-                ctx.conn,
-                updated,
-                str(current["attempt"]),
-                str(current["workdir"]),
-                loads(current["read_set"], []),
-                env.config,
-            )
-            ctx.storage.put_artifact(str(current["brief_path"]), body.encode("utf-8"))
+            body = _brief(ctx.conn, updated, attempt_id, workdir, read_set, env.config)
+            ctx.storage.put_artifact(path, body.encode("utf-8"))
             data["brief"] = {
                 "attempt": current["attempt"],
                 "revision": revision,
-                "path": current["brief_path"],
+                "path": path,
+                **({"read_set": read_set} if unwritten else {}),
                 # The session the orchestrator tells about the new brief, if it has one.
                 **(
                     {"session_ref": current["session_ref"]}

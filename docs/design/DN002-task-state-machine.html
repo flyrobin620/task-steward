@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="0277085dd9f2d4987f5cee75dbbb354e1affeeda03a3293978bdd25ffe490dfd">
+<meta name="tsw-source-sha256" content="76133c9eaa82235c8f409383416692ab29642bef3e0838689e49f2eb86182af0">
 <title>DN002 任务状态机</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -88,7 +88,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <h3 id="51-需求变更">5.1 需求变更</h3>
 <p>用户实质修改任务需求时记录 <code>task.requirement_changed</code>，<code>revision+1</code>。在不同状态下的处理如下：</p>
 <table><thead><tr><th>当前状态</th><th>处理</th></tr></thead><tbody><tr><td><code>intake</code> / <code>waiting_dependency</code> / <code>ready</code> / <code>paused</code> / <code>waiting_user</code></td><td>状态不变，任务书 revision 更新；必要时主会话重新规划依赖（记录 <code>dependency.rebound</code>，可能经 T06 / T05）；恢复执行时 worker 读取新 brief；<code>paused</code> 且 <code>resume_target=verifying</code> 时提交证据失效，只能经 T21 / T20 恢复</td></tr><tr><td><code>dispatching</code></td><td>状态不变，brief 在绑定前更新到新 revision</td></tr><tr><td><code>in_progress</code></td><td>状态不变，子状态回到 <code>executing</code>（E07），旧评审失效，开启新周期；brief 更新到新 revision，主会话通知 worker 重读</td></tr><tr><td><code>verifying</code></td><td>撤回提交，回到 <code>in_progress</code>（T17）</td></tr><tr><td><code>done</code></td><td>回到 <code>intake</code>（T23）</td></tr><tr><td><code>accepted</code> / <code>cancelled</code> / <code>archived</code></td><td>不接受修改；新建关联任务（新 ID），引用原成果</td></tr></tbody></table>
-<p>无论处于上表哪个状态，只要任务当前的 attempt 已有任务书（预启动、派发中、执行中或暂停中，attempt 不是 <code>replaced</code> / <code>closed</code>），需求变更都在同一事件中把这份任务书按新 revision 重写，并记下它的路径和要通知的会话（<code>standby</code> / <code>live</code> / <code>stopped</code> 的会话）。主会话随后用消息告诉该会话重新读取。后来的决定或其他任务的结论影响到已登记、尚未完成的任务时，主会话立即按本节写回任务书（附用户来源），不依赖会话上下文保存这些信息。</p>
+<p>无论处于上表哪个状态，只要任务当前的 attempt 已有任务书（预启动、派发中、执行中或暂停中，attempt 不是 <code>replaced</code> / <code>closed</code>），需求变更都在同一事件中把这份任务书按新 revision 重写，并记下它的路径和要通知的会话（<code>standby</code> / <code>live</code> / <code>stopped</code> 的会话）。在预启动开始写任务书之前就已预启动、还没有任务书的待命会话，这时补写一份。主会话随后用消息告诉该会话重新读取。后来的决定或其他任务的结论影响到已登记、尚未完成的任务时，主会话立即按本节写回任务书（附用户来源），不依赖会话上下文保存这些信息。</p>
 <h3 id="52-依赖失效">5.2 依赖失效</h3>
 <p>上游 revision 增加（T23）或上游被取消（T25）时，系统对每个下游任务记录 <code>dependency.invalidated</code>：</p>
 <ul><li><code>ready</code> → <code>waiting_dependency</code>（T06）；</li><li><code>dispatching</code> / <code>in_progress</code> / <code>waiting_user</code> / <code>verifying</code> → <code>waiting_dependency</code>（T16），worker 先停止；</li><li><code>intake</code> / <code>paused</code> / <code>waiting_dependency</code>：状态不变，恢复或规划时由 G-DEP 拦截；</li><li><code>done</code>：标记 <code>stale</code>，并生成待用户决定的输入请求，不自动迁移。用户选择“保持”时记录 <code>dependency.stale_cleared</code>（附用户来源，说明为何旧成果仍然有效，并记下当时已确认的依赖问题；之后只有上游再变化才重新标记）；选择“重新验证”时经 T23 回到 <code>intake</code>（revision+1）。未解决的 <code>stale</code> 使该任务不满足 G-DEP，因此失效会继续向它的下游传播；</li><li><code>accepted</code> 及只读任务：不受影响。</li></ul>

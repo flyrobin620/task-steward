@@ -164,7 +164,16 @@ def requirement_changed(conn: sqlite3.Connection, event: Event) -> None:
     if tid == "T23":
         _set(conn, task_id, submission=None, done_at=None, substate=None)
     if "brief" in data:
-        _attempt(conn, task_id, data["brief"]["attempt"], brief_revision=data["brief"]["revision"])
+        brief = data["brief"]
+        _attempt(
+            conn,
+            task_id,
+            brief["attempt"],
+            brief_revision=brief["revision"],
+            # Set when the change wrote the first brief of an older prestarted session (T244).
+            **({"brief_path": brief["path"]} if brief.get("path") else {}),
+            **({"read_set": dumps(brief["read_set"])} if "read_set" in brief else {}),
+        )
     if status == "paused":
         pause = loads(
             conn.execute("SELECT pause FROM tasks WHERE task_id = ?", (task_id,)).fetchone()[
