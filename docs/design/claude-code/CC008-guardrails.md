@@ -141,7 +141,7 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 | 会话 | 设置文件 | 允许的动作 | 仍然生效的检查 |
 | --- | --- | --- | --- |
 | 主会话 | 数据目录的 `.claude/settings.json`（`render_instructions` 一并生成） | tsw MCP 工具；`start_session`、`send_message` / `SendMessage`、`stop_session`、`get_session`、`list_sessions`、`archive_session` | CC-B9；tsw 工具按角色、守卫与用户来源校验 |
-| worker | 执行目录的 `.claude/settings.local.json`（执行目录在数据目录 `work/` 之下时，由 `attempt_start` 在会话创建前写入，已有内容按键合并；`work/` 之外的目录（如仓库 worktree）不写） | tsw MCP 工具；`send_message` / `SendMessage`；`gh pr merge` | CC-B6、CC-B7；hook 的拒绝优先于允许规则 |
+| worker | 执行目录的 `.claude/settings.local.json`（执行目录在数据目录 `work/` 之下时，由 `attempt_start` 在会话创建前写入，已有内容按键合并；`work/` 之外的目录（如仓库 worktree）不写） | tsw MCP 工具；`send_message` / `SendMessage`；有合并授权（开发任务且 `delivery.merge`）时加入 `Bash(gh pr merge:*)`，没有时移除 | CC-B6、CC-B7；hook 的拒绝优先于允许规则 |
 
 `start_session` 与 `send_message` 等会话工具由 app 自己的分类器把关，不受 `permissions.allow` 约束（live 中允许规则已生效，带“worker 自行合并”的任务书正文仍被拦截）。用户 2026-11-07 决定：创建 worker 会话时 `prompt` 只写短指令（角色、attempt、任务书路径），`background` 只写任务标题、仓库与执行目录，任务书正文（含交付与合并方式）由 worker 从 `runs/` 读取；合并的把关点因此在 worker 实际合并时，由上表的允许规则与 hooks 守卫承担，而不是在创建会话时由 app 分类器判断。会话可能在 `attempt_reconcile` 之前开始第一轮（`whoami` 仍为 pending），主会话绑定后发消息通知它。
 
