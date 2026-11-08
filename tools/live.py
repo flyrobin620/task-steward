@@ -739,9 +739,9 @@ def session_settings(run: Run, directory: Path, *, merge: bool = False) -> None:
 def selected(spec: Mapping[str, Any], names: Iterable[str] | None) -> list[dict[str, Any]]:
     """The scenario's tasks a run uses: all of them, or the subset ``--tasks`` names."""
     tasks: list[dict[str, Any]] = list(spec["tasks"])
-    if not names:
+    wanted = {n.strip() for n in names or () if n.strip()}
+    if not wanted:
         return tasks
-    wanted = {n.strip() for n in names if n.strip()}
     unknown = wanted - {str(t["task_id"]) for t in tasks}
     if unknown:
         raise SystemExit(f"live: 场景中没有任务 {sorted(unknown)}")
@@ -863,8 +863,9 @@ def host_verify(args: argparse.Namespace) -> int:
         e for e in evs if e["actor"].get("role") == "orchestrator" and e["actor"].get("session_id")
     ]
     main_sessions = sorted({str(e["actor"]["session_id"]) for e in orch})
-    for sid in main_sessions:
-        run.record("claude-session", "main", state="created", ref=sid)
+    for index, sid in enumerate(main_sessions):
+        name = "main" if index == 0 else f"main-{index + 1}"
+        run.record("claude-session", name, state="created", ref=sid)
     checks.append(
         check(
             "H1",
@@ -878,17 +879,7 @@ def host_verify(args: argparse.Namespace) -> int:
     tasks = tuple(str(t["task_id"]) for t in chosen)
     code = tuple(str(t["task_id"]) for t in chosen if t["kind"] == "code")
     checks.append(permission_rules(run, chosen))
-    workers: dict[str, list[str]] = {}
-    for e in evs:
-        ref = e["data"].get("session_ref")
-        if e["type"] in ("attempt.bound", "attempt.prestarted", "attempt.continued") and ref:
-            workers.setdefault(str(e["task_id"]), []).append(str(ref))
-        name = e["data"].get("session_name")
-        if name and e["type"] == "attempt.start_requested":
-            run.record("claude-session", str(name), task=e["task_id"])
-    for task_id, refs in workers.items():
-        for ref in refs:
-            run.record("claude-session", f"{task_id}:{ref}", state="created", ref=ref, task=task_id)
+    reconcile_sessions(run, evs)
     prestarted = seqs(evs, "attempt.prestarted")
     delivered = {
         t: seqs(evs, "attempt.brief_delivered", t) + seqs(evs, "attempt.bound", t) for t in tasks
@@ -1016,6 +1007,37 @@ def hook_summary(run: Run) -> str:
             tag = tag or "（用户文字）"
             leading[tag] = leading.get(tag, 0) + 1
     return f"hook payload：{counts}；UserPromptSubmit 的开头：{leading}"
+
+
+def reconcile_sessions(run: Run, evs: list[dict[str, Any]]) -> None:
+    """One manifest entry per worker session name (``t001-a1-g1``), as the orchestrator asked
+    for it; the session it became, or ``not_created`` when the ledger says it was never made.
+    An entry that stays ``maybe_created`` blocks cleanup until it is resolved."""
+    names: dict[tuple[str, str, int], str] = {}
+    for e in evs:
+        data = e["data"]
+        key = (str(e["task_id"]), str(data.get("attempt")), int(data.get("generation") or 0))
+        if e["type"] == "attempt.start_requested" and data.get("session_name"):
+            names[key] = str(data["session_name"])
+            run.record("claude-session", names[key], task=e["task_id"])
+        elif key in names and e["type"] == "attempt.not_created":
+            run.record("claude-session", names[key], state="not_created")
+        elif (
+            key in names
+            and e["type"] in ("attempt.bound", "attempt.prestarted", "attempt.late_session")
+            and data.get("session_ref")
+        ):
+            run.record("claude-session", names[key], state="created", ref=str(data["session_ref"]))
+
+
+def unresolved(run: Run) -> list[dict[str, Any]]:
+    """Sessions and threads not confirmed archived (or confirmed never created)."""
+    return [
+        e
+        for e in run.manifest()["entries"]
+        if e["kind"] in ("claude-session", "codex-thread")
+        and e["state"] not in ("archived", "not_created")
+    ]
 
 
 def b1(evs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1169,15 +1191,10 @@ def cleanup(args: argparse.Namespace) -> int:
         if not matched:
             raise SystemExit(f"live: 会话 {sid} 不在本次运行的清单中，拒绝记录")
         run.save(manifest)
-    left = [
-        e
-        for e in run.manifest()["entries"]
-        if e["kind"] in ("claude-session", "codex-thread")
-        and e["state"] not in ("archived",)
-        and e.get("ref")
-    ]
+    left = unresolved(run)
     for e in left:
-        print(f"未清理：{e['kind']} {e['name']} {e.get('ref')}（{e['state']}）")
+        ref = e.get("ref") or "会话 ID 未知，先运行 verify 或按名称对账"
+        print(f"未清理：{e['kind']} {e['name']} {ref}（{e['state']}）")
     done = not left and threads["status"] == "passed"
     print("清理完成" if done else f"清理未完成：剩余 {len(left)} 项会话或线程")
     return 0 if done else 1
@@ -1186,15 +1203,9 @@ def cleanup(args: argparse.Namespace) -> int:
 def discard(args: argparse.Namespace) -> int:
     """Delete a finished run's directory: only one with a manifest, only after its cleanup."""
     run = Run.open(args.run_id)
-    left = [
-        e
-        for e in run.manifest()["entries"]
-        if e["kind"] in ("claude-session", "codex-thread")
-        and e.get("ref")
-        and e["state"] != "archived"
-    ]
+    left = unresolved(run)
     if left:
-        names = ", ".join(f"{e['name']}={e['ref']}" for e in left)
+        names = ", ".join(f"{e['name']}={e.get('ref')}" for e in left)
         raise SystemExit(f"live: 还有未确认归档的对象（{names}），先完成 cleanup")
 
     def writable(func: Any, path: str, _exc: Any) -> None:

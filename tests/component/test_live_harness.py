@@ -6,6 +6,7 @@ The live scenarios themselves call the real app and reviewers and never run here
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -177,3 +178,90 @@ def test_a_reviewer_that_cannot_run_is_reported_not_verified(
     assert "未验证（NOT VERIFIED）" in evidence and "另有未验证项" in evidence
     checks.append(live.check("X2", "增量评审", False, "失败"))
     assert not live.write_results(run, "reviewer", checks, [])
+
+
+def test_without_a_subset_every_scenario_task_is_used() -> None:
+    spec = live.scenario("host-e2e")
+    every = [t["task_id"] for t in spec["tasks"]]
+    assert [t["task_id"] for t in live.selected(spec, None)] == every
+    assert [t["task_id"] for t in live.selected(spec, [""])] == every
+    assert [t["task_id"] for t in live.selected(spec, ["T001", " T002"])] == ["T001", "T002"]
+    with pytest.raises(SystemExit):
+        live.selected(spec, ["T999"])
+
+
+def test_concurrent_pull_requests_keep_every_record(tmp_path: Path) -> None:
+    run = make_run(tmp_path)
+    work = run / "w"
+    for branch in ("b1", "b2", "b3", "b4"):
+        git(work, "checkout", "-q", "-b", branch, "main")
+        (work / f"{branch}.txt").write_text(branch, encoding="utf-8")
+        git(work, "add", "-A")
+        git(work, "commit", "-q", "-m", branch)
+        git(work, "push", "-q", "origin", branch)
+    env = {**os.environ, "TSW_LIVE_RUN": str(run)}
+    procs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-X",
+                "utf8",
+                str(STUB),
+                "pr",
+                "create",
+                "-R",
+                "live/live-repo",
+                "--head",
+                branch,
+                "-t",
+                branch,
+            ],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
+        for branch in ("b1", "b2", "b3", "b4")
+    ]
+    urls = sorted(p.communicate(timeout=120)[0].strip() for p in procs)
+    assert len(set(urls)) == 4
+    state = json.loads((run / "gh-state.json").read_text(encoding="utf-8"))
+    assert sorted(p["head"] for p in state["pulls"]) == ["b1", "b2", "b3", "b4"]
+    assert not (run / "gh-state.lock").exists()
+
+
+def test_unknown_sessions_block_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    run = live.Run.create("host-e2e")
+    run.record("claude-session", "main")
+    events = [
+        ev(
+            1,
+            "attempt.start_requested",
+            "T001",
+            attempt="a1",
+            generation=1,
+            session_name="t001-a1-g1",
+        ),
+        ev(
+            2,
+            "attempt.start_requested",
+            "T002",
+            attempt="a1",
+            generation=1,
+            session_name="t002-a1-g1",
+        ),
+        ev(3, "attempt.not_created", "T002", attempt="a1", generation=1),
+    ]
+    live.reconcile_sessions(run, events)
+    names = {e["name"]: e["state"] for e in live.unresolved(run)}
+    # The orchestrator's session and T001's are unknown; T002's was never created.
+    assert names == {"main": "maybe_created", "t001-a1-g1": "maybe_created"}
+    bound = ev(4, "attempt.bound", "T001", attempt="a1", generation=1, session_ref="local_1")
+    live.reconcile_sessions(run, [*events, bound])
+    entry = next(e for e in run.manifest()["entries"] if e["name"] == "t001-a1-g1")
+    assert (entry["state"], entry["ref"]) == ("created", "local_1")
+    with pytest.raises(SystemExit):
+        live.discard(argparse.Namespace(run_id=run.id))

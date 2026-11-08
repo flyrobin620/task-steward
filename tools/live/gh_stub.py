@@ -19,6 +19,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -226,7 +229,34 @@ def merge(values: dict[str, str], words: list[str], flags: set[str], state: dict
     return 0
 
 
+@contextmanager
+def locked(timeout: float = 120.0) -> Generator[None, None, None]:
+    """One stand-in invocation at a time per run: two workers share ``gh-state.json`` and the
+    bare repository, and each command reads, changes and writes them as a whole."""
+    lock = RUN / "gh-state.lock"
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            if time.monotonic() > deadline:
+                message = f"gh (live stub): {lock} is held; remove it if no gh is running"
+                raise SystemExit(message) from None
+            time.sleep(0.1)
+    try:
+        yield
+    finally:
+        os.close(fd)
+        lock.unlink()
+
+
 def main(argv: list[str]) -> int:
+    with locked():
+        return run_command(argv)
+
+
+def run_command(argv: list[str]) -> int:
     with LOG.open("a", encoding="utf-8") as log:
         log.write(json.dumps({"time": now(), "args": argv}, ensure_ascii=False) + "\n")
     if argv[:1] == ["--version"]:
