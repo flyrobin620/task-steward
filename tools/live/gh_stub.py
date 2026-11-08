@@ -225,7 +225,7 @@ def merge(values: dict[str, str], words: list[str], flags: set[str], state: dict
         git("push", "-q", "origin", f"HEAD:{pr['base']}", cwd=work)
     pr.update(state="MERGED", merge_commit=commit, merged_head=pr["head_sha"], merged_at=now())
     save(state)
-    print(f"✓ Squashed and merged pull request {repo}#{number} ({commit})")
+    print(f"OK Squashed and merged pull request {repo}#{number} ({commit})")
     return 0
 
 

@@ -55,14 +55,18 @@ def make_run(tmp_path: Path) -> Path:
     return run
 
 
-def gh(run: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def gh(run: Path, *args: str, encoding: str | None = None) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "TSW_LIVE_RUN": str(run)}
+    utf8 = ["-X", "utf8"] if encoding is None else []
+    if encoding is not None:
+        env["PYTHONIOENCODING"] = encoding
+        env.pop("PYTHONUTF8", None)
     return subprocess.run(
-        [sys.executable, "-X", "utf8", str(STUB), *args],
+        [sys.executable, *utf8, str(STUB), *args],
         env=env,
         capture_output=True,
         text=True,
-        encoding="utf-8",
+        encoding=encoding or "utf-8",
         check=False,
     )
 
@@ -78,7 +82,11 @@ def test_gh_stub_squash_merges_into_the_bare_origin(tmp_path: Path) -> None:
     assert "-R" in unnamed.stderr
     other = gh(run, "pr", "merge", "1", "-R", "someone/else", "--squash")
     assert other.returncode != 0
-    merged = gh(run, "pr", "merge", "1", "-R", "github.com/live/live-repo", "--squash")
+    # A worker's shell may write with a legacy code page (cp1252 in the live run): the stand-in
+    # prints only ASCII, so a merge that happened is never reported as a failure.
+    merged = gh(
+        run, "pr", "merge", "1", "-R", "github.com/live/live-repo", "--squash", encoding="cp1252"
+    )
     assert merged.returncode == 0, merged.stderr
     state: dict[str, Any] = json.loads((run / "gh-state.json").read_text(encoding="utf-8"))
     pr = state["pulls"][0]
