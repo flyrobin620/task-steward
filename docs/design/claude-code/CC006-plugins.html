@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="9cf6100cc62aaa5f88c5a89ca2a30c15883379892414bdd205f19df8ac29a21f">
+<meta name="tsw-source-sha256" content="23d20ff8a7c8704f5316adb7427764a1dcef7138379860ea5b4559c93d63db70">
 <title>CC006 Claude Code 插件</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -48,6 +48,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <ul><li>状态：设计草案（T242 r2 自 DN006 拆出，待用户确认）</li><li>日期：2026-11-08</li><li>实现：<a href="../DN006-plugin-layer.html">DN006 插件层</a></li><li>相关：<a href="CC001-sessions-and-hooks.html">CC001 Claude Code 上的会话与 hooks</a> · <a href="CC004-reviewer.html">CC004 Claude Code 评审器</a> · <a href="CC008-guardrails.html">CC008 Claude Code 上的护栏</a></li></ul>
 <h2 id="1-范围">1. 范围</h2>
 <p>本文是 DN006 插件层在 Claude Code 上的实现：宿主集成 <code>claude-code</code>、会话适配器 <code>claude-app</code> 与 <code>claude-headless</code>、<code>in-session</code> 渠道的记录方式。插件接口与能力声明见 DN006。</p>
+<p>过渡说明：DN006 §6.3 的 <code>claude-code</code> 段落、§7.3 动作映射表的 <code>claude-app</code> 列与 §8.1b 中的 Claude 定时任务说明，正被 T241（未合并）修改，暂时保留在 DN006，与本文 §2、§3 重复；T241 合并后从 DN006 移除并以本文为准。DN006 §6.3 中“enforced”段落的写入范围描述已被 <a href="CC008-guardrails.html">CC008</a> 取代（DN008 §1）。</p>
 <p>与 Claude Code 耦合的设计元素及其归属的插件类型：</p>
 <table><thead><tr><th>设计元素</th><th>Claude 实现</th><th>归属</th></tr></thead><tbody><tr><td>主会话与 worker 的指令、skill、工具注册</td><td><code>CLAUDE.md</code>、<code>.claude-plugin</code>、skills、<code>.mcp.json</code></td><td>P1</td></tr><tr><td>写入范围、危险命令拦截、结束前检查</td><td>Claude Code hooks</td><td>P1</td></tr><tr><td>创建、续用、停止、观察 worker 会话</td><td><code>start_session</code>、<code>SendMessage</code>、<code>list_sessions</code>、<code>get_session</code>、<code>stop_session</code></td><td>P2</td></tr><tr><td>唤醒主会话</td><td>worker→父会话 <code>send_message(session_id=&quot;parent&quot;)</code>、side-sessions-event</td><td>P2（唤醒能力）</td></tr><tr><td>派发窗口与预启动（G-WINDOW、attempt <code>standby</code>）</td><td>只有用户本人的 turn 能在任务目录创建会话；任何 turn 都能给已有会话发消息</td><td>P2（能力声明）</td></tr><tr><td>权限模式名称</td><td><code>default</code> / <code>acceptEdits</code> / <code>auto</code> / <code>bypassPermissions</code></td><td>P2（映射表）</td></tr><tr><td>评审器</td><td>Codex App Server 一次性线程</td><td>P2 的 oneshot 能力 + <code>roles.reviewer.session</code></td></tr><tr><td>待答问题的投递与回收</td><td>用户在子会话直接答复</td><td>P3</td></tr><tr><td>控制根 = 私有 Git 仓库</td><td>ledger、runs 随仓库提交</td><td>P4 + 数据目录</td></tr></tbody></table>
 <h2 id="2-宿主集成-claude-code">2. 宿主集成 <code>claude-code</code></h2>

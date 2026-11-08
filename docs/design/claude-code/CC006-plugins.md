@@ -9,6 +9,8 @@
 
 本文是 DN006 插件层在 Claude Code 上的实现：宿主集成 `claude-code`、会话适配器 `claude-app` 与 `claude-headless`、`in-session` 渠道的记录方式。插件接口与能力声明见 DN006。
 
+过渡说明：DN006 §6.3 的 `claude-code` 段落、§7.3 动作映射表的 `claude-app` 列与 §8.1b 中的 Claude 定时任务说明，正被 T241（未合并）修改，暂时保留在 DN006，与本文 §2、§3 重复；T241 合并后从 DN006 移除并以本文为准。DN006 §6.3 中“enforced”段落的写入范围描述已被 [CC008](CC008-guardrails.md) 取代（DN008 §1）。
+
 与 Claude Code 耦合的设计元素及其归属的插件类型：
 
 | 设计元素 | Claude 实现 | 归属 |

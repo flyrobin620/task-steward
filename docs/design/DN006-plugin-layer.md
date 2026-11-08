@@ -143,7 +143,11 @@ class HostIntegration(Protocol):
 
 宿主声明为 `advisory` 时，STATUS 页和任务报告标注“规则为提示级”，并要求主会话在 G-ACCEPT 中额外核对写入范围（`git status` 与 diff 范围检查）。
 
-各宿主集成的具体做法见实现文档：Claude Code 见 [CC006 §2](claude-code/CC006-plugins.md)，它的护栏见 [CC008](claude-code/CC008-guardrails.md)。规则强度描述的是机械检查覆盖的程度，不是安全强度（DN008）：`enforced` 表示宿主上有确定性的护栏，`advisory` 表示只能靠指令与事后核对。
+`claude-code` 的 enforced 有边界：编辑类工具（Write、Edit 等）的目标路径可以精确检查；Bash 命令只能尽力解析——识别重定向、`tee`、`cp`/`mv`/`rm`/`mkdir`、`sed -i`、PowerShell 的 `Set-Content`/`Out-File`/`New-Item` 等常见写法，跟踪 `cd`，并递归读取 `bash -c`、`powershell -Command`、`cmd /c`；变量、脚本内部的写入看不到。因此 G-ACCEPT 对 `claude-code` 同样核对 diff 是否落在可写根内。git/gh 的推送、建 PR、合并按程序名识别（忽略路径与 `.exe` 后缀），分别对照仓库的 `delivery.push`、`create_pr`、`merge` 授权；合并还核对目标仓库（`-R` / `--repo`、PR 链接、REST 合并路径）是本任务的仓库。
+
+`claude-code` 的插件按用户级启用，任何目录的会话（主会话、`~/tsw-worktrees` 或 `work/<任务>/<attempt>` 中的 worker、无关会话）都会加载它，所以插件只携带每个会话都需要的 MCP 注册与 hooks。主会话的流程说明不放进插件：`render_instructions` 把 `CLAUDE.md` 和 `orchestrate` skill 写进数据目录，后者是 Claude Code 的项目 skill（`<cwd>/.claude/skills/`），只有以数据目录为工作目录的会话会发现它。Claude Code 也从上级目录加载 `CLAUDE.md` 与项目 skill，执行目录在数据目录之下（`work/<任务>/<attempt>`）的 worker 同样会看到二者，所以二者都写明：`whoami` 的角色不是 orchestrator 时忽略。skill 的来源在产品代码中（`tsw/host/orchestrate_skill.md`），产品更新后重新运行 `tsw host render`。
+
+插件由 Claude Code 复制到插件缓存运行，缓存里没有 `tsw` 运行时。启动器按顺序查找：`TSW_REPO` 环境变量、插件所在的产品仓库（源码树或原地使用的本地市场）、`tsw init` 写入数据目录标记文件的 `product_repo`；都找不到时 MCP server 报错退出，hooks 静默放行。
 
 **权限规则**（用户 2026-11-07 决定）：Claude app 的 auto 权限模式由分类器判断每次工具调用是否出自用户意图。它只认对话中用户本人的话，不认 tsw 的配置、账本与任务书，所以把派发 worker（`start_session`）、主会话代为决定、worker 按 `delivery.merge` 合并等 tsw 已经把关的动作当作未经授权而拒绝（live `host-e2e` 中出现）。对 tsw 自己把关的动作，`claude-code` 生成 Claude Code 的显式允许规则（`permissions.allow`），由 hooks 守卫与 MCP 工具的授权检查作为这些动作的门禁；其他一切仍由宿主的权限模式与分类器把关。
 
@@ -221,7 +225,7 @@ class SessionAdapter(Protocol):
 | `copilot-cli` | direct | 否 | 待验证（B2） | 待验证 | 否 | 否 |
 | `remote-hub` | direct | 是：`POST /api/sessions`（intentId 关联） | 否 | — | 是（Portal 会话页） | 否 |
 
-interactive 动作（`create`、`deliver_brief`、`send`、`stop`、`observe`、`find` 与唤醒主会话）在各宿主上的做法见实现文档：`claude-app` 见 [CC006 §3](claude-code/CC006-plugins.md)。尚无实现文档的宿主（`codex-app-server`、`copilot-app`、`remote-hub`）的映射暂列于此，建立实现文档时移出：
+interactive 动作映射（承载 worker 的实现）：
 
 | 动作 | `claude-app` | `codex-app-server`（暂不承载 worker，B7 解决后启用） | `copilot-app` | `remote-hub` |
 | --- | --- | --- | --- | --- |
