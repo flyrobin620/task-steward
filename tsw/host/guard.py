@@ -36,6 +36,9 @@ WRITE_TOOLS = {
     "NotebookEdit": "notebook_path",
 }
 START_SESSION = "mcp__ccd_session__start_session"
+# The host's session-scheduling tools, and the tag every scheduled prompt of a worker carries.
+SCHEDULERS = ("CronCreate", "ScheduleWakeup")
+SCHEDULED_TAG = "<scheduled-task"
 TSW_OWNED = ("ledger", "runs", "todo", "config", "outbox", "legacy", "views", "cache", "locks")
 _HASH = re.compile(
     r"\b(sha\d*sum|md5sum|shasum|certutil\s+-hashfile|get-filehash)\b", re.IGNORECASE
@@ -92,12 +95,47 @@ def context(event: str, text: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------- pure rules
 
 
+SETTINGS = "claude-settings"
+MEMORY_REASON = (
+    "worker 不写 Claude Code 的记忆目录：它按会话目录分开，以后的会话读不到，还会成为留给后续会话的"
+    "指令入口。需要以后记住的决定与约定，写进报告的“决定与约定”一节，由主会话验收时转记"
+)
+
+
+def is_memory_file(path: Path) -> bool:
+    """A file in a Claude Code memory directory (``~/.claude/projects/<folder>/memory/``)."""
+    parts = [p.lower() for p in path.parts]
+    return any(
+        parts[i] == ".claude" and parts[i + 1] == "projects" and "memory" in parts[i + 3 : i + 4]
+        for i in range(len(parts) - 3)
+    )
+
+
+def is_settings_file(home: Home, path: Path) -> bool:
+    """A Claude Code settings file in the data directory or an execution directory under it.
+
+    tsw writes the permission rules there (DN006 §6.3); a session that could edit them would
+    grant itself permissions.
+    """
+    return (
+        path.parent.name.lower() == ".claude"
+        and path.name.lower().startswith("settings")
+        and path.name.lower().endswith(".json")
+        and within(path, home.root)
+    )
+
+
 def owned_top(home: Home, path: Path) -> str | None:
-    """The tsw-owned top-level directory of the data directory that ``path`` is in, if any."""
+    """The tsw-owned top-level directory of the data directory that ``path`` is in, if any
+    (``claude-settings`` for the permission settings tsw generates)."""
+    if is_settings_file(home, path):
+        return SETTINGS
     return next((top for top in TSW_OWNED if within(path, home.root / top)), None)
 
 
 def owned_reason(top: str) -> str:
+    if top == SETTINGS:
+        return "数据目录与执行目录中的 .claude/settings*.json 由 tsw 生成，会话不能修改权限设置"
     if top == "config":
         return "数据目录的 config/ 只由 tsw 写入：主会话用 config_change / config_revert 修改配置"
     return f"数据目录的 {top}/ 只由 tsw 写入，请使用 tsw 工具"
@@ -375,7 +413,8 @@ class Guard:
                 return context(
                     "SessionStart",
                     f"这个会话正在为 TaskSteward 任务 {who.task_id}（attempt {who.attempt}）创建，"
-                    "主会话随后会完成绑定。先调用 whoami：返回 role 为 worker 后再开始工作。",
+                    "主会话随后会完成绑定。先调用 whoami：返回 role 为 worker 后再开始工作；"
+                    "仍未绑定（pending）时结束这一轮，主会话完成绑定后会发消息通知你。",
                 )
             if who.pending and event == "PreToolUse":
                 tool = str(self.payload.get("tool_name") or "")
@@ -406,8 +445,11 @@ class Guard:
                 f"你是 TaskSteward 任务 {who.task_id} 的 worker（attempt {who.attempt}）。"
                 f"任务书：{who.brief_path or '等待投递'}。只在可写路径内修改：{roots}。"
                 "完成后用 review_run 做自评审并逐条处置；任务书写明由 worker 合并时，"
-                "门禁、评审与意见都解决后自行合并 PR，再 submit。需要用户决定的事用 ask_user "
-                "在本会话直接问用户，用户回复后用 user_answer 登记；跨任务的事（资源冲突、依赖、"
+                "门禁、评审与意见都解决后自行合并 PR（合并命令单独运行，不与其他命令连接），"
+                "再 submit。需要用户决定的事用 ask_user "
+                "在本会话直接问用户（Claude app 中再用 wrap_up 的 ask 写问题、actions 给每个选项"
+                "一个按钮并设 blocked: true；用户点按钮等于在本会话发出按钮文字），"
+                "用户回复后用 user_answer 登记；跨任务的事（资源冲突、依赖、"
                 "其他任务的范围）才用 question 交主会话，并用 "
                 'mcp__ccd_session_mgmt__send_message(session_id="parent") 唤醒主会话。',
             )
@@ -469,6 +511,8 @@ class Guard:
             if who.role == "worker" and not any(
                 within(target, root) for root in who.writable_roots
             ):
+                if is_memory_file(target):
+                    return deny("PreToolUse", MEMORY_REASON)
                 return deny(
                     "PreToolUse",
                     f"只能写入本任务的可写路径：{'、'.join(str(p) for p in who.writable_roots)}",
@@ -495,6 +539,18 @@ class Guard:
                 writable_roots=who.writable_roots if who.role == "worker" else None,
             )
             return None if problem is None else deny("PreToolUse", problem)
+        if tool in SCHEDULERS and who.role == "worker":
+            # A scheduled prompt reaches the session like a user's message. Untagged, the hook
+            # would record it as the user's words: a worker could answer its own question
+            # (found by the live host-e2e scenario, DN006 §8.1a).
+            prompt = str(tool_input.get("prompt") or "")
+            if not prompt.lstrip().startswith(SCHEDULED_TAG):
+                return deny(
+                    "PreToolUse",
+                    f"worker 的定时提示必须以 {SCHEDULED_TAG}> 开头（以 </scheduled-task> 结束），"
+                    "这样它不会被记录为用户消息",
+                )
+            return None
         if tool == START_SESSION and who.role == "orchestrator":
             name = str(tool_input.get("name") or "")
             with self.ledger.view() as conn:

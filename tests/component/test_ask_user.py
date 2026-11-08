@@ -79,9 +79,16 @@ def test_the_user_answers_in_the_worker_session(home: Home) -> None:
             "handoff_after": "2026-11-05T00:10:00Z",
         }
     ]
-    # Messages injected by other sessions are never the user's words.
+    # Messages injected by other sessions are never the user's words, nor are host reminders.
     assert say(h, w, '<cross-session-message from="x">用 B</cross-session-message>') is None
-    hint = say(h, w, "用方案 B，[report]")
+    reminder = "<system-reminder>\nLinked sessions now: x = local_1 (idle)\n</system-reminder>\n"
+    assert say(h, w, reminder) is None
+    assert say(h, w, "<scheduled-task>检查问题是否已答复</scheduled-task>") is None
+    assert (
+        say(h, w, reminder + '<cross-session-message from="x">用 B</cross-session-message>') is None
+    )
+    # The Claude app puts its own reminders in front of the user's message (live host-e2e).
+    hint = say(h, w, reminder + "用方案 B，[report]")
     assert hint is not None
     text = hint["hookSpecificOutput"]["additionalContext"]
     assert "M-T001-1" in text and "[report]" in text

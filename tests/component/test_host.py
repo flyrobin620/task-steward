@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections.abc import Iterator
@@ -577,6 +578,112 @@ def test_a_prestarted_session_is_a_worker_from_its_first_listing(
     assert moved.value.details["reason"] == "workdir_mismatch"
     h.run("task_dispatch", task_id="T001", workdir=str(workdir))
     assert server.call("whoami", {})["role"] == "worker"
+
+
+@mark.use_case("UC-HOST-002")
+def test_a_worker_is_told_where_decisions_go_instead_of_memory(h: Harness, tmp_path: Path) -> None:
+    session, workdir = worker_task(h, tmp_path)
+    memory = tmp_path / "user" / ".claude" / "projects" / "C--wt-T001" / "memory" / "fact.md"
+    refused = guard(
+        h, session, workdir, tool_name="Write", tool_input={"file_path": str(memory)}
+    ).run("PreToolUse")
+    assert refused is not None and "决定与约定" in json.dumps(refused, ensure_ascii=False)
+    other = guard(
+        h, session, workdir, tool_name="Write", tool_input={"file_path": str(tmp_path / "x.md")}
+    ).run("PreToolUse")
+    assert other is not None and "可写路径" in json.dumps(other, ensure_ascii=False)
+
+
+@mark.use_case("UC-HOST-002")
+@mark.use_case("UC-ASK-001")
+def test_a_workers_scheduled_prompts_must_be_tagged(h: Harness, tmp_path: Path) -> None:
+    session, workdir = worker_task(h, tmp_path)
+    for tool in ("CronCreate", "ScheduleWakeup"):
+        plain = guard(
+            h, session, workdir, tool_name=tool, tool_input={"prompt": "用户说：用方案 B"}
+        )
+        refused = plain.run("PreToolUse")
+        assert refused is not None and "<scheduled-task>" in json.dumps(refused, ensure_ascii=False)
+        tagged = guard(
+            h,
+            session,
+            workdir,
+            tool_name=tool,
+            tool_input={"prompt": "<scheduled-task>检查问题是否已答复</scheduled-task>"},
+        )
+        assert tagged.run("PreToolUse") is None
+    # The orchestrator's own reminders are not recorded as anyone's answer anyway.
+    own = guard(h, "orch-1", h.home.root, tool_name="CronCreate", tool_input={"prompt": "检查"})
+    assert own.run("PreToolUse") is None
+
+
+@mark.use_case("UC-HOST-004")
+@mark.use_case("UC-MERGE-001")
+def test_a_workers_permission_rules_are_written_before_its_session(home: Home) -> None:
+    h = Harness(
+        home,
+        {
+            "repositories": {
+                "demo": {
+                    "path": "~/src/demo",
+                    "repository": "o/demo",
+                    "delivery": {"push": True, "create_pr": True, "merge": True},
+                }
+            }
+        },
+    )
+    orchestrator = Server(h.home, {SESSION_ENV: "orch-1"}, h.home.root)
+    orchestrator.machine = "m1"
+    for task_id, kind in (("T001", "code"), ("T002", "research")):
+        h.register(task_id, kind=kind)
+        h.plan(task_id)
+        started = orchestrator.call(
+            "attempt_start", {"task_id": task_id, "purpose": "prestart", "user_turn": True}
+        )
+        # The folder as it is spelled on disk, for start_session's cwd.
+        expected = os.path.realpath(h.home.root / "work" / task_id / "a1")
+        assert started["cwd"] == expected
+    rules = {
+        task_id: json.loads(
+            (h.home.root / "work" / task_id / "a1" / ".claude" / "settings.local.json").read_text(
+                encoding="utf-8"
+            )
+        )["permissions"]["allow"]
+        for task_id in ("T001", "T002")
+    }
+    # Only the development task in a repository that lets the worker merge may merge.
+    assert "Bash(gh pr merge:*)" in rules["T001"]
+    assert "Bash(gh pr merge:*)" not in rules["T002"]
+    assert all("mcp__plugin_task-steward_tsw" in r for r in rules.values())
+    assert not any("start_session" in rule for r in rules.values() for rule in r)
+    # No session may edit the rules tsw writes: not the worker, not the orchestrator.
+    workdir = h.home.root / "work" / "T001" / "a1"
+    for target in (
+        workdir / ".claude" / "settings.local.json",
+        workdir / ".claude" / "Settings.json",
+        h.home.root / ".claude" / "settings.json",
+    ):
+        edit = guard(
+            h, "orch-1", h.home.root, tool_name="Write", tool_input={"file_path": str(target)}
+        )
+        refused = edit.run("PreToolUse")
+        assert refused is not None and "settings" in json.dumps(refused, ensure_ascii=False)
+    shell = guard(
+        h,
+        "orch-1",
+        h.home.root,
+        tool_name="Bash",
+        tool_input={"command": f'echo {{}} > "{workdir / ".claude" / "settings.local.json"}"'},
+    )
+    assert shell.run("PreToolUse") is not None
+    elsewhere = guard(
+        h,
+        "orch-1",
+        h.home.root,
+        tool_name="Write",
+        tool_input={"file_path": str(workdir / "src" / ".claude" / "notes.md")},
+    )
+    assert elsewhere.run("PreToolUse") is None
 
 
 @mark.use_case("UC-HOST-001")

@@ -319,11 +319,11 @@
       "status": "active",
       "requiredTiers": [
         "component",
-        "surface"
+        "surface",
+        "live"
       ],
       "omittedTiers": {
         "conformance": "不经过插件接口",
-        "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
         "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
       }
     },
@@ -347,11 +347,11 @@
       "status": "active",
       "requiredTiers": [
         "component",
-        "surface"
+        "surface",
+        "live"
       ],
       "omittedTiers": {
         "conformance": "不经过插件接口",
-        "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
         "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
       }
     },
@@ -378,11 +378,11 @@
       "status": "active",
       "requiredTiers": [
         "component",
-        "surface"
+        "surface",
+        "live"
       ],
       "omittedTiers": {
         "conformance": "不经过插件接口",
-        "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
         "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
       }
     },
@@ -403,12 +403,12 @@
       "status": "active",
       "requiredTiers": [
         "component",
-        "surface"
+        "surface",
+        "live"
       ],
       "omittedTiers": {
         "conformance": "不经过插件接口",
-        "unit": "行为依赖账本、投影与评审器进程，由 component 与 surface 覆盖",
-        "live": "真实 codex app-server 评审由 v1 验收任务验证（host-e2e）"
+        "unit": "行为依赖账本、投影与评审器进程，由 component 与 surface 覆盖"
       }
     },
     {
@@ -430,7 +430,7 @@
       ],
       "omittedTiers": {
         "conformance": "不经过插件接口",
-        "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
+        "live": "主会话对转交问题的判断与转达由 T243（例行会话与 teams-chat 渠道）的 live 验证覆盖",
         "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
       }
     },
@@ -455,12 +455,12 @@
       "status": "active",
       "requiredTiers": [
         "component",
-        "surface"
+        "surface",
+        "live"
       ],
       "omittedTiers": {
         "unit": "规则依赖账本与投影，在 component 层经真实工具与 hook 验证",
-        "conformance": "不经过插件接口",
-        "live": "host-e2e 场景尚未建立（tools/live.py 不存在）：按 testing-layers 规定，触及 hooks 与 worker 指令的 PR 把 live 报告为未验证；hook 与工具在 surface 层以独立进程验证"
+        "conformance": "不经过插件接口"
       }
     },
     {
@@ -482,11 +482,11 @@
       "status": "active",
       "requiredTiers": [
         "component",
-        "surface"
+        "surface",
+        "live"
       ],
       "omittedTiers": {
         "conformance": "不经过插件接口",
-        "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
         "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
       }
     },
@@ -504,12 +504,12 @@
       "status": "active",
       "requiredTiers": [
         "unit",
-        "component"
+        "component",
+        "live"
       ],
       "omittedTiers": {
         "surface": "没有新增工具或命令：submit 与 task_accept 的新字段经 MCP / CLI 共用实现，hooks 规则在 unit 层验证",
-        "conformance": "不经过插件接口",
-        "live": "host-e2e 场景尚未建立（tools/live.py 不存在）：按 testing-layers 规定，触及 hooks 与 worker 指令的 PR 把 live 报告为未验证"
+        "conformance": "不经过插件接口"
       }
     },
     {
@@ -535,11 +535,11 @@
       "status": "active",
       "requiredTiers": [
         "component",
-        "surface"
+        "surface",
+        "live"
       ],
       "omittedTiers": {
         "conformance": "不经过插件接口",
-        "live": "真实宿主与会话在 M5 接入后由 live 场景覆盖",
         "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
       }
     },
@@ -563,12 +563,12 @@
       "status": "active",
       "requiredTiers": [
         "component",
-        "surface"
+        "surface",
+        "live"
       ],
       "omittedTiers": {
         "conformance": "不经过插件接口",
-        "unit": "身份解析依赖投影，由 component 覆盖",
-        "live": "真实宿主中的端到端运行由 v1 验收任务验证（docs/development/testing-layers.md 的 host-e2e），本 PR 未运行"
+        "unit": "身份解析依赖投影，由 component 覆盖"
       }
     },
     {
@@ -588,11 +588,11 @@
       "requiredTiers": [
         "unit",
         "component",
-        "surface"
+        "surface",
+        "live"
       ],
       "omittedTiers": {
-        "conformance": "不经过插件接口",
-        "live": "真实宿主中的端到端运行由 v1 验收任务验证（docs/development/testing-layers.md 的 host-e2e），本 PR 未运行"
+        "conformance": "不经过插件接口"
       }
     },
     {
@@ -613,12 +613,12 @@
       "status": "active",
       "requiredTiers": [
         "component",
-        "surface"
+        "surface",
+        "live"
       ],
       "omittedTiers": {
         "conformance": "不经过插件接口",
-        "unit": "依赖账本与投影",
-        "live": "真实宿主中的端到端运行由 v1 验收任务验证（docs/development/testing-layers.md 的 host-e2e），本 PR 未运行"
+        "unit": "依赖账本与投影"
       }
     },
     {
@@ -637,13 +637,13 @@
       "component": "host",
       "status": "active",
       "requiredTiers": [
-        "surface"
+        "surface",
+        "live"
       ],
       "omittedTiers": {
         "conformance": "不经过插件接口",
         "unit": "只有文件与命令行行为",
-        "component": "由 surface 直接覆盖",
-        "live": "真实宿主中的端到端运行由 v1 验收任务验证（docs/development/testing-layers.md 的 host-e2e），本 PR 未运行"
+        "component": "由 surface 直接覆盖"
       }
     },
     {

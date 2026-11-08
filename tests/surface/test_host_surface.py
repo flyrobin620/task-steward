@@ -174,9 +174,23 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     skill = home / ".claude" / "skills" / "orchestrate" / "SKILL.md"
     skill.parent.mkdir(parents=True)
     skill.write_text("stale", encoding="utf-8")
+    settings = home / ".claude" / "settings.json"
+    settings.write_text(
+        json.dumps({"permissions": {"allow": ["Bash(ls:*)"]}, "env": {"X": "1"}}), "utf-8"
+    )
     code, out = run_json("host", "render")
     assert code == 0
-    assert [Path(p) for p in out["written"]] == [home / "CLAUDE.md", skill]
+    assert [Path(p) for p in out["written"]] == [home / "CLAUDE.md", skill, settings]
+    # The actions tsw guards itself are allowed; what the user had there is kept (DN006 §6.3).
+    written = json.loads(settings.read_text(encoding="utf-8"))
+    assert written["env"] == {"X": "1"}
+    allow = written["permissions"]["allow"]
+    assert allow[0] == "Bash(ls:*)"
+    assert {"mcp__plugin_task-steward_tsw", "mcp__ccd_session__start_session"} <= set(allow)
+    assert not any(rule.startswith("Bash(gh") for rule in allow)
+    assert run_json("host", "render")[0] == 0
+    again = json.loads(settings.read_text(encoding="utf-8"))["permissions"]["allow"]
+    assert again == allow
     assert (home / "CLAUDE.md").read_text(encoding="utf-8").startswith("# TaskSteward 数据目录")
     text = skill.read_text(encoding="utf-8")
     assert text.startswith("---\nname: orchestrate\ndescription: ")
@@ -184,6 +198,13 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     code, hint = run_json("host", "install-hint")
     assert code == 0 and "/plugin install task-steward@task-steward" in hint["hint"]
     assert "tsw host render" in hint["hint"]
+    # The auto-mode rule is shown, never written: Claude Code reads it from user settings only.
+    rules = json.loads(hint["hint"][hint["hint"].index("{") :])["autoMode"]["allow"]
+    assert [r.split(":")[0] for r in rules] == [
+        "TaskSteward Worker Dispatch",
+        "TaskSteward Worker Merge",
+    ]
+    assert "--admin" in rules[1]
 
 
 def launch(

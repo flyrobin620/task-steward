@@ -1,0 +1,90 @@
+{
+  "id": "host-e2e",
+  "title": "Claude 桌面 app 中的主会话与 worker 全流程",
+  "useCases": [
+    "UC-PLAN-001",
+    "UC-DISPATCH-001",
+    "UC-REVIEW-001",
+    "UC-REVIEW-002",
+    "UC-JUDGE-001",
+    "UC-ASK-001",
+    "UC-VERIFY-001",
+    "UC-MERGE-001",
+    "UC-LIFE-001",
+    "UC-HOST-001",
+    "UC-HOST-002",
+    "UC-HOST-003",
+    "UC-HOST-004"
+  ],
+  "modelCalls": {
+    "sessions": "主会话 1 个、每个任务 1 个 worker",
+    "reviewer": "codex-app-server，T001 与 T002 各至少 1 轮，上限各 3 轮（review.max_rounds）"
+  },
+  "repository": "live/live-repo",
+  "config": {
+    "input": {
+      "in_session_timeout_minutes": 2
+    },
+    "roles": {
+      "reviewer": {
+        "effort": "low"
+      }
+    },
+    "review": {
+      "max_rounds": 3
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "T001",
+      "title": "live：新增求和函数（会话内提问、worker 合并）",
+      "kind": "code",
+      "goal": "在 live-repo 的 calc.py 中新增一个两数求和函数并补单元测试。函数名由用户决定：开始实现前用 ask_user 问用户“求和函数命名为 add 还是 plus？”，按 worker 指令在本会话提出（Claude app 中用 wrap_up 的问题与按钮：“用 add”“用 plus”）并结束这一轮；用户在本会话回答后，用 user_answer 引用 hook 给出的消息编号登记答复，按答复命名。做法：在执行目录中 git clone {origin} src，在 src 中新建分支、实现、提交，运行 python -m unittest；自评审（review_run）直到 finalize；git push origin <分支>。本次运行的 GitHub 由替身代替，命令就是 {gh}（用这个完整路径，不要加 PATH 前缀或其他前置命令）：{gh} pr create -R github.com/{repository} --head <分支> --title <标题>，再按任务书的交付授权合并：{gh} pr merge <编号> -R github.com/{repository} --squash。提交时 merge 带 PR 链接、替身打印的合并提交与合并的 head（即最后一轮评审的 HEAD）。",
+      "acceptance": [
+        "calc.py 有按用户答复命名的求和函数与单元测试，python -m unittest 通过",
+        "会话内问题经 user_answer 登记了用户原话",
+        "PR 由 worker 自行合并，合并的 head 等于最后一轮评审的 HEAD"
+      ]
+    },
+    {
+      "task_id": "T002",
+      "title": "live：README 加说明（worker 合并）",
+      "kind": "code",
+      "goal": "在 live-repo 的 README.md 加一行项目说明“四则运算示例”。做法：在执行目录中 git clone {origin} src，新建分支、提交、自评审（review_run）直到 finalize、git push origin <分支>；本次运行的 GitHub 由替身代替，命令就是 {gh}（用这个完整路径，不要加 PATH 前缀或其他前置命令）：{gh} pr create -R github.com/{repository} --head <分支> --title <标题>，再按任务书的交付授权 {gh} pr merge <编号> -R github.com/{repository} --squash；提交时带 merge。",
+      "acceptance": [
+        "README.md 加了说明",
+        "PR 由 worker 自行合并，合并的 head 等于最后一轮评审的 HEAD"
+      ]
+    },
+    {
+      "task_id": "T003",
+      "title": "live：预启动、暂停、恢复与取消",
+      "kind": "research",
+      "goal": "本任务用于验证预启动、暂停、恢复与取消：收到任务书后调用 progress_note 记录“就绪”，然后结束这一轮，等待主会话的消息，不做其他工作。",
+      "acceptance": [
+        "任务按用户要求预启动、派发、暂停、恢复后取消"
+      ]
+    }
+  ],
+  "operator": [
+    "在 Claude 桌面 app 新建会话，文件夹选择本运行的数据目录 {home}（首次打开需要信任该文件夹），权限模式用 auto。",
+    "在该主会话中说：“执行 {code_tasks}”{prestart_step}。",
+    "T001 的 worker 会话会在侧栏标为等你回答，下一步框里有问题和按钮；点按钮回答（例如“用 add”）。",
+    "{life_step}",
+    "开发任务提交后，主会话核验并技术验收；然后在主会话中说：“我验收 {code_tasks}”。",
+    "回到运行 live.py 的会话，运行 python tools/live.py host-e2e verify {run_id}，然后归档本次运行的会话并运行 cleanup。"
+  ],
+  "checks": [
+    "H1 隔离：数据目录与产品仓库指向本运行，主会话在临时数据目录中持有调度租约",
+    "P 权限规则：主会话放行会话管理与 tsw 工具，worker 放行 tsw 工具，只有授权合并的开发任务放行合并",
+    "H2 预启动与派发：任务书送达，每个任务都进入执行；运行包含 T003 时还有预启动",
+    "H3 自评审：每个开发任务至少一轮 codex-app-server 评审完成并以 finalize 定稿",
+    "H4 提交与技术验收：每个开发任务的 worker.submitted 与 task.accepted",
+    "H5 暂停、恢复与取消（运行包含 T003 时）：T003 的 task.paused、task.resumed、task.cancelled",
+    "B1 会话内提问：T001 的 input.escalated（in_session）、hook 记录的 input.session_message（来自同一 worker 会话）、引用该消息的 input.resolved（in-session，source_kind=user）；问题在下一步框中以按钮呈现，点按钮的回答同样被 hook 记录",
+    "C 自行合并：每个开发任务的最后一次提交带 merge，merged_head 等于提交 HEAD，替身记录的 PR 已合并且合并提交在 origin 的 main 上"
+  ],
+  "prerequisites": [
+    "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则“TaskSteward Worker Merge”（worker 合并依赖它；Claude Code 不读取项目设置中的 autoMode）。"
+  ]
+}

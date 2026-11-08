@@ -103,8 +103,31 @@ def _request(conn: sqlite3.Connection, task_id: str, request_id: str) -> dict[st
     return row
 
 
+REMINDER_OPEN, REMINDER_CLOSE = "<system-reminder>", "</system-reminder>"
+
+
+def user_words(prompt: str) -> str:
+    """The prompt without the ``<system-reminder>`` blocks the host puts in front of it.
+
+    The Claude app prefixes a user's own message with reminders of its own (for example the
+    linked sessions of a side session), so the payload of the ``UserPromptSubmit`` hook starts
+    with ``<system-reminder>`` even when the rest is the user's message (found by the live
+    ``host-e2e`` scenario). Only complete leading blocks are removed; what follows decides.
+    """
+    text = prompt.lstrip()
+    while text.startswith(REMINDER_OPEN):
+        end = text.find(REMINDER_CLOSE)
+        if end < 0:
+            return text
+        text = text[end + len(REMINDER_CLOSE) :].lstrip()
+    return text
+
+
 def is_automated(prompt: str) -> bool:
-    return prompt.lstrip().startswith(AUTOMATED_PREFIXES)
+    """A message the host injected (another session, an app event, a scheduled task), or one
+    with nothing but host reminders in it: never the user's own words."""
+    words = user_words(prompt)
+    return not words or words.startswith(AUTOMATED_PREFIXES)
 
 
 def session_message(
@@ -133,8 +156,7 @@ def session_message(
         or is_automated(prompt)
     ):
         return None
-    if not prompt.strip():
-        return None
+    prompt = user_words(prompt)
     message_id = next_item_id(conn, "session_messages", "message_id", "M", task_id)
     row = task(conn, task_id)
     return EventDraft(
