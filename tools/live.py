@@ -33,6 +33,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -137,6 +138,8 @@ class Run:
         manifest = self.manifest()
         for entry in manifest["entries"]:
             if entry["kind"] == kind and entry["name"] == name:
+                if entry.get("state") == "archived" and fields.get("state") == "created":
+                    fields = {k: v for k, v in fields.items() if k != "state"}  # never undo cleanup
                 entry.update(fields)
                 break
         else:
@@ -1008,7 +1011,9 @@ def hook_summary(run: Run) -> str:
         prompt = str(payload.get("prompt") or "") if isinstance(payload, dict) else ""
         if event == "UserPromptSubmit":
             text = prompt.lstrip()
-            tag = text[: text.find(">") + 1] if text.startswith("<") else "（用户文字）"
+            # The tag name only: attributes carry session titles.
+            tag = "<" + re.split(r"[\s>]", text[1:], maxsplit=1)[0] if text.startswith("<") else ""
+            tag = tag or "（用户文字）"
             leading[tag] = leading.get(tag, 0) + 1
     return f"hook payload：{counts}；UserPromptSubmit 的开头：{leading}"
 
