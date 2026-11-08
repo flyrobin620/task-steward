@@ -204,6 +204,8 @@ class HostIntegration(Protocol):
 
 `start_session` 与 `send_message` 等会话工具由 app 自己的分类器把关，不受 `permissions.allow` 约束（live 中允许规则已生效，带“worker 自行合并”的任务书正文仍被拦截）。用户 2026-11-07 决定：创建 worker 会话时 `prompt` 只写短指令（角色、attempt、任务书路径），`background` 只写任务标题、仓库与执行目录，任务书正文（含交付与合并方式）由 worker 从 `runs/` 读取；合并的把关点因此在 worker 实际合并时，由上表的允许规则与 hooks 守卫承担，而不是在创建会话时由 app 分类器判断。会话可能在 `attempt_reconcile` 之前开始第一轮（`whoami` 仍为 pending），主会话绑定后发消息通知它。
 
+auto 模式分类器另有自己的规则（`autoMode.allow` / `soft_deny`），其中“Merge Without Review”把 worker 合并自己的 PR 判为未经评审的合并（live 中即使命中允许规则的合并也出现过被拒）。Claude Code 只从用户设置、命令行设置与托管设置读取 `autoMode`，项目设置与本地设置中的一律忽略（Claude Code 2.1.302 中核实），所以 tsw 不能把它与允许规则一起生成：`tsw host install-hint` 给出一条“TaskSteward Worker Merge”规则（限 worker 会话、本任务的 PR、单独的 `gh pr merge … -R …`，不含 `--admin` 与绕过检查），由用户在采用 worker 合并时加入自己的用户设置（用户 2026-11-08 决定在策略层允许 worker 合并）。
+
 Claude Code 对复合命令（`;`、`&&`、管道）逐段核对允许规则，有一段不在规则内就交给权限模式与分类器判断。live 中单独的 `gh pr merge … -R …` 命中规则后直接执行，而后面接了 `git fetch` 等命令的同一合并被分类器以“Merge Without Review”拒绝；worker 指令因此要求合并命令单独运行。
 
 worker 能写自己的执行目录，所以 hooks 拒绝任何会话写入执行目录与数据目录中的 `.claude/settings*.json`（编辑工具与可识别的 shell 写法），避免会话给自己追加权限。允许规则只放行动作本身；动作的授权仍由账本、配置与用户来源决定，主会话代答也仍然不是用户批准（§8.1b）。
@@ -322,6 +324,8 @@ interactive 动作映射（承载 worker 的实现）：
 4. 消息回答了问题时，worker 调用 `user_answer`，必须引用 hook 记录的消息编号，且该消息来自同一 worker 会话。tsw 用记录中的原文构造 `VerifiedSource`（渠道 `in-session`），记录 `input.resolved`，经 T12 回到离开时的子状态。同一次答复可以带上用户批准的追加评审轮次（`source = user`，没有累计上限）、批准延后或认定不成立的阻断项。用户原话来自 hook，不来自 worker 的转述，所以 worker 不能伪造答复。
 
 用户回复了但还没有回答问题（例如“让我想想”）时，worker 在会话中继续与用户交流；问题不会因超时转交。
+
+在 Claude app 中，worker 提问后以 `wrap_up` 结束这一轮：问题写在 `ask`，每个选项一个按钮，`blocked: true` 让 app 把会话标为等待用户。用户点按钮等于在 worker 会话中发出按钮上的文字，经 `UserPromptSubmit` 记录，与打字回答相同；app 的选择卡片（AskUserQuestion）的回答是工具结果，不经过 hook，不能作为答复来源，所以不用。
 
 ### 8.1b 超时转交主会话
 

@@ -434,7 +434,9 @@ class Guard:
                 "完成后用 review_run 做自评审并逐条处置；任务书写明由 worker 合并时，"
                 "门禁、评审与意见都解决后自行合并 PR（合并命令单独运行，不与其他命令连接），"
                 "再 submit。需要用户决定的事用 ask_user "
-                "在本会话直接问用户，用户回复后用 user_answer 登记；跨任务的事（资源冲突、依赖、"
+                "在本会话直接问用户（Claude app 中再用 wrap_up 的 ask 写问题、actions 给每个选项"
+                "一个按钮并设 blocked: true；用户点按钮等于在本会话发出按钮文字），"
+                "用户回复后用 user_answer 登记；跨任务的事（资源冲突、依赖、"
                 "其他任务的范围）才用 question 交主会话，并用 "
                 'mcp__ccd_session_mgmt__send_message(session_id="parent") 唤醒主会话。',
             )

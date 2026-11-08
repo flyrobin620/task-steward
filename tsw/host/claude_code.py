@@ -105,8 +105,28 @@ def allow_actions(path: Path, rules: Iterable[str]) -> None:
     atomic_write(path, (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
 
 
+# A rule for Claude Code's auto-mode classifier (DN006 §6.3). Claude Code reads auto-mode rules
+# only from the user's, the command line's and the managed settings, never from a project's, so
+# tsw cannot generate it next to the permission rules: the install hint shows it to the user.
+AUTO_MODE_WORKER_MERGE = (
+    "TaskSteward Worker Merge: In a TaskSteward worker session (its working directory is "
+    "work/<task>/<attempt> under a TaskSteward data directory and tsw's whoami reports role "
+    "worker), running `gh pr merge <number> -R <host>/<owner>/<name> --squash` as a command of "
+    "its own for the task's own pull request, after the task's self-review was finalized, is "
+    "authorized by the user's standing decision that workers merge their own pull requests "
+    "(TaskSteward decision 0002, repositories.<id>.delivery.merge). The pull request was "
+    "reviewed by the configured independent reviewer, and tsw's PreToolUse hook refuses the "
+    "merge when the task is not authorized or the target is another repository. This is not "
+    "Merge Without Review or Self-Approval. It does not cover --admin, bypassing checks or "
+    "branch protection, or merging any other pull request."
+)
+
+
 def install_hint(home: Home) -> str:
     plugin = PLUGIN_DIR.parent
+    auto_mode = json.dumps(
+        {"autoMode": {"allow": [AUTO_MODE_WORKER_MERGE]}}, ensure_ascii=False, indent=2
+    )
     return "\n".join(
         [
             "TaskSteward 的 Claude Code 插件安装步骤（只需一次）：",
@@ -119,5 +139,10 @@ def install_hint(home: Home) -> str:
             f"5. 在数据目录 {home.root} 中打开一个会话作为主会话。",
             "插件只提供 tsw MCP server 与 hooks，在任何目录的会话里都生效；orchestrate skill",
             "是数据目录的项目 skill，只有在数据目录打开的会话会加载。tsw 不修改任何全局设置。",
+            "6. auto 权限模式下 worker 自行合并 PR，Claude Code 的分类器默认判为未经评审。",
+            "   若采用 worker 合并（repositories.<id>.delivery.merge），由你在用户设置",
+            "   （~/.claude/settings.json，与已有的 autoMode 合并）中加入下面的 auto 模式规则；",
+            "   Claude Code 不读取项目设置中的 autoMode，tsw 也不会替你修改用户设置：",
+            auto_mode,
         ]
     )

@@ -841,6 +841,10 @@ def host_prepare(args: argparse.Namespace) -> int:
     operator = [
         f"# live host-e2e {run.id}",
         "",
+        "开始前确认：",
+        "",
+        *[f"- {p}" for p in spec.get("prerequisites", [])],
+        "",
         "按顺序操作（每一步都在 Claude 桌面 app 中，不在终端）：",
         "",
         *[f"{i}. {s}" for i, s in enumerate(steps, 1)],

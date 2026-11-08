@@ -198,6 +198,9 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     code, hint = run_json("host", "install-hint")
     assert code == 0 and "/plugin install task-steward@task-steward" in hint["hint"]
     assert "tsw host render" in hint["hint"]
+    # The auto-mode rule is shown, never written: Claude Code reads it from user settings only.
+    rule = json.loads(hint["hint"][hint["hint"].index("{") :])["autoMode"]["allow"][0]
+    assert rule.startswith("TaskSteward Worker Merge:") and "--admin" in rule
 
 
 def launch(
