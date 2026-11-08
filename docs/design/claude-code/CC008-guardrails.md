@@ -44,7 +44,7 @@
 
 1. **就地放行（worker）**：worker 用 `ask_user` 说明被拦下的动作与理由；用户在 worker 会话中回复后，worker 调用 `user_answer`，除答复外带上 `waive_rules`（如 `["CC-B4"]`）。tsw 用 hook 记录的用户原话记录 `guardrail.waived`（规则编号、attempt、用户来源）。hook 对该 attempt 不再执行这些规则；attempt 结束即失效。这与评审预算追加的做法相同（DN006 §8.1a），不需要主会话参与。
 2. **长期关闭（用户）**：配置 `guardrails.disabled` 列出的规则对所有会话不再拦截。它是新的权限类键（DN003 §7.2），由主会话按用户在主会话或其他渠道的原话修改；worker 会话中的原话只用于就地放行，不改全局配置。
-3. **主会话被拦下**（CC-B1、CC-B2、CC-B9）：在主会话中问用户，按用户的话用 `config_change` 写入 `guardrails.disabled`，或由用户自己执行。
+3. **主会话被拦下**（CC-B1、CC-B2）：在主会话中问用户，按用户的话用 `config_change` 写入 `guardrails.disabled`，或由用户自己执行。CC-B9 不可关闭：先 `attempt_start`，再用返回的会话名创建会话。
 4. **用户自己做**：用户总可以在会话外自己执行被拦下的动作。
 
 **失败方式**：hook 内部异常时放行并在 stderr 报告（现状不变）。
