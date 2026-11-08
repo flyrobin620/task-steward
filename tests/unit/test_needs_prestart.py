@@ -43,6 +43,7 @@ def _task(
     db: sqlite3.Connection,
     task_id: str,
     status: str,
+    *,
     deps: tuple[str, ...] = (),
     attempt: str | None = None,
     purpose: str | None = None,

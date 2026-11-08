@@ -58,8 +58,11 @@
 | CC-S1 | SessionStart | 识别角色；主会话领取租约并注入 attention 摘要；worker 注入任务与回传规则；待绑定会话提示等待绑定 | 保留（不是拦截） |
 | CC-S2 | UserPromptSubmit（worker） | worker 有待答问题时，把用户消息原文记为 `input.session_message` 并告诉 worker 编号；去掉宿主前置的 `<system-reminder>`（T241）；以 `<cross-session-message` `<side-sessions-event` `<task-notification` `<ci-monitor-event` `<scheduled-task` 开头的注入消息不记 | 保留。前置 reminder 的修复是必需的：本任务中用户在 worker 会话的回复以 `<system-reminder>` 开头，`main` 上的实现把它当成注入消息没有记录，worker 因而无法登记答复 |
 | CC-S3 | UserPromptSubmit（worker） | 检测 `[report]` 并提示回传 | 保留 |
-| CC-S4 | Stop（主会话） | 有未处理的回传或到期未转交的问题时阻止结束一次 | 保留 |
+| CC-S4 | Stop（主会话） | 有未处理的回传或到期未转交的问题时阻止结束一次；这一轮是用户的 turn（CC-S6）且 `attention` 的 `needs_prestart` 非空时也阻止一次，提示为列出的任务预启动（DN002 §5.6）。几条原因合在一条提示里，`stop_hook_active` 时不再阻止 | 保留；预启动提醒为 T244 新增 |
 | CC-S5 | Stop（worker） | 评审进行中时阻止结束一次；记录 `worker.turn_ended` | 保留 |
+| CC-S6 | UserPromptSubmit（主会话） | 记下这一轮是不是用户本人的 turn：按 CC-S2 的同一规则判断（去掉前置 `<system-reminder>` 后为空或以注入标记开头的不是），写入数据目录 `cache/turns/<会话>.json`；Stop 读取后即删除，hook 没有看到开头的一轮（没有 `UserPromptSubmit`）因此不算用户的 turn | T244 新增 |
+
+**CC-S4 预启动提醒的背景与 escape**：只有用户本人的 turn 能创建会话（CC001 §4）。2026-11-07 主会话登记了等待依赖的任务后，没有在之后的用户 turn 里为它预启动，用户提醒后才补上；之后要等用户再发消息才能创建，依赖链因此停住。Stop hook 本身不知道这一轮由谁触发，所以由 CC-S6 在一轮开始时记下。提醒只在用户的 turn、本会话没有被另一个主会话的有效租约排除（另一个会话持有租约时本会话不能预启动）、列表非空时出现，每轮最多一次。escape：用户要求先不开始、或预启动确实不合适时，主会话说明原因后直接结束（第二次 Stop 带 `stop_hook_active`，不再阻止）；用户也可以关闭预启动（`scheduling.prestart.enabled`）。标记只是缓存：写入失败时这一轮不提醒，不影响其他行为（DN008 §8 第 2 条）。
 
 ## 5. 现有校验逐项归类
 

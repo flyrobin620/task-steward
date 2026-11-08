@@ -342,9 +342,7 @@ def test_needs_prestart_respects_the_standby_limit(home: Home) -> None:
 
 
 @mark.use_case("UC-DISPATCH-001")
-def test_attempt_start_creates_the_execution_directory_anywhere(
-    h: Harness, tmp_path: Path
-) -> None:
+def test_attempt_start_creates_the_execution_directory_anywhere(h: Harness, tmp_path: Path) -> None:
     h.register("T001")
     h.plan("T001")
     h.register("T002")
@@ -374,6 +372,81 @@ def test_attempt_start_creates_the_execution_directory_anywhere(
         )
     assert refused.value.details["reason"] == "workdir_unavailable"
     assert h.query("SELECT * FROM attempts WHERE task_id = 'T003'") == []
+
+
+def change(h: Harness, task_id: str, revision: int, goal: str) -> dict[str, Any]:
+    out = h.run(
+        "task_update",
+        task_id=task_id,
+        goal=goal,
+        acceptance=["验收"],
+        user_source=h.source(task_id, revision, "change"),
+    )
+    return dict(out["events"][0]["data"])
+
+
+@mark.use_case("UC-DISPATCH-001")
+def test_a_prestarted_session_has_a_brief_that_follows_the_requirement(
+    h: Harness, tmp_path: Path
+) -> None:
+    h.register("T001")
+    h.register("T002", goal="第一版目标")
+    h.plan("T001")
+    h.plan("T002", deps=["T001"])
+    started = h.run("attempt_start", task_id="T002", purpose="prestart", user_turn=True)
+    data = started["events"][0]["data"]
+    assert (data["brief_path"], data["brief_revision"], data["read_set"]) == (
+        "runs/T002/a1/brief.md",
+        1,
+        ["T001", "T002"],
+    )
+    brief = h.home.root / "runs" / "T002" / "a1" / "brief.md"
+    assert "第一版目标" in brief.read_text(encoding="utf-8")
+    workdir = h.home.root / "work" / "T002" / "a1"
+    h.run(
+        "attempt_reconcile",
+        task_id="T002",
+        attempt="a1",
+        generation=data["generation"],
+        outcome="created",
+        session_ref="w-2",
+    )
+    server = Server(h.home, {SESSION_ENV: "w-2"}, workdir)
+    who = server.call("whoami", {})
+    assert (who["phase"], who["brief_path"], who["brief_revision"]) == (
+        "standby",
+        "runs/T002/a1/brief.md",
+        1,
+    )
+    standby = guard(h, "w-2", workdir).run("SessionStart")
+    assert standby is not None and "待命中" in standby["hookSpecificOutput"]["additionalContext"]
+    # A later decision is written back at once: the standby session's brief follows.
+    updated = change(h, "T002", 1, "第二版目标")
+    assert updated["brief"] == {
+        "attempt": "a1",
+        "revision": 2,
+        "path": "runs/T002/a1/brief.md",
+        "session_ref": "w-2",
+    }
+    text = brief.read_text(encoding="utf-8")
+    assert "第二版目标" in text and "revision：2" in text
+    assert server.call("whoami", {})["brief_revision"] == 2
+    # Dispatch renders it again from the latest revision and delivers it.
+    upstream = h.dispatch("T001")
+    h.finalize(upstream, "T001")
+    h.submit(upstream, "T001")
+    h.accept("T001")
+    h.run("sync")
+    assert h.status("T002") == "ready"
+    h.run("task_dispatch", task_id="T002", workdir=str(workdir))
+    h.run("attempt_deliver", task_id="T002")
+    assert h.status("T002") == "in_progress"
+    assert "第二版目标" in brief.read_text(encoding="utf-8")
+    # At work: the brief follows as well and the worker is named for the orchestrator to tell.
+    at_work = change(h, "T002", 2, "第三版目标")
+    assert at_work["brief"]["session_ref"] == "w-2" and at_work["brief"]["revision"] == 3
+    assert "第三版目标" in brief.read_text(encoding="utf-8")
+    assert server.call("whoami", {})["brief_revision"] == 3
 
 
 def ack(h: Harness, sequences: list[int], session: str = "orch-1") -> Any:

@@ -7,7 +7,7 @@ acceptance and cancellation (DN002 §3.2, §5; DN006 §8.3)."""
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from tsw.commands import Command, CommitContext
@@ -334,8 +334,14 @@ def task_update(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             "user_source": source,
         }
         current = current_attempt(ctx.conn, task_id)
-        if row["status"] == "dispatching" and current is not None and current["brief_path"]:
-            # DN002 §5.1: the brief is brought to the new revision before binding.
+        if (
+            current is not None
+            and current["brief_path"]
+            and current["phase"] not in ("replaced", "closed")
+        ):
+            # DN002 §5.1: the brief of the task's session (prestarted, being dispatched or at
+            # work) is brought to the new revision; the orchestrator tells a session that has
+            # one, and dispatch rewrites it again from the latest revision.
             updated = {**row, "revision": revision, "goal": goal, "acceptance": dumps(acceptance)}
             body = _brief(
                 ctx.conn,
@@ -346,7 +352,17 @@ def task_update(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 env.config,
             )
             ctx.storage.put_artifact(str(current["brief_path"]), body.encode("utf-8"))
-            data["brief"] = {"attempt": current["attempt"], "revision": revision}
+            data["brief"] = {
+                "attempt": current["attempt"],
+                "revision": revision,
+                "path": current["brief_path"],
+                # The session the orchestrator tells about the new brief, if it has one.
+                **(
+                    {"session_ref": current["session_ref"]}
+                    if current["session_ref"] and current["phase"] in ("standby", "live", "stopped")
+                    else {}
+                ),
+            }
         if transition:
             data["transition"] = transition
         return [
@@ -458,6 +474,19 @@ def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
     ) + resume_package(conn, str(row["task_id"]))
 
 
+def _brief_path(task_id: str, attempt_id: str) -> str:
+    return f"runs/{task_id}/{attempt_id}/brief.md"
+
+
+def _read_set(conn: sqlite3.Connection, task_id: str, extra: Sequence[str] = ()) -> list[str]:
+    """The task itself, its dependencies and any extra tasks the orchestrator adds."""
+    deps = [
+        str(r["dep_id"])
+        for r in conn.execute("SELECT dep_id FROM dependencies WHERE task_id = ?", (task_id,))
+    ]
+    return sorted({task_id, *deps, *extra})
+
+
 @tool("task_dispatch", "orchestrator", description="派发任务（T07，R-ATTEMPT）")
 def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
@@ -501,14 +530,8 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             raise rejected("未知的 attempt 阶段", reason="invalid_attempt", phase=previous["phase"])
         if mode in ("new", "reuse_planned"):
             guards.g_window(env.config, user_turn)
-        deps = [
-            r["dep_id"]
-            for r in ctx.conn.execute(
-                "SELECT dep_id FROM dependencies WHERE task_id = ?", (task_id,)
-            )
-        ]
-        read_set = sorted({task_id, *map(str, deps), *extra_reads})
-        brief_path = f"runs/{task_id}/{attempt_id}/brief.md"
+        read_set = _read_set(ctx.conn, task_id, extra_reads)
+        brief_path = _brief_path(task_id, attempt_id)
         ctx.storage.put_artifact(
             brief_path,
             _brief(ctx.conn, row, attempt_id, workdir, read_set, env.config).encode("utf-8"),
@@ -627,21 +650,37 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         recorded = current["workdir"] if purpose == "dispatch" and current is not None else None
         _ensure_dir(ctx.home, str(recorded or workdir))
         generation = (int(previous["generation"]) if previous else 0) + 1
+        data: dict[str, Any] = {
+            "attempt": attempt_id,
+            "generation": generation,
+            "session_name": _session_name(env, task_id, attempt_id, generation),
+            "purpose": purpose,
+            "controller": env.caller.session_id,
+            "adapter": str(env.config.get("roles.worker.session")),
+        }
+        if purpose == "prestart":
+            # The brief is written now, at the current revision, so what was decided for the
+            # task is on disk before the context that decided it is gone; dispatch and every
+            # requirement change rewrite it (DN002 §5.6).
+            read_set = _read_set(ctx.conn, task_id)
+            brief_path = _brief_path(task_id, attempt_id)
+            ctx.storage.put_artifact(
+                brief_path,
+                _brief(ctx.conn, row, attempt_id, workdir, read_set, env.config).encode("utf-8"),
+            )
+            data |= {
+                "workdir": workdir,
+                "brief_path": brief_path,
+                "brief_revision": int(row["revision"]),
+                "read_set": read_set,
+            }
         return [
             EventDraft(
                 type="attempt.start_requested",
                 task_id=task_id,
                 revision=int(row["revision"]),
                 attempt=attempt_id,
-                data={
-                    "attempt": attempt_id,
-                    "generation": generation,
-                    "session_name": _session_name(env, task_id, attempt_id, generation),
-                    "purpose": purpose,
-                    "controller": env.caller.session_id,
-                    "adapter": str(env.config.get("roles.worker.session")),
-                    **({"workdir": workdir} if purpose == "prestart" else {}),
-                },
+                data=data,
             )
         ]
 

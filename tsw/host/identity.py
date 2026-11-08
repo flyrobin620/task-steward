@@ -59,6 +59,7 @@ class Identity:
     attempt: str | None = None
     phase: str | None = None
     brief_path: str | None = None
+    brief_revision: int | None = None
     writable_roots: tuple[Path, ...] = field(default_factory=tuple)
     cwd_consistent: bool = True
     pending: bool = False  # not bound yet, but started in a starting attempt's directory
@@ -72,6 +73,7 @@ class Identity:
             "attempt": self.attempt,
             "phase": self.phase,
             "brief_path": self.brief_path,
+            "brief_revision": self.brief_revision,
             "writable_roots": [str(p) for p in self.writable_roots],
             "cwd_consistent": self.cwd_consistent,
             "pending": self.pending,
@@ -110,6 +112,7 @@ def resolve(conn: sqlite3.Connection, home: Home, env: Mapping[str, str], cwd: P
                 attempt=str(row["attempt"]),
                 phase=str(row["phase"]),
                 brief_path=row["brief_path"],
+                brief_revision=row["brief_revision"],
                 writable_roots=tuple(roots),
                 cwd_consistent=consistent,
             )

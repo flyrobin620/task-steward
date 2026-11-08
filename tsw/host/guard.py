@@ -9,6 +9,7 @@ crashes the session: an internal failure allows the action and reports the error
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import sqlite3
@@ -444,10 +445,20 @@ class Guard:
             )
         if who.role == "worker":
             roots = "、".join(str(p) for p in who.writable_roots)
+            if who.phase == "standby":
+                # A prestarted session already has a brief to read, but no slot yet (DN002 §5.6).
+                brief = (
+                    f"{who.brief_path or '等待投递'}（待命中：可以先阅读，等主会话派发并发消息后"
+                    "再开始工作；派发时任务书按最新 revision 重新生成）"
+                )
+            else:
+                brief = who.brief_path or "等待投递"
             return context(
                 "SessionStart",
                 f"你是 TaskSteward 任务 {who.task_id} 的 worker（attempt {who.attempt}）。"
-                f"任务书：{who.brief_path or '等待投递'}。只在可写路径内修改：{roots}。"
+                f"任务书：{brief}。只在可写路径内修改：{roots}。"
+                "主会话告诉你任务书已更新时，重新读取任务书（whoami 的 brief_revision），"
+                "按新 revision 继续。"
                 "完成后用 review_run 做自评审并逐条处置；任务书写明由 worker 合并时，"
                 "门禁、评审与意见都解决后自行合并 PR（合并命令单独运行，不与其他命令连接），"
                 "再 submit。需要用户决定的事用 ask_user "
@@ -694,10 +705,8 @@ class Guard:
             user = bool(json.loads(path.read_text(encoding="utf-8")).get("user_turn"))
         except (OSError, ValueError, AttributeError):
             return False
-        try:
+        with contextlib.suppress(OSError):
             path.unlink()
-        except OSError:
-            pass
         return user
 
     def _may_dispatch(self, conn: sqlite3.Connection, who: Identity) -> bool:

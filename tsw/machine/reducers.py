@@ -385,6 +385,16 @@ def attempt_start_requested(conn: sqlite3.Connection, event: Event) -> None:
         controller=data["controller"],
         adapter=data["adapter"],
         **({"workdir": data["workdir"]} if data.get("workdir") else {}),
+        # A prestart writes the brief (T244); events from before that carry none.
+        **(
+            {
+                "brief_path": data["brief_path"],
+                "brief_revision": data["brief_revision"],
+                "read_set": dumps(data["read_set"]),
+            }
+            if data.get("brief_path")
+            else {}
+        ),
     )
     if known is None:
         conn.execute(
