@@ -149,7 +149,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一
 | 工具 | orchestrator | worker | 说明 |
 | --- | --- | --- | --- |
 | `whoami` | ✓ | ✓ | 角色、任务、attempt、可写路径 |
-| `task_read` / `context_catalog` / `context_read` / `context_search` / `context_decisions` / `context_task` | ✓ | 只限该 attempt 的授权读取集合（DN007 §7.2） | 任务卡片、原文、全文片段、用户决定、本任务过程 |
+| `task_read` / `context_catalog` / `context_read` / `context_search` / `context_decisions` / `context_task` | ✓ | 可读全部任务（只读），brief 列出推荐读取集合（DN007 §7.2） | 任务卡片、原文、全文片段、用户决定、本任务过程 |
 | `task_register` / `task_update` / `task_plan` | ✓ | — | T01–T06 |
 | `task_dispatch` / `attempt_bind` / `attempt_reconcile` | ✓ | — | T07–T10、T15 |
 | `inbox` / `inbox_ack` | ✓ | — | 未处理 reportable 事件 |

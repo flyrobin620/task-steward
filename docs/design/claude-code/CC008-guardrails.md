@@ -19,7 +19,7 @@
 | tsw 生成的允许规则 | 把“授权记录在 tsw 中、由 tsw 把关”的动作从分类器的判断中移出 | 否 | `permissions.allow`（§6） |
 | tsw hooks 的 block list | tsw 特有的已知错误（§3） | 否 | `PreToolUse` 调用 `tsw guard` |
 | tsw MCP 与状态机 | 角色、任务、租约、版本、G-*、用户来源（DN008 §6） | 否 | MCP server 按角色列出工具；`run_tool` 的检查与各工具的守卫 |
-| 事后发现 | 漏网的偏差（不保证发现） | 部分 | 确定性：`ledger audit` 的摘要链、G-SUBMIT / G-ACCEPT 对证据结构、提交与登记的检查。LLM：主会话验收时核对 diff、PR 与合并后的 CI（证据内容的判断，不是护栏） |
+| 事后发现 | 漏网的偏差（不保证发现） | 部分 | 流程（确定性）：`ledger audit` 的摘要链、G-SUBMIT / G-ACCEPT 对提交、登记与处置记录的检查。内容（LLM）：主会话验收时判断 diff、PR 与合并后的 CI，不是护栏 |
 
 权限模式为 `bypassPermissions` 时没有分类器，一般风险没有宿主保护；这是用户自己的选择，tsw 不补上。
 
@@ -101,7 +101,7 @@
 | --- | --- | --- |
 | 工具列表按角色给出；调用时再查角色 | 保留 | 接口语义（DN008 §6） |
 | worker 只能操作自己的任务、必须是当前 attempt 绑定的 live 会话 | 保留 | 对象错误、状态漂移 |
-| worker 只能读授权读取集合 | 保留 | 见 DN008 §12 第 2 条 |
+| worker 只能读授权读取集合（`read_scope`） | 删除 | 用户 2026-11-08 决定放宽（DN008 §12）：读取不会写错状态；授权读取集合改为推荐起点（DN007 §7.2） |
 | worker 写工具要求会话目录一致（`cwd_mismatch`） | 保留 | 会话建在了错误目录（绑定错误） |
 | 主会话写工具要求租约（G-LEASE） | 保留 | — |
 | `expected_version`、`command_id` 内容不同则拒绝 | 保留 | — |
@@ -162,6 +162,6 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 
 1. **措辞**（只改文档与注释）：§7。
 2. **hooks 改为 block list**（行为变化，需测试与 live `host-e2e`）：CC-B1–CC-B10、规则编号与 escape 信息、就地放行（`waive_rules`、`guardrail.waived`）与 `guardrails.disabled`；删除 shell 路径解析、文本兜底、tsw CLI 与 `import tsw` 识别、哈希规则、hook 侧目录一致性检查。
-3. **用户来源与授权**（契约兼容变化）：`principal` 可选、删除 `source_reused`、导入授权对象加参数摘要。
+3. **用户来源、授权与读取范围**（契约兼容变化）：`principal` 可选、删除 `source_reused`、导入授权对象加参数摘要；worker 的检索与 `task_read` 放宽为可读全部任务（DN007 §7.2）。
 
 第 2、3 项涉及 hooks 守卫与 MCP 写工具授权，按 `AGENTS.md` 第 4 节须用户确认后合并。T241 中的 CC-B2、CC-B8、CC-S2 与 §6 在 T241 合并后按本文调整措辞与归类。

@@ -192,21 +192,21 @@ DN001 §8 只定义了事件格式和“JSONL 账本为唯一事实、SQLite 投
 
 每次 `context_read` 与扩大检索都记入事件（`context.read`，含理由与读取量），便于事后看到主会话依据了哪些历史。
 
-### 7.2 worker：由 brief 提供，范围受限
+### 7.2 worker：由 brief 提供，可读全部
 
 - 派发时，tsw 在 brief 中生成“背景”一节：依赖任务的卡片与产出链接、主会话选定的相关历史任务（附选择理由）、适用的用户决定与偏好。
-- brief 同时登记该 attempt 的**授权读取集合**：本任务、其依赖、brief 中列出的相关任务与用户决定条目。集合随 brief revision 变化，记入 `task.dispatch_started` / `attempt.continued` 事件。
-- 各检索工具对两种角色的范围（mcp-gate 执行检查）：
+- brief 同时列出该 attempt 的**推荐读取集合**：本任务、其依赖、brief 中列出的相关任务与用户决定条目。集合随 brief revision 变化，记入 `task.dispatch_started` / `attempt.continued` 事件。它是 worker 读取的起点，不是限制：读取其他任务不会写错状态（用户 2026-11-08 决定放宽，DN008 §12）。
+- 各检索工具对两种角色的范围：
 
 | 工具 | 主会话 | worker |
 | --- | --- | --- |
-| `context_catalog` | 任意范围 | 只返回授权读取集合内的卡片 |
-| `context_read` | 任意任务 | 只限授权读取集合 |
-| `context_search` | 任意范围 | 只返回授权读取集合内文档的片段 |
-| `context_decisions` | 任意范围 | 只返回 brief 列出的条目与本任务的决定 |
-| `context_task` | 任意任务 | 只限本任务 |
+| `context_catalog` | 任意范围 | 任意范围；推荐读取集合内的卡片排在前面 |
+| `context_read` | 任意任务 | 任意任务（只读） |
+| `context_search` | 任意范围 | 任意范围 |
+| `context_decisions` | 任意范围 | 任意范围；brief 列出的条目与本任务的决定排在前面 |
+| `context_task` | 任意任务 | 任意任务（只读） |
 
-- worker 需要集合外的历史时，以 `worker.question` 请主会话判断；主会话同意后通过 `attempt.continued` 扩大集合。
+- worker 只能读取其他任务，不能操作它们：写工具仍只限本任务（DN008、CC008 §5.3）。
 
 ## 8. 导入的历史如何进入索引
 
