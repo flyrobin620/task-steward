@@ -5,13 +5,16 @@ registration and the hooks. It is enabled at user scope, so it carries no orches
 This module generates the orchestrator's instructions into the data directory: ``CLAUDE.md`` and
 the project skill ``.claude/skills/orchestrate/SKILL.md``, which only a session opened in the
 data directory discovers. It also generates the permission rules for the actions tsw guards
-itself (DN006 §6.3): ``.claude/settings.json`` in the data directory for the orchestrator and
-``.claude/settings.local.json`` in a worker's execution directory. It explains how to install
-the plugin and never changes global settings by itself.
+itself (CC008 §6): ``.claude/settings.json`` in the data directory for the orchestrator. A
+worker's execution directory gets no settings file: a folder that brings its own permission
+rules asks for trust again even under a trusted data directory, so a worker relies on the
+user's auto-mode rules instead (decision 0003). It explains how to install the plugin and never
+changes global settings by itself.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Iterable
 from pathlib import Path
@@ -38,6 +41,8 @@ ORCHESTRATOR_ALLOW = (
     "mcp__ccd_session_mgmt__list_sessions",
     "mcp__ccd_session_mgmt__archive_session",
 )
+# What tsw wrote into a worker's ``.claude/settings.local.json`` before decision 0003; a file
+# holding nothing else is tsw's own and is removed (``clear_worker_settings``).
 WORKER_ALLOW = (TSW_TOOLS, *SEND_MESSAGE)
 WORKER_MERGE_ALLOW = ("Bash(gh pr merge:*)",)
 CAPABILITIES = {
@@ -73,18 +78,40 @@ def render_instructions(home: Home) -> list[Path]:
     return [claude_md, skill, settings]
 
 
-def render_worker_settings(workdir: Path, *, merge: bool) -> Path:
-    """The permission rules of a worker's session, written before the session is created."""
+def clear_worker_settings(workdir: Path) -> bool:
+    """Remove the permission rules tsw once generated in a worker's execution directory.
+
+    Only a file that holds nothing but tsw's own rules goes (and ``.claude/`` when it is left
+    empty); a file with anything else, such as rules the user allowed in that session, is the
+    user's and stays as it is. Returns whether a file was removed.
+    """
     settings = workdir / WORKER_SETTINGS_PATH
-    allow_actions(settings, (*WORKER_ALLOW, *(WORKER_MERGE_ALLOW if merge else ())))
-    return settings
+    if not settings.is_file():
+        return False
+    try:
+        loaded: Any = json.loads(settings.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(loaded, dict) or set(cast("dict[str, Any]", loaded)) != {"permissions"}:
+        return False
+    permissions: Any = cast("dict[str, Any]", loaded)["permissions"]
+    if not isinstance(permissions, dict) or set(cast("dict[str, Any]", permissions)) != {"allow"}:
+        return False
+    rules: Any = cast("dict[str, Any]", permissions)["allow"]
+    ours = {*WORKER_ALLOW, *WORKER_MERGE_ALLOW}
+    if not isinstance(rules, list) or not all(r in ours for r in cast("list[Any]", rules)):
+        return False
+    settings.unlink()
+    with contextlib.suppress(OSError):
+        settings.parent.rmdir()  # only when empty
+    return True
 
 
 def allow_actions(path: Path, rules: Iterable[str]) -> None:
     """Add ``rules`` to ``permissions.allow`` of a Claude Code settings file, keeping the rest.
 
-    A merge rule that ``rules`` does not contain is removed: an attempt that may not merge
-    never inherits it from an earlier one in the same directory.
+    A worker merge rule that ``rules`` does not contain is removed: tsw no longer generates it
+    (decision 0003).
     """
     data: dict[str, Any] = {}
     if path.is_file():
@@ -154,8 +181,10 @@ def install_hint(home: Home) -> str:
             "插件只提供 tsw MCP server 与 hooks，在任何目录的会话里都生效；orchestrate skill",
             "是数据目录的项目 skill，只有在数据目录打开的会话会加载。tsw 不修改任何全局设置。",
             "6. auto 权限模式下，Claude Code 的分类器会把主会话派发 worker、worker 自行合并 PR",
-            "   当作未经授权。由你在用户设置（~/.claude/settings.json，与已有的 autoMode 合并）",
-            "   中加入下面的 auto 模式规则（不采用 worker 合并时可省略合并那一条）；",
+            "   当作未经授权。worker 的执行目录不带权限规则（带规则的目录会再次要求信任），",
+            "   worker 的放行都来自这里。由你在用户设置（~/.claude/settings.json，",
+            "   与已有的 autoMode 合并）中加入下面的 auto 模式规则（不采用 worker 合并时可省略",
+            "   合并那一条）；",
             "   Claude Code 不读取项目设置中的 autoMode，tsw 也不会替你修改用户设置：",
             auto_mode,
         ]

@@ -99,8 +99,17 @@ def test_gh_stub_squash_merges_into_the_bare_origin(tmp_path: Path) -> None:
     assert json.loads(view.stdout)["mergeCommit"]["oid"] == pr["merge_commit"]
     again = gh(run, "pr", "merge", "1", "-R", "live/live-repo", "--squash")
     assert again.returncode != 0
+    # The merge commit's CI on main, simulated as one passed run (decision 0003).
+    listed = gh(run, "run", "list", "--commit", pr["merge_commit"][:10], "-R", "live/live-repo")
+    assert listed.returncode == 0, listed.stderr
+    (ci,) = json.loads(listed.stdout)
+    assert (ci["headSha"], ci["conclusion"]) == (pr["merge_commit"], "success")
+    assert ci["url"].endswith("/actions/runs/1")
+    viewed = gh(run, "run", "view", "1", "-R", "github.com/live/live-repo")
+    assert json.loads(viewed.stdout)["headSha"] == pr["merge_commit"]
+    assert json.loads(gh(run, "run", "list", "-c", "0" * 40, "-R", "live/live-repo").stdout) == []
     log = (run / "gh-log.jsonl").read_text(encoding="utf-8").splitlines()
-    assert len(log) == 6
+    assert len(log) == 9
 
 
 def ev(seq: int, type_: str, task: str, actor: str | None = None, **data: Any) -> dict[str, Any]:

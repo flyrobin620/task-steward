@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, cast
 
 from tsw.config import EffectiveConfig, resolve_repository
 from tsw.errors import rejected
@@ -353,11 +353,70 @@ def g_submit(
 
 
 def merge_authorized(config: EffectiveConfig, task_row: Mapping[str, Any]) -> bool:
-    """A development task whose repository lets the worker merge (DN002 G-SUBMIT, 0002)."""
-    if task_row["kind"] != "code":
-        return False
+    """A task whose repository lets the worker merge, whatever its kind (DN002 §3.5, 0003)."""
     repo = resolve_repository(config, str(task_row["repo"]))
     return bool(repo and config.get(f"repositories.{repo}.delivery.merge"))
+
+
+# GitHub Actions run conclusions and statuses: a run that has not finished yet is waited for,
+# anything else that is not ``success`` failed (DN002 §3.5).
+CI_PENDING = frozenset(
+    {"", "queued", "in_progress", "pending", "requested", "waiting", "expected", "running"}
+)
+MERGE_KEYS = ("pr", "merge_commit", "merged_head", "live")
+
+
+def _merge_ci(merge: Mapping[str, Any]) -> dict[str, str]:
+    """The CI evidence of the merge commit on the default branch (DN002 G-SUBMIT, 0003).
+
+    A structured declaration (DN008 §8 item 3): tsw checks that it is complete, names the merge
+    commit and says the run passed; the orchestrator opens the run link when it verifies.
+    """
+    found: Any = merge.get("ci")
+    if not isinstance(found, Mapping):
+        raise rejected(
+            "须附主分支上合并提交的 CI 结果：等 CI 完成，再在 merge.ci 中写明 commit、"
+            "conclusion 与运行链接 url",
+            reason="g_submit",
+            check="merge_ci",
+        )
+    given = cast("Mapping[str, Any]", found)
+    ci = {k: str(given.get(k) or "").strip() for k in ("commit", "conclusion", "url")}
+    missing = [k for k in ("commit", "url") if not ci[k]]
+    if missing:
+        raise rejected(
+            "CI 结果不完整：写明运行的提交与链接",
+            reason="g_submit",
+            check="merge_ci",
+            missing=missing,
+        )
+    if ci["commit"] != str(merge["merge_commit"]):
+        raise rejected(
+            "CI 结果不是合并提交的：附主分支上合并提交的那次运行",
+            reason="g_submit",
+            check="ci_commit",
+            ci_commit=ci["commit"],
+            merge_commit=str(merge["merge_commit"]),
+        )
+    conclusion = ci["conclusion"].lower()
+    if conclusion in CI_PENDING:
+        raise rejected(
+            "合并提交的 CI 尚未完成：等它完成后再提交",
+            reason="g_submit",
+            check="ci_pending",
+            conclusion=ci["conclusion"],
+            url=ci["url"],
+        )
+    if conclusion != "success":
+        raise rejected(
+            "合并提交的 CI 没有通过：在本任务内修复（新的 PR，经评审后合并）或 revert，"
+            "等新的合并提交 CI 通过后再提交，不能带着失败提交",
+            reason="g_submit",
+            check="ci_failed",
+            conclusion=ci["conclusion"],
+            url=ci["url"],
+        )
+    return {**ci, "conclusion": "success"}
 
 
 def g_merge(
@@ -367,21 +426,26 @@ def g_merge(
     merge: Mapping[str, Any] | None,
     skipped: str | None,
 ) -> dict[str, Any]:
-    """The merge part of G-SUBMIT: a development task in a repository that lets the worker merge
-    is submitted after its PR is merged, unless the brief or the repository says otherwise."""
+    """The merge part of G-SUBMIT: a task in a repository that lets the worker merge is
+    submitted after its PR is merged and the merge commit's CI passed, unless the brief or the
+    repository says otherwise."""
     allowed = merge_authorized(config, task_row)
     if merge is not None:
         if not allowed:
             raise rejected(
-                "该仓库或任务类型没有合并授权（repositories.*.delivery.merge）",
+                "该仓库没有合并授权（repositories.*.delivery.merge）",
                 reason="g_submit",
                 check="merge_authorized",
             )
-        missing = [
-            k for k in ("pr", "merge_commit", "merged_head") if not str(merge.get(k) or "").strip()
-        ]
+        missing = [k for k in MERGE_KEYS if not str(merge.get(k) or "").strip()]
         if missing:
-            raise rejected("合并记录不完整", reason="g_submit", check="merge", missing=missing)
+            raise rejected(
+                "合并记录不完整（live 写明在最终 head 与合并后的主分支上运行的 live 场景与结果，"
+                "或不需要、不能运行的原因）",
+                reason="g_submit",
+                check="merge",
+                missing=missing,
+            )
         if merge["merged_head"] != head:
             raise rejected(
                 "合并的 PR head 与提交 HEAD（最后评审的 HEAD）不一致",
@@ -390,7 +454,8 @@ def g_merge(
                 merged_head=merge["merged_head"],
                 head=head,
             )
-        return {"merge": {k: str(merge[k]) for k in ("pr", "merge_commit", "merged_head")}}
+        record = {k: str(merge[k]).strip() for k in MERGE_KEYS}
+        return {"merge": {**record, "ci": _merge_ci(merge)}}
     if allowed:
         if not (skipped and skipped.strip()):
             raise rejected(

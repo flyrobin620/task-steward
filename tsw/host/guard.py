@@ -267,8 +267,8 @@ def merge_problem(
     repository: str | None,
     host: str | None = None,
 ) -> str | None:
-    """Why a worker's ``gh`` merge is refused (decision 0002, DN002 §3.5): no authorization for
-    this task, or a target that is not, or cannot be shown to be, the task's own repository.
+    """Why a worker's ``gh`` merge is refused (decision 0003, DN002 §3.5): no authorization in
+    the task's repository, or a target that is not, or cannot be shown to be, that repository.
 
     The merge must name its target explicitly, so that neither the working directory nor gh's
     default remote decides it: ``gh pr merge`` with ``-R`` / ``--repo`` or a PR link on the
@@ -278,7 +278,7 @@ def merge_problem(
     ``GH_REPO`` / ``GH_HOST``, is refused rather than guessed."""
     if not allowed:
         return (
-            "该任务没有合并授权（开发任务且仓库 repositories.*.delivery.merge）："
+            "该任务的仓库没有合并授权（repositories.*.delivery.merge）："
             "PR 由主会话合并，worker 提交时用 merge_skipped 说明"
         )
     if re.search(r"\bGH_(REPO|HOST)\b", command):

@@ -170,7 +170,8 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         summary=S,
         post_merge={
             **S,
-            "description": "worker 已合并时必填：合并后的核对（main 上合并提交的 CI 等）",
+            "description": "worker 已合并时必填：对 worker 所附合并证据（合并提交、CI 链接、live）"
+            "的核对结论",
         },
         acceptance={
             "type": "array",
@@ -252,8 +253,24 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         diff_note=S,
         merge={
             "type": "object",
-            "description": "worker 已合并 PR（仓库授权 delivery.merge 的开发任务）",
-            "properties": {"pr": S, "merge_commit": S, "merged_head": S},
+            "description": "worker 已合并 PR（仓库授权 delivery.merge）：合并记录、主分支上合并提交"
+            "的 CI 结果与 live 说明",
+            "properties": {
+                "pr": S,
+                "merge_commit": S,
+                "merged_head": S,
+                "ci": {
+                    "type": "object",
+                    "description": "主分支上合并提交的 CI 运行：commit 为合并提交，conclusion 为"
+                    " success，url 为运行链接",
+                    "properties": {"commit": S, "conclusion": S, "url": S},
+                },
+                "live": {
+                    **S,
+                    "description": "在最终 head 与（需要时）合并后的主分支上运行的 live 场景"
+                    "与结果，或不需要、不能运行的原因",
+                },
+            },
         },
         merge_skipped={**S, "description": "授权合并但没有合并时的原因（任务书或仓库规则）"},
     ),

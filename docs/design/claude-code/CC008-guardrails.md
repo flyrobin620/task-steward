@@ -16,7 +16,7 @@
 | 层 | 判断什么 | 是否 LLM | 在 Claude Code 中 |
 | --- | --- | --- | --- |
 | Claude Code 权限模式与 auto 分类器 | 一般风险：删除、写到意外的位置、危险命令；一次调用是否出自用户意图 | 是（宿主的保护，不是 tsw 的护栏，DN008 §4 第 3 条） | 会话的权限模式；worker 建议使用 `auto`（`roles.worker.permission_mode`） |
-| tsw 生成的允许规则与 auto 模式规则 | 把“授权记录在 tsw 中、由 tsw 把关”的动作从分类器的判断中移出 | 否 | 生成的 `permissions.allow`；用户加入用户设置的 `autoMode.allow` 规则（install hint 给出，§6） |
+| tsw 生成的允许规则与 auto 模式规则 | 把“授权记录在 tsw 中、由 tsw 把关”的动作从分类器的判断中移出 | 否 | 主会话：数据目录生成的 `permissions.allow`；worker：执行目录不带规则，只靠用户加入用户设置的 `autoMode.allow` 规则（install hint 给出，§6） |
 | tsw hooks 的 block list | tsw 特有的已知错误（§3） | 否 | `PreToolUse` 调用 `tsw guard` |
 | tsw MCP 与状态机 | 角色、任务、租约、版本、G-*、用户来源（DN008 §6） | 否 | MCP server 按角色列出工具；`run_tool` 的检查与各工具的守卫 |
 | 事后发现 | 漏网的偏差（不保证发现） | 部分 | 流程（确定性）：`ledger audit` 的摘要链、G-SUBMIT / G-ACCEPT 对提交、登记与处置记录的检查。内容（LLM）：主会话验收时判断 diff、PR 与合并后的 CI，不是护栏 |
@@ -34,7 +34,7 @@
 | CC-B3 | worker | 编辑类工具的目标在本任务仓库的主检出（`repositories.<repo>.path`）中，而执行目录不在其中 | 写进主仓库检出而不是任务 worktree（对象错误） | 在执行目录（任务 worktree）中修改 |
 | CC-B4 | worker | `git … push`，仓库没有 `delivery.push` | 未授权的远端动作 | 不推送；提交时说明 |
 | CC-B5 | worker | `gh pr create`，仓库没有 `delivery.create_pr` | 同上 | 同上 |
-| CC-B6 | worker | `gh pr merge`，或 `gh api` 调用 REST 合并路径（`…/pulls/<n>/merge`）或 GraphQL `mergePullRequest`（只看这两种写法，不看评论正文等其他参数里的 “merge” 一词：现状对此误拦，本任务回复评审线程时实测）；任务不是开发任务或仓库没有 `delivery.merge` | 不该由 worker 合并时合并，主会话流程随之错乱 | 提交时用 `merge_skipped` 说明，由主会话合并。**不可放行**：它是 G-SUBMIT 合并授权的镜像，放行后合并记录仍会被 G-SUBMIT 拒绝；需要 worker 合并时由用户修改 `delivery.merge`（用户在会话外手工编辑，或经主会话 `config_change`），然后在原 worker 中重试：hook 与 G-SUBMIT 每次都重新读取配置，不需要重启会话；任务须为开发任务。会话创建时没有合并授权，worker 的 `settings.local.json` 中就没有 `gh pr merge` 的允许规则，auto 分类器可能要求确认 |
+| CC-B6 | worker | `gh pr merge`，或 `gh api` 调用 REST 合并路径（`…/pulls/<n>/merge`）或 GraphQL `mergePullRequest`（只看这两种写法，不看评论正文等其他参数里的 “merge” 一词：现状对此误拦，本任务回复评审线程时实测）；仓库没有 `delivery.merge`（不看任务类型，T245） | 不该由 worker 合并时合并，主会话流程随之错乱 | 提交时用 `merge_skipped` 说明，由主会话合并。**不可放行**：它是 G-SUBMIT 合并授权的镜像，放行后合并记录仍会被 G-SUBMIT 拒绝；需要 worker 合并时由用户修改 `delivery.merge`（用户在会话外手工编辑，或经主会话 `config_change`），然后在原 worker 中重试：hook 与 G-SUBMIT 每次都重新读取配置，不需要重启会话 |
 | CC-B7 | worker | 有合并授权，但 `gh pr merge` 没有 `-R HOST/OWNER/NAME` 或本仓库的 PR 链接与配置的 `host`（默认 `github.com`）、`repository` 一致；或用 `gh api` 合并 | 按当前目录或遗留的 `GH_HOST` 合并了别的仓库或别的主机的 PR（目标错误） | `gh pr merge <编号> -R github.com/<owner>/<name>`，或该仓库的 PR 链接 |
 | CC-B8 | worker、主会话 | `CronCreate` / `ScheduleWakeup` 的提示不以 `<scheduled-task>` 开头 | 定时提示到达时与用户消息无法区分：worker 的被记成用户答复（live `host-e2e` 实测，误认来源）；主会话的被当成用户本人的 turn，CC-S4 随之要求在不能创建会话的 turn 中预启动（T244） | 提示以 `<scheduled-task>` 开头、`</scheduled-task>` 结束 |
 | CC-B9 | 主会话 | `start_session` 的会话名不是已落账、代次有效的 attempt | 没有先 `attempt_start` 就建会话，或重复建会话 | 先 `attempt_start`，用返回的会话名。**不可放行**：没有落账的会话无法绑定到 attempt（DN002 §6） |
@@ -78,7 +78,7 @@
 | 文本兜底：命令中出现数据目录路径加自有目录名，且出现 `>` `rm` `cp` 等写入词就拒绝 | 删除 | 误拦只读命令：`grep … runs/…/brief.md > work/…/x.txt`、`cp runs/…/brief.md work/…/` 都被拒（本任务用临时目录实测） |
 | `.claude/settings*.json` 不能写（T241，编辑类工具与 shell 写法） | 简化为 CC-B2 | 只看编辑类工具；理由改为越过用户的权限选择与被覆盖，不再写“防止会话给自己追加权限” |
 | `git push` / `gh pr create` 对照 `delivery.push` / `create_pr` | 保留为 CC-B4、CC-B5 | 授权记录在 tsw 中，宿主不知道 |
-| 合并须是开发任务且有 `delivery.merge` | 保留为 CC-B6 | 同上 |
+| 合并须是开发任务且有 `delivery.merge` | 保留为 CC-B6；T245 去掉“开发任务”的条件 | 同上；合并授权按仓库判断（决定记录 0003） |
 | 合并目标：必须写明 host、拒绝 `GH_REPO` / `GH_HOST`、拒绝短选项合写、解析 REST 合并路径 | 简化为 CC-B7 | 保留“连同 host 写明本仓库”（省略 host 时遗留的 `GH_HOST` 会改变目标）；host 写明后环境变量不再影响目标，去掉对它们的单独拒绝与合写选项解析；`gh api` 合并一律拦下。现状的拒绝信息“无法确认的目标：o/n”（本任务实测）改为写出 `-R github.com/o/n` |
 | 会话中运行 `tsw` 写入口；运行 `tsw guard`（理由“否则会话可以编造用户消息”） | 删除（hook 一侧） | CLI 自己按会话身份拒绝（`host_session_cli`，§5.2）；`tsw guard` 的拦截只为对抗伪造 |
 | `python -c` / heredoc 中 `import tsw` 就拒绝 | 删除 | 只为对抗；误拦调查或开发 tsw 本身的 worker（本任务中 `python -c "from tsw…"` 被拒） |
@@ -144,18 +144,18 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 | 会话 | 设置文件 | 允许的动作 | 仍然生效的检查 |
 | --- | --- | --- | --- |
 | 主会话 | 数据目录的 `.claude/settings.json`（`render_instructions` 一并生成） | tsw MCP 工具；`start_session`、`send_message` / `SendMessage`、`stop_session`、`get_session`、`list_sessions`、`archive_session` | CC-B9；tsw 工具按角色、守卫与用户来源校验 |
-| worker | 执行目录的 `.claude/settings.local.json`（执行目录在数据目录 `work/` 之下时，由 `attempt_start` 在会话创建前写入，已有内容按键合并；`work/` 之外的目录（如仓库 worktree）不写） | tsw MCP 工具；`send_message` / `SendMessage`；有合并授权（开发任务且 `delivery.merge`）时加入 `Bash(gh pr merge:*)`，没有时移除 | CC-B6、CC-B7；hook 的拒绝优先于允许规则 |
+| worker | 无（T245 起不生成）。执行目录带自己的权限规则时，即使在已信任的数据目录之下，app 也会为它再次要求信任确认（Claude Code 文档 permissions.md“project allow rules and workspace trust”；数据目录中 T241、T245 的执行目录各有一条单独的信任记录，没有规则文件的 T242–T244 没有），每个新任务因此多一次确认。`attempt_start` 删除早先 tsw 写下、只含 tsw 规则的 `settings.local.json`；含其他内容（如用户在该会话中放行的规则）的文件不动 | worker 的 tsw 工具、`send_message` / `SendMessage` 由 auto 分类器判断（T242–T244 的 worker 没有允许规则，调用都没有被拦）；合并由用户设置中的“TaskSteward Worker Merge”放行 | CC-B6、CC-B7；hook 的拒绝优先于一切放行 |
 
-`start_session` 与 `send_message` 等会话工具由 app 自己的分类器把关，不受 `permissions.allow` 约束（live 中允许规则已生效，带“worker 自行合并”的任务书正文仍被拦截）。用户 2026-11-07 决定：创建 worker 会话时 `prompt` 只写短指令（角色、attempt、任务书路径），`background` 只写任务标题、仓库与执行目录，任务书正文（含交付与合并方式）由 worker 从 `runs/` 读取；合并的把关点因此在 worker 实际合并时，由上表的允许规则与 hooks 守卫承担，而不是在创建会话时由 app 分类器判断。会话可能在 `attempt_reconcile` 之前开始第一轮（`whoami` 仍为 pending），主会话绑定后发消息通知它。
+`start_session` 与 `send_message` 等会话工具由 app 自己的分类器把关，不受 `permissions.allow` 约束（live 中允许规则已生效，带“worker 自行合并”的任务书正文仍被拦截）。用户 2026-11-07 决定：创建 worker 会话时 `prompt` 只写短指令（角色、attempt、任务书路径），`background` 只写任务标题、仓库与执行目录，任务书正文（含交付与合并方式）由 worker 从 `runs/` 读取；合并的把关点因此在 worker 实际合并时，由 auto 模式规则与 hooks 守卫承担，而不是在创建会话时由 app 分类器判断。会话可能在 `attempt_reconcile` 之前开始第一轮（`whoami` 仍为 pending），主会话绑定后发消息通知它。
 
-auto 模式分类器另有自己的规则（`autoMode.allow` / `soft_deny`），其中“Merge Without Review”把 worker 合并自己的 PR 判为未经评审的合并（live 中即使命中允许规则的合并也出现过被拒）。Claude Code 只从用户设置、命令行设置与托管设置读取 `autoMode`，项目设置与本地设置中的一律忽略（Claude Code 2.1.302 中核实），所以 tsw 不能把它与允许规则一起生成：`tsw host install-hint` 给出两条规则，由用户加入自己的用户设置（用户 2026-11-08 决定：凡是 tsw 已把关、分类器仍会误拦的动作，都用 auto 模式规则在策略层放行）：“TaskSteward Worker Dispatch”（主会话以 `attempt_start` 返回的会话名与 `cwd`、只指向任务书的短指令创建 worker 会话；live 中同样的短指令创建曾被分类器以“Blocked by classifier”拒绝一次，用户重试后通过）与“TaskSteward Worker Merge”（限 worker 会话、本任务的 PR、单独的 `gh pr merge … -R …`，不含 `--admin` 与绕过检查）。`attempt_start` 同时返回执行目录在磁盘上的实际写法 `cwd`：app 拒绝大小写不同的同一目录。
+auto 模式分类器另有自己的规则（`autoMode.allow` / `soft_deny`），其中“Merge Without Review”把 worker 合并自己的 PR 判为未经评审的合并（live 中即使命中允许规则的合并也出现过被拒）。Claude Code 只从用户设置、命令行设置与托管设置读取 `autoMode`，项目设置与本地设置中的一律忽略（Claude Code 2.1.302 中核实），所以 tsw 不能把它与允许规则一起生成：`tsw host install-hint` 给出两条规则，由用户加入自己的用户设置（用户 2026-11-08 决定：凡是 tsw 已把关、分类器仍会误拦的动作，都用 auto 模式规则在策略层放行）：“TaskSteward Worker Dispatch”（主会话以 `attempt_start` 返回的会话名与 `cwd`、只指向任务书的短指令创建 worker 会话；live 中同样的短指令创建曾被分类器以“Blocked by classifier”拒绝一次，用户重试后通过）与“TaskSteward Worker Merge”（限 worker 会话、本任务的 PR、单独的 `gh pr merge … -R …`，不含 `--admin` 与绕过检查；不看任务类型）。worker 的 tsw 工具与发给主会话的消息没有对应的规则：分类器本来就不拦它们（上表）；如果 live 中出现误拦，再按同一原则在 install hint 中加一条覆盖它们的规则。`attempt_start` 同时返回执行目录在磁盘上的实际写法 `cwd`：app 拒绝大小写不同的同一目录。
 
-Claude Code 对复合命令（`;`、`&&`、管道）逐段核对允许规则，有一段不在规则内就交给权限模式与分类器判断。live 中单独的 `gh pr merge … -R …` 命中规则后直接执行，而后面接了 `git fetch` 等命令的同一合并被分类器以“Merge Without Review”拒绝；worker 指令因此要求合并命令单独运行。
+Claude Code 对复合命令（`;`、`&&`、管道）逐段核对允许规则，有一段不在规则内就交给权限模式与分类器判断。live 中单独的 `gh pr merge … -R …` 直接执行，而后面接了 `git fetch` 等命令的同一合并被分类器以“Merge Without Review”拒绝；worker 指令因此要求合并命令单独运行，auto 模式规则也只描述单独的合并命令。
 
-worker 能写自己的执行目录，所以 CC-B2 拦下编辑类工具对执行目录与数据目录中 `.claude/settings*.json` 的修改：遇到权限拒绝时不自行添加允许规则，而是告诉用户；这些文件也会被 tsw 重新生成覆盖。允许规则只放行动作本身；动作的授权仍由账本、配置与用户来源决定，主会话代答也仍然不是用户批准（DN006 §8.1b）。
+worker 能写自己的执行目录，所以 CC-B2 拦下编辑类工具对执行目录与数据目录中 `.claude/settings*.json` 的修改：遇到权限拒绝时不自行添加允许规则，而是告诉用户；在执行目录中写规则还会让下一次在该目录打开会话时要求信任，数据目录中的文件会被 tsw 重新生成覆盖。允许规则只放行动作本身；动作的授权仍由账本、配置与用户来源决定，主会话代答也仍然不是用户批准（DN006 §8.1b）。
 
 - 其余一切动作仍由 Claude Code 的权限模式与分类器判断：tsw 不放宽它不检查的动作。
-- 已知缺口：执行目录不在 `work/` 之下（例如数据目录外的仓库 worktree）时不写允许规则，那里的 worker 合并时可能被分类器拦下；由用户在该目录自行配置，或把 worktree 放在 `work/` 之下。
+- 执行目录在哪里都一样：tsw 不在任何执行目录中写规则，worker 的放行只来自用户设置；数据目录之外的执行目录（如仓库 worktree）仍需用户在第一次使用时确认信任。
 
 ## 7. 对其他文档与代码的影响
 

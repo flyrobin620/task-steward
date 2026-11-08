@@ -8,8 +8,10 @@ the bare repository. Everything else in the run is real; what this script does i
 evidence and is reported as such.
 
 Supported: ``gh --version``, ``gh pr create``, ``gh pr view``, ``gh pr list``, ``gh pr checks``
-and ``gh pr merge`` (``--squash``), each with ``-R [HOST/]OWNER/NAME`` or a PR link. Every
-invocation is appended to ``<run>/gh-log.jsonl``.
+and ``gh pr merge`` (``--squash``), each with ``-R [HOST/]OWNER/NAME`` or a PR link, and ``gh run
+list`` / ``gh run view`` / ``gh run watch`` for the CI of a merge commit on the default branch:
+every merge records one simulated run that has passed. Every invocation is appended to
+``<run>/gh-log.jsonl``.
 """
 
 from __future__ import annotations
@@ -48,6 +50,13 @@ VALUE_OPTIONS = {
     "--jq",
     "--subject",
     "--match-head-commit",
+    "-c",
+    "--commit",
+    "--branch",
+    "-L",
+    "--limit",
+    "-w",
+    "--workflow",
 }
 
 
@@ -224,6 +233,20 @@ def merge(values: dict[str, str], words: list[str], flags: set[str], state: dict
         commit = git("rev-parse", "HEAD", cwd=work)
         git("push", "-q", "origin", f"HEAD:{pr['base']}", cwd=work)
     pr.update(state="MERGED", merge_commit=commit, merged_head=pr["head_sha"], merged_at=now())
+    run_id = len(state.setdefault("runs", [])) + 1
+    state["runs"].append(
+        {
+            "databaseId": run_id,
+            "headSha": commit,
+            "headBranch": pr["base"],
+            "event": "push",
+            "workflowName": "CI",
+            "status": "completed",
+            "conclusion": "success",
+            "url": f"https://github.com/{repo}/actions/runs/{run_id}",
+            "createdAt": now(),
+        }
+    )
     save(state)
     print(f"OK Squashed and merged pull request {repo}#{number} ({commit})")
     return 0
@@ -251,6 +274,29 @@ def locked(timeout: float = 120.0) -> Generator[None, None, None]:
         lock.unlink()
 
 
+def runs(values: dict[str, str], words: list[str], state: dict[str, Any]) -> int:
+    """``gh run list|view|watch``: the simulated CI runs of merge commits (all passed)."""
+    repo = values.get("-R") or values.get("--repo")
+    if repo is None:
+        raise SystemExit("gh (live stub): name the repository with -R")
+    target({"-R": repo}, [], state)
+    found: list[dict[str, Any]] = list(state.get("runs") or [])
+    command, rest = words[1], words[2:]
+    if command == "list":
+        commit = values.get("-c") or values.get("--commit")
+        if commit:
+            found = [r for r in found if str(r["headSha"]).startswith(commit)]
+        print(json.dumps(found, indent=2))
+        return 0
+    if command in {"view", "watch"} and rest and rest[0].isdigit():
+        for run in found:
+            if run["databaseId"] == int(rest[0]):
+                print(json.dumps(run, indent=2))
+                return 0
+        raise SystemExit(f"gh (live stub): no run {rest[0]}")
+    raise SystemExit(f"gh (live stub): unsupported command: gh run {' '.join(words[1:])}")
+
+
 def main(argv: list[str]) -> int:
     with locked():
         return run_command(argv)
@@ -264,6 +310,8 @@ def run_command(argv: list[str]) -> int:
         return 0
     words, values, flags = parse(argv)
     state = load()
+    if words[:1] == ["run"] and len(words) >= 2:
+        return runs(values, words, state)
     if words[:1] != ["pr"] or len(words) < 2:
         raise SystemExit(f"gh (live stub): unsupported command: gh {' '.join(argv)}")
     command, rest = words[1], words[2:]

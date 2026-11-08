@@ -714,23 +714,17 @@ def bash_path(path: Path) -> str:
     return text
 
 
-def stub_merge_rule(run: Run) -> str:
-    """The permission rule tsw writes for ``gh pr merge``, for the stand-in's full path.
-
-    A session's shell does not take ``PATH`` from project settings, so the run's tasks call the
-    stand-in by its full path; this rule stands for tsw's ``Bash(gh pr merge:*)``. The hooks
-    still check the merge (they recognise ``gh`` by its program name).
-    """
-    return f"Bash({bash_path(run.bin / 'gh')} pr merge:*)"
-
-
-def session_settings(run: Run, directory: Path, *, merge: bool = False) -> None:
+def session_settings(run: Run, directory: Path) -> None:
     """Point sessions opened in ``directory`` at this run's data directory.
 
     The user's own settings give every Claude Code session ``TSW_HOME`` (their real data
     directory). Project settings of the folder a session is opened in override it, so the run's
-    main session and workers resolve this run's data directory, never the real one. tsw adds
-    its permission rules to the same file when it creates a worker's session (keys are merged).
+    main session and workers resolve this run's data directory, never the real one. The file
+    carries no permission rules: tsw writes none into execution directories, and a worker's
+    actions, its merge included, are allowed by the user's auto-mode rules as in a real data
+    directory (decision 0003). The run's tasks call the GitHub stand-in by its full path (a
+    session's shell does not take ``PATH`` from project settings); the hooks still recognise
+    ``gh`` by its program name.
     """
     run.check_inside(directory)
     settings = directory / ".claude" / "settings.local.json"
@@ -753,8 +747,6 @@ def session_settings(run: Run, directory: Path, *, merge: bool = False) -> None:
     ]
     env = {"TSW_HOME": str(run.home), "TSW_LIVE_RUN": str(run.dir)}
     data: dict[str, Any] = {"env": env, "hooks": hooks}
-    if merge:
-        data["permissions"] = {"allow": [stub_merge_rule(run)]}
     settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
@@ -824,10 +816,8 @@ def host_prepare(args: argparse.Namespace) -> int:
             *[a for item in task["acceptance"] for a in ("--acceptance", item)],
         )
         for attempt in ("a1", "a2"):
-            session_settings(
-                run, run.home / "work" / task["task_id"] / attempt, merge=task["kind"] == "code"
-            )
-    code = "、".join(str(t["task_id"]) for t in tasks if t["kind"] == "code")
+            session_settings(run, run.home / "work" / task["task_id"] / attempt)
+    code = "、".join(str(t["task_id"]) for t in tasks if t["kind"] != "research")
     life = any(t["task_id"] == "T003" for t in tasks)
     values["code_tasks"] = code
     values["prestart_step"] = "；T003 先预启动一个待命会话，等我说再派发" if life else ""
@@ -902,7 +892,7 @@ def host_verify(args: argparse.Namespace) -> int:
     spec = scenario("host-e2e")
     chosen = selected(spec, run.manifest().get("tasks"))
     tasks = tuple(str(t["task_id"]) for t in chosen)
-    code = tuple(str(t["task_id"]) for t in chosen if t["kind"] == "code")
+    code = tuple(str(t["task_id"]) for t in chosen if t["kind"] != "research")
     checks.append(permission_rules(run, chosen))
     reconcile_sessions(run, evs)
     prestarted = seqs(evs, "attempt.prestarted")
@@ -985,7 +975,8 @@ def host_verify(args: argparse.Namespace) -> int:
 
 
 def permission_rules(run: Run, tasks: list[dict[str, Any]]) -> dict[str, Any]:
-    """The permission rules tsw generated for the run's sessions (DN006 §6.3)."""
+    """The permission rules of the run's sessions (CC008 §6): the main session's are generated
+    in the data directory; execution directories carry none (decision 0003)."""
 
     def allow(path: Path) -> list[str]:
         data = read_json(path)
@@ -998,15 +989,14 @@ def permission_rules(run: Run, tasks: list[dict[str, Any]]) -> dict[str, Any]:
         )
         for t in tasks
     }
-    merge = "Bash(gh pr merge:*)"
-    ok = "mcp__ccd_session__start_session" in main and all(
-        "mcp__plugin_task-steward_tsw" in workers[str(t["task_id"])]
-        and (merge in workers[str(t["task_id"])]) == (t["kind"] == "code")
-        for t in tasks
+    ok = (
+        "mcp__ccd_session__start_session" in main
+        and "mcp__plugin_task-steward_tsw" in main
+        and not any(workers.values())
     )
     return check(
         "P",
-        "权限规则：主会话放行会话管理与 tsw 工具，worker 放行 tsw 工具，只有授权合并的任务放行合并",
+        "权限规则：主会话放行会话管理与 tsw 工具；worker 的执行目录没有权限规则",
         ok,
         {"main": main, **workers},
     )
@@ -1198,9 +1188,18 @@ def merged(
             problems.append(f"{t} 替身记录的合并与提交不一致")
         if not any(same_commit(c, merge.get("merge_commit")) for c in main_log):
             problems.append(f"{t} 合并提交不在 origin 的 main 上")
+        ci = merge.get("ci") or {}
+        runs = {str(r["url"]): r for r in state.get("runs") or []}
+        evidence[t]["ci"] = ci.get("url")
+        evidence[t]["live"] = merge.get("live")
+        recorded = runs.get(str(ci.get("url")))
+        if recorded is None or not same_commit(recorded["headSha"], merge.get("merge_commit")):
+            problems.append(f"{t} 提交所附的 CI 不是替身为合并提交记录的那次运行")
+        if not str(merge.get("live") or "").strip():
+            problems.append(f"{t} 提交没有 live 说明")
     return check(
         "C",
-        "worker 自行合并并通过 G-SUBMIT（GitHub 为模拟）",
+        "worker 自行合并、附合并提交的 CI 与 live 说明并通过 G-SUBMIT（GitHub 与 CI 为模拟）",
         not problems,
         {**evidence, "problems": problems},
     )

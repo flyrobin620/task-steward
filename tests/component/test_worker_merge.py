@@ -1,5 +1,6 @@
-"""A development task's worker merges its own PR before submitting; the orchestrator checks after
-the merge (DN002 G-SUBMIT / G-ACCEPT, decision 0002)."""
+"""In a repository that lets the worker merge, the worker merges its own PR, waits for the merge
+commit's CI and submits with the evidence; the orchestrator checks the evidence (DN002 §3.5,
+G-SUBMIT / G-ACCEPT, decision 0003)."""
 
 from __future__ import annotations
 
@@ -16,6 +17,10 @@ from tsw.machine.base import Caller
 
 pytestmark = pytest.mark.use_case("UC-MERGE-001")
 PR = "https://example.com/pr/1"
+RUN = "https://example.com/actions/runs/7"
+CI = {"commit": "m1", "conclusion": "success", "url": RUN}
+LIVE = "host-e2e 在最终 head 上通过（运行 r1）"
+MERGED = {"pr": PR, "merge_commit": "m1", "merged_head": "h1", "ci": CI, "live": LIVE}
 
 
 def reason_of(call: Callable[[], Any]) -> tuple[str, str | None]:
@@ -88,21 +93,58 @@ def test_the_worker_merges_and_the_orchestrator_checks_after_the_merge(home: Hom
     h, w = harness(home, merge=True)
     brief = home.path("runs/T001/a1/brief.md")
     assert "worker 在门禁、评审与意见都解决后自行合并" in brief.read_text(encoding="utf-8")
+    brief_text = brief.read_text(encoding="utf-8")
+    assert "等主分支上合并提交的 CI 通过" in brief_text and "- live：" in brief_text
     assert reason_of(lambda: submit(h, w)) == ("g_submit", "merge")
-    merged = {"pr": PR, "merge_commit": "m1", "merged_head": "h0"}
-    assert reason_of(lambda: submit(h, w, merge=merged)) == ("g_submit", "merged_head")
-    out = submit(h, w, merge={**merged, "merged_head": "h1"})
+    assert reason_of(lambda: submit(h, w, merge={**MERGED, "merged_head": "h0"})) == (
+        "g_submit",
+        "merged_head",
+    )
+    out = submit(h, w, merge=MERGED)
     submission = out["events"][0]["data"]["submission"]
-    assert submission["merge"] == {"pr": PR, "merge_commit": "m1", "merged_head": "h1"}
+    assert submission["merge"] == MERGED
     assert h.status("T001") == "verifying"
     link(h, ref="https://example.com/pr/2")
     assert reason_of(lambda: accept(h)) == ("g_accept", "merged_pr")
     link(h)
     assert reason_of(lambda: accept(h)) == ("g_accept", "post_merge")
-    accepted = accept(h, post_merge="main 上 m1 的 CI 通过")
-    assert accepted["events"][0]["data"]["post_merge"] == "main 上 m1 的 CI 通过"
+    accepted = accept(h, post_merge="已打开 CI 链接，m1 的 Gate 为绿")
+    assert accepted["events"][0]["data"]["post_merge"] == "已打开 CI 链接，m1 的 Gate 为绿"
     review = home.path("runs/T001/a1/review.md").read_text(encoding="utf-8")
     assert "## 合并后核对" in review and "m1" in review
+    assert RUN in review and LIVE in review
+
+
+@pytest.mark.transition("G-SUBMIT")
+@pytest.mark.parametrize(
+    ("change", "check"),
+    [
+        ({"ci": None}, "merge_ci"),
+        ({"ci": {"commit": "m1", "conclusion": "success"}}, "merge_ci"),
+        ({"ci": {**CI, "commit": "h1"}}, "ci_commit"),
+        ({"ci": {**CI, "conclusion": "in_progress"}}, "ci_pending"),
+        ({"ci": {**CI, "conclusion": ""}}, "ci_pending"),
+        ({"ci": {**CI, "conclusion": "failure"}}, "ci_failed"),
+        ({"ci": {**CI, "conclusion": "cancelled"}}, "ci_failed"),
+        ({"live": " "}, "merge"),
+    ],
+)
+def test_the_worker_submits_only_after_the_merge_commits_ci_passed(
+    home: Home, change: dict[str, Any], check: str
+) -> None:
+    h, w = harness(home, merge=True)
+    merge = {k: v for k, v in {**MERGED, **change}.items() if v is not None}
+    with pytest.raises(TswError) as exc:
+        submit(h, w, merge=merge)
+    assert (exc.value.details.get("reason"), exc.value.details.get("check")) == ("g_submit", check)
+    # The refusal says what to do next: wait, or fix or revert within the task.
+    if check == "ci_pending":
+        assert "等它完成" in str(exc.value)
+    if check == "ci_failed":
+        assert "修复" in str(exc.value) and "revert" in str(exc.value)
+    assert h.status("T001") == "in_progress"
+    submit(h, w, merge={**MERGED, "ci": {**CI, "conclusion": "SUCCESS"}})
+    assert h.status("T001") == "verifying"
 
 
 @pytest.mark.transition("G-SUBMIT")
@@ -119,14 +161,18 @@ def test_without_the_authorization_the_worker_does_not_merge(home: Home) -> None
     h, w = harness(home, merge=False)
     brief = home.path("runs/T001/a1/brief.md").read_text(encoding="utf-8")
     assert "合并：worker 不合并" in brief
-    merged = {"pr": PR, "merge_commit": "m1", "merged_head": "h1"}
-    assert reason_of(lambda: submit(h, w, merge=merged)) == ("g_submit", "merge_authorized")
+    assert reason_of(lambda: submit(h, w, merge=MERGED)) == ("g_submit", "merge_authorized")
     submit(h, w)
 
 
-def test_only_development_tasks_merge(home: Home) -> None:
-    h, w = harness(home, merge=True, kind="research")
-    submit(h, w)
+@pytest.mark.transition("G-SUBMIT")
+@pytest.mark.parametrize("kind", ["design", "research"])
+def test_the_repository_not_the_task_kind_authorizes_the_merge(home: Home, kind: str) -> None:
+    h, w = harness(home, merge=True, kind=kind)
+    brief = home.path("runs/T001/a1/brief.md").read_text(encoding="utf-8")
+    assert "worker 在门禁、评审与意见都解决后自行合并" in brief
+    assert reason_of(lambda: submit(h, w)) == ("g_submit", "merge")
+    submit(h, w, merge=MERGED)
     assert h.status("T001") == "verifying"
 
 
@@ -142,13 +188,19 @@ def bash(h: Harness, worker: Caller, command: str) -> dict[str, Any] | None:
 
 
 @pytest.mark.parametrize("kind", ["research", "design"])
-def test_the_hook_refuses_merging_for_other_task_kinds(home: Home, kind: str) -> None:
-    h, w = harness(home, merge=True, kind=kind)
-    out = bash(h, w, "gh pr merge 3 --squash")
-    assert out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
+@pytest.mark.parametrize("merge", [True, False])
+def test_the_hook_follows_the_repository_whatever_the_task_kind(
+    home: Home, kind: str, merge: bool
+) -> None:
+    h, w = harness(home, merge=merge, kind=kind)
+    out = bash(h, w, "gh pr merge 3 -R github.com/example/demo --squash")
+    if merge:
+        assert out is None
+    else:
+        assert out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_the_hook_lets_a_development_worker_merge_only_its_repository(home: Home) -> None:
+def test_the_hook_lets_a_worker_merge_only_its_repository(home: Home) -> None:
     h, w = harness(home, merge=True)
     assert bash(h, w, "gh pr merge 3 -R github.com/example/demo --squash") is None
     assert bash(h, w, "gh pr merge 3 --squash") is not None

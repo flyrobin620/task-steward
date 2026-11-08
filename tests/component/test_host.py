@@ -869,7 +869,7 @@ def test_a_workers_scheduled_prompts_must_be_tagged(h: Harness, tmp_path: Path) 
 
 @mark.use_case("UC-HOST-004")
 @mark.use_case("UC-MERGE-001")
-def test_a_workers_permission_rules_are_written_before_its_session(home: Home) -> None:
+def test_a_workers_execution_directory_gets_no_permission_rules(home: Home) -> None:
     h = Harness(
         home,
         {
@@ -884,7 +884,14 @@ def test_a_workers_permission_rules_are_written_before_its_session(home: Home) -
     )
     orchestrator = Server(h.home, {SESSION_ENV: "orch-1"}, h.home.root)
     orchestrator.machine = "m1"
-    for task_id, kind in (("T001", "code"), ("T002", "research")):
+    # Directories an earlier tsw readied: T002's holds only tsw's rules, T003's the user's too.
+    ours = {"permissions": {"allow": ["mcp__plugin_task-steward_tsw", "Bash(gh pr merge:*)"]}}
+    theirs = {"permissions": {"allow": ["mcp__plugin_task-steward_tsw", "Bash(ls:*)"]}}
+    for task_id, earlier in (("T002", ours), ("T003", theirs)):
+        settings = h.home.root / "work" / task_id / "a1" / ".claude" / "settings.local.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps(earlier), encoding="utf-8")
+    for task_id, kind in (("T001", "code"), ("T002", "research"), ("T003", "design")):
         h.register(task_id, kind=kind)
         h.plan(task_id)
         started = orchestrator.call(
@@ -893,20 +900,13 @@ def test_a_workers_permission_rules_are_written_before_its_session(home: Home) -
         # The folder as it is spelled on disk, for start_session's cwd.
         expected = os.path.realpath(h.home.root / "work" / task_id / "a1")
         assert started["cwd"] == expected
-    rules = {
-        task_id: json.loads(
-            (h.home.root / "work" / task_id / "a1" / ".claude" / "settings.local.json").read_text(
-                encoding="utf-8"
-            )
-        )["permissions"]["allow"]
-        for task_id in ("T001", "T002")
-    }
-    # Only the development task in a repository that lets the worker merge may merge.
-    assert "Bash(gh pr merge:*)" in rules["T001"]
-    assert "Bash(gh pr merge:*)" not in rules["T002"]
-    assert all("mcp__plugin_task-steward_tsw" in r for r in rules.values())
-    assert not any("start_session" in rule for r in rules.values() for rule in r)
-    # No session may edit the rules tsw writes: not the worker, not the orchestrator.
+    # A folder with its own permission rules asks for trust again, so tsw writes none; the
+    # worker's actions are allowed by the user's auto-mode rules (decision 0003).
+    assert not (h.home.root / "work" / "T001" / "a1" / ".claude").exists()
+    assert not (h.home.root / "work" / "T002" / "a1" / ".claude").exists()
+    kept = h.home.root / "work" / "T003" / "a1" / ".claude" / "settings.local.json"
+    assert json.loads(kept.read_text(encoding="utf-8")) == theirs
+    # No session may edit the settings files: not the worker, not the orchestrator.
     workdir = h.home.root / "work" / "T001" / "a1"
     for target in (
         workdir / ".claude" / "settings.local.json",

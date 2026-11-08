@@ -31,7 +31,7 @@
 | `in_progress` | worker 执行（内部含自评审） |
 | `waiting_user` | 用户回答 worker 的问题；worker 会话保持，名额保持 |
 | `paused` | 外部条件、用户 park、失败原因排除、导入交接；worker 已停，名额释放 |
-| `verifying` | 主会话核验与集成（含等待 CI、PR 合并等外部事实）；worker 已自行合并的开发任务为合并后核对（§3.5） |
+| `verifying` | 主会话核验与集成（含等待 CI、PR 合并等外部事实）；worker 已自行合并的任务，主会话只核对 worker 附的合并与 CI 证据（§3.5） |
 | `done` | 用户人工验收 |
 | `accepted` | 7 天无变化后归档 |
 | `cancelled` / `archived` | 退役 / 终态 |
@@ -47,7 +47,7 @@
 | `in_progress` | 执行中 | worker 持有任务；内部子状态见 §3.3 | 是 | 否 | 是 |
 | `waiting_user` | 等待用户 | worker 提问或评审受阻，等待用户答复；子会话保持 | 是 | 否 | 是 |
 | `paused` | 暂停 | worker 已停；带 owner / next_action / resume_condition / 类别 | 否 | 否 | 是 |
-| `verifying` | 主控核验 | worker 已提交终版与评审证据，主会话核验、集成、组合验证；worker 已合并时为合并后核对 | 是 | 否 | 是 |
+| `verifying` | 主控核验 | worker 已提交终版与评审证据，主会话核验、集成、组合验证；worker 已合并时只核对它附的合并、CI 与 live 证据 | 是 | 否 | 是 |
 | `done` | 完成·待用户验收 | 主会话已技术验收，等待用户人工验收 | 否 | 否 | 是（仅验收或退回） |
 | `accepted` | 已验收 | 用户已验收当前 revision；只读 | 否 | 否 | 否 |
 | `cancelled` | 已取消 | 用户删除或关闭；只读 | 否 | 否（可归档） | 否 |
@@ -88,7 +88,7 @@
 | T15 | in_progress | ready | `attempt.lost` | O / P | 子会话不存在或已归档，且核实执行目录没有继续写入 | 原 attempt 记为 `replaced`；释放名额；再次派发时新建 attempt 复用现场 |
 | T16 | dispatching、in_progress、waiting_user、verifying | waiting_dependency | `dependency.invalidated` | S / O | 任一依赖不再满足 G-DEP；执行中的 worker 已收到通知并停止；从 `dispatching` 离开时须先收口派发：`starting` 先对账（已创建则按 `live` 停止，未创建则回到 `planned`）；`standby` 的待命会话保留，供依赖恢复后投递 | 释放名额；撤回进行中的集成；核实 worker 已停后释放本任务的独占资源（`resource.released`，下次 T07 重新占用），停止事实未知时保留占用并生成待用户决定的输入请求；原 attempt 保留供 R-ATTEMPT 续用 |
 | T17 | verifying | in_progress | `orchestrator.feedback` / `task.requirement_changed` | O / U | 主会话列出具体剩余工作（worker 已合并时，修复以新的 PR 进行）；或集成冲突需要 worker 解决；或用户实质修改需求（revision+1，撤回提交） | 经会话适配器给同一 worker 发消息（`send`）；开启新的提交周期；需求变更时旧评审失效 |
-| T18 | verifying | done | `task.accepted` | O | G-ACCEPT | 写入 `review.md` / `review.html`（worker 已合并时含“合并后核对”）、登记 PR 与产出、记录集成提交；释放名额与资源；通知用户 |
+| T18 | verifying | done | `task.accepted` | O | G-ACCEPT | 写入 `review.md` / `review.html`（worker 已合并时含“合并后核对”：worker 附的 CI 与 live 证据和主会话的核对结论）、登记 PR 与产出、记录集成提交；释放名额与资源；通知用户 |
 | T19 | verifying | paused | `task.paused` | O | 集成或组合验证受阻（CI 环境故障、外部审批未到等），G-PAUSE | 类别 `integration_blocked` 或 `failure`，`resume_target=verifying`；冻结的提交证据保留；释放名额，集成占用保留或撤回并记录 |
 | T20 | paused | in_progress | `task.resumed` | O | resume_condition 已满足；`resume_target` 不是 `verifying`，或其提交证据已失效；原子会话可用且可控；G-SLOT、G-RES、G-DEP（与名额占用在同一事件中原子完成） | 重新占用名额，经会话适配器发消息（`send`）继续；开启新的提交周期 |
 | T21 | paused | ready | `task.resumed` | O | resume_condition 已满足；`resume_target` 不是 `verifying`（或其提交证据已失效）；原会话不可用、导入交接已核实，或名额不足需要排队 | 下次派发按 R-ATTEMPT 处理 |
@@ -145,19 +145,21 @@
 | I05 | 未退役，`pending` / `ready` | intake | 是：主会话重新受理与规划 |
 | I06 | 未退役，`paused` 或任何活动状态（starting / running / waiting_user / review / integrating / conflict / failed） | paused（原暂停保留原类别；活动状态为 `import_handover`，原 failed 为 `failure`） | 是：`import_handover` 须先核实旧 worker 已停 |
 
-### 3.5 开发任务的合并
+### 3.5 worker 的合并与交付闭环
 
-用户 2026-11-06 决定：开发任务默认由 worker 自己开 PR、自己合并，除非任务书或仓库 `AGENTS.md` 另有说明；合并在主会话技术验收之前，主会话的核验改为合并后核对。
+用户 2026-11-06 决定：任务默认由 worker 自己开 PR、自己合并，除非任务书或仓库 `AGENTS.md` 另有说明；合并在主会话技术验收之前。用户 2026-11-08 进一步决定（决定记录 [0003](../decisions/0003-worker-delivery-loop.md)）：合并授权按仓库判断，不按任务类型；交付闭环由 worker 走完——合并后等主分支上合并提交的 CI 通过、必要的 live 场景通过，才提交；主会话只核对 worker 附的证据，不替 worker 等待。
 
 | 项目 | 规则 |
 | --- | --- |
-| 授权 | 仓库配置 `repositories.<id>.delivery.merge` 为 `true`（DN003 §3.4，权限类键，默认关闭），且任务类型为 `code`。任务书的“交付”一行写明合并方式 |
-| 合并时机 | 在 `in_progress` 内：自评审定稿（`finalize`）→ 推送、开 PR → 仓库门禁与 CI 通过、仓库要求的评审完成且意见都已回复并解决、仓库规定须用户确认的改动已取得用户确认（worker 在自己的会话中问用户，DN006 §8.1a）→ 合并 → T13 提交。不新增状态 |
+| 授权 | 仓库配置 `repositories.<id>.delivery.merge` 为 `true`（DN003 §3.4，权限类键，默认关闭）。不看任务类型：设计、文档、研究任务在已授权的仓库中同样由 worker 合并。任务书的“交付”一行写明合并方式 |
+| 合并时机 | 在 `in_progress` 内：自评审定稿（`finalize`）→ 推送、开 PR → 仓库门禁与 CI 通过、仓库要求的评审完成且意见都已回复并解决、仓库规定须用户确认的改动已取得用户确认（worker 在自己的会话中问用户，DN006 §8.1a）→ 合并 → 主分支上合并提交的 CI 通过 →（需要时）合并后的 live → T13 提交。不新增状态 |
+| 合并后的 CI | worker 等主分支上合并提交的 CI 完成。失败时在同一任务内修复（新的 PR，同样经评审与门禁后合并）或 revert，再等新的合并提交的 CI；不能带着未完成或失败的 CI 提交。提交的合并记录写明运行的提交、结论与链接 |
+| live | 仓库规则要求的 live 场景在最终 head 上运行；只有在合并后的主分支上才能验证的（例如要更新插件或重新生成宿主文件才生效的改动）在合并后运行。worker 在合并记录中写明运行的场景与结果，或不需要、不能运行的原因 |
 | HEAD | 合并的 PR head 必须等于最后一轮自评审的 HEAD（即提交 HEAD）；为同步主分支而改变 HEAD 时，先经 E06 补审增量 |
 | 另有说明 | 任务书或仓库规则要求由他人合并时，worker 不合并，提交时用 `merge_skipped` 写明原因，由主会话按原流程合并（必要时 `integrate`） |
-| 未授权 | 仓库没有 `delivery.merge`、或任务不是开发任务时，worker 不能合并（宿主护栏拦下合并命令），提交也不能带合并记录 |
+| 未授权 | 仓库没有 `delivery.merge` 时，worker 不能合并（宿主护栏拦下合并命令），提交也不能带合并记录 |
 | 合并目标 | 授权的仓库必须写明 `repository`（`owner/name`）与 `host`（默认 `github.com`），二者是权限类键（DN003 §7.2）。合并必须连同 host 明确指向本任务仓库，不能由当前目录或环境决定目标；宿主上的护栏拦下不符合的合并（Claude Code 见 [CC008](claude-code/CC008-guardrails.md) CC-B7） |
-| 合并后核对 | 主会话在 `verifying` 中核对：PR 已合并、合并提交与提交 HEAD 对应、`main` 上该合并提交的 CI 结果，并在 `task_accept` 中写明（G-ACCEPT）。发现问题时经 T17 交回同一 worker，以新的 PR 修复；已合并的改动不由状态机撤销，需要撤销时由 worker 开 revert PR |
+| 合并后核对 | 主会话在 `verifying` 中只核对 worker 附的证据：PR 已合并、合并提交与提交 HEAD 对应、CI 运行链接指向合并提交且结论为通过、live 的结果或原因，并在 `task_accept` 中写明（G-ACCEPT）；主会话不再等待 CI。发现问题时经 T17 交回同一 worker，以新的 PR 修复；已合并的改动不由状态机撤销，需要撤销时由 worker 开 revert PR |
 
 ## 4. 守卫条件
 
@@ -171,8 +173,8 @@
 | G-WINDOW | 当前 turn 允许在任务目录创建会话：会话适配器声明的创建时机限制（DN001 §6.3；Claude Code 为用户本人消息所在的 turn，CC001 §4）。只在会话适配器声明 `dispatch_window=true` 时适用（DN006 §7.3），只约束“创建”，不约束“投递任务书”与续用 |
 | G-ONE-ATTEMPT | 该任务没有其他处于 `standby` / `starting` / `live` / `stopped` 阶段的 attempt |
 | G-PAUSE | 记录了 owner、next_action、resume_condition 和类别 |
-| G-SUBMIT | 以下均针对当前 revision 与当前提交周期：报告的 md 与 html 都存在；本周期至少完成一轮由 `roles.reviewer.session` 指定的只读评审器（默认 Codex `gpt-6-astra` / `medium`）给出的评审；最后一轮评审的 HEAD 等于提交 HEAD；最后的评审决定为 `finalize`；仓库授权 worker 合并的开发任务（§3.5）已合并 PR 且合并的 head 等于提交 HEAD，或以 `merge_skipped` 写明由他人合并的原因；未授权时不能带合并记录；每个阻断项都已处置：`fix`（已验证：worker 记录了验证说明，或本周期之后又完成了一轮增量评审）、有据 `reject`、主会话认定不成立（`review.finding_overruled`），或经主会话 / 用户批准延后（`review.defer_approved`，且列入报告“已知问题”）；工作树干净或差异已说明。评审为必经环节，不能由配置或主会话关闭 |
-| G-ACCEPT | 当前 revision；验收要求逐项为“已完成 / 用户明确替代”，并附证据；评审证据通过 G-SUBMIT 复核；G-DEP 复核通过；PR 与产出已登记；Git 状态与提交 SHA 已核对；需要集成的仓库已完成集成与组合验证；worker 已合并时，该 PR 已由主会话核验登记，并写明合并后核对（`main` 上合并提交的 CI 等，§3.5）；无待答输入 |
+| G-SUBMIT | 以下均针对当前 revision 与当前提交周期：报告的 md 与 html 都存在；本周期至少完成一轮由 `roles.reviewer.session` 指定的只读评审器（默认 Codex `gpt-6-astra` / `medium`）给出的评审；最后一轮评审的 HEAD 等于提交 HEAD；最后的评审决定为 `finalize`；仓库授权 worker 合并的任务（§3.5，不看任务类型）已合并 PR，合并的 head 等于提交 HEAD，合并记录附主分支上合并提交的 CI 结果（运行的提交等于合并提交，结论为 `success`，带运行链接；未完成或失败时拒绝，并写明“等它完成”或“在本任务内修复或 revert”）与 live 说明（结果，或不需要、不能运行的原因），或以 `merge_skipped` 写明由他人合并的原因；未授权时不能带合并记录；每个阻断项都已处置：`fix`（已验证：worker 记录了验证说明，或本周期之后又完成了一轮增量评审）、有据 `reject`、主会话认定不成立（`review.finding_overruled`），或经主会话 / 用户批准延后（`review.defer_approved`，且列入报告“已知问题”）；工作树干净或差异已说明。评审为必经环节，不能由配置或主会话关闭 |
+| G-ACCEPT | 当前 revision；验收要求逐项为“已完成 / 用户明确替代”，并附证据；评审证据通过 G-SUBMIT 复核；G-DEP 复核通过；PR 与产出已登记；Git 状态与提交 SHA 已核对；需要集成的仓库已完成集成与组合验证；worker 已合并时，该 PR 已由主会话核验登记，并写明对 worker 所附证据（合并提交、CI 链接、live）的核对（§3.5）；无待答输入 |
 | G-USER | 来源是统一的 `VerifiedSource`（DN006 §8.5）：渠道、已核实的用户身份、消息引用、用户原话、所答请求（可空）、决定对象（任务、revision、决定类别）。主会话消息、子会话消息、Teams 回复、Portal 提交都可以满足，只要身份核实为用户本人且决定对象与当前 revision 一致；主会话代答、worker 回执、主控自评与超时都不满足 |
 
 ## 5. 跨状态规则
