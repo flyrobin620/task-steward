@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="76133c9eaa82235c8f409383416692ab29642bef3e0838689e49f2eb86182af0">
+<meta name="tsw-source-sha256" content="6c92cda68b4c979c27f7773d8a8cf7b75d5a5274ef7cfa20a9656f553cdbb013">
 <title>DN002 任务状态机</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -107,7 +107,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p><strong>入口检查</strong>（与 <code>attempt.start_requested</code> 在同一事件中原子完成）：</p>
 <ul><li>任务处于 <code>ready</code>，或是按依赖顺序排在前面的 <code>waiting_dependency</code>；</li><li>满足 G-ONE-ATTEMPT：该任务没有处于 <code>standby</code> / <code>starting</code> / <code>live</code> / <code>stopped</code> 的 attempt（已有可控的待命或可续用会话就跳过；有旧主会话的会话则先按 R-ATTEMPT 核实停止并替换）；</li><li>预启动额度：处于 <code>standby</code> 的会话与预启动中处于 <code>starting</code> 的请求合计不超过 <code>scheduling.prestart.max_standby</code>。</li></ul>
 <p><strong>何时预启动</strong>：每个满足 G-WINDOW 的 turn（用户本人的 turn）结束前，主会话为满足入口检查的任务预启动，不限于用户要求执行任务的 turn。<code>attention</code> 的 <code>needs_prestart</code> 列出它们：</p>
-<ul><li><code>ready</code> 或 <code>waiting_dependency</code>，且当前 attempt 不在 <code>starting</code> / <code>standby</code> / <code>live</code> / <code>stopped</code>；</li><li><code>waiting_dependency</code> 的任务，上游缺失或已取消（不会再就绪）时不列；</li><li>先列 <code>ready</code>，再按依赖顺序（上游在前、登记顺序次之）列 <code>waiting_dependency</code>，每项写出它还在等的上游；</li><li>个数不超过剩余的预启动额度；预启动关闭时为空。</li></ul>
+<ul><li><code>ready</code> 或 <code>waiting_dependency</code>，且当前 attempt 不在 <code>starting</code> / <code>standby</code> / <code>live</code> / <code>stopped</code>；</li><li><code>waiting_dependency</code> 的任务不会再就绪时不列：上游缺失或已取消，或者它等待的上游本身因此不会再就绪（沿依赖链传播；已完成、已验收或已确认保留的上游不传播）；</li><li>先列 <code>ready</code>，再按依赖顺序（上游在前、登记顺序次之）列 <code>waiting_dependency</code>，每项写出它还在等的上游；</li><li>个数不超过剩余的预启动额度；预启动关闭时为空。</li></ul>
 <p>宿主集成在用户 turn 结束前，列表非空时提醒一次（Claude Code 见 <a href="claude-code/CC008-guardrails.html">CC008</a> 的 CC-S4、CC-S6）；在自动 turn 中不提醒，因为那时不能创建会话。用户明确要求先不开始的任务，主会话说明原因后不预启动。</p>
 <p><strong>过程与收口</strong>：</p>
 <table><thead><tr><th>情况</th><th>处理</th><th>attempt 阶段</th></tr></thead><tbody><tr><td>开始</td><td>准备执行目录（worktree 基于当前基线；目录不存在时 <code>attempt_start</code> 创建空目录，创建失败则拒绝，不记录事件）；按当前 revision 生成任务书 <code>runs/&lt;任务&gt;/&lt;attempt&gt;/brief.md</code>（授权读取集合为任务本身与依赖），路径与 revision 记在 attempt 上；记录 <code>attempt.start_requested</code>（创建代次 +1）；以<strong>待命说明</strong>创建会话（只介绍角色、工具与回传协议，要求等待任务书）</td><td><code>planned</code> → <code>starting</code></td></tr><tr><td>创建成功</td><td>记录 <code>attempt.prestarted</code></td><td><code>starting</code> → <code>standby</code></td></tr><tr><td>确认未创建</td><td>记录 <code>attempt.not_created</code>，当前代次失效（§5.4）；释放预启动额度；下一次用户 turn 可以重试</td><td><code>starting</code> → <code>planned</code></td></tr><tr><td>结果未知</td><td>按当前代次的会话名对账，绝不再次创建；对账前该任务不能派发，也不能再次预启动</td><td>保持 <code>starting</code></td></tr><tr><td>迟到会话</td><td>失效代次的会话按 §5.4 停止，不影响任务状态</td><td>—</td></tr><tr><td>任务被取消（T25）</td><td><code>starting</code> 先对账；可控的 <code>standby</code> 会话按 <code>sessions.archive_on_archive</code> 处置后为 <code>closed</code>；会话已不存在或由旧主会话创建时核实停止后为 <code>replaced</code></td><td><code>closed</code> 或 <code>replaced</code></td></tr><tr><td>会话丢失或被用户归档</td><td>观察（<code>observe</code>）结果为不存在或已归档时记为 <code>replaced</code>；下一次满足 G-WINDOW 的 turn 重新预启动</td><td><code>replaced</code></td></tr></tbody></table>

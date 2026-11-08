@@ -418,8 +418,10 @@ class Guard:
                 return context(
                     "SessionStart",
                     f"这个会话正在为 TaskSteward 任务 {who.task_id}（attempt {who.attempt}）创建，"
-                    "主会话随后会完成绑定。先调用 whoami：返回 role 为 worker 后再开始工作；"
-                    "仍未绑定（pending）时结束这一轮，主会话完成绑定后会发消息通知你。",
+                    "主会话随后会完成绑定。先调用 whoami：role 为 worker 且 phase 为 live 时"
+                    "按任务书开始工作；phase 为 standby 时是预启动的待命会话，可以先阅读任务书，"
+                    "但不开始工作，结束这一轮，等主会话派发后发来的消息；仍未绑定（pending）时"
+                    "结束这一轮，主会话完成绑定后会发消息通知你。",
                 )
             if who.pending and event == "PreToolUse":
                 tool = str(self.payload.get("tool_name") or "")
@@ -554,16 +556,17 @@ class Guard:
                 writable_roots=who.writable_roots if who.role == "worker" else None,
             )
             return None if problem is None else deny("PreToolUse", problem)
-        if tool in SCHEDULERS and who.role == "worker":
-            # A scheduled prompt reaches the session like a user's message. Untagged, the hook
-            # would record it as the user's words: a worker could answer its own question
-            # (found by the live host-e2e scenario, DN006 §8.1a).
+        if tool in SCHEDULERS and who.role in ("worker", "orchestrator"):
+            # A scheduled prompt reaches the session like a user's message. Untagged, a worker's
+            # would be recorded as the user's answer (found by the live host-e2e scenario,
+            # DN006 §8.1a), and the orchestrator's would count as the user's turn, where the Stop
+            # hook asks for prestarts that cannot be made (CC008 CC-S6).
             prompt = str(tool_input.get("prompt") or "")
             if not prompt.lstrip().startswith(SCHEDULED_TAG):
                 return deny(
                     "PreToolUse",
-                    f"worker 的定时提示必须以 {SCHEDULED_TAG}> 开头（以 </scheduled-task> 结束），"
-                    "这样它不会被记录为用户消息",
+                    f"定时提示必须以 {SCHEDULED_TAG}> 开头（以 </scheduled-task> 结束），"
+                    "这样它不会被当成用户本人的消息",
                 )
             return None
         if tool == START_SESSION and who.role == "orchestrator":

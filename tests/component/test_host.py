@@ -744,6 +744,8 @@ def test_a_session_created_for_an_attempt_lists_worker_tools_before_binding(
     assert waiting.value.details["reason"] == "not_bound"
     context = guard(h, "w-1", workdir).run("SessionStart")
     assert context is not None and "whoami" in context["hookSpecificOutput"]["additionalContext"]
+    # Bound as a prestart, the session waits: the context says standby is not a go.
+    assert "standby 时是预启动的待命会话" in context["hookSpecificOutput"]["additionalContext"]
     elsewhere = Server(h.home, {SESSION_ENV: "x-1"}, tmp_path)
     assert [t["name"] for t in elsewhere.tools(elsewhere.identity())] == ["whoami"]
     h.run(
@@ -851,9 +853,18 @@ def test_a_workers_scheduled_prompts_must_be_tagged(h: Harness, tmp_path: Path) 
             tool_input={"prompt": "<scheduled-task>检查问题是否已答复</scheduled-task>"},
         )
         assert tagged.run("PreToolUse") is None
-    # The orchestrator's own reminders are not recorded as anyone's answer anyway.
+    # The orchestrator's too: untagged, its reminder would count as the user's turn.
     own = guard(h, "orch-1", h.home.root, tool_name="CronCreate", tool_input={"prompt": "检查"})
-    assert own.run("PreToolUse") is None
+    refused = own.run("PreToolUse")
+    assert refused is not None and "<scheduled-task>" in json.dumps(refused, ensure_ascii=False)
+    tagged_own = guard(
+        h,
+        "orch-1",
+        h.home.root,
+        tool_name="ScheduleWakeup",
+        tool_input={"prompt": "<scheduled-task>检查待办</scheduled-task>"},
+    )
+    assert tagged_own.run("PreToolUse") is None
 
 
 @mark.use_case("UC-HOST-004")

@@ -181,9 +181,18 @@ def needs_prestart(conn: sqlite3.Connection, config: EffectiveConfig) -> list[di
     invalid = invalidated(conn)
     ready: list[dict[str, Any]] = []
     waiting: list[dict[str, Any]] = []
+    # Waiting tasks that can never become ready: a missing or cancelled upstream, directly or
+    # through a waiting upstream that has one. Upstream comes first in topological order.
+    dead: set[str] = set()
     for row in topological(conn):
         if row["status"] not in ("ready", "waiting_dependency"):
             continue
+        problems: list[dict[str, Any]] = []
+        if row["status"] == "waiting_dependency":
+            problems = dependency_problems(conn, str(row["task_id"]), invalid)
+            if any(p["reason"] in _DEAD_DEPENDENCY or p["dep_id"] in dead for p in problems):
+                dead.add(str(row["task_id"]))
+                continue
         current = conn.execute(
             "SELECT phase FROM attempts WHERE task_id = ? AND attempt = ?",
             (row["task_id"], row["current_attempt"]),
@@ -192,9 +201,6 @@ def needs_prestart(conn: sqlite3.Connection, config: EffectiveConfig) -> list[di
             continue
         if row["status"] == "ready":
             ready.append({"task_id": row["task_id"], "status": "ready"})
-            continue
-        problems = dependency_problems(conn, str(row["task_id"]), invalid)
-        if any(p["reason"] in _DEAD_DEPENDENCY for p in problems):
             continue
         waiting.append(
             {

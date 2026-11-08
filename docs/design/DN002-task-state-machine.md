@@ -246,7 +246,7 @@
 **何时预启动**：每个满足 G-WINDOW 的 turn（用户本人的 turn）结束前，主会话为满足入口检查的任务预启动，不限于用户要求执行任务的 turn。`attention` 的 `needs_prestart` 列出它们：
 
 - `ready` 或 `waiting_dependency`，且当前 attempt 不在 `starting` / `standby` / `live` / `stopped`；
-- `waiting_dependency` 的任务，上游缺失或已取消（不会再就绪）时不列；
+- `waiting_dependency` 的任务不会再就绪时不列：上游缺失或已取消，或者它等待的上游本身因此不会再就绪（沿依赖链传播；已完成、已验收或已确认保留的上游不传播）；
 - 先列 `ready`，再按依赖顺序（上游在前、登记顺序次之）列 `waiting_dependency`，每项写出它还在等的上游；
 - 个数不超过剩余的预启动额度；预启动关闭时为空。
 

@@ -55,7 +55,7 @@ tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC �
 
 | hook | 角色 | 行为 |
 | --- | --- | --- |
-| SessionStart | 全部 | 按会话 ID 与目录识别角色；主会话尝试领取租约，并注入未读 inbox 数与 attention 摘要；worker 注入任务 ID、brief 路径和评审规则（待命会话还提示可以先读任务书、等派发后再开始，任务书更新时重读）；待绑定会话提示等待绑定 |
+| SessionStart | 全部 | 按会话 ID 与目录识别角色；主会话尝试领取租约，并注入未读 inbox 数与 attention 摘要；worker 注入任务 ID、brief 路径和评审规则（待命会话还提示可以先读任务书、等派发后再开始，任务书更新时重读）；待绑定会话提示等待绑定，绑定后 `phase` 为 `standby` 时只读任务书、等派发，为 `live` 时开始 |
 | PreToolUse | 已登记会话 | block list 护栏，见 [CC008 §3](CC008-guardrails.md) |
 | UserPromptSubmit | worker | 检测 `[report]`，注入回传协议提示；worker 有未获用户答复的会话内问题时，把用户消息原文记为 `input.session_message` 并告诉 worker 消息编号（注入的其他会话消息不记，DN006 §8.1a） |
 | UserPromptSubmit | orchestrator | 记下这一轮是不是用户本人的 turn（[CC008](CC008-guardrails.md) CC-S6）：去掉宿主前置的 `<system-reminder>` 后还有内容，且不以注入消息的标记开头时是用户的 turn |

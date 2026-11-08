@@ -121,7 +121,10 @@ def test_only_ready_and_waiting_tasks_with_a_live_upstream(
     _task(conn, "T006", "waiting_dependency", deps=("T005",))  # upstream cancelled
     _task(conn, "T007", "waiting_dependency", deps=("T404",))  # upstream missing
     _task(conn, "T008", "waiting_dependency", deps=("T003",))  # upstream paused: may resume
-    assert _ids(needs_prestart(conn, _config(home))) == ["T008"]
+    _task(conn, "T009", "waiting_dependency", deps=("T006",))  # upstream waits on a cancelled one
+    _task(conn, "T010", "waiting_dependency", deps=("T009", "T008"))  # two hops away
+    _task(conn, "T011", "waiting_dependency", deps=("T004", "T008"))  # a done upstream is fine
+    assert _ids(needs_prestart(conn, _config(home))) == ["T008", "T011"]
 
 
 @mark.use_case("UC-HOST-003")
