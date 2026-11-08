@@ -108,7 +108,7 @@
 | 主会话写工具要求租约（G-LEASE） | 保留 | — |
 | `expected_version`、`command_id` 内容不同则拒绝 | 保留 | — |
 | 权限类配置键须附用户原话，绑定修改前文件摘要；一条原话只能授权一次修改（`source_reused`） | 简化 | 删除 `source_reused`：摘要绑定已防住对象错误 |
-| 正式导入须先同参数演练、附用户原话；一条原话只授权一次导入 | 简化 | 决定对象加入参数摘要，删除“只用一次”的扫描 |
+| 正式导入须先同参数演练、附用户原话；一条原话只授权一次导入 | 简化 | 决定对象改为 `["import", "orchestrator-agent", <摘要>]`，摘要覆盖导入参数与快照内容（`snapshot_sha256`）；演练、用户批准与正式导入须对应同一份快照，换了快照就要重新演练并重新问用户（对象错误）。对新对象删除“只用一次”的扫描；旧对象（不含摘要）在过渡期仍接受，但保留一次性检查，否则对快照 A 的批准可以在对 B 演练后再次授权 B |
 | 接管须附用户原话；配置无效时只开放配置工具；worker 不能改配置 | 保留 | — |
 
 ### 5.4 状态机守卫（`tsw/machine/guards.py`）
@@ -123,7 +123,7 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 | 主会话代答、worker 回执、超时不满足 G-USER | 保留 | — |
 | `user_answer` 必须引用 hook 记录的、同一任务同一问题同一会话的消息 | 保留 | 理由改为“答复以用户原话为准”，删去“worker 不能伪造答复” |
 | 主会话不能记录 `in-session` 来源；worker 会话中的原话不能授权改配置 | 保留 | 对象错误：用户在 worker 会话中回答的是本任务的问题；需要放行护栏时用本任务范围的就地放行（§3） |
-| `teams-chat`：按消息 ID 精确读回、发送者为本人（未实现） | 删除 | 只对抗他人冒充；答复登记只核对“问题仍待答、回复对应到问题编号”（DN008 §9） |
+| `teams-chat`：按消息 ID 精确读回、发送者为本人（未实现） | 删除 | 只对抗他人冒充；答复登记只核对“问题仍待答、回复对应到问题编号”，并按发送时记下的消息 ID 排除 tsw 自己发出的卡片与提醒，避免把它们误记为用户答复（DN008 §9；在 T243 的 `teams-chat` 渠道中实现） |
 | `hub-portal`：owner 认证（未实现） | 简化 | owner 认证是门户自己的访问控制，不属于 tsw |
 | 只有 `pending` 且上下文绑定一致时 T12 生效，其余记为迟到答复 | 保留 | 即“问题仍待答” |
 
@@ -166,7 +166,7 @@ worker 能写自己的执行目录，所以 CC-B2 拦下编辑类工具对执行
 | 代码、指令与工具中指向 DN006 §6.3 权限规则的引用（`tsw/host/claude_code.py`、`guard.py`、`mcp.py`、`tools/live.py`，以及 `orchestrate_skill.md`、`plugin/roles/worker.md` 中的相关说明） | 改为指向本文 §6 |
 | 宿主能力 `enforcement: enforced \| advisory` | 取值不变（契约），解释为机械检查覆盖的程度 |
 
-兼容性：`VerifiedSource.principal` 从必需改为可选，旧事件与旧调用照常有效；导入授权的旧决定对象在过渡期仍接受；删除的只是拒绝，不删除工具、事件、字段或命令；新增的只有配置键 `guardrails.disabled`、`user_answer` 的可选参数 `waive_rules` 与事件类型 `guardrail.waived`。
+兼容性：`VerifiedSource.principal` 从必需改为可选，旧事件与旧调用照常有效；导入授权的旧决定对象在过渡期仍接受，并保留一次性检查；删除的只是拒绝，不删除工具、事件、字段或命令；新增的只有配置键 `guardrails.disabled`、`user_answer` 的可选参数 `waive_rules` 与事件类型 `guardrail.waived`。
 
 ## 8. 实现拆分（由用户决定）
 
@@ -174,6 +174,6 @@ worker 能写自己的执行目录，所以 CC-B2 拦下编辑类工具对执行
 
 1. **措辞**（只改文档与注释）：§7。
 2. **hooks 改为 block list**（行为变化，需测试与 live `host-e2e`）：CC-B1–CC-B10、规则编号与 escape 信息、就地放行（`waive_rules`、`guardrail.waived`）与 `guardrails.disabled`；删除 shell 路径解析、文本兜底、tsw CLI 与 `import tsw` 识别、哈希规则、hook 侧目录一致性检查。
-3. **用户来源、授权与读取范围**（契约兼容变化）：`principal` 可选、删除 `source_reused`、导入授权对象加参数摘要；worker 的检索与 `task_read` 放宽为可读全部任务（DN007 §7.2）。
+3. **用户来源、授权与读取范围**（契约兼容变化）：`principal` 可选、删除 `source_reused`、导入授权对象加参数与快照内容摘要（旧对象保留一次性检查）；worker 的检索与 `task_read` 放宽为可读全部任务（DN007 §7.2）。
 
 第 2、3 项涉及 hooks 守卫与 MCP 写工具授权，按 `AGENTS.md` 第 4 节须用户确认后合并。T241 引入的 CC-B2、CC-B8、CC-S2 与 §6 只需按本文调整代码注释与拒绝信息的措辞（第 1 项）。
