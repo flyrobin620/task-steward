@@ -12,9 +12,11 @@ from typing import Any
 
 import pytest
 
-from tests.machine_harness import Harness
+from tests.machine_harness import ORCH, Harness
 from tsw.cli import main as cli_main
+from tsw.commands import Command
 from tsw.errors import TswError
+from tsw.events import EventDraft
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
 from tsw.host.guard import Guard
@@ -267,6 +269,243 @@ def test_stop_blocks_on_unhandled_reports_and_unfinished_reviews(
     )
 
 
+def prompt_then_stop(h: Harness, prompt: str | None, session: str = "orch-1") -> Any:
+    """One orchestrator turn: the prompt that starts it (``None``: a turn the hook did not see)
+    and the ``Stop`` hook that ends it."""
+    if prompt is not None:
+        assert guard(h, session, h.home.root, prompt=prompt).run("UserPromptSubmit") is None
+    return guard(h, session, h.home.root).run("Stop")
+
+
+@mark.use_case("UC-HOST-002")
+@mark.use_case("UC-HOST-003")
+def test_a_user_turn_does_not_end_while_tasks_wait_for_a_session(h: Harness) -> None:
+    h.register("T001")
+    h.register("T002")
+    h.plan("T001")
+    h.plan("T002", deps=["T001"])
+    with h.ledger.view() as conn:
+        listed = inbox_mod.attention(conn, h.ledger.storage, h.config)["needs_prestart"]
+    assert listed == [
+        {"task_id": "T001", "status": "ready"},
+        {"task_id": "T002", "status": "waiting_dependency", "waiting_on": ["T001"]},
+    ]
+    stop = prompt_then_stop(h, "执行 T001 和 T002")
+    assert stop is not None and stop["decision"] == "block"
+    assert "T001、T002" in stop["reason"] and "attempt_start" in stop["reason"]
+    # Blocked once: the stop that follows in the same turn goes through.
+    assert guard(h, "orch-1", h.home.root, stop_hook_active=True).run("Stop") is None
+    # The app puts its own reminders in front of the user's words: still the user's turn.
+    reminded = prompt_then_stop(h, "<system-reminder>linked sessions</system-reminder>\n继续")
+    assert reminded is not None and reminded["decision"] == "block"
+    # Turns that cannot create sessions are not reminded.
+    for injected in (
+        '<cross-session-message from="w">done</cross-session-message>',
+        "<side-sessions-event>t001 ended</side-sessions-event>",
+        "<scheduled-task>check</scheduled-task>",
+        "<system-reminder>only a reminder</system-reminder>",
+    ):
+        assert prompt_then_stop(h, injected) is None
+    assert prompt_then_stop(h, None) is None  # the user's mark was used up by the last stop
+    # Another session reads while this one holds the lease: it could not prestart either.
+    assert prompt_then_stop(h, "执行", session="orch-2") is None
+    # Once both have a session, the user's turn ends normally.
+    for task_id in ("T001", "T002"):
+        started = h.run("attempt_start", task_id=task_id, purpose="prestart", user_turn=True)
+        assert (h.home.root / "work" / task_id / "a1").is_dir()
+        h.run(
+            "attempt_reconcile",
+            task_id=task_id,
+            attempt="a1",
+            generation=started["events"][0]["data"]["generation"],
+            outcome="created",
+            session_ref=f"w-{task_id}",
+        )
+    assert prompt_then_stop(h, "执行") is None
+
+
+@mark.use_case("UC-HOST-003")
+def test_needs_prestart_respects_the_standby_limit(home: Home) -> None:
+    h = Harness(home, {"scheduling": {"prestart": {"enabled": True, "max_standby": 2}}})
+    for task_id in ("T001", "T002", "T003"):
+        h.register(task_id)
+        h.plan(task_id)
+    h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+
+    def listed() -> list[str]:
+        with h.ledger.view() as conn:
+            items = inbox_mod.attention(conn, h.ledger.storage, h.config)["needs_prestart"]
+        return [item["task_id"] for item in items]
+
+    assert listed() == ["T002"]  # one place left; T001 is being created
+    h.run("attempt_start", task_id="T002", purpose="prestart", user_turn=True)
+    assert listed() == []
+    assert prompt_then_stop(h, "执行") is None  # nothing can be prestarted now
+
+
+@mark.use_case("UC-DISPATCH-001")
+def test_attempt_start_creates_the_execution_directory_anywhere(h: Harness, tmp_path: Path) -> None:
+    h.register("T001")
+    h.plan("T001")
+    h.register("T002")
+    h.plan("T002")
+    elsewhere = tmp_path / "worktrees" / "T001"
+    h.run(
+        "attempt_start", task_id="T001", purpose="prestart", user_turn=True, workdir=str(elsewhere)
+    )
+    assert elsewhere.is_dir()
+    dispatched = tmp_path / "worktrees" / "T002"
+    h.run("task_dispatch", task_id="T002", workdir=str(dispatched), user_turn=True)
+    assert not dispatched.exists()
+    h.run("attempt_start", task_id="T002", purpose="dispatch", user_turn=True)
+    assert dispatched.is_dir()
+    # A directory that cannot be created is refused before anything is recorded.
+    h.register("T003")
+    h.plan("T003")
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x", encoding="utf-8")
+    with pytest.raises(TswError) as refused:
+        h.run(
+            "attempt_start",
+            task_id="T003",
+            purpose="prestart",
+            user_turn=True,
+            workdir=str(blocker / "T003"),
+        )
+    assert refused.value.details["reason"] == "workdir_unavailable"
+    assert h.query("SELECT * FROM attempts WHERE task_id = 'T003'") == []
+
+
+def change(h: Harness, task_id: str, revision: int, goal: str) -> dict[str, Any]:
+    out = h.run(
+        "task_update",
+        task_id=task_id,
+        goal=goal,
+        acceptance=["验收"],
+        user_source=h.source(task_id, revision, "change"),
+    )
+    return dict(out["events"][0]["data"])
+
+
+@mark.use_case("UC-DISPATCH-001")
+def test_a_prestarted_session_has_a_brief_that_follows_the_requirement(
+    h: Harness, tmp_path: Path
+) -> None:
+    h.register("T001")
+    h.register("T002", goal="第一版目标")
+    h.plan("T001")
+    h.plan("T002", deps=["T001"])
+    started = h.run("attempt_start", task_id="T002", purpose="prestart", user_turn=True)
+    data = started["events"][0]["data"]
+    assert (data["brief_path"], data["brief_revision"], data["read_set"]) == (
+        "runs/T002/a1/brief.md",
+        1,
+        ["T001", "T002"],
+    )
+    brief = h.home.root / "runs" / "T002" / "a1" / "brief.md"
+    assert "第一版目标" in brief.read_text(encoding="utf-8")
+    workdir = h.home.root / "work" / "T002" / "a1"
+    h.run(
+        "attempt_reconcile",
+        task_id="T002",
+        attempt="a1",
+        generation=data["generation"],
+        outcome="created",
+        session_ref="w-2",
+    )
+    server = Server(h.home, {SESSION_ENV: "w-2"}, workdir)
+    who = server.call("whoami", {})
+    assert (who["phase"], who["brief_path"], who["brief_revision"]) == (
+        "standby",
+        "runs/T002/a1/brief.md",
+        1,
+    )
+    standby = guard(h, "w-2", workdir).run("SessionStart")
+    assert standby is not None and "待命中" in standby["hookSpecificOutput"]["additionalContext"]
+    # A later decision is written back at once: the standby session's brief follows.
+    updated = change(h, "T002", 1, "第二版目标")
+    assert updated["brief"] == {
+        "attempt": "a1",
+        "revision": 2,
+        "path": "runs/T002/a1/brief.md",
+        "session_ref": "w-2",
+    }
+    text = brief.read_text(encoding="utf-8")
+    assert "第二版目标" in text and "revision：2" in text
+    assert server.call("whoami", {})["brief_revision"] == 2
+    # Dispatch renders it again from the latest revision and delivers it.
+    upstream = h.dispatch("T001")
+    h.finalize(upstream, "T001")
+    h.submit(upstream, "T001")
+    h.accept("T001")
+    h.run("sync")
+    assert h.status("T002") == "ready"
+    h.run("task_dispatch", task_id="T002", workdir=str(workdir))
+    h.run("attempt_deliver", task_id="T002")
+    assert h.status("T002") == "in_progress"
+    assert "第二版目标" in brief.read_text(encoding="utf-8")
+    # At work: the brief follows as well and the worker is named for the orchestrator to tell.
+    at_work = change(h, "T002", 2, "第三版目标")
+    assert at_work["brief"]["session_ref"] == "w-2" and at_work["brief"]["revision"] == 3
+    assert "第三版目标" in brief.read_text(encoding="utf-8")
+    assert server.call("whoami", {})["brief_revision"] == 3
+
+
+@mark.use_case("UC-DISPATCH-001")
+def test_a_session_prestarted_before_briefs_gets_one_on_the_next_change(h: Harness) -> None:
+    h.register("T001")
+    h.plan("T001")
+    # attempt.start_requested as written before prestart wrote briefs: no brief fields.
+    h.ledger.commit(
+        Command(
+            actor=ORCH.actor(),
+            input={"op": "old_prestart"},
+            build=lambda _ctx: [
+                EventDraft(
+                    type="attempt.start_requested",
+                    task_id="T001",
+                    revision=1,
+                    attempt="a1",
+                    data={
+                        "attempt": "a1",
+                        "generation": 1,
+                        "session_name": "t001-a1-g1",
+                        "purpose": "prestart",
+                        "controller": "orch-1",
+                        "adapter": "claude-app",
+                        "workdir": "work/T001/a1",
+                    },
+                )
+            ],
+        )
+    )
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=1,
+        outcome="created",
+        session_ref="w-1",
+    )
+    assert h.query("SELECT brief_path FROM attempts")[0]["brief_path"] is None
+    updated = change(h, "T001", 1, "补写的目标")
+    assert updated["brief"] == {
+        "attempt": "a1",
+        "revision": 2,
+        "path": "runs/T001/a1/brief.md",
+        "read_set": ["T001"],
+        "session_ref": "w-1",
+    }
+    row = h.query("SELECT brief_path, brief_revision, read_set FROM attempts")[0]
+    assert row == {
+        "brief_path": "runs/T001/a1/brief.md",
+        "brief_revision": 2,
+        "read_set": '["T001"]',
+    }
+    brief = h.home.root / "runs" / "T001" / "a1" / "brief.md"
+    assert "补写的目标" in brief.read_text(encoding="utf-8")
+
+
 def ack(h: Harness, sequences: list[int], session: str = "orch-1") -> Any:
     return inbox_mod.ack(
         sequences,
@@ -505,6 +744,8 @@ def test_a_session_created_for_an_attempt_lists_worker_tools_before_binding(
     assert waiting.value.details["reason"] == "not_bound"
     context = guard(h, "w-1", workdir).run("SessionStart")
     assert context is not None and "whoami" in context["hookSpecificOutput"]["additionalContext"]
+    # Bound as a prestart, the session waits: the context says standby is not a go.
+    assert "standby 时是预启动的待命会话" in context["hookSpecificOutput"]["additionalContext"]
     elsewhere = Server(h.home, {SESSION_ENV: "x-1"}, tmp_path)
     assert [t["name"] for t in elsewhere.tools(elsewhere.identity())] == ["whoami"]
     h.run(
@@ -612,9 +853,18 @@ def test_a_workers_scheduled_prompts_must_be_tagged(h: Harness, tmp_path: Path) 
             tool_input={"prompt": "<scheduled-task>检查问题是否已答复</scheduled-task>"},
         )
         assert tagged.run("PreToolUse") is None
-    # The orchestrator's own reminders are not recorded as anyone's answer anyway.
+    # The orchestrator's too: untagged, its reminder would count as the user's turn.
     own = guard(h, "orch-1", h.home.root, tool_name="CronCreate", tool_input={"prompt": "检查"})
-    assert own.run("PreToolUse") is None
+    refused = own.run("PreToolUse")
+    assert refused is not None and "<scheduled-task>" in json.dumps(refused, ensure_ascii=False)
+    tagged_own = guard(
+        h,
+        "orch-1",
+        h.home.root,
+        tool_name="ScheduleWakeup",
+        tool_input={"prompt": "<scheduled-task>检查待办</scheduled-task>"},
+    )
+    assert tagged_own.run("PreToolUse") is None
 
 
 @mark.use_case("UC-HOST-004")
@@ -695,13 +945,13 @@ def test_default_and_home_relative_execution_directories_are_recognised(h: Harne
     # A prestart without a directory creates the session in work/<task>/<attempt>.
     h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
     default = h.home.root / "work" / "T001" / "a1"
-    default.mkdir(parents=True)
+    assert default.is_dir()  # attempt_start created it
     assert Server(h.home, {SESSION_ENV: "w-1"}, default).identity().pending
     # A dispatch may record its directory relative to the data directory.
     h.run("task_dispatch", task_id="T002", workdir="work/T002-wt", user_turn=True)
     h.run("attempt_start", task_id="T002", purpose="dispatch", user_turn=True)
     relative = h.home.root / "work" / "T002-wt"
-    relative.mkdir(parents=True)
+    assert relative.is_dir()
     who = Server(h.home, {SESSION_ENV: "w-2"}, relative).identity()
     assert (who.pending, who.task_id) == (True, "T002")
 
@@ -726,7 +976,7 @@ def test_a_prestart_retry_without_a_directory_uses_the_default(h: Harness, tmp_p
     )
     again = h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
     default = h.home.root / "work" / "T001" / "a1"
-    default.mkdir(parents=True)
+    assert default.is_dir()
     assert Server(h.home, {SESSION_ENV: "w-1"}, default).identity().pending
     h.run(
         "attempt_reconcile",

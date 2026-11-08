@@ -74,7 +74,13 @@ T08（`attempt.bound`）要求两个阶段都有完成证据：**会话存在不
 
 关联标记：承载 worker 的会话适配器**必须**声明一种“只凭代次就能找回会话”的方式（能力 `find_by_name` 或 `correlation_tag`），这是 `interactive` 能力的准入条件。Claude app 与 Copilot app 用会话名。Codex App Server 的线程名可以写入，但 PoC 发现未归档线程不能及时按名称或目录列出（B7），所以 `codex-app-server` 暂不承载 worker。因此创建结果未知时总能对账，并按 DN002 的 T09 / attempt 阶段规则收口。
 
-预启动（DN002 §5.6）是同一个两阶段流程的提前执行：在用户 turn 中只完成“创建”（以待命说明启动会话），“投递 brief”推迟到派发时，可以在任何 turn 中进行。
+预启动（DN002 §5.6）是同一个两阶段流程的提前执行：在用户 turn 中只完成“创建”（以待命说明启动会话），“投递 brief”推迟到派发时，可以在任何 turn 中进行。brief 在预启动时就按当前 revision 写出，需求变更时随之重写，派发时再按最新 revision 生成后投递（DN002 §5.1、§5.6）：任务的决定落在任务书里，不依赖主会话的上下文。
+
+会话适配器声明 `dispatch_window`（只有用户本人的 turn 能创建会话）时，宿主集成为预启动提供三项防错护栏（DN008），各宿主的做法见实现文档（Claude Code：[CC001 §6](claude-code/CC001-sessions-and-hooks.md)、[CC008 §4](claude-code/CC008-guardrails.md)）：
+
+1. **列出**：`attention` 的 `needs_prestart` 列出还没有会话的 `ready` 与等待依赖任务，不超过剩余的待命名额（DN002 §5.6）；
+2. **提醒**：宿主集成在一轮开始时记下这一轮是不是用户本人的 turn（注入的其他会话消息、app 事件、定时提示都不是），用户 turn 结束时 `needs_prestart` 非空就提醒一次；其他 turn 不提醒，因为那时不能创建会话；
+3. **准备目录**：`attempt_start` 在请求创建会话前创建执行目录（预启动与派发都是），宿主创建会话时目录一定存在。
 
 ## 5. 公共约定
 

@@ -9,8 +9,10 @@ crashes the session: an internal failure allows the action and reports the error
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
+import sqlite3
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -25,9 +27,10 @@ from tsw.host import inbox as inbox_mod
 from tsw.host import shell
 from tsw.host.identity import HOST_CLI_COMMANDS, Identity, resolve, within
 from tsw.ledger import Ledger
-from tsw.machine.ask_user import handoff_due, session_message
+from tsw.machine.ask_user import handoff_due, is_automated, session_message
 from tsw.machine.guards import merge_authorized
 from tsw.machine.model import row_dict
+from tsw.storage.fs import atomic_write
 
 WRITE_TOOLS = {
     "Edit": "file_path",
@@ -39,6 +42,8 @@ START_SESSION = "mcp__ccd_session__start_session"
 # The host's session-scheduling tools, and the tag every scheduled prompt of a worker carries.
 SCHEDULERS = ("CronCreate", "ScheduleWakeup")
 SCHEDULED_TAG = "<scheduled-task"
+# Under the data directory's cache/: whether each orchestrator session's current turn is the user's.
+TURNS_DIR = "turns"
 TSW_OWNED = ("ledger", "runs", "todo", "config", "outbox", "legacy", "views", "cache", "locks")
 _HASH = re.compile(
     r"\b(sha\d*sum|md5sum|shasum|certutil\s+-hashfile|get-filehash)\b", re.IGNORECASE
@@ -413,8 +418,10 @@ class Guard:
                 return context(
                     "SessionStart",
                     f"这个会话正在为 TaskSteward 任务 {who.task_id}（attempt {who.attempt}）创建，"
-                    "主会话随后会完成绑定。先调用 whoami：返回 role 为 worker 后再开始工作；"
-                    "仍未绑定（pending）时结束这一轮，主会话完成绑定后会发消息通知你。",
+                    "主会话随后会完成绑定。先调用 whoami：role 为 worker 且 phase 为 live 时"
+                    "按任务书开始工作；phase 为 standby 时是预启动的待命会话，可以先阅读任务书，"
+                    "但不开始工作，结束这一轮，等主会话派发后发来的消息；仍未绑定（pending）时"
+                    "结束这一轮，主会话完成绑定后会发消息通知你。",
                 )
             if who.pending and event == "PreToolUse":
                 tool = str(self.payload.get("tool_name") or "")
@@ -440,10 +447,20 @@ class Guard:
             )
         if who.role == "worker":
             roots = "、".join(str(p) for p in who.writable_roots)
+            if who.phase == "standby":
+                # A prestarted session already has a brief to read, but no slot yet (DN002 §5.6).
+                brief = (
+                    f"{who.brief_path or '等待投递'}（待命中：可以先阅读，等主会话派发并发消息后"
+                    "再开始工作；派发时任务书按最新 revision 重新生成）"
+                )
+            else:
+                brief = who.brief_path or "等待投递"
             return context(
                 "SessionStart",
                 f"你是 TaskSteward 任务 {who.task_id} 的 worker（attempt {who.attempt}）。"
-                f"任务书：{who.brief_path or '等待投递'}。只在可写路径内修改：{roots}。"
+                f"任务书：{brief}。只在可写路径内修改：{roots}。"
+                "主会话告诉你任务书已更新时，重新读取任务书（whoami 的 brief_revision），"
+                "按新 revision 继续。"
                 "完成后用 review_run 做自评审并逐条处置；任务书写明由 worker 合并时，"
                 "门禁、评审与意见都解决后自行合并 PR（合并命令单独运行，不与其他命令连接），"
                 "再 submit。需要用户决定的事用 ask_user "
@@ -539,16 +556,17 @@ class Guard:
                 writable_roots=who.writable_roots if who.role == "worker" else None,
             )
             return None if problem is None else deny("PreToolUse", problem)
-        if tool in SCHEDULERS and who.role == "worker":
-            # A scheduled prompt reaches the session like a user's message. Untagged, the hook
-            # would record it as the user's words: a worker could answer its own question
-            # (found by the live host-e2e scenario, DN006 §8.1a).
+        if tool in SCHEDULERS and who.role in ("worker", "orchestrator"):
+            # A scheduled prompt reaches the session like a user's message. Untagged, a worker's
+            # would be recorded as the user's answer (found by the live host-e2e scenario,
+            # DN006 §8.1a), and the orchestrator's would count as the user's turn, where the Stop
+            # hook asks for prestarts that cannot be made (CC008 CC-S6).
             prompt = str(tool_input.get("prompt") or "")
             if not prompt.lstrip().startswith(SCHEDULED_TAG):
                 return deny(
                     "PreToolUse",
-                    f"worker 的定时提示必须以 {SCHEDULED_TAG}> 开头（以 </scheduled-task> 结束），"
-                    "这样它不会被记录为用户消息",
+                    f"定时提示必须以 {SCHEDULED_TAG}> 开头（以 </scheduled-task> 结束），"
+                    "这样它不会被当成用户本人的消息",
                 )
             return None
         if tool == START_SESSION and who.role == "orchestrator":
@@ -568,6 +586,9 @@ class Guard:
 
     def on_UserPromptSubmit(self, who: Identity) -> dict[str, Any] | None:
         prompt = str(self.payload.get("prompt") or "")
+        if who.role == "orchestrator":
+            self._mark_turn(who, user=not is_automated(prompt))
+            return None
         if who.role != "worker":
             return None
         notes: list[str] = []
@@ -613,24 +634,38 @@ class Guard:
     def on_Stop(self, who: Identity) -> dict[str, Any] | None:
         again = bool(self.payload.get("stop_hook_active"))
         if who.role == "orchestrator":
+            user_turn = self._take_turn(who)
             if again or not self.config.valid:
                 return None
+            reasons: list[str] = []
             with self.ledger.view() as conn:
                 pending = inbox_mod.inbox(conn, self.ledger.storage, self.config)
                 due = handoff_due(conn, utc_now())
+                # Only the user's own turn can create sessions (G-WINDOW): elsewhere a reminder
+                # could not be acted on. A session reading while another holds the lease neither.
+                prestart = (
+                    inbox_mod.needs_prestart(conn, self.config)
+                    if user_turn and self._may_dispatch(conn, who)
+                    else []
+                )
             if pending:
-                return {
-                    "decision": "block",
-                    "reason": f"还有 {len(pending)} 条未处理的回传，"
-                    "先调用 inbox 处理并 inbox_ack。",
-                }
+                reasons.append(
+                    f"还有 {len(pending)} 条未处理的回传，先调用 inbox 处理并 inbox_ack。"
+                )
             if due:
-                return {
-                    "decision": "block",
-                    "reason": f"有 {len(due)} 个 worker 会话中的问题已超时无人回复："
-                    "运行 sync 转交，再按 inbox 处理。",
-                }
-            return None
+                reasons.append(
+                    f"有 {len(due)} 个 worker 会话中的问题已超时无人回复："
+                    "运行 sync 转交，再按 inbox 处理。"
+                )
+            if prestart:
+                names = "、".join(str(item["task_id"]) for item in prestart)
+                reasons.append(
+                    f"这是用户的 turn，结束后就不能再创建会话：{names} 还没有会话（attention 的 "
+                    "needs_prestart）。按 orchestrate skill 为它们预启动：attempt_start"
+                    "（purpose: prestart，user_turn: true）→ start_session → attempt_reconcile。"
+                    "确实不该现在预启动时（例如用户要求先不开始），说明原因后直接结束。"
+                )
+            return {"decision": "block", "reason": "".join(reasons)} if reasons else None
         with self.ledger.view() as conn:
             row = row_dict(
                 conn.execute(
@@ -649,6 +684,40 @@ class Guard:
                 "（或用 review_complete / review_fail 记录结果）后再结束。",
             }
         return None
+
+    def _turn_file(self, who: Identity) -> Path:
+        name = re.sub(r"[^A-Za-z0-9_.-]", "_", str(who.session_id or "none"))
+        return self.home.cache_dir / TURNS_DIR / f"{name}.json"
+
+    def _mark_turn(self, who: Identity, *, user: bool) -> None:
+        """Remember whether the orchestrator's current turn is the user's own (``UserPromptSubmit``
+        sees every turn's prompt; the ``Stop`` hook does not). A cache file, not a ledger event:
+        it only steers the reminder at the end of this turn."""
+        path = self._turn_file(who)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(path, json.dumps({"user_turn": user, "at": utc_now()}).encode("utf-8"))
+        except OSError as exc:  # a missed mark only skips a reminder
+            print(f"tsw guard: turn not recorded: {exc}", file=sys.stderr)
+
+    def _take_turn(self, who: Identity) -> bool:
+        """Whether the turn that is ending was the user's; the mark is used up either way, so a
+        later turn the hook did not see (no ``UserPromptSubmit``) never counts as the user's."""
+        path = self._turn_file(who)
+        try:
+            user = bool(json.loads(path.read_text(encoding="utf-8")).get("user_turn"))
+        except (OSError, ValueError, AttributeError):
+            return False
+        with contextlib.suppress(OSError):
+            path.unlink()
+        return user
+
+    def _may_dispatch(self, conn: sqlite3.Connection, who: Identity) -> bool:
+        """No other session holds a valid scheduling lease (G-LEASE would refuse a prestart)."""
+        held = lease.lease_row(conn)
+        if held is None or lease.is_expired(held, utc_now()):
+            return True
+        return held["holder_session"] == who.session_id and held["machine"] == self.machine
 
     def _returns_to_root(self, command: str, who: Identity) -> bool:
         """A bare ``cd`` into a writable root is how a drifted worker gets back."""

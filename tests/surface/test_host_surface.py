@@ -153,6 +153,56 @@ def test_guard_entry_point_denies_ledger_edits(home: Path) -> None:
     assert (garbage.returncode, garbage.stdout) == (0, "")
 
 
+def hook(home: Path, session: str, event: str, **fields: Any) -> dict[str, Any] | None:
+    proc = launch(
+        PLUGIN / "bin" / "tsw_launch.py",
+        "guard",
+        event,
+        env=child_env(CLAUDE_CODE_HOST_SESSION_ID=session),
+        cwd=home,
+        stdin=json.dumps({"cwd": str(home), **fields}),
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout) if proc.stdout.strip() else None
+
+
+@pytest.mark.use_case("UC-HOST-002")
+@pytest.mark.use_case("UC-HOST-003")
+@pytest.mark.use_case("UC-DISPATCH-001")
+def test_the_users_turn_is_reminded_to_prestart(home: Path) -> None:
+    replies = mcp(
+        home,
+        home,
+        "orch-9",
+        INIT,
+        NOTE,
+        call(1, "lease_acquire"),
+        call(2, "task_register", title="t", repo="demo", kind="code", goal="g", acceptance=["a"]),
+        call(3, "task_plan", task_id="T001", dependencies=[], resources=[], reason="r"),
+        call(4, "attention"),
+    )
+    by_id = {r["id"]: r for r in replies}
+    assert payload(by_id[4])["needs_prestart"] == [{"task_id": "T001", "status": "ready"}]
+    assert hook(home, "orch-9", "UserPromptSubmit", prompt="开始 T001") is None
+    stop = hook(home, "orch-9", "Stop")
+    assert stop is not None and stop["decision"] == "block" and "T001" in stop["reason"]
+    assert hook(home, "orch-9", "Stop", stop_hook_active=True) is None
+    injected = '<cross-session-message from="w">done</cross-session-message>'
+    assert hook(home, "orch-9", "UserPromptSubmit", prompt=injected) is None
+    assert hook(home, "orch-9", "Stop") is None
+    # attempt_start creates the execution directory, so start_session can open it directly.
+    started = mcp(
+        home,
+        home,
+        "orch-9",
+        INIT,
+        NOTE,
+        call(5, "attempt_start", task_id="T001", purpose="prestart", user_turn=True),
+    )
+    cwd = Path(payload({r["id"]: r for r in started}[5])["cwd"])
+    assert cwd.is_dir() and cwd.parts[-3:] == ("work", "T001", "a1")
+
+
 @pytest.mark.use_case("UC-HOST-004")
 def test_plugin_package_and_generated_files(home: Path) -> None:
     manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))

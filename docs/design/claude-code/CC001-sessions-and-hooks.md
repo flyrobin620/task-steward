@@ -21,12 +21,12 @@
 | --- | --- | --- |
 | `initiation` | `user_asked` | 用户已要求执行该任务 |
 | `context` | `fresh` | 不 fork 主会话的长上下文；任务所需背景全部在 brief 里 |
-| `cwd` | 执行目录（worktree 或研究目录） | worktree 由 tsw 创建，不让 app 另建 |
+| `cwd` | 执行目录（worktree 或研究目录），即 `attempt_start` 返回的 `cwd` | worktree 由 tsw 创建，不让 app 另建；目录不存在时 `attempt_start` 先创建（app 不接受不存在的目录，报 “folder does not exist”） |
 | `use_worktree` | `false` | 在已有目录中工作；app 归档会话时不会删除该目录（§7 假设 A7） |
 | `name` | `txxx-aN-gK` | K 为创建代次（DN002 §5.4），每次请求创建加 1；用于对账，在 linked 会话中唯一 |
 | `model` / `effort` | `roles.worker.model` / `roles.worker.effort` | 如实记录请求值；实际值以 `get_session` 回执为准 |
 | `permission_mode` | `roles.worker.permission_mode` | 不能高于主会话自身模式（平台限制） |
-| `prompt` | 待命说明（预启动）或 worker 启动指令（直接启动） | 待命说明只介绍角色与回传协议，要求等待任务书；任务书 `runs/Txxx/aN/brief.md` 在派发时用 `SendMessage` 投递 |
+| `prompt` | 待命说明（预启动）或 worker 启动指令（直接启动） | 待命说明只介绍角色与回传协议，要求等待派发；任务书 `runs/Txxx/aN/brief.md` 在预启动时已写出，待命会话可以先阅读（SessionStart 提示它不要开始工作），派发时按最新 revision 重新生成，再用 `SendMessage` 通知会话开始；需求变更后主会话同样用 `SendMessage` 通知会话重读 |
 | `background` | 任务目标摘要（≥80 字） | 平台对 fresh 会话的要求 |
 
 先写 `attempt.start_requested` 事件，再调用工具。结果未知时按会话名对账（`list_sessions {linked:true}`），不再次创建（DN002 §6 `starting` 阶段）。
@@ -55,10 +55,11 @@ tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC �
 
 | hook | 角色 | 行为 |
 | --- | --- | --- |
-| SessionStart | 全部 | 按会话 ID 与目录识别角色；主会话尝试领取租约，并注入未读 inbox 数与 attention 摘要；worker 注入任务 ID、brief 路径和评审规则；待绑定会话提示等待绑定 |
+| SessionStart | 全部 | 按会话 ID 与目录识别角色；主会话尝试领取租约，并注入未读 inbox 数与 attention 摘要；worker 注入任务 ID、brief 路径和评审规则（待命会话还提示可以先读任务书、等派发后再开始，任务书更新时重读）；待绑定会话提示等待绑定，绑定后 `phase` 为 `standby` 时只读任务书、等派发，为 `live` 时开始 |
 | PreToolUse | 已登记会话 | block list 护栏，见 [CC008 §3](CC008-guardrails.md) |
 | UserPromptSubmit | worker | 检测 `[report]`，注入回传协议提示；worker 有未获用户答复的会话内问题时，把用户消息原文记为 `input.session_message` 并告诉 worker 消息编号（注入的其他会话消息不记，DN006 §8.1a） |
-| Stop | orchestrator | 运行只读 `attention`；有未处理 reportable 事件，或有已超时未转交的会话内问题（提示运行 `sync`）时阻止一次结束（`stop_hook_active` 防循环） |
+| UserPromptSubmit | orchestrator | 记下这一轮是不是用户本人的 turn（[CC008](CC008-guardrails.md) CC-S6）：去掉宿主前置的 `<system-reminder>` 后还有内容，且不以注入消息的标记开头时是用户的 turn |
+| Stop | orchestrator | 运行只读 `attention`；有未处理 reportable 事件，有已超时未转交的会话内问题（提示运行 `sync`），或这一轮是用户的 turn 且 `needs_prestart` 非空（提示预启动）时阻止一次结束（`stop_hook_active` 防循环），几条原因合在一条提示里 |
 | Stop | worker | 记录 `worker.turn_ended` 观察事件（不改状态）；若处于 `reviewing`，提示完成这一轮再结束 |
 
 hooks 是防错护栏，不是安全边界（DN008）；skill 和 CLAUDE.md 只写流程与判断准则。

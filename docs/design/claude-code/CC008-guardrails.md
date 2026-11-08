@@ -36,7 +36,7 @@
 | CC-B5 | worker | `gh pr create`，仓库没有 `delivery.create_pr` | 同上 | 同上 |
 | CC-B6 | worker | `gh pr merge`，或 `gh api` 调用 REST 合并路径（`…/pulls/<n>/merge`）或 GraphQL `mergePullRequest`（只看这两种写法，不看评论正文等其他参数里的 “merge” 一词：现状对此误拦，本任务回复评审线程时实测）；任务不是开发任务或仓库没有 `delivery.merge` | 不该由 worker 合并时合并，主会话流程随之错乱 | 提交时用 `merge_skipped` 说明，由主会话合并。**不可放行**：它是 G-SUBMIT 合并授权的镜像，放行后合并记录仍会被 G-SUBMIT 拒绝；需要 worker 合并时由用户修改 `delivery.merge`（用户在会话外手工编辑，或经主会话 `config_change`），然后在原 worker 中重试：hook 与 G-SUBMIT 每次都重新读取配置，不需要重启会话；任务须为开发任务。会话创建时没有合并授权，worker 的 `settings.local.json` 中就没有 `gh pr merge` 的允许规则，auto 分类器可能要求确认 |
 | CC-B7 | worker | 有合并授权，但 `gh pr merge` 没有 `-R HOST/OWNER/NAME` 或本仓库的 PR 链接与配置的 `host`（默认 `github.com`）、`repository` 一致；或用 `gh api` 合并 | 按当前目录或遗留的 `GH_HOST` 合并了别的仓库或别的主机的 PR（目标错误） | `gh pr merge <编号> -R github.com/<owner>/<name>`，或该仓库的 PR 链接 |
-| CC-B8 | worker | `CronCreate` / `ScheduleWakeup` 的提示不以 `<scheduled-task>` 开头 | 定时提示到达时与用户消息无法区分，被记成用户答复（live `host-e2e` 实测，误认来源） | 提示以 `<scheduled-task>` 开头、`</scheduled-task>` 结束 |
+| CC-B8 | worker、主会话 | `CronCreate` / `ScheduleWakeup` 的提示不以 `<scheduled-task>` 开头 | 定时提示到达时与用户消息无法区分：worker 的被记成用户答复（live `host-e2e` 实测，误认来源）；主会话的被当成用户本人的 turn，CC-S4 随之要求在不能创建会话的 turn 中预启动（T244） | 提示以 `<scheduled-task>` 开头、`</scheduled-task>` 结束 |
 | CC-B9 | 主会话 | `start_session` 的会话名不是已落账、代次有效的 attempt | 没有先 `attempt_start` 就建会话，或重复建会话 | 先 `attempt_start`，用返回的会话名。**不可放行**：没有落账的会话无法绑定到 attempt（DN002 §6） |
 | CC-B10 | 已撤销 / 待绑定 | 编辑类工具、Bash、`start_session` | 已被替换的会话继续写；绑定前就开始工作（状态漂移） | 已撤销：回到主会话；待绑定：等主会话绑定后的消息 |
 
@@ -47,7 +47,7 @@
 3. **主会话被拦下**（CC-B1、CC-B2）：在主会话中问用户，按用户的话用 `config_change` 写入 `guardrails.disabled`，或由用户自己执行。CC-B9 不可关闭：先 `attempt_start`，再用返回的会话名创建会话。
 4. **用户自己做**：用户总可以在会话外自己执行被拦下的动作。
 
-**CC-B8 的背景**（自 DN006 §8.1b 移入）：定时提示到达会话的方式与用户消息相同，`UserPromptSubmit` 的 payload 中没有区分来源的字段（live `host-e2e` 中，worker 用 CronCreate 设的唤醒提示被记成了用户消息，转交因此以 `user_responded` 被拒）。因此 worker 调用宿主的定时工具（`CronCreate`、`ScheduleWakeup`）时，提示必须以 `<scheduled-task>` 开头，PreToolUse hook 拒绝其他写法；带这个标记的消息与其他注入消息一样不记录。
+**CC-B8 的背景**（自 DN006 §8.1b 移入）：定时提示到达会话的方式与用户消息相同，`UserPromptSubmit` 的 payload 中没有区分来源的字段（live `host-e2e` 中，worker 用 CronCreate 设的唤醒提示被记成了用户消息，转交因此以 `user_responded` 被拒）。因此 worker 调用宿主的定时工具（`CronCreate`、`ScheduleWakeup`）时，提示必须以 `<scheduled-task>` 开头，PreToolUse hook 拒绝其他写法；带这个标记的消息与其他注入消息一样不记录。主会话记下用户 turn（CC-S6）之后，同样的规则也用于主会话（T244）：不带标记的定时提示会被当成用户本人的 turn。
 
 **失败方式**：hook 内部异常时放行并在 stderr 报告（现状不变）。
 
@@ -58,8 +58,11 @@
 | CC-S1 | SessionStart | 识别角色；主会话领取租约并注入 attention 摘要；worker 注入任务与回传规则；待绑定会话提示等待绑定 | 保留（不是拦截） |
 | CC-S2 | UserPromptSubmit（worker） | worker 有待答问题时，把用户消息原文记为 `input.session_message` 并告诉 worker 编号；去掉宿主前置的 `<system-reminder>`（T241）；以 `<cross-session-message` `<side-sessions-event` `<task-notification` `<ci-monitor-event` `<scheduled-task` 开头的注入消息不记 | 保留。前置 reminder 的修复是必需的：本任务中用户在 worker 会话的回复以 `<system-reminder>` 开头，`main` 上的实现把它当成注入消息没有记录，worker 因而无法登记答复 |
 | CC-S3 | UserPromptSubmit（worker） | 检测 `[report]` 并提示回传 | 保留 |
-| CC-S4 | Stop（主会话） | 有未处理的回传或到期未转交的问题时阻止结束一次 | 保留 |
+| CC-S4 | Stop（主会话） | 有未处理的回传或到期未转交的问题时阻止结束一次；这一轮是用户的 turn（CC-S6）且 `attention` 的 `needs_prestart` 非空时也阻止一次，提示为列出的任务预启动（DN002 §5.6）。几条原因合在一条提示里，`stop_hook_active` 时不再阻止 | 保留；预启动提醒为 T244 新增 |
 | CC-S5 | Stop（worker） | 评审进行中时阻止结束一次；记录 `worker.turn_ended` | 保留 |
+| CC-S6 | UserPromptSubmit（主会话） | 记下这一轮是不是用户本人的 turn：按 CC-S2 的同一规则判断（去掉前置 `<system-reminder>` 后为空或以注入标记开头的不是），写入数据目录 `cache/turns/<会话>.json`；Stop 读取后即删除，hook 没有看到开头的一轮（没有 `UserPromptSubmit`）因此不算用户的 turn | T244 新增 |
+
+**CC-S4 预启动提醒的背景与 escape**：只有用户本人的 turn 能创建会话（CC001 §4）。2026-11-07 主会话登记了等待依赖的任务后，没有在之后的用户 turn 里为它预启动，用户提醒后才补上；之后要等用户再发消息才能创建，依赖链因此停住。Stop hook 本身不知道这一轮由谁触发，所以由 CC-S6 在一轮开始时记下。提醒只在用户的 turn、本会话没有被另一个主会话的有效租约排除（另一个会话持有租约时本会话不能预启动）、列表非空时出现，每轮最多一次。escape：用户要求先不开始、或预启动确实不合适时，主会话说明原因后直接结束（第二次 Stop 带 `stop_hook_active`，不再阻止）；用户也可以关闭预启动（`scheduling.prestart.enabled`）。标记只是缓存：写入失败时这一轮不提醒，不影响其他行为（DN008 §8 第 2 条）。
 
 ## 5. 现有校验逐项归类
 

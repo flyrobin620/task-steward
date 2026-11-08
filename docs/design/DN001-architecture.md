@@ -96,7 +96,7 @@ worker 会话分两步启动（DN006 §4.1）：先**创建**会话，再**投�
 
 适配器声明 `dispatch_window` 与 `prestart` 时，派发与唤醒策略为：
 
-- **预启动 + 后投递**：用户要求执行一批任务时，主会话在这个 turn 中为其中已规划的任务（`ready`，以及在 `scheduling.prestart.max_standby` 范围内的 `waiting_dependency`）预启动 worker 会话。前序任务完成、名额可用时，主会话在任何 turn 中给待命会话投递任务书，依次执行一串有依赖的任务不需要用户再次发消息。
+- **预启动 + 后投递**：每个用户 turn 结束前，主会话为还没有会话的已规划任务（`ready`，以及在 `scheduling.prestart.max_standby` 范围内的 `waiting_dependency`）预启动 worker 会话，不限于用户要求执行任务的 turn：在自动 turn 中登记或变为可派发的任务，在下一个用户 turn 预启动。`attention` 的 `needs_prestart` 列出这些任务（DN002 §5.6），宿主集成在用户 turn 结束前提醒一次（§7.3）。前序任务完成、名额可用时，主会话在任何 turn 中给待命会话投递任务书，依次执行一串有依赖的任务不需要用户再次发消息。
 - **没有待命会话的任务**：在自动 turn 中变为可派发、但没有待命会话的任务（例如新拆出的任务）保持 `ready` 并标记“待启动”，STATUS 页显示数量；用户下一次发消息时主会话为它们创建会话。
 - **唤醒**：worker 产生 reportable 事件时，必须同时调用 tsw 工具落账**并**用宿主的父会话消息工具向父会话发送一行带事件 ID 的短消息（主唤醒路径，见 §9 时序第 16 步）。这样即使其他 worker 仍在工作，主会话也能被唤醒。不允许创建会话的 turn 仍可以给待命会话投递任务书，与预启动配合即可推进依赖链。宿主若有兜底唤醒，作为兜底。
 - **处理范围**：被唤醒后，主会话只读取 `inbox` 中未处理的 reportable 事件（按事件 ID 去重并 ack）。普通进度、无回传的 idle、interactive 超时都不触发查询、催办或改账本（沿用用户 2026-10-13 的约定）。
@@ -135,7 +135,7 @@ worker 用 `ask_user` 向用户提问后，用户在子会话里的回复由宿�
 
 - 会话 ID 等于某个已登记 attempt 绑定的会话 → 该 attempt 的 worker；该 attempt 已被替换或关闭时 → **已撤销**（revoked）：只暴露 `whoami`，宿主护栏拒绝写入与命令行，且永远不会因为目录在数据目录而回落成主会话；
 - 会话目录是数据目录（`TSW_HOME`）且不是 worker → **主会话角色**。主会话角色可以使用只读工具（`inbox`、`attention`、`context_*` 等）以及租约工具（领取、在用户确认后 `controller_takeover`）；派发、验收等写工具还要求该会话持有调度租约（G-LEASE）；
-- 还没有绑定、但会话目录是某个 `starting` 且尚未绑定会话的 attempt 的执行目录 → **待绑定的 worker**：工具列表从一开始就按 worker 列出，除 `whoami` 外的调用一律以 `not_bound` 拒绝；宿主护栏拒绝它的编辑、命令行与建会话，`tsw` 命令行也按已绑定会话限制，直到主会话 `attempt_reconcile` 完成绑定。预启动（`attempt_start` 的 `prestart`）可以给出会话将要创建在的执行目录（不给时为 `work/<任务>/<attempt>`），之后派发沿用该目录。执行目录可以写成相对数据目录的路径。主会话只能在宿主返回会话 ID 之后才绑定，而新会话的 MCP server 在此之前就已列出工具，宿主可能不再重新获取列表（Claude Code 即如此，CC001 §5），所以第一次列表就是 worker 的。
+- 还没有绑定、但会话目录是某个 `starting` 且尚未绑定会话的 attempt 的执行目录 → **待绑定的 worker**：工具列表从一开始就按 worker 列出，除 `whoami` 外的调用一律以 `not_bound` 拒绝；宿主护栏拒绝它的编辑、命令行与建会话，`tsw` 命令行也按已绑定会话限制，直到主会话 `attempt_reconcile` 完成绑定。预启动（`attempt_start` 的 `prestart`）可以给出会话将要创建在的执行目录（不给时为 `work/<任务>/<attempt>`），之后派发沿用该目录；目录不存在时 `attempt_start`（预启动与派发都是）先创建它，宿主创建会话时目录一定已经存在。执行目录可以写成相对数据目录的路径。主会话只能在宿主返回会话 ID 之后才绑定，而新会话的 MCP server 在此之前就已列出工具，宿主可能不再重新获取列表（Claude Code 即如此，CC001 §5），所以第一次列表就是 worker 的。
 - 其他 → 只暴露 `whoami` 和只读帮助。
 
 会话启动时宿主集成先把会话登记为主会话角色或 worker（按会话 ID 与目录），再尝试领取租约（§6.4）；领取失败时该会话保持主会话角色、只读运行。
@@ -164,7 +164,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一
 | `review_run` / `review_triage` / `review_decide` | — | ✓ | DN004 |
 | `submit` | — | ✓ | T13，执行 G-SUBMIT 检查；worker 已合并时带合并记录（DN002 §3.5） |
 | `report_back` | — | ✓ | `[report]` 回传 |
-| `attention` | ✓ | — | 只读自检：缺证、过期问题、已停未收口 |
+| `attention` | ✓ | — | 只读自检：缺证、过期问题、已停未收口、待预启动（`needs_prestart`，DN002 §5.6） |
 | `operations_pending` / `operation_receipt` | ✓ | — | 委托操作的领取与回执（DN006 §4） |
 | `input_triage` / `input_escalate` | ✓ | — | 主会话判断：回答、追加评审轮次、认定意见不成立、批准延后或交给人类（DN006 §8） |
 | `input_response` | 渠道回调 | — | 人类渠道写回答复，核实后生效 |
@@ -191,7 +191,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一
 
 ### 7.3 宿主集成的检查点
 
-宿主集成在会话生命周期的几个时点运行 tsw：会话开始（识别角色、领取租约、注入上下文）、动作之前（DN008 的护栏）、用户消息到达（记录会话内答复、检测 `[report]`）、一轮结束（有未处理的回传或评审未完成时提醒一次）。这些都是确定性的防错护栏，不是安全边界（DN008）。Claude Code 的 hooks 见 [CC001 §6](claude-code/CC001-sessions-and-hooks.md) 与 [CC008](claude-code/CC008-guardrails.md)。
+宿主集成在会话生命周期的几个时点运行 tsw：会话开始（识别角色、领取租约、注入上下文）、动作之前（DN008 的护栏）、用户消息到达（记录会话内答复、检测 `[report]`；主会话记下这一轮是不是用户本人的 turn）、一轮结束（有未处理的回传或评审未完成时提醒一次；用户 turn 结束时还有待预启动的任务也提醒一次，因为只有用户 turn 能创建会话）。这些都是确定性的防错护栏，不是安全边界（DN008）。Claude Code 的 hooks 见 [CC001 §6](claude-code/CC001-sessions-and-hooks.md) 与 [CC008](claude-code/CC008-guardrails.md)。
 
 ## 8. 数据与存储
 

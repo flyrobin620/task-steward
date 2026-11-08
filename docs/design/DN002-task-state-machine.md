@@ -185,10 +185,12 @@
 | --- | --- |
 | `intake` / `waiting_dependency` / `ready` / `paused` / `waiting_user` | 状态不变，任务书 revision 更新；必要时主会话重新规划依赖（记录 `dependency.rebound`，可能经 T06 / T05）；恢复执行时 worker 读取新 brief；`paused` 且 `resume_target=verifying` 时提交证据失效，只能经 T21 / T20 恢复 |
 | `dispatching` | 状态不变，brief 在绑定前更新到新 revision |
-| `in_progress` | 状态不变，子状态回到 `executing`（E07），旧评审失效，开启新周期 |
+| `in_progress` | 状态不变，子状态回到 `executing`（E07），旧评审失效，开启新周期；brief 更新到新 revision，主会话通知 worker 重读 |
 | `verifying` | 撤回提交，回到 `in_progress`（T17） |
 | `done` | 回到 `intake`（T23） |
 | `accepted` / `cancelled` / `archived` | 不接受修改；新建关联任务（新 ID），引用原成果 |
+
+无论处于上表哪个状态，只要任务当前的 attempt 已有任务书（预启动、派发中、执行中或暂停中，attempt 不是 `replaced` / `closed`），需求变更都在同一事件中把这份任务书按新 revision 重写，并记下它的路径和要通知的会话（`standby` / `live` / `stopped` 的会话）。在预启动开始写任务书之前就已预启动、还没有任务书的待命会话，这时补写一份。主会话随后用消息告诉该会话重新读取。后来的决定或其他任务的结论影响到已登记、尚未完成的任务时，主会话立即按本节写回任务书（附用户来源），不依赖会话上下文保存这些信息。
 
 ### 5.2 依赖失效
 
@@ -241,11 +243,20 @@
 - 满足 G-ONE-ATTEMPT：该任务没有处于 `standby` / `starting` / `live` / `stopped` 的 attempt（已有可控的待命或可续用会话就跳过；有旧主会话的会话则先按 R-ATTEMPT 核实停止并替换）；
 - 预启动额度：处于 `standby` 的会话与预启动中处于 `starting` 的请求合计不超过 `scheduling.prestart.max_standby`。
 
+**何时预启动**：每个满足 G-WINDOW 的 turn（用户本人的 turn）结束前，主会话为满足入口检查的任务预启动，不限于用户要求执行任务的 turn。`attention` 的 `needs_prestart` 列出它们：
+
+- `ready` 或 `waiting_dependency`，且当前 attempt 不在 `starting` / `standby` / `live` / `stopped`；
+- `waiting_dependency` 的任务不会再就绪时不列：上游缺失或已取消，或者它等待的上游本身因此不会再就绪（沿依赖链传播；已完成、已验收或已确认保留的上游不传播）；
+- 先列 `ready`，再按依赖顺序（上游在前、登记顺序次之）列 `waiting_dependency`，每项写出它还在等的上游；
+- 个数不超过剩余的预启动额度；预启动关闭时为空。
+
+宿主集成在用户 turn 结束前，列表非空时提醒一次（Claude Code 见 [CC008](claude-code/CC008-guardrails.md) 的 CC-S4、CC-S6）；在自动 turn 中不提醒，因为那时不能创建会话。用户明确要求先不开始的任务，主会话说明原因后不预启动。
+
 **过程与收口**：
 
 | 情况 | 处理 | attempt 阶段 |
 | --- | --- | --- |
-| 开始 | 准备执行目录（worktree 基于当前基线）；记录 `attempt.start_requested`（创建代次 +1）；以**待命说明**创建会话（只介绍角色、工具与回传协议，要求等待任务书） | `planned` → `starting` |
+| 开始 | 准备执行目录（worktree 基于当前基线；目录不存在时 `attempt_start` 创建空目录，创建失败则拒绝，不记录事件）；按当前 revision 生成任务书 `runs/<任务>/<attempt>/brief.md`（授权读取集合为任务本身与依赖），路径与 revision 记在 attempt 上；记录 `attempt.start_requested`（创建代次 +1）；以**待命说明**创建会话（只介绍角色、工具与回传协议，要求等待任务书） | `planned` → `starting` |
 | 创建成功 | 记录 `attempt.prestarted` | `starting` → `standby` |
 | 确认未创建 | 记录 `attempt.not_created`，当前代次失效（§5.4）；释放预启动额度；下一次用户 turn 可以重试 | `starting` → `planned` |
 | 结果未知 | 按当前代次的会话名对账，绝不再次创建；对账前该任务不能派发，也不能再次预启动 | 保持 `starting` |
@@ -253,7 +264,7 @@
 | 任务被取消（T25） | `starting` 先对账；可控的 `standby` 会话按 `sessions.archive_on_archive` 处置后为 `closed`；会话已不存在或由旧主会话创建时核实停止后为 `replaced` | `closed` 或 `replaced` |
 | 会话丢失或被用户归档 | 观察（`observe`）结果为不存在或已归档时记为 `replaced`；下一次满足 G-WINDOW 的 turn 重新预启动 | `replaced` |
 
-派发时（T07）按 R-ATTEMPT 给待命会话投递任务书；投递前把执行目录更新到最新基线（例如前序任务已合并的结果）。任务书在投递时才生成，因此需求变更不影响待命会话；依赖失效也不影响待命会话。新目录的信任确认在预启动所在的用户 turn 中完成。
+派发时（T07）按 R-ATTEMPT 给待命会话投递任务书；投递前把执行目录更新到最新基线（例如前序任务已合并的结果）。任务书在预启动时按当前 revision 生成（见上表“开始”），待命会话可以先阅读，但不开始工作；派发（T07）时按最新 revision 重新生成再投递，因此需求变更不会让待命会话按旧版本执行；依赖失效也不影响待命会话。新目录的信任确认在预启动所在的用户 turn 中完成。
 
 ## 6. attempt 阶段（属性）
 
