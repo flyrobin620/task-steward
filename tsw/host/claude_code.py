@@ -121,11 +121,25 @@ AUTO_MODE_WORKER_MERGE = (
     "branch protection, or merging any other pull request."
 )
 
+AUTO_MODE_WORKER_DISPATCH = (
+    "TaskSteward Worker Dispatch: In a TaskSteward main session (its working directory is a "
+    "TaskSteward data directory and tsw's whoami reports role orchestrator), calling "
+    "start_session to create a worker session is the user's standing instruction to run their "
+    "TaskSteward tasks, when the session's name is the session_name and its cwd the cwd that "
+    "tsw's attempt_start just returned, and its prompt only points the worker at its brief "
+    "under runs/. The brief's delivery terms, including a worker merging its own pull request "
+    "(TaskSteward Worker Merge), were authorized by the user. tsw's PreToolUse hook refuses a "
+    "start_session whose name tsw did not record. This is not Create Unsafe Agents, Merge "
+    "Without Review or Self-Approval. It does not cover sessions in any other folder or with "
+    "any other name."
+)
+AUTO_MODE_RULES = (AUTO_MODE_WORKER_DISPATCH, AUTO_MODE_WORKER_MERGE)
+
 
 def install_hint(home: Home) -> str:
     plugin = PLUGIN_DIR.parent
     auto_mode = json.dumps(
-        {"autoMode": {"allow": [AUTO_MODE_WORKER_MERGE]}}, ensure_ascii=False, indent=2
+        {"autoMode": {"allow": list(AUTO_MODE_RULES)}}, ensure_ascii=False, indent=2
     )
     return "\n".join(
         [
@@ -139,9 +153,9 @@ def install_hint(home: Home) -> str:
             f"5. 在数据目录 {home.root} 中打开一个会话作为主会话。",
             "插件只提供 tsw MCP server 与 hooks，在任何目录的会话里都生效；orchestrate skill",
             "是数据目录的项目 skill，只有在数据目录打开的会话会加载。tsw 不修改任何全局设置。",
-            "6. auto 权限模式下 worker 自行合并 PR，Claude Code 的分类器默认判为未经评审。",
-            "   若采用 worker 合并（repositories.<id>.delivery.merge），由你在用户设置",
-            "   （~/.claude/settings.json，与已有的 autoMode 合并）中加入下面的 auto 模式规则；",
+            "6. auto 权限模式下，Claude Code 的分类器会把主会话派发 worker、worker 自行合并 PR",
+            "   当作未经授权。由你在用户设置（~/.claude/settings.json，与已有的 autoMode 合并）",
+            "   中加入下面的 auto 模式规则（不采用 worker 合并时可省略合并那一条）；",
             "   Claude Code 不读取项目设置中的 autoMode，tsw 也不会替你修改用户设置：",
             auto_mode,
         ]

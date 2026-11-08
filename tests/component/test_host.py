@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections.abc import Iterator
@@ -622,9 +623,12 @@ def test_a_workers_permission_rules_are_written_before_its_session(home: Home) -
     for task_id, kind in (("T001", "code"), ("T002", "research")):
         h.register(task_id, kind=kind)
         h.plan(task_id)
-        orchestrator.call(
+        started = orchestrator.call(
             "attempt_start", {"task_id": task_id, "purpose": "prestart", "user_turn": True}
         )
+        # The folder as it is spelled on disk, for start_session's cwd.
+        expected = os.path.realpath(h.home.root / "work" / task_id / "a1")
+        assert started["cwd"] == expected
     rules = {
         task_id: json.loads(
             (h.home.root / "work" / task_id / "a1" / ".claude" / "settings.local.json").read_text(

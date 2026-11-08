@@ -283,6 +283,10 @@ class Server:
         if within(workdir, self.home.root / "work"):
             workdir.mkdir(parents=True, exist_ok=True)
             render_worker_settings(workdir, merge=merge_authorized(config, row))
+        if workdir.is_dir():
+            # The app refuses a cwd spelled differently from the folder on disk (``A1`` for
+            # ``a1``): hand back the real spelling for start_session.
+            out["cwd"] = os.path.realpath(workdir)
 
     def _host_tool(
         self,
