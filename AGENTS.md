@@ -61,13 +61,15 @@ TaskSteward（任务管家）：可插拔宿主的任务编排器。核心库与
 1. 按模板开 PR，同时启动独立评审（与 CI 并行）。
 1. 修完已知问题，重新运行本地门禁，然后一次推送。
 1. 合并条件：`Gate` 在最终 head 上为绿，评审在最终 head 上通过，每条评审意见都已回复并解决。
-   满足后由完成改动的 agent 合并（编排器派发的任务即 worker 自己合并，编排者在合并后核对），
-   以下改动须用户明确确认后才能合并（worker 在自己的会话中直接问用户）：
-   `.github/**`、`tools/` 中的门禁与 CI 包装器、`AGENTS.md`、`CLAUDE.md`、`docs/development/**`、
-   `docs/decisions/**`、`docs/design/**`、发布与版本配置、权限与身份校验相关代码（角色解析、hooks 守卫、
-   MCP 写工具授权）、`LICENSE`。
-1. 完成的含义：合并提交在 `main` 上的 CI 通过，验收标准逐项核实，要求的 live 场景已在最终 head 上运行
-   通过。“测试通过”“CI 绿”“已合并”都不等于完成。
+   满足后由完成改动的 agent 合并（编排器派发的任务即 worker 自己合并，不论任务类型）。规则文档与
+   决定记录（`AGENTS.md`、`CLAUDE.md`、`docs/development/**`、`docs/decisions/**`）和设计文档
+   （`docs/design/**`）的改动须用户明确确认后才能合并（worker 在自己的会话中直接问用户）。一个任务的
+   这类文字确认一次即可，评审意见引起的后续修改不再重新确认；新增或删除护栏规则、改变已确认的决定除外。
+1. 合并后由同一 agent 等合并提交在 `main` 上的 CI 通过（失败时立即修复或 revert），需要在合并后的
+   `main` 上验证的 live 场景随后运行。编排器派发的任务由 worker 做完这一步，提交时附合并提交、CI 链接
+   与 live 证据，编排者只核对证据。
+1. 完成的含义：合并提交在 `main` 上的 CI 通过，验收标准逐项核实，要求的 live 场景已运行通过。
+   “测试通过”“CI 绿”“已合并”都不等于完成。
 
 门禁与 CI 尚未建立期间的过渡规则、每一步的门禁、证据和失败处理见
 [docs/development/workflow.md](docs/development/workflow.md)。

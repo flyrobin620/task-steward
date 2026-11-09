@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="fe1e74a9e4dcd08be7f1768f8bac6e6daabca7a824ffa0538a48b9fffdd735bc">
+<meta name="tsw-source-sha256" content="e883a38cb03c383b746cff0663bfd39476613cad40fbe712a89173379a1bc974">
 <title>CC006 Claude Code 插件</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -53,7 +53,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <h2 id="2-宿主集成-claude-code">2. 宿主集成 <code>claude-code</code></h2>
 <p><code>claude-code</code> 的插件按用户级启用，任何目录的会话（主会话、<code>~/tsw-worktrees</code> 或 <code>work/&lt;任务&gt;/&lt;attempt&gt;</code> 中的 worker、无关会话）都会加载它，所以插件只携带每个会话都需要的 MCP 注册与 hooks。主会话的流程说明不放进插件：<code>render_instructions</code> 把 <code>CLAUDE.md</code> 和 <code>orchestrate</code> skill 写进数据目录，后者是 Claude Code 的项目 skill（<code>&lt;cwd&gt;/.claude/skills/</code>），只有以数据目录为工作目录的会话会发现它。Claude Code 也从上级目录加载 <code>CLAUDE.md</code> 与项目 skill，执行目录在数据目录之下（<code>work/&lt;任务&gt;/&lt;attempt&gt;</code>）的 worker 同样会看到二者，所以二者都写明：<code>whoami</code> 的角色不是 orchestrator 时忽略。skill 的来源在产品代码中（<code>tsw/host/orchestrate_skill.md</code>），产品更新后重新运行 <code>tsw host render</code>。</p>
 <p>插件由 Claude Code 复制到插件缓存运行，缓存里没有 <code>tsw</code> 运行时。启动器按顺序查找：<code>TSW_REPO</code> 环境变量、插件所在的产品仓库（源码树或原地使用的本地市场）、<code>tsw init</code> 写入数据目录标记文件的 <code>product_repo</code>；都找不到时 MCP server 报错退出，hooks 静默放行。</p>
-<p>规则执行：hooks 调用 <code>tsw guard</code>，按 <a href="CC008-guardrails.html">CC008</a> 的 block list 拦截已知的错误动作；tsw 已把关的动作由生成的允许规则放行（CC008 §6）。</p>
+<p>规则执行：hooks 调用 <code>tsw guard</code>，按 <a href="CC008-guardrails.html">CC008</a> 的 block list 拦截已知的错误动作；tsw 已把关的动作在主会话由数据目录中生成的允许规则放行，在 worker 由用户设置中的 auto 模式规则放行（执行目录不带权限规则，CC008 §6）。</p>
 <h2 id="3-会话适配器">3. 会话适配器</h2>
 <table><thead><tr><th>适配器</th><th>用途</th><th>做法</th></tr></thead><tbody><tr><td><code>claude-app</code></td><td>主会话与 worker（interactive、delegated）</td><td>创建、投递、停止、观察、对账分别用 app 的 <code>start_session</code>、<code>SendMessage</code>、<code>stop_session</code>、<code>get_session</code>、<code>list_sessions {linked:true}</code>；创建参数与平台约束见 <a href="CC001-sessions-and-hooks.html">CC001 §3–§4</a>；中性权限映射 ask→default、edits→acceptEdits、auto→auto、full→bypassPermissions</td></tr><tr><td><code>claude-headless</code></td><td>无 Codex 时的评审器（oneshot、direct）</td><td><code>claude -p</code> 严格只读，调用约定见 <a href="CC004-reviewer.html">CC004</a></td></tr></tbody></table>
 <p><code>claude-app</code> 的 interactive 动作：</p>

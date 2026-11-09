@@ -226,7 +226,7 @@
 
 ### 3.4 `repositories` 与 `accounts`
 
-结构沿用 orchestrator-agent 的 `config/repositories.json` 与 `config/accounts.json`，合并为两个小节（账号只记录名称与认证目录引用，凭据本身不进数据目录），并新增 `aliases`（原 `repositories.md` 中的缩写表）。导入时自动转换（DN005 §4.4）。`delivery.push` / `create_pr` / `merge` 是该仓库的默认交付授权，具体任务仍以用户当次指令为准。`merge`（默认关闭）为 `true` 时，该仓库的开发任务由 worker 在门禁、评审与意见都解决后自行合并 PR，再提交（DN002 §3.5）；此时必须写明 `repository`（`owner/name`），hooks 据此只放行合并本仓库的 PR。三者都是权限类键（§7.2）。
+结构沿用 orchestrator-agent 的 `config/repositories.json` 与 `config/accounts.json`，合并为两个小节（账号只记录名称与认证目录引用，凭据本身不进数据目录），并新增 `aliases`（原 `repositories.md` 中的缩写表）。导入时自动转换（DN005 §4.4）。`delivery.push` / `create_pr` / `merge` 是该仓库的默认交付授权，具体任务仍以用户当次指令为准。`merge`（默认关闭）为 `true` 时，该仓库的任务（不看任务类型）由 worker 在门禁、评审与意见都解决后自行合并 PR，等主分支上合并提交的 CI 通过后再提交（DN002 §3.5）；此时必须写明 `repository`（`owner/name`），hooks 据此只放行合并本仓库的 PR。三者都是权限类键（§7.2）。
 
 ### 3.5 `policies`
 

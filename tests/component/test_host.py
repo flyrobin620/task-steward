@@ -19,6 +19,7 @@ from tsw.errors import TswError
 from tsw.events import EventDraft
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
+from tsw.host.claude_code import clear_worker_settings
 from tsw.host.guard import Guard
 from tsw.host.identity import SESSION_ENV, resolve
 from tsw.host.mcp import Server, serve
@@ -868,8 +869,33 @@ def test_a_workers_scheduled_prompts_must_be_tagged(h: Harness, tmp_path: Path) 
 
 
 @mark.use_case("UC-HOST-004")
+@pytest.mark.parametrize("link", [".claude", "settings.local.json"])
+def test_clearing_old_rules_never_follows_a_link_out_of_the_directory(
+    tmp_path: Path, link: str
+) -> None:
+    """A link may lead to a file tsw never wrote, outside the execution directory: it stays."""
+    outside = tmp_path / "shared" / ".claude"
+    outside.mkdir(parents=True)
+    target = outside / "settings.local.json"
+    rules = ["mcp__plugin_task-steward_tsw", "SendMessage", "mcp__ccd_session_mgmt__send_message"]
+    target.write_text(json.dumps({"permissions": {"allow": rules}}), encoding="utf-8")
+    workdir = tmp_path / "work" / "T001" / "a1"
+    try:
+        if link == ".claude":
+            workdir.mkdir(parents=True)
+            (workdir / ".claude").symlink_to(outside, target_is_directory=True)
+        else:
+            (workdir / ".claude").mkdir(parents=True)
+            (workdir / ".claude" / "settings.local.json").symlink_to(target)
+    except OSError as exc:  # pragma: no cover - Windows without the symlink privilege
+        pytest.skip(f"cannot create a symbolic link here: {exc}")
+    assert clear_worker_settings(workdir) is False
+    assert target.is_file()
+
+
+@mark.use_case("UC-HOST-004")
 @mark.use_case("UC-MERGE-001")
-def test_a_workers_permission_rules_are_written_before_its_session(home: Home) -> None:
+def test_a_workers_execution_directory_gets_no_permission_rules(home: Home) -> None:
     h = Harness(
         home,
         {
@@ -884,7 +910,21 @@ def test_a_workers_permission_rules_are_written_before_its_session(home: Home) -
     )
     orchestrator = Server(h.home, {SESSION_ENV: "orch-1"}, h.home.root)
     orchestrator.machine = "m1"
-    for task_id, kind in (("T001", "code"), ("T002", "research")):
+    # Directories an earlier tsw readied: T002's and T004's hold exactly what tsw wrote (with
+    # and without the merge rule); T003's and T005's may be the user's (more, or fewer, rules).
+    worker = ["mcp__plugin_task-steward_tsw", "SendMessage", "mcp__ccd_session_mgmt__send_message"]
+    earlier = {
+        "T002": {"permissions": {"allow": [*worker, "Bash(gh pr merge:*)"]}},
+        "T003": {"permissions": {"allow": [*worker, "Bash(ls:*)"]}},
+        "T004": {"permissions": {"allow": worker}},
+        "T005": {"permissions": {"allow": ["SendMessage"]}},
+    }
+    for task_id, content in earlier.items():
+        settings = h.home.root / "work" / task_id / "a1" / ".claude" / "settings.local.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps(content), encoding="utf-8")
+    kinds = {"T001": "code", "T002": "research", "T003": "design", "T004": "code", "T005": "code"}
+    for task_id, kind in kinds.items():
         h.register(task_id, kind=kind)
         h.plan(task_id)
         started = orchestrator.call(
@@ -893,20 +933,14 @@ def test_a_workers_permission_rules_are_written_before_its_session(home: Home) -
         # The folder as it is spelled on disk, for start_session's cwd.
         expected = os.path.realpath(h.home.root / "work" / task_id / "a1")
         assert started["cwd"] == expected
-    rules = {
-        task_id: json.loads(
-            (h.home.root / "work" / task_id / "a1" / ".claude" / "settings.local.json").read_text(
-                encoding="utf-8"
-            )
-        )["permissions"]["allow"]
-        for task_id in ("T001", "T002")
-    }
-    # Only the development task in a repository that lets the worker merge may merge.
-    assert "Bash(gh pr merge:*)" in rules["T001"]
-    assert "Bash(gh pr merge:*)" not in rules["T002"]
-    assert all("mcp__plugin_task-steward_tsw" in r for r in rules.values())
-    assert not any("start_session" in rule for r in rules.values() for rule in r)
-    # No session may edit the rules tsw writes: not the worker, not the orchestrator.
+    # A folder with its own permission rules asks for trust again, so tsw writes none; the
+    # worker's actions are allowed by the user's auto-mode rules (decision 0003).
+    for task_id in ("T001", "T002", "T004"):
+        assert not (h.home.root / "work" / task_id / "a1" / ".claude").exists()
+    for task_id in ("T003", "T005"):
+        kept = h.home.root / "work" / task_id / "a1" / ".claude" / "settings.local.json"
+        assert json.loads(kept.read_text(encoding="utf-8")) == earlier[task_id]
+    # No session may edit the settings files: not the worker, not the orchestrator.
     workdir = h.home.root / "work" / "T001" / "a1"
     for target in (
         workdir / ".claude" / "settings.local.json",

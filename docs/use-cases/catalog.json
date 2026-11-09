@@ -492,9 +492,9 @@
     },
     {
       "id": "UC-MERGE-001",
-      "title": "开发任务由 worker 合并 PR，主会话合并后核对（DN002 §3.5、G-SUBMIT、G-ACCEPT）",
+      "title": "worker 合并 PR 并等合并提交的 CI 通过后提交，主会话核对证据（DN002 §3.5、G-SUBMIT、G-ACCEPT）",
       "actor": "worker / 主会话",
-      "acceptance": "仓库授权 delivery.merge 的开发任务：任务书写明合并方式；hooks 只对授权仓库的开发任务放行 worker 的 gh 合并命令，且目标必须是本任务的仓库（配置须写明 repository）；submit 须带合并记录（PR、合并提交、合并的 head 等于提交 HEAD）或 merge_skipped 原因，未授权时不能带合并记录，非开发任务不要求合并；task_accept 要求该 PR 已由主会话核验登记并写明合并后核对，review.md 含“合并后核对”",
+      "acceptance": "仓库授权 delivery.merge 的任务（不看任务类型）：任务书写明合并方式、合并后等 CI 与 live 的要求；hooks 只对授权仓库的任务放行 worker 的 gh 合并命令，且目标必须是本任务的仓库（配置须写明 repository）；submit 须带合并记录（PR、合并提交、合并的 head 等于提交 HEAD、主分支上合并提交的 CI 结果：提交等于合并提交、结论 success、运行链接，以及 live 说明）或 merge_skipped 原因，CI 未完成或失败时拒绝并写明等待或修复 / revert，未授权时不能带合并记录；task_accept 要求该 PR 已由主会话核验登记并写明对证据的核对，review.md 含“合并后核对”与 CI 链接",
       "surfaces": [
         "mcp",
         "hook"
@@ -625,7 +625,7 @@
       "id": "UC-HOST-004",
       "title": "Claude Code 插件包与生成文件",
       "actor": "用户",
-      "acceptance": "插件清单、MCP 注册、hooks 配置都指向插件内的启动器；插件复制到产品仓库之外（插件缓存）时按 TSW_REPO、产品仓库、数据目录记录的 product_repo 找到运行时；插件不携带 skill；本仓库自带本地插件市场；tsw host render 生成数据目录的 CLAUDE.md 与项目 skill .claude/skills/orchestrate/SKILL.md，install-hint 给出安装步骤且不修改全局设置",
+      "acceptance": "插件清单、MCP 注册、hooks 配置都指向插件内的启动器；插件复制到产品仓库之外（插件缓存）时按 TSW_REPO、产品仓库、数据目录记录的 product_repo 找到运行时；插件不携带 skill；本仓库自带本地插件市场；tsw host render 生成数据目录的 CLAUDE.md 与项目 skill .claude/skills/orchestrate/SKILL.md，install-hint 给出安装步骤与 auto 模式规则且不修改全局设置；worker 的执行目录不写权限规则，早先 tsw 写下、只含 tsw 规则的 settings.local.json 在 attempt_start 时删除，含其他内容的不动",
       "surfaces": [
         "mcp",
         "cli"

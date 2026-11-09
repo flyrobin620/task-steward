@@ -442,19 +442,23 @@ def stale_keep(inp: Mapping[str, Any], env: ToolEnv) -> Command:
 
 
 def _delivery_line(config: EffectiveConfig, row: Mapping[str, Any]) -> str:
-    """How the work leaves the worker (DN002 G-SUBMIT; decision 0002)."""
+    """How the work leaves the worker (DN002 §3.5, G-SUBMIT; decision 0003)."""
     repo = resolve_repository(config, str(row["repo"]))
     delivery = config.get(f"repositories.{repo}.delivery", {}) if repo else {}
     yes = {True: "是", False: "否"}
     merge = (
-        "worker 在门禁、评审与意见都解决后自行合并，再提交（任务书或仓库 AGENTS.md 另有规定时"
-        "从其规定，提交时说明）"
+        "worker 在门禁、评审与意见都解决后自行合并；等主分支上合并提交的 CI 通过（失败时在本任务内"
+        "修复或 revert），提交时附 CI 运行链接（任务书或仓库 AGENTS.md 另有规定时从其规定，提交时"
+        "说明）"
         if guards.merge_authorized(config, row)
         else "worker 不合并"
     )
     return (
         f"- 交付：推送 {yes[bool(delivery.get('push'))]}；"
         f"开 PR {yes[bool(delivery.get('create_pr'))]}；合并：{merge}\n"
+        "- live：仓库规则要求的 live 场景在最终 head 上运行；需要在合并后的主分支上才能验证的"
+        "（例如要更新插件或重新生成宿主文件才生效的改动），合并后运行；不能运行的在提交与报告中"
+        "写明原因\n"
     )
 
 
@@ -1326,8 +1330,8 @@ def task_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             raise rejected("没有已核验登记的 PR 或产出", reason="g_accept", check="outputs")
         merge = submission.get("merge")
         if merge:
-            # The worker merged before submitting: the orchestrator checks after the merge
-            # (DN002 G-ACCEPT): the merged PR is verified, and so is main after the merge commit.
+            # The worker merged and waited for the merge commit's CI before submitting: the
+            # orchestrator checks the evidence it attached (DN002 G-ACCEPT, decision 0003).
             if not ctx.conn.execute(
                 "SELECT 1 FROM outputs WHERE task_id = ? AND type = 'pr' AND ref = ? "
                 "AND verified_at IS NOT NULL",
@@ -1341,7 +1345,7 @@ def task_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 )
             if not (post_merge and post_merge.strip()):
                 raise rejected(
-                    "worker 已合并：须写明合并后的核对（main 上合并提交的 CI 等）",
+                    "worker 已合并：须写明对 worker 所附合并证据（合并提交、CI 链接、live）的核对",
                     reason="g_accept",
                     check="post_merge",
                 )
@@ -1372,7 +1376,13 @@ def task_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 "## 合并后核对",
                 "",
                 f"- worker 合并：{merge['pr']}（合并提交 {merge['merge_commit']}）",
-                f"- {post_merge}",
+                *(
+                    [f"- 合并提交的 CI：{merge['ci']['conclusion']}（{merge['ci']['url']}）"]
+                    if merge.get("ci")
+                    else []
+                ),
+                *([f"- live：{merge['live']}"] if merge.get("live") else []),
+                f"- 主会话核对：{post_merge}",
             ]
         decisions = ctx.conn.execute(
             "SELECT decision_id, decision, rationale FROM decisions WHERE task_id = ? ORDER BY "
