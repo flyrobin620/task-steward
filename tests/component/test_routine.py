@@ -309,7 +309,8 @@ def test_teams_round_trip(home: Home) -> None:
         ("chat-1", ["T002"]),
         ("chat-2", ["T003"]),
     ]
-    reply = {"id": "r3", "createdDateTime": "2026-11-05T00:40:00Z", "body": {"content": "T003 好"}}
+    # Teams message IDs are unique within a chat only: r1 was already passed on from chat-1.
+    reply = {"id": "r1", "createdDateTime": "2026-11-05T00:40:00Z", "body": {"content": "T003 好"}}
     assert run_job(h, routine, "teams-replies", chat_id="chat-1", fetched=[reply]) == ([], "")
     events, _ = run_job(h, routine, "teams-replies", chat_id="chat-2", fetched=[reply])
     assert [e["data"]["request_id"] for e in events] == [third]

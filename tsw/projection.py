@@ -211,16 +211,18 @@ CREATE TABLE IF NOT EXISTS channel_messages(
     chat_id TEXT NOT NULL,
     sender_id TEXT,
     sent_at TEXT NOT NULL,
-    PRIMARY KEY(channel, message_id)
+    PRIMARY KEY(channel, chat_id, message_id)
 );
 CREATE TABLE IF NOT EXISTS channel_replies(
-    message_id TEXT PRIMARY KEY,
+    chat_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
     job_id TEXT NOT NULL,
     task_id TEXT NOT NULL,
     request_id TEXT NOT NULL,
     text TEXT NOT NULL,
     sent_at TEXT,
-    sequence INTEGER NOT NULL
+    sequence INTEGER NOT NULL,
+    PRIMARY KEY(chat_id, message_id)
 );
 CREATE TABLE IF NOT EXISTS outputs(
     task_id TEXT NOT NULL,

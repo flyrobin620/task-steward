@@ -300,12 +300,6 @@ def teams_jobs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             (TEAMS_CHANNEL,),
         )
     ]
-    outbound = {
-        str(r["message_id"])
-        for r in conn.execute(
-            "SELECT message_id FROM channel_messages WHERE channel = ?", (TEAMS_CHANNEL,)
-        )
-    }
     jobs: list[dict[str, Any]] = []
     for chat_id in sorted({str(c["chat_id"]) for c in cards}):
         here = [c for c in cards if c["chat_id"] == chat_id]
@@ -317,6 +311,21 @@ def teams_jobs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             "AND sender_id IS NOT NULL ORDER BY sent_at DESC LIMIT 1",
             (TEAMS_CHANNEL, chat_id),
         ).fetchone()
+        # Message IDs are unique within a chat only (Teams uses times): both what tsw sent and
+        # what was passed on are kept per chat.
+        outbound = {
+            str(r["message_id"])
+            for r in conn.execute(
+                "SELECT message_id FROM channel_messages WHERE channel = ? AND chat_id = ?",
+                (TEAMS_CHANNEL, chat_id),
+            )
+        }
+        seen = {
+            str(r["message_id"])
+            for r in conn.execute(
+                "SELECT message_id FROM channel_replies WHERE chat_id = ?", (chat_id,)
+            )
+        }
         jobs.append(
             {
                 "chat_id": chat_id,
@@ -324,6 +333,7 @@ def teams_jobs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "tasks": waiting,
                 "requests": [c for c in here if c["task_id"] in waiting],
                 "outbound": outbound,
+                "seen": seen,
             }
         )
     return jobs
@@ -675,10 +685,6 @@ def routine_run(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     job_id=job_id,
                     chat_id=chat_id,
                 )
-            seen = {
-                str(r["message_id"])
-                for r in ctx.conn.execute("SELECT message_id FROM channel_replies")
-            }
             since = format_time(
                 parse_time(ctx.now) - _hours(env.config.get("routine.teams_lookback_hours"))
             )
@@ -687,7 +693,7 @@ def routine_run(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 requests=job["requests"],
                 sender_id=job["sender_id"],
                 since=since,
-                exclude=seen | job["outbound"],
+                exclude=job["seen"] | job["outbound"],
             )
             return [
                 EventDraft(
@@ -696,6 +702,7 @@ def routine_run(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     data={
                         "job_id": TEAMS_REPLIES,
                         "channel": TEAMS_CHANNEL,
+                        "chat_id": chat_id,
                         "request_id": reply["request_id"],
                         "pending": reply["pending"],
                         "message_id": reply["message_id"],

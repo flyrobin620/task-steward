@@ -885,9 +885,10 @@ def channel_message_sent(conn: sqlite3.Connection, event: Event) -> None:
 def channel_reply_seen(conn: sqlite3.Connection, event: Event) -> None:
     data = event.data
     conn.execute(
-        "INSERT OR IGNORE INTO channel_replies(message_id, job_id, task_id, request_id, text, "
-        "sent_at, sequence) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO channel_replies(chat_id, message_id, job_id, task_id, request_id, "
+        "text, sent_at, sequence) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
         (
+            data["chat_id"],
             data["message_id"],
             data["job_id"],
             _tid(event),
