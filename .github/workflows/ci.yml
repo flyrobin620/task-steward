@@ -85,6 +85,10 @@ jobs:
       - name: Test tiers and use-case coverage
         run: python tools/gate.py --steps tests,catalog --results-dir results/test-${{ matrix.python }}
         timeout-minutes: 30
+        env:
+          # Test data directories go to the runner's work disk instead of the system disk.
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
