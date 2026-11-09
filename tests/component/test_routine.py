@@ -204,6 +204,10 @@ def test_handoff_scan_hands_off_and_forwards(home: Home) -> None:
     assert [i["type"] for i in items] == ["input.handed_off"]
     assert reason_of(lambda: h.run("routine_run", routine, job_id="nope")) == "unknown_job"
     assert reason_of(lambda: h.run("routine_run", job_id="handoff-scan")) == "role_denied"
+    # The orchestrator sat idle past its lease: it is still the one to wake (it takes the lease
+    # again before it writes).
+    with h.ledger.view() as conn:
+        assert routine_mod.orchestrator_session(conn, "2099-01-01T00:00:00Z") == "orch-1"
 
 
 @pytest.mark.use_case("UC-CHANNEL-001")

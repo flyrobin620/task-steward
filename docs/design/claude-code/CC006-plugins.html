@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="1ea76883d34b0d9539315f70391d88111d3a8ba40d955d0c78ce26e8543f3c85">
+<meta name="tsw-source-sha256" content="37ba1e25c35904dfab3640e833ce875a701dc45db9e9430eb72725daeedc2acd">
 <title>CC006 Claude Code 插件</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -97,7 +97,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p>数据目录的 <code>CLAUDE.md</code> 与 <code>orchestrate</code> skill 也会被 <code>routine/</code> 中的会话读到；二者已写明角色不是 orchestrator 时忽略（§2）。例行会话的指令由 SessionStart hook 注入（CC001 §6）。</p>
 <h3 id="62-每次运行">6.2 每次运行</h3>
 <p>定时提示（由 <code>routine_board</code> 的 <code>arm</code> 动作给出）：<code>&lt;scheduled-task&gt;调用 routine_board，逐行执行例行项，原样转发结果；没有例行项就结束这一轮。&lt;/scheduled-task&gt;</code>。提示自身就足够完成一次运行，所以清空上下文后定时任务继续有效时，下一次运行不需要任何记忆。</p>
-<table><thead><tr><th>例行表给出的内容</th><th>例行会话调用的工具</th></tr></thead><tbody><tr><td>例行项没有 <code>fetch</code></td><td><code>routine_run(job_id)</code></td></tr><tr><td>例行项的 <code>fetch</code> 为 <code>teams.read_chat</code></td><td><code>mcp__teams__ListChatMessages</code>（<code>chatId</code>，<code>top</code>），把返回的消息原样交给 <code>routine_run(job_id, fetched)</code></td></tr><tr><td><code>routine_run</code> 返回非空的 <code>forward</code></td><td><code>mcp__ccd_session_mgmt__send_message</code>，<code>session_id</code> 为 <code>forward</code> 中的主会话 ID，正文原样</td></tr><tr><td>维护动作 <code>arm</code></td><td>有旧任务引用时先 <code>CronDelete</code>；再 <code>CronCreate</code>（<code>recurring: true</code>，<code>durable: false</code>，<code>cron</code> 与 <code>prompt</code> 原样）；然后 <code>routine_armed</code> 登记返回的任务引用</td></tr><tr><td>维护动作 <code>clear_context</code></td><td>本轮最后调用 <code>mcp__ccd_session_mgmt__clear_session(session_id=&quot;self&quot;)</code>：app 在这一轮结束、会话空闲后清空</td></tr></tbody></table>
+<table><thead><tr><th>例行表给出的内容</th><th>例行会话调用的工具</th></tr></thead><tbody><tr><td>例行项没有 <code>fetch</code></td><td><code>routine_run(job_id)</code></td></tr><tr><td>例行项的 <code>fetch</code> 为 <code>teams.read_chat</code></td><td><code>mcp__teams__ListChatMessages</code>（<code>chatId</code>，<code>top</code>）；结果有 <code>nextLink</code> 且最早的消息不早于 <code>pages.until</code> 时，用 <code>nextLink</code> 继续取下一页；所有页按顺序放进一个列表，原样交给 <code>routine_run(job_id, fetched)</code></td></tr><tr><td><code>routine_run</code> 返回非空的 <code>forward</code></td><td><code>mcp__ccd_session_mgmt__send_message</code>，<code>session_id</code> 为 <code>forward</code> 中的主会话 ID，正文原样</td></tr><tr><td>维护动作 <code>arm</code></td><td>有旧任务引用时先 <code>CronDelete</code>；再 <code>CronCreate</code>（<code>recurring: true</code>，<code>durable: false</code>，<code>cron</code> 与 <code>prompt</code> 原样）；然后 <code>routine_armed</code> 登记返回的任务引用</td></tr><tr><td>维护动作 <code>clear_context</code></td><td>本轮最后调用 <code>mcp__ccd_session_mgmt__clear_session(session_id=&quot;self&quot;)</code>：app 在这一轮结束、会话空闲后清空</td></tr></tbody></table>
 <p>间隔 N 分钟的 cron 表达式：N 整除 60 时为 <code>*/N * * * *</code>，N 为 60 的倍数时为 <code>0 */(N/60) * * *</code>（DN003 §3.1b）。<code>CronCreate</code> 的循环任务 7 天后到期，所以 <code>routine.renew_after_days</code> 默认 6。</p>
 <p>转发的消息以 <code>&lt;cross-session-message</code> 到达主会话，不是用户本人的 turn（CC008 的 CC-S6）；到达 worker 时也不会被记成用户答复（CC-S2）。</p>
 <h3 id="63-宿主侧护栏与允许规则">6.3 宿主侧护栏与允许规则</h3>

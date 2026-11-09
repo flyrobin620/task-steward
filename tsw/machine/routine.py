@@ -34,7 +34,7 @@ from tsw.config import EffectiveConfig
 from tsw.errors import rejected
 from tsw.events import EventDraft
 from tsw.home import Home
-from tsw.lease import format_time, is_expired, lease_row, parse_time
+from tsw.lease import format_time, lease_row, parse_time
 from tsw.machine.ask_user import handed_off_event, handoff_due
 from tsw.machine.base import ToolEnv, flag, integer, opt_text, text, tool
 from tsw.machine.model import loads, row_dict, task
@@ -243,6 +243,10 @@ def board(
                     "since": since,
                     "tool": FETCH_TOOLS.get(host, {}).get("teams.read_chat"),
                     "arguments": {"chatId": teams["chat_id"], "top": TEAMS_READ_TOP},
+                    # Newest first, a page at a time: keep reading while the result names a
+                    # next page and its oldest message is not older than ``since``; pass all
+                    # pages, in order, as a list.
+                    "pages": {"next": "nextLink", "argument": "nextLink", "until": since},
                 },
             }
         )
@@ -256,11 +260,16 @@ def board(
 
 
 def orchestrator_session(conn: sqlite3.Connection, now: str) -> str | None:
-    """Where forwarded results go: the session holding the scheduling lease."""
+    """Where forwarded results go: the session that holds or last held the scheduling lease.
+
+    A lease that expired while the orchestrator sat idle still names it, and waking it is the
+    point: it takes the lease again before it writes. A released lease names nobody; the
+    results stay in the ledger for the next orchestrator (DN006 §8.9.3)."""
+    del now  # an expired lease still names the orchestrator to wake
     held = lease_row(conn)
-    if held is None or is_expired(held, now):
+    if held is None or not held["holder_session"]:
         return None
-    return str(held["holder_session"]) if held["holder_session"] else None
+    return str(held["holder_session"])
 
 
 # ---------------------------------------------------------------------- the Teams job
@@ -275,21 +284,30 @@ def teams_job(conn: sqlite3.Connection) -> dict[str, Any] | None:
     if row is None:
         return None
     inp = loads(row["input"], {})
-    waiting = [
+    cards = [
         dict(r)
         for r in conn.execute(
-            "SELECT DISTINCT r.task_id, r.request_id FROM input_requests r "
-            "JOIN in_session_requests s ON s.request_id = r.request_id "
-            "JOIN channel_messages m ON m.request_id = r.request_id AND m.channel = ? "
-            "WHERE r.status = 'pending' AND s.relayed_to = ? ORDER BY r.task_id",
-            (TEAMS_CHANNEL, TEAMS_CHANNEL),
+            "SELECT m.task_id, m.request_id, m.message_id, MIN(m.sent_at) AS sent_at, r.status "
+            "FROM channel_messages m JOIN input_requests r ON r.request_id = m.request_id "
+            "WHERE m.channel = ? GROUP BY m.request_id ORDER BY m.task_id, sent_at",
+            (TEAMS_CHANNEL,),
         )
     ]
+    waiting = sorted({c["task_id"] for c in cards if c["status"] == "pending"})
+    outbound = {
+        str(r["message_id"])
+        for r in conn.execute(
+            "SELECT message_id FROM channel_messages WHERE channel = ?", (TEAMS_CHANNEL,)
+        )
+    }
     return {
         "chat_id": inp.get("chat_id"),
         "sender_id": inp.get("sender_id"),
-        "tasks": [w["task_id"] for w in waiting],
-        "requests": {w["task_id"]: w["request_id"] for w in waiting},
+        "tasks": waiting,
+        # The Teams questions of the waiting tasks, older ones included: a reply is matched to
+        # the question it answers, never pinned on whatever question is waiting now.
+        "requests": [c for c in cards if c["task_id"] in waiting],
+        "outbound": outbound,
     }
 
 
@@ -302,24 +320,34 @@ def plain_text(body: str) -> str:
     return _SPACES.sub(" ", html.unescape(_TAGS.sub(" ", body))).strip()
 
 
+ENVELOPES = ("messages", "value", "items", "data", "results")
+
+
 def fetched_messages(fetched: Any) -> list[dict[str, Any]]:
-    """The messages in what the host's chat tool returned, whatever envelope it used."""
+    """The messages in what the host's chat tool returned, whatever envelope it used: one
+    result, or a list of pages (each a result), or a plain list of messages."""
     if isinstance(fetched, str):
         try:
             fetched = json.loads(fetched)
         except ValueError:
             return []
     if isinstance(fetched, Mapping):
-        for key in ("messages", "value", "items", "data", "results"):
+        for key in ENVELOPES:
             inner = fetched.get(key)
             if isinstance(inner, list):
-                fetched = inner
-                break
-        else:
-            fetched = [fetched] if "id" in fetched else []
+                return fetched_messages(inner)
+        return [dict(fetched)] if "id" in fetched else []
     if not isinstance(fetched, list):
         return []
-    return [dict(m) for m in fetched if isinstance(m, Mapping)]
+    out: list[dict[str, Any]] = []
+    for item in fetched:
+        if isinstance(item, str) or (
+            isinstance(item, Mapping) and any(isinstance(item.get(k), list) for k in ENVELOPES)
+        ):
+            out.extend(fetched_messages(item))  # a page
+        elif isinstance(item, Mapping):
+            out.append(dict(item))
+    return out
 
 
 def _sender(message: Mapping[str, Any]) -> str | None:
@@ -356,7 +384,7 @@ def _created(message: Mapping[str, Any]) -> datetime | None:
 
 
 def starting_task(words: str, tasks: Iterable[str]) -> str | None:
-    """The task ID the message starts with, followed by nothing, a space or punctuation."""
+    """The ID the message starts with, followed by nothing, a space or punctuation."""
     upper = words.upper()
     for task_id in sorted(tasks, key=len, reverse=True):
         if upper.startswith(task_id.upper()):
@@ -366,37 +394,78 @@ def starting_task(words: str, tasks: Iterable[str]) -> str | None:
     return None
 
 
+def _question_for(
+    words: str,
+    created: datetime | None,
+    requests: list[Mapping[str, Any]],
+    card_times: Mapping[str, datetime],
+) -> Mapping[str, Any] | None:
+    """The question a reply answers (DN008 §9: the reply must lead to the question's number).
+
+    A reply that starts with a question number (``Q-T001-2``) answers that question. One that
+    starts with a task ID answers the task's latest Teams question whose card went out before
+    the reply was written: an old reply is never pinned on a question asked after it."""
+    by_request = {str(r["request_id"]): r for r in requests}
+    request_id = starting_task(words, by_request)
+    if request_id is not None:
+        return by_request[request_id]
+    task_id = starting_task(words, {str(r["task_id"]) for r in requests})
+    if task_id is None:
+        return None
+    asked = [r for r in requests if r["task_id"] == task_id]
+    if created is not None:
+        asked = [
+            r
+            for r in asked
+            if card_times.get(str(r["request_id"]), parse_time(str(r["sent_at"]))) <= created
+        ]
+    return asked[-1] if asked else None
+
+
 def select_replies(
     fetched: Any,
     *,
-    tasks: Iterable[str],
+    requests: list[Mapping[str, Any]],
     sender_id: str | None,
     since: str,
-    seen: set[str],
+    exclude: set[str],
 ) -> list[dict[str, Any]]:
     """The ``teams_replies`` script (DN006 §8.9.5): messages from the user, within the lookback
-    window, starting with a waiting task's ID, not passed on before. Oldest first."""
-    wanted = list(tasks)
+    window, starting with a question number or a waiting task's ID, that tsw neither sent nor
+    passed on before, each with the question it answers. Oldest first.
+
+    ``requests`` are the Teams questions with their cards (``request_id``, ``task_id``,
+    ``message_id`` of the card, ``sent_at``, ``status``), oldest first."""
+    messages = fetched_messages(fetched)
+    cards = {str(r["message_id"]): str(r["request_id"]) for r in requests}
+    card_times: dict[str, datetime] = {}
+    for message in messages:
+        created = _created(message)
+        request_id = cards.get(str(message.get("id") or ""))
+        if request_id is not None and created is not None:
+            card_times[request_id] = created
     floor = parse_time(since)
     out: list[dict[str, Any]] = []
-    for message in fetched_messages(fetched):
+    for message in messages:
         message_id = str(message.get("id") or "")
-        if not message_id or message_id in seen:
+        if not message_id or message_id in exclude:
             continue
         sender = _sender(message)
         if sender_id and sender and sender != sender_id:
-            continue
+            continue  # the user's own messages only (user, 2026-11-09)
         created = _created(message)
         if created is not None and created < floor:
             continue
         words = plain_text(_body(message))
-        task_id = starting_task(words, wanted)
-        if task_id is None:
+        question = _question_for(words, created, requests, card_times)
+        if question is None:
             continue
         out.append(
             {
                 "message_id": message_id,
-                "task_id": task_id,
+                "task_id": str(question["task_id"]),
+                "request_id": str(question["request_id"]),
+                "pending": question["status"] == "pending",
                 "text": words,
                 "sent_at": format_time(created) if created else None,
             }
@@ -443,8 +512,9 @@ def forward_text(conn: sqlite3.Connection, job_id: str, events: Iterable[Mapping
                 f"worker 会话 {request['session_ref']}：{request['question']}"
             )
         elif event.get("type") == "channel.reply_seen":
+            late = "" if data.get("pending", True) else "（问题已不再待答：按迟到答复处理）"
             lines.append(
-                f"- {event.get('task_id')} {data.get('request_id')}，Teams 消息 "
+                f"- {event.get('task_id')} {data.get('request_id')}{late}，Teams 消息 "
                 f"{data.get('message_id')}（{data.get('sent_at') or '时间未知'}）："
                 f"{data.get('text')}"
             )
@@ -589,7 +659,11 @@ def routine_run(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 parse_time(ctx.now) - _hours(env.config.get("routine.teams_lookback_hours"))
             )
             found = select_replies(
-                fetched, tasks=job["tasks"], sender_id=job["sender_id"], since=since, seen=seen
+                fetched,
+                requests=job["requests"],
+                sender_id=job["sender_id"],
+                since=since,
+                exclude=seen | job["outbound"],
             )
             return [
                 EventDraft(
@@ -598,7 +672,8 @@ def routine_run(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     data={
                         "job_id": TEAMS_REPLIES,
                         "channel": TEAMS_CHANNEL,
-                        "request_id": job["requests"][reply["task_id"]],
+                        "request_id": reply["request_id"],
+                        "pending": reply["pending"],
                         "message_id": reply["message_id"],
                         "text": reply["text"],
                         "sent_at": reply["sent_at"],
