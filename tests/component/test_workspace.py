@@ -251,3 +251,80 @@ def test_the_worker_is_reviewed_in_its_worktree(
     assert out["reviewed_head"] == head
     assert calls[0]["cwd"] == worktree
     assert f"git diff {base}..{head}" in str(calls[0]["prompt"])
+
+
+def test_a_repository_id_that_is_not_a_plain_name_gets_no_worktree(
+    home: Home, tmp_path: Path
+) -> None:
+    repo = checkout(tmp_path)
+    h = Harness(home, {"repositories": {"../escape": {"path": str(repo)}}})
+    h.register("T001", repo="../escape")
+    h.plan("T001")
+    out = h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    assert "worktree" not in out["events"][0]["data"]
+    assert not (h.home.root / "work" / "T001" / "escape").exists()
+    brief = (h.home.root / "runs" / "T001" / "a1" / "brief.md").read_text(encoding="utf-8")
+    assert "不能用作执行目录下的目录名" in brief
+
+
+def test_a_relative_checkout_path_is_relative_to_the_data_directory(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = checkout(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)  # the process runs somewhere else
+    relative = Path(os.path.relpath(repo, home.root))
+    assert not relative.is_absolute()
+    h = harness(home, relative)
+    h.register("T001")
+    h.plan("T001")
+    out = h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    assert out["events"][0]["data"]["worktree"]["created"] is True
+
+
+def test_a_dotted_repository_id_keeps_its_settings(home: Home, tmp_path: Path) -> None:
+    repo = checkout(tmp_path)
+    h = Harness(
+        home,
+        {
+            "repositories": {
+                "my.repo": {"path": str(repo), "aliases": ["mr"], "instructions": ["RULES.md"]}
+            }
+        },
+    )
+    h.register("T001", repo="mr")
+    h.plan("T001")
+    out = h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    made = out["events"][0]["data"]["worktree"]
+    assert Path(made["path"]) == h.home.root / "work" / "T001" / "a1" / "my.repo"
+    brief = (h.home.root / "runs" / "T001" / "a1" / "brief.md").read_text(encoding="utf-8")
+    assert "`RULES.md`（不存在的跳过）" in brief
+
+
+def test_a_clone_of_another_repository_on_the_task_branch_is_refused(
+    home: Home, tmp_path: Path
+) -> None:
+    repo = checkout(tmp_path)
+    h = harness(home, repo)
+    h.register("T001")
+    h.plan("T001")
+    other = h.home.root / "work" / "T001" / "a1" / "demo"
+    other.mkdir(parents=True)
+    git(other, "init", "-q", "-b", "tsw/t001-a1")
+    git(
+        other,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.com",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "x",
+    )
+    with pytest.raises(TswError) as refused:
+        h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    assert refused.value.details["reason"] == "worktree_conflict"
+    assert h.query("SELECT * FROM attempts WHERE task_id = 'T001'") == []

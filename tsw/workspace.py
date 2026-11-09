@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tsw.config import EffectiveConfig, resolve_repository
+from tsw.config import EffectiveConfig, resolve_path, resolve_repository
 from tsw.errors import rejected
 from tsw.home import Home, workdir_path
 
@@ -57,27 +57,47 @@ def plan(
     repo_id = resolve_repository(config, str(row["repo"] or ""))
     if repo_id is None:
         return None
-    repo: dict[str, Any] = config.get(f"repositories.{repo_id}", {}) or {}
+    # Indexed by the ID itself: an ID may contain dots (``my.repo``), which config.get would
+    # read as nesting.
+    repositories: dict[str, Any] = config.get("repositories", {}) or {}
+    repo: dict[str, Any] = repositories.get(repo_id) or {}
     instructions = tuple(str(p) for p in (repo.get("instructions") or DEFAULT_INSTRUCTIONS))
     remote = str(repo.get("remote") or "origin")
     base_ref = str(repo["base_ref"]) if repo.get("base_ref") else None
     raw = str(repo.get("path") or "")
-    checkout = Path(raw).expanduser() if raw else None
-    missing = None
-    if checkout is None:
-        missing = "配置中没有仓库路径（repositories.<id>.path）"
-    elif not checkout.is_dir():
-        missing = f"仓库路径 {checkout} 不存在"
-    elif _git(checkout, "rev-parse", "--git-dir")[0] != 0:
-        missing = f"仓库路径 {checkout} 不是 git 仓库"
-    if missing is not None:
-        return Workspace(repo_id, instructions, None, None, None, remote, base_ref, missing)
+    checkout = resolve_path(home, raw) if raw else None  # relative: to the data directory
     task_id = str(row["task_id"])
     branch = str(config.get("worktrees.branch_pattern")).format(
         task_id_lower=task_id.lower(), task_id=task_id, attempt=attempt_id
     )
-    worktree = workdir_path(home, workdir) / repo_id
+    directory = workdir_path(home, workdir)
+    worktree = directory / repo_id
+    missing = None
+    if checkout is None:
+        missing = "配置中没有仓库路径（repositories.<id>.path）"
+    elif not _plain_name(repo_id) or not _same(worktree.parent, directory):
+        # The worktree must be a direct child of the execution directory, never elsewhere.
+        missing = f"仓库 id {repo_id!r} 不能用作执行目录下的目录名"
+    elif not checkout.is_dir():
+        missing = f"仓库路径 {checkout} 不存在"
+    elif _git(checkout, "rev-parse", "--git-dir")[0] != 0:
+        missing = f"仓库路径 {checkout} 不是 git 仓库"
+    elif _git(checkout, "check-ref-format", "--branch", branch)[0] != 0 or branch.startswith("-"):
+        missing = f"分支名 {branch!r}（worktrees.branch_pattern）不是合法的分支名"
+    if missing is not None:
+        return Workspace(repo_id, instructions, None, None, None, remote, base_ref, missing)
     return Workspace(repo_id, instructions, checkout, worktree, branch, remote, base_ref, None)
+
+
+def _plain_name(name: str) -> bool:
+    """A single path component that names the same directory on every platform."""
+    bad = set('/\\:*?"<>|') | {chr(c) for c in range(32)}
+    return (
+        bool(name)
+        and name not in (".", "..")
+        and not (set(name) & bad)
+        and name == name.strip(" .")
+    )
 
 
 def ensure(ws: Workspace) -> dict[str, Any]:
@@ -89,10 +109,17 @@ def ensure(ws: Workspace) -> dict[str, Any]:
     """
     assert ws.checkout is not None and ws.worktree is not None and ws.branch is not None
     path, branch = ws.worktree, ws.branch
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        raise rejected("worktree 路径已有其他内容", reason="worktree_conflict", path=str(path))
     if path.exists():
         code, head, _ = _git(path, "rev-parse", "--abbrev-ref", "HEAD")
         top = _git(path, "rev-parse", "--show-toplevel")[1]
-        if code == 0 and head == branch and _same(Path(top), path):
+        if (
+            code == 0
+            and head == branch
+            and _same(Path(top), path)
+            and _same(_common_dir(path), _common_dir(ws.checkout))  # the configured repository's
+        ):
             return _record(ws, base=None, created=False, fetched=False)
         if any(path.iterdir()):
             raise rejected("worktree 路径已有其他内容", reason="worktree_conflict", path=str(path))
@@ -127,14 +154,29 @@ def _record(ws: Workspace, *, base: str | None, created: bool, fetched: bool) ->
 
 
 def _base(ws: Workspace) -> str:
+    """The base the branch starts from; only a name that resolves to a commit reaches git."""
     assert ws.checkout is not None
-    if ws.base_ref:
-        return ws.base_ref
-    for candidate in BASE_CANDIDATES:
+    candidates = (ws.base_ref,) if ws.base_ref else BASE_CANDIDATES
+    for candidate in candidates:
         ref = candidate.format(remote=ws.remote)
-        if _git(ws.checkout, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")[0] == 0:
+        if not ref.startswith("-") and _commit(ws.checkout, ref):
             return ref
-    raise rejected("找不到 worktree 的基线", reason="worktree_unavailable", repo=ws.repo_id)
+    raise rejected(
+        "找不到 worktree 的基线", reason="worktree_unavailable", repo=ws.repo_id, base=ws.base_ref
+    )
+
+
+def _commit(checkout: Path, ref: str) -> bool:
+    found = _git(
+        checkout, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}"
+    )
+    return found[0] == 0
+
+
+def _common_dir(directory: Path) -> Path:
+    """The repository a checkout or worktree belongs to (its shared ``.git``)."""
+    out = _git(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")[1]
+    return Path(out) if out else directory / ".nonexistent"
 
 
 def _same(a: Path, b: Path) -> bool:
