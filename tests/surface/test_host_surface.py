@@ -301,6 +301,42 @@ def test_the_plugin_runs_from_a_copy_outside_the_repository(home: Path, tmp_path
     assert named.returncode == 0 and "serverInfo" in named.stdout
 
 
+@pytest.mark.use_case("UC-HOST-004")
+def test_a_session_inside_a_claiming_data_directory_uses_it(home: Path, tmp_path: Path) -> None:
+    """The cached plugin finds the runtime and the data directory from the session's folder,
+    with no settings file there and ``TSW_HOME`` naming another data directory."""
+    cached = tmp_path / "plugin-cache" / "task-steward" / "0.1.0"
+    shutil.copytree(PLUGIN, cached)
+    launcher = cached / "bin" / "tsw_launch.py"
+    run = tmp_path / "run" / "home"
+    claimed = run_tsw("init", "--home", str(run), "--claim-sessions", "--json")
+    assert claimed.returncode == 0, claimed.stderr
+    assert json.loads(claimed.stdout.splitlines()[-1])["claim_sessions"] is True
+    workdir = run / "work" / "T001" / "a1"
+    workdir.mkdir(parents=True)
+    # TSW_HOME names a data directory with no runtime record: only the claiming one has it.
+    marker = json.loads((home / "tsw-home.json").read_text(encoding="utf-8"))
+    del marker["product_repo"]
+    (home / "tsw-home.json").write_text(json.dumps(marker), encoding="utf-8")
+    env = child_env(TSW_HOME=str(home), CLAUDE_CODE_HOST_SESSION_ID="orch-run")
+    env.pop("PYTHONPATH")
+    found = launch(launcher, "home", "--json", env=env, cwd=workdir)
+    assert found.returncode == 0, found.stderr
+    assert Path(json.loads(found.stdout.splitlines()[-1])["home"]) == run.resolve()
+    # The MCP server resolves the session's identity in the same directory: a session in the
+    # claiming data directory is its main session and may write.
+    request = "".join(
+        json.dumps(m) + "\n" for m in (INIT, NOTE, call(2, "whoami"), call(3, "lease_acquire"))
+    )
+    served = launch(launcher, "mcp", env=env, cwd=run, stdin=request)
+    assert served.returncode == 0, served.stderr
+    by_id = {r["id"]: r for r in map(json.loads, served.stdout.splitlines()) if "id" in r}
+    who = payload(by_id[2])
+    assert (who["role"], Path(who["cwd"]).resolve()) == ("orchestrator", run.resolve())
+    assert "expires_at" in payload(by_id[3])
+    assert (run / "locks").is_dir() and not (home / "locks" / "lease.json").exists()
+
+
 @pytest.mark.use_case("UC-HOST-001")
 def test_the_command_line_does_not_take_a_role_inside_a_tsw_session(
     home: Path, tmp_path: Path

@@ -11,7 +11,7 @@
       "id": "UC-HOME-001",
       "title": "初始化与定位数据目录",
       "actor": "用户 / tsw CLI",
-      "acceptance": "数据目录按 DN001 §8.1 的布局创建，tsw-home.json 记录版本；重复初始化不改变内容；非空的其他目录被拒绝；版本不受支持时拒绝打开",
+      "acceptance": "数据目录按 DN001 §8.1 的布局创建，tsw-home.json 记录版本；重复初始化不改变内容；非空的其他目录被拒绝；版本不受支持时拒绝打开；声明 claim_sessions（tsw init --claim-sessions）的数据目录优先于 TSW_HOME，用于在其中工作的会话（最近的数据目录决定），插件启动器同样按它找到运行时",
       "surfaces": [
         "cli"
       ],

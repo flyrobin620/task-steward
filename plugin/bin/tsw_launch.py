@@ -4,7 +4,8 @@ Claude Code copies an installed plugin into its plugin cache, so this directory 
 product repository around it. The ``tsw`` package is looked up in this order: the ``TSW_REPO``
 environment variable; the repository this plugin directory sits in (a source checkout or a
 local marketplace used in place); the ``product_repo`` that ``tsw init`` recorded in the data
-directory (``TSW_HOME``, else ``~/.tsw``); finally an installed ``tsw`` package.
+directory (one that claims the session's directory, else ``TSW_HOME``, else ``~/.tsw``, as
+``tsw.home.resolve_home``); finally an installed ``tsw`` package.
 """
 
 import json
@@ -17,9 +18,23 @@ def _has_runtime(root: Path) -> bool:
     return (root / "tsw" / "__init__.py").is_file()
 
 
+def _claiming_home() -> Path | None:
+    """The data directory that claims the session's directory (``tsw.home.claiming_home``)."""
+    start = Path.cwd().resolve()  # the session's directory, as for tsw.home
+    for folder in (start, *start.parents):
+        try:
+            marker = json.loads((folder / "tsw-home.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        return folder if isinstance(marker, dict) and marker.get("claim_sessions") is True else None
+    return None
+
+
 def _recorded_repo() -> Path | None:
     explicit = os.environ.get("TSW_HOME")
-    home = Path(explicit).expanduser() if explicit else Path("~/.tsw").expanduser()
+    home = _claiming_home() or (
+        Path(explicit).expanduser() if explicit else Path("~/.tsw").expanduser()
+    )
     try:
         marker = json.loads((home / "tsw-home.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):

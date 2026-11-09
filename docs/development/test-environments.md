@@ -32,13 +32,18 @@
   - `manifest.json`：本次运行创建的每个会话、线程、目录；`result.json` 与 `evidence.md`：检查结果
     （`evidence.md` 已去除本机路径与用户名，可附在 PR 中）；`hook-payloads.jsonl`：真实 app 发出的 hook
     payload（可去除个人信息后作为 surface 测试的录制样本）。
-- 宿主会话的隔离：用户设置给每个 Claude Code 会话 `TSW_HOME`。`host-e2e` 在运行的数据目录与预建的执行
-  目录中写 `.claude/settings.local.json`：用项目设置把 `TSW_HOME` 指向本次运行，挂上记录 hook payload
-  的钩子，并让本检出的 hooks 守卫宿主插件缓存副本还看不到的工具（例如定时工具）。这些文件只为隔离，只有
-  `env` 与 `hooks`，不含权限规则：tsw 不在执行目录中写权限规则，worker 的放行来自用户设置中的 auto
-  模式规则（与真实数据目录相同）。已信任的父目录覆盖 `env` 与 `hooks`，只有允许规则会让子目录再次要求
-  信任，所以运行中 worker 会话创建时是否弹出信任确认，就是“新任务不弹信任确认”的检验；操作者把观察到
-  的信任确认与权限拦截在 `verify` 时用 `--trust-prompted` / `--blocked` 记下（操作者观察，不是自动检查）。项目
+- 宿主会话的隔离：用户设置给每个 Claude Code 会话 `TSW_HOME`。`host-e2e` 用
+  `tsw init --claim-sessions` 建运行的数据目录：在其中工作的会话（主会话与 `work/` 下的 worker）一律使用
+  它，不看 `TSW_HOME`，执行目录里因此不需要任何设置文件。只有运行的数据目录本身（主会话所在、操作者打开
+  时就要信任的文件夹）写 `.claude/settings.local.json`：挂上记录 hook payload 的钩子，并让本检出的 hooks
+  守卫宿主插件缓存副本还看不到的工具（例如定时工具）。worker 会话找到运行时靠真实数据目录记录的
+  `product_repo`，所以 `prepare` 先检查那个检出已认识 `claim_sessions`，否则拒绝（worker 会落到真实数据
+  目录）。tsw 不在执行目录中写
+  任何设置，worker 的放行来自用户设置中的 auto 模式规则（与真实数据目录相同）。Claude 桌面 app 对带
+  `.claude/settings.local.json` 的文件夹（即使只有 `env` 与 `hooks`）会再次要求信任（2026-11-09 live 实测，
+  确认框写明 “Execution allowed by: .claude/settings.local.json”），所以执行目录必须没有这个文件；运行中
+  worker 会话创建时是否弹出信任确认，就是“新任务不弹信任确认”的检验。操作者把观察到的信任确认与权限
+  拦截在 `verify` 时用 `--trust-prompted` / `--blocked` 记下（操作者观察，不是自动检查）。项目
   设置里的 `env.PATH` 到不了会话的 shell，所以任务书用完整路径调用 `bin/gh`（hooks 仍按程序名 `gh`
   检查合并授权与目标仓库）；替身还模拟主分支上合并提交的 CI（`gh run list --commit`，结论为
   `success`，模拟证据）。

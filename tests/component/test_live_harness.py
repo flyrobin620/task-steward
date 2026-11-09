@@ -112,6 +112,42 @@ def test_gh_stub_squash_merges_into_the_bare_origin(tmp_path: Path) -> None:
     assert len(log) == 9
 
 
+def runtime(root: Path, *, claims: bool) -> Path:
+    (root / "tsw").mkdir(parents=True)
+    (root / "tsw" / "__init__.py").write_text("", encoding="utf-8")
+    text = "def claim_sessions(): ...\n" if claims else "def resolve_home(): ...\n"
+    (root / "tsw" / "home.py").write_text(text, encoding="utf-8")
+    return root
+
+
+def test_prepare_checks_the_runtime_the_installed_plugin_will_use(tmp_path: Path) -> None:
+    """The launcher's order: TSW_REPO first, then the recorded product_repo (a cached plugin is
+    in no checkout). The run is refused when that runtime does not know claim_sessions, or
+    when no runtime can be determined, so workers never fall back to the real data directory."""
+    new, old = runtime(tmp_path / "new", claims=True), runtime(tmp_path / "old", claims=False)
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "tsw-home.json").write_text(json.dumps({"product_repo": str(new)}), encoding="utf-8")
+    assert live.installed_runtime_claims({"TSW_HOME": str(real)}) == new
+    # The recorded runtime is up to date, but TSW_REPO wins and is not.
+    with pytest.raises(SystemExit, match="TSW_REPO"):
+        live.installed_runtime_claims({"TSW_HOME": str(real), "TSW_REPO": str(old)})
+    assert live.installed_runtime_claims({"TSW_HOME": str(real), "TSW_REPO": str(new)}) == new
+    # A TSW_REPO without the package is skipped by the launcher, which takes the recorded one.
+    broken = tmp_path / "broken"
+    (broken / "tsw").mkdir(parents=True)
+    (broken / "tsw" / "home.py").write_text("def claim_sessions(): ...\n", encoding="utf-8")
+    env = {"TSW_HOME": str(real), "TSW_REPO": str(broken)}
+    assert live.installed_runtime_claims(env) == new
+    (real / "tsw-home.json").write_text(json.dumps({"product_repo": str(old)}), encoding="utf-8")
+    with pytest.raises(SystemExit, match="product_repo"):
+        live.installed_runtime_claims({"TSW_HOME": str(real)})
+    with pytest.raises(SystemExit, match="product_repo"):
+        live.installed_runtime_claims({"TSW_HOME": str(real), "TSW_REPO": str(broken)})
+    with pytest.raises(SystemExit, match="无法确定"):
+        live.installed_runtime_claims({})
+
+
 def ev(seq: int, type_: str, task: str, actor: str | None = None, **data: Any) -> dict[str, Any]:
     return {
         "sequence": seq,
