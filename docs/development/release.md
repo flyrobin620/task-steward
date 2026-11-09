@@ -15,5 +15,15 @@ v1 开发期间不发布：没有版本标签、没有发布流水线，也不�
 - 发布记录写明版本、来源提交、live 场景的运行结果，以及已知未验证项。
 - 发布完成的含义：在干净的 Claude 配置中从该标签安装插件，`host-e2e` 冒烟场景通过。
 
-TODO(decision)：插件分发方式（本仓库自带插件市场清单，还是另建市场仓库），以及是否发布到 PyPI。
-提议：本仓库自带插件市场清单，按标签安装；不发布到 PyPI。
+## 插件分发
+
+设计见 [DN009 分发](../design/DN009-distribution.md)（Claude Code 的做法见 CC009，Codex 见 CX009）。
+
+- 本仓库自带插件市场清单（`.claude-plugin/marketplace.json`，市场名 `task-steward`），只列 TaskSteward
+  自己的插件；不另建市场仓库，不发布到 PyPI。个人或团队的插件放各自的私有市场仓库，不进本仓库。
+- 推荐的安装方式：检出标签 `vX.Y.Z`，以检出目录添加本地市场并安装插件，同一个检出提供 `tsw` 命令与插件。
+  也可以从 GitHub 市场按标签安装（`flyrobin620/task-steward#vX.Y.Z`），运行时仍来自本机检出。
+- 版本：发布后 `plugin/.claude-plugin/plugin.json` 的 `version` 等于 `tsw/__init__.py` 的 `__version__`，
+  市场条目不写 `version`。开发期 `plugin.json` 不写固定版本（按提交 SHA），否则已安装的副本不会更新；现在的
+  `0.1.0-dev` 由 DN009 §9 的 S1 改掉。
+- 插件清单、市场清单与版本规则的改动属于本文范围，合并前须用户明确确认。

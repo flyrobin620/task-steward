@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="tsw-source-sha256" content="7a1c41bc181c91cb0d67a856ca0b8909a1304a3ac56ccd01ec590d5006479a57">
+<title>CC009 Claude Code 上的分发</title>
+<style>
+:root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.7 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--fg);background:#fff}
+.layout{display:grid;grid-template-columns:260px minmax(0,1fr);max-width:1400px;margin:0 auto}
+nav.toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:28px 18px;border-right:1px solid var(--line);font-size:13px}
+nav.toc h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
+nav.toc a{display:block;color:var(--fg);text-decoration:none;padding:2px 0}
+nav.toc a.l3{padding-left:14px;color:var(--muted)}
+nav.toc a:hover{color:var(--accent)}
+main{padding:32px 48px 64px;min-width:0}
+h1{font-size:28px;margin:0 0 16px;border-bottom:3px solid var(--accent);padding-bottom:10px}
+h2{font-size:21px;margin:36px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:17px;margin:26px 0 10px}
+h4{font-size:15px;margin:20px 0 8px}
+a{color:var(--accent)}
+code{font-family:Consolas,"Cascadia Mono",monospace;font-size:13px;background:var(--code);padding:1px 5px;border-radius:4px}
+pre{background:#1e2230;color:#e8eaf2;padding:14px 16px;border-radius:8px;overflow:auto;line-height:1.5}
+pre code{background:none;padding:0;color:inherit}
+table{border-collapse:collapse;width:100%;margin:12px 0 18px;font-size:13.5px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:var(--bg-soft);white-space:nowrap}
+tr:nth-child(even) td{background:#fbfcfe}
+blockquote{margin:12px 0;padding:8px 16px;border-left:4px solid var(--accent);background:var(--bg-soft)}
+figure{margin:18px 0 8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff}
+figure svg{display:block;width:100%;height:auto;max-height:none}
+figcaption{font-size:13px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between;gap:12px}
+.meta{color:var(--muted);font-size:13px}
+footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:10px}
+@media (max-width:900px){.layout{grid-template-columns:1fr}nav.toc{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line)}main{padding:20px}}
+@media print{nav.toc{display:none}.layout{display:block}main{padding:0}a{color:inherit;text-decoration:none}
+ pre{white-space:pre-wrap;background:#f3f4f8;color:#111}figure,table,pre{break-inside:avoid}h2,h3{break-after:avoid}
+ body{font-size:11pt}@page{margin:16mm 14mm}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc"><h2>目录</h2><a class="l2" href="#1-范围">1. 范围</a><a class="l2" href="#2-tasksteward-插件">2. TaskSteward 插件</a><a class="l2" href="#3-各类会话能看到什么">3. 各类会话能看到什么</a><a class="l2" href="#4-打包检查">4. 打包检查</a><a class="l2" href="#5-私有市场的凭据">5. 私有市场的凭据</a><a class="l2" href="#6-安装命令由-install-hint-给出">6. 安装命令（由 install-hint 给出）</a></nav>
+<main>
+<h1>CC009 Claude Code 上的分发</h1>
+<ul><li>状态：设计草案（T247，待用户确认）</li><li>日期：2026-11-09</li><li>实现：<a href="../DN009-distribution.html">DN009 分发</a></li><li>相关：<a href="CC006-plugins.html">CC006 Claude Code 插件</a> · <a href="CC008-guardrails.html">CC008 Claude Code 上的护栏</a></li></ul>
+<h2 id="1-范围">1. 范围</h2>
+<p>本文是 DN009 在 Claude Code（CLI 与桌面 app）上的做法：市场清单、TaskSteward 插件的安装与更新、各类会话能看到哪些插件与 skill、打包检查、私有仓库的凭据。出处为 Claude Code 官方文档：<a href="https://code.claude.com/docs/en/plugins/marketplace-reference.md">Marketplace reference</a>、<a href="https://code.claude.com/docs/en/plugins/host-marketplace.md">Host and maintain a marketplace</a>、<a href="https://code.claude.com/docs/en/plugins/manifest-reference.md">Plugin manifest reference</a>、<a href="https://code.claude.com/docs/en/plugins/loading.md">Plugin loading reference</a>。</p>
+<h2 id="2-tasksteward-插件">2. TaskSteward 插件</h2>
+<table><thead><tr><th>项</th><th>做法</th></tr></thead><tbody><tr><td>市场清单</td><td>仓库根目录 <code>.claude-plugin/marketplace.json</code>：<code>name</code>、<code>owner</code>、<code>plugins</code> 必填；条目 <code>task-steward</code> 的来源为相对路径 <code>./plugin</code>，从市场根目录解析</td></tr><tr><td>方式 A（推荐）</td><td>检出标签后，在 Claude Code 中以检出目录添加本地市场（<code>/plugin marketplace add &lt;检出目录&gt;</code>），再 <code>/plugin install task-steward@task-steward</code></td></tr><tr><td>方式 B</td><td><code>/plugin marketplace add flyrobin620/task-steward#vX.Y.Z</code>，再安装同一插件；插件被复制进缓存 <code>~/.claude/plugins/cache/&lt;市场&gt;/&lt;插件&gt;/&lt;版本&gt;/</code>，缓存中没有插件目录之外的文件，所以启动器按 <code>TSW_REPO</code> 或数据目录记录的 <code>product_repo</code> 找运行时（CC006 §2）</td></tr><tr><td>版本</td><td>宿主按“<code>plugin.json</code> 的 <code>version</code> → 条目的 <code>version</code> → 来源”计算版本：git 市场中的相对路径插件不写版本时取安装目录的提交 SHA；<code>plugin.json</code> 与条目不能同时写</td></tr><tr><td>更新</td><td><code>/plugin marketplace update task-steward</code> 或 <code>claude plugin update task-steward@task-steward</code>；计算出的版本没变时不替换副本（“already at the latest version”）；之后 <code>/reload-plugins</code> 或重启。自动更新对非官方市场默认关闭</td></tr></tbody></table>
+<p><strong>本机实测（2026-11-09）</strong>：插件以本地目录市场登记，<code>plugin.json</code> 的 <code>version</code> 为 <code>0.1.0-dev</code>。正在运行的 tsw MCP server 的命令行是缓存目录 <code>…/cache/task-steward/task-steward/0.1.0-dev/bin/tsw_launch.py</code>，缓存内容停在 2026-11-06：</p>
+<ul><li><code>hooks/hooks.json</code> 的 PreToolUse matcher 没有 <code>CronCreate|ScheduleWakeup</code>（T243 加入）；</li><li><code>bin/tsw_launch.py</code> 是旧版，不按 <code>claim_sessions</code> 找数据目录（T245 加入）；</li><li>还有已从产品中删除的 <code>skills/orchestrate</code>，会话的 skill 列表因此多出 <code>task-steward:orchestrate</code>。</li></ul>
+<p>文档说本地目录市场中的相对路径插件“原地加载”，与实测不符；不论原因，固定的版本字符串让 <code>claude plugin update</code> 不会替换这份副本。所以 DN009 §4.1 规定开发期不写固定版本，并由启动器提示过期副本：</p>
+<ul><li>SessionStart 时，启动器比较自己所在目录（<code>${CLAUDE_PLUGIN_ROOT}</code>）与产品仓库 <code>plugin/</code> 下的文件摘要；不一致且自己不在产品仓库中时，在 hook 的上下文输出中写一次提示与更新命令；</li><li>不阻断，不改任何设置。</li></ul>
+<h2 id="3-各类会话能看到什么">3. 各类会话能看到什么</h2>
+<p>TaskSteward 的会话目录见 DN009 §5.4。Claude Code 的规则：</p>
+<table><thead><tr><th>机制</th><th>依据</th><th>主会话（数据目录）</th><th><code>work/</code>、<code>routine/</code></th><th>worktree</th></tr></thead><tbody><tr><td>用户范围的插件（<code>~/.claude/settings.json</code> 的 <code>enabledPlugins</code>）</td><td>对用户的所有项目生效</td><td>能用</td><td>能用</td><td>能用</td></tr><tr><td>项目范围的插件（数据目录 <code>.claude/settings.json</code> 的 <code>enabledPlugins</code> 与 <code>extraKnownMarketplaces</code>）</td><td>宿主只读会话主工作目录的共享设置；项目插件要求信任该文件夹本身，信任上级目录不算；它声明的 MCP server 逐个批准</td><td>能用</td><td>不能用</td><td>不能用</td></tr><tr><td>数据目录 <code>.claude/skills/&lt;名&gt;/SKILL.md</code> 中的普通 skill</td><td>普通 skill 会从上级目录被发现</td><td>能用</td><td>能用</td><td>不能用</td></tr><tr><td>数据目录 <code>.claude/skills/</code> 中带 <code>.claude-plugin/plugin.json</code> 的插件（<code>&lt;名&gt;@skills-dir</code>）</td><td>只读主工作目录的 <code>.claude/skills/</code>，不向上级目录查找插件</td><td>能用</td><td>不能用</td><td>不能用</td></tr><tr><td><code>~/.claude/skills/</code> 中的普通 skill 或插件</td><td>用户级，不需要信任确认</td><td>能用</td><td>能用</td><td>能用</td></tr></tbody></table>
+<p>补充：</p>
+<ul><li>只在项目设置中启用、来源不是相对路径的插件，宿主不会替没安装的机器下载（文档：“enabled in project settings but isn't installed here”）。</li><li>在执行目录写 <code>.claude/settings.local.json</code> 来启用插件，会让 app 对该目录再次要求信任（决定记录 0003），所以不采用。</li><li><code>tsw host render</code> 只改数据目录 <code>.claude/settings.json</code> 中的 <code>permissions.allow</code>，其他键保持不变（<code>allow_actions</code>），用户按项目范围安装的插件不会被渲染冲掉。</li></ul>
+<p>结论同 DN009 §5.4：给 worker 用的插件装在用户范围；只含 skill、只给主会话与 <code>work/</code> 中会话用的，可以放数据目录 <code>.claude/skills/</code>。</p>
+<h2 id="4-打包检查">4. 打包检查</h2>
+<table><thead><tr><th>检查</th><th>做法</th></tr></thead><tbody><tr><td>清单与插件校验</td><td><code>claude plugin validate &lt;市场根目录或插件目录&gt;</code>，CI 中加 <code>--strict</code> 把警告当错误</td></tr><tr><td>名称</td><td>市场名与插件名只用字母、数字、<code>.</code>、<code>_</code>、<code>-</code>，以字母或数字开头；不能用保留名，也不能以 <code>claude-</code>、<code>anthropic-</code> 开头</td></tr><tr><td>路径</td><td>组件路径以 <code>./</code> 开头，不能越出插件根目录；同一市场内指向其他插件的符号链接在复制时被解引用，指向市场之外的被跳过</td></tr><tr><td>参数</td><td><code>userConfig</code> 的值以 <code>${user_config.KEY}</code> 在 MCP 配置、exec 形式的 hook 参数与 skill 正文中替换；敏感值进系统凭据库，在 skill 正文中只是占位符</td></tr><tr><td>可执行文件</td><td>顶层 <code>bin/</code> 中的文件进入 Bash 工具的 <code>PATH</code>；但经 claude.ai 组织同步分发的插件不能有顶层 <code>bin/</code>。TaskSteward 插件的启动器在 <code>bin/</code>，将来要走组织同步时移到 <code>scripts/</code></td></tr><tr><td>版本</td><td>按 DN009 §7；<code>tsw dist check</code> 在内容变化而版本没变时报错</td></tr></tbody></table>
+<h2 id="5-私有市场的凭据">5. 私有市场的凭据</h2>
+<ul><li>宿主在用户机器上以非交互方式运行 <code>git</code>，没有自己的令牌，清单也没有凭据字段。</li><li>GitHub：<code>owner/repo</code> 形式先试 SSH，失败时改用 HTTPS；没有 SSH key 的机器设 <code>CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1</code>。HTTPS 依赖已存好的凭据，例如 <code>gh auth login</code> 加 <code>gh auth setup-git</code>。</li><li>后台自动更新拿不到凭据时静默失败，保留现有副本。</li></ul>
+<h2 id="6-安装命令由-install-hint-给出">6. 安装命令（由 install-hint 给出）</h2>
+<p>用户范围：</p>
+<pre><code class="lang-text">/plugin marketplace add &lt;市场：owner/repo、owner/repo#ref 或本地目录&gt;
+/plugin install &lt;插件&gt;@&lt;市场&gt;</code></pre>
+<p>shell 中的等价命令为 <code>claude plugin marketplace add …</code> 与 <code>claude plugin install …</code>。tsw 只输出这些命令，不替用户执行，也不写用户设置（DN009 §3 第 4 条）。</p>
+<footer>本页由同目录的 <a href="CC009-distribution.md">CC009-distribution.md</a> 生成，内容与 Markdown 版本一致。</footer>
+</main>
+</div>
+</body>
+</html>

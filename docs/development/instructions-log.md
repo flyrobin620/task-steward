@@ -20,3 +20,4 @@
 | 2026-11-08 | 合并授权不再限于开发任务；合并后的 `main` CI 与需要合并后运行的 live 由 worker 完成，编排者只核对证据；须用户确认才能合并的类别缩小为规则 / 决定与设计文档，一个任务确认一次（增删护栏规则、改变已确认决定除外） | `AGENTS.md` 第 4 节第 6、7 步、`workflow.md`、`review.md` | 同一位置（第 4 节新增“合并后”一步） | 用户决定，见 [0003](../decisions/0003-worker-delivery-loop.md) |
 | 2026-11-08 | 设计文档分两层：`DN*` 只写与宿主无关的原则与设计，宿主实现放在 `docs/design/<宿主>/`（`claude-code/CC*`、`codex/CX*`），编号与所实现的 DN 相同 | — | `docs/development/docs.md`“设计文档”、`AGENTS.md` 开头 | 用户在 T242 中要求原则与 Claude 实现分开存放 |
 | 2026-11-09 | 新增 live 场景 `routine-e2e`（例行会话、超时转交与主会话代答、经 Teams 转达与答复登记）；超时转交从 `host-e2e` 的覆盖范围中移出 | `testing-layers.md` 的场景表（`host-e2e` 含超时转交） | 同一位置 | T243：超时转交改由例行会话完成，用户 2026-11-09 确认例行表设计 |
+| 2026-11-09 | 插件分发方式：本仓库自带市场清单、按标签安装（推荐检出标签加本地目录市场）、不发布到 PyPI；版本规则（发布后 `plugin.json` 等于 `__version__`，开发期不写固定版本） | `release.md` 的 TODO(decision)“插件分发方式” | `release.md`“插件分发” | T247，用户确认 DN009 |

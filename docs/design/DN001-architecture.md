@@ -2,7 +2,7 @@
 
 - 状态：设计草案（T233 r5，已按 PoC 结果修订）
 - 日期：2026-11-05
-- 相关：[DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN006 插件层](DN006-plugin-layer.md) · [DN007 账本与上下文检索](DN007-ledger-and-context.md) · [DN008 校验原则](DN008-guardrails.md) · 实现：[CC001 Claude Code 上的会话与 hooks](claude-code/CC001-sessions-and-hooks.md)
+- 相关：[DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN006 插件层](DN006-plugin-layer.md) · [DN007 账本与上下文检索](DN007-ledger-and-context.md) · [DN008 校验原则](DN008-guardrails.md) · [DN009 分发](DN009-distribution.md) · 实现：[CC001 Claude Code 上的会话与 hooks](claude-code/CC001-sessions-and-hooks.md)
 
 ## 1. 背景
 
@@ -318,6 +318,7 @@ runs/Txxx/aN/
 | [DN006 插件层](DN006-plugin-layer.md) | 宿主集成、会话适配器（含一次性评审）、人类渠道、存储后端四类插件的职责与接口；委托操作；主会话判断；数据目录；组合示例 |
 | [DN007 账本与上下文检索](DN007-ledger-and-context.md) | 三层存储（事件账本、投影、检索索引）、写读路径与重建；任务卡片、检索工具、用户决定与偏好；主会话与 worker 的历史读取方式 |
 | [DN008 校验原则](DN008-guardrails.md) | 安全边界与信任假设；护栏只防诚实 agent 出错：确定性死规则、易用性优先、block list、escape；保留 / 简化 / 删除标准 |
+| [DN009 分发](DN009-distribution.md) | TaskSteward 插件的发布与安装；code agent 插件（skill + MCP）经市场仓库分发；数据目录 skill 与插件 skill 的关系；版本与可信 |
 
 宿主相关的实现放在 `docs/design/<宿主>/` 下，编号与所实现的 DN 相同：
 
@@ -327,4 +328,6 @@ runs/Txxx/aN/
 | [CC004 Claude Code 评审器](claude-code/CC004-reviewer.md) | `claude-headless` 一次性只读评审的调用约定 |
 | [CC006 Claude Code 插件](claude-code/CC006-plugins.md) | 宿主集成 `claude-code`、会话适配器 `claude-app` / `claude-headless`、`in-session` 渠道的记录方式 |
 | [CC008 Claude Code 上的护栏](claude-code/CC008-guardrails.md) | 分工、block list 规则与 escape、现有校验逐项归类、允许规则 |
+| [CC009 Claude Code 上的分发](claude-code/CC009-distribution.md) | 市场清单、插件的安装与更新、各类会话能看到的插件与 skill、打包检查、私有仓库凭据 |
 | [CX004 Codex 评审器](codex/CX004-reviewer.md) | `codex-app-server` 一次性线程与 `codex-exec` 回退 |
+| [CX009 Codex 上的分发](codex/CX009-distribution.md) | Codex 的插件与市场、用户级安装、与 Claude Code 的差别 |

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="tsw-source-sha256" content="3f53233ed5d24b85d2afb7c5d4cc0bb2c0931898c2e721a2556f59e6c30b2e96">
+<title>CX009 Codex 上的分发</title>
+<style>
+:root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.7 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--fg);background:#fff}
+.layout{display:grid;grid-template-columns:260px minmax(0,1fr);max-width:1400px;margin:0 auto}
+nav.toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:28px 18px;border-right:1px solid var(--line);font-size:13px}
+nav.toc h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
+nav.toc a{display:block;color:var(--fg);text-decoration:none;padding:2px 0}
+nav.toc a.l3{padding-left:14px;color:var(--muted)}
+nav.toc a:hover{color:var(--accent)}
+main{padding:32px 48px 64px;min-width:0}
+h1{font-size:28px;margin:0 0 16px;border-bottom:3px solid var(--accent);padding-bottom:10px}
+h2{font-size:21px;margin:36px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:17px;margin:26px 0 10px}
+h4{font-size:15px;margin:20px 0 8px}
+a{color:var(--accent)}
+code{font-family:Consolas,"Cascadia Mono",monospace;font-size:13px;background:var(--code);padding:1px 5px;border-radius:4px}
+pre{background:#1e2230;color:#e8eaf2;padding:14px 16px;border-radius:8px;overflow:auto;line-height:1.5}
+pre code{background:none;padding:0;color:inherit}
+table{border-collapse:collapse;width:100%;margin:12px 0 18px;font-size:13.5px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:var(--bg-soft);white-space:nowrap}
+tr:nth-child(even) td{background:#fbfcfe}
+blockquote{margin:12px 0;padding:8px 16px;border-left:4px solid var(--accent);background:var(--bg-soft)}
+figure{margin:18px 0 8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff}
+figure svg{display:block;width:100%;height:auto;max-height:none}
+figcaption{font-size:13px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between;gap:12px}
+.meta{color:var(--muted);font-size:13px}
+footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:10px}
+@media (max-width:900px){.layout{grid-template-columns:1fr}nav.toc{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line)}main{padding:20px}}
+@media print{nav.toc{display:none}.layout{display:block}main{padding:0}a{color:inherit;text-decoration:none}
+ pre{white-space:pre-wrap;background:#f3f4f8;color:#111}figure,table,pre{break-inside:avoid}h2,h3{break-after:avoid}
+ body{font-size:11pt}@page{margin:16mm 14mm}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc"><h2>目录</h2><a class="l2" href="#1-范围">1. 范围</a><a class="l2" href="#2-插件与市场">2. 插件与市场</a><a class="l2" href="#3-各类会话能看到什么">3. 各类会话能看到什么</a><a class="l2" href="#4-与-claude-code-的差别">4. 与 Claude Code 的差别</a><a class="l2" href="#5-安装命令codex-宿主集成实现后由-install-hint-给出">5. 安装命令（Codex 宿主集成实现后由 install-hint 给出）</a></nav>
+<main>
+<h1>CX009 Codex 上的分发</h1>
+<ul><li>状态：设计草案（T247，待用户确认）</li><li>日期：2026-11-09</li><li>实现：<a href="../DN009-distribution.html">DN009 分发</a></li><li>相关：<a href="CX004-reviewer.html">CX004 Codex 评审器</a></li></ul>
+<h2 id="1-范围">1. 范围</h2>
+<p>本文是 DN009 在 Codex 上的做法。Codex 的宿主集成（DN006 §6.3 的 <code>codex</code>）尚未实现，本文先确定分发部分，供实现时使用。出处：<a href="https://developers.openai.com/codex/plugins/build">Build plugins</a>、<a href="https://learn.chatgpt.com/docs/build-skills">Build skills</a>、<a href="https://learn.chatgpt.com/docs/extend/mcp?surface=cli">Codex MCP</a>，以及 codex-cli 0.163.0 的命令帮助。</p>
+<h2 id="2-插件与市场">2. 插件与市场</h2>
+<table><thead><tr><th>项</th><th>Codex 的做法</th></tr></thead><tbody><tr><td>插件格式</td><td>推荐根目录 <code>plugin.json</code>、<code>mcp.json</code>、<code>skills/</code>；也接受 Claude 兼容的清单，<code>.codex-plugin/plugin.json</code> 为兼容回退</td></tr><tr><td>市场清单位置</td><td>仓库：<code>$REPO_ROOT/.agents/plugins/marketplace.json</code>，或兼容的 <code>$REPO_ROOT/.claude-plugin/marketplace.json</code>；用户：<code>~/.agents/plugins/marketplace.json</code>。<code>source.path</code> 从市场根目录解析</td></tr><tr><td>添加市场</td><td><code>codex plugin marketplace add &lt;本地路径 \| owner/repo[@ref] \| git URL&gt;</code>，可加 <code>--ref</code>、<code>--sparse</code>；没有安装范围参数，结果写进用户级 <code>~/.codex/config.toml</code> 的 <code>[marketplaces.&lt;名&gt;]</code></td></tr><tr><td>启用插件</td><td><code>codex plugin add</code>，或 <code>config.toml</code> 中 <code>[plugins.&quot;&lt;插件&gt;@&lt;市场&gt;&quot;] enabled = true</code>；受信任项目的 <code>.codex/config.toml</code> 也可以写</td></tr><tr><td>更新</td><td><code>codex plugin marketplace upgrade [名]</code>；git 来源的条目可用 <code>ref</code> 或 <code>sha</code> 固定；缓存在 <code>~/.codex/plugins/cache/&lt;市场&gt;/&lt;插件&gt;/&lt;版本&gt;/</code></td></tr><tr><td>hooks</td><td>插件带的 hooks 要用户审阅并信任后才运行</td></tr><tr><td>环境变量</td><td><code>PLUGIN_ROOT</code>、<code>PLUGIN_DATA</code>；为兼容 Claude 插件的 hooks，也设置 <code>CLAUDE_PLUGIN_ROOT</code>、<code>CLAUDE_PLUGIN_DATA</code></td></tr></tbody></table>
+<p><strong>本机证据（2026-11-09）</strong>：用户级 <code>config.toml</code> 中登记了一个 git 来源的市场（<code>source_type = &quot;git&quot;</code>，稀疏检出含 <code>.claude-plugin</code>），并启用了其中两个插件；缓存目录中只有 Claude 格式的文件（<code>.claude-plugin/plugin.json</code>、<code>.mcp.json</code>、<code>skills/</code>）。所以同一个 Claude 格式的市场仓库已经同时被两个宿主安装。其中的 MCP server 在 Codex 中能否运行没有核实（DN009 V5）。</p>
+<h2 id="3-各类会话能看到什么">3. 各类会话能看到什么</h2>
+<table><thead><tr><th>机制</th><th>依据</th><th>主会话（数据目录）</th><th><code>work/</code>、<code>routine/</code></th><th>worktree</th></tr></thead><tbody><tr><td>用户级市场与插件（<code>~/.codex/config.toml</code>）</td><td>所有会话共用这份配置</td><td>能用</td><td>能用</td><td>能用</td></tr><tr><td>仓库级市场与 <code>.codex/config.toml</code></td><td>按仓库根定位；项目配置只对受信任项目生效</td><td>数据目录不是 git 仓库，未验证（DN009 V2）</td><td>同左</td><td>属于业务仓库，不由 TaskSteward 管理</td></tr><tr><td><code>.agents/skills</code></td><td>从当前目录向上直到仓库根查找；用户级 <code>~/.agents/skills</code></td><td>未验证（同上）</td><td>未验证</td><td>只有业务仓库自己的</td></tr></tbody></table>
+<p>结论：Codex 上给 TaskSteward 会话用的插件只用用户级安装；仓库级的入口留给业务仓库自己。</p>
+<h2 id="4-与-claude-code-的差别">4. 与 Claude Code 的差别</h2>
+<ul><li><strong>参数</strong>：Codex 文档没有与 <code>userConfig</code> 对应的启用时参数，跨宿主的插件按 DN009 §5.1 从配置文件读取个人数据（DN009 V3）。</li><li><strong>MCP 声明</strong>：Codex 自己的格式是根目录 <code>mcp.json</code>，Claude 格式是 <code>.mcp.json</code>；在 V5 验证前，跨宿主的插件两份都放，内容相同。</li><li><strong>skill 位置</strong>：Claude Code 读 <code>.claude/skills</code> 与 <code>~/.claude/skills</code>，Codex 读 <code>.agents/skills</code> 与 <code>~/.agents/skills</code>；经插件分发可以避开两套路径。</li></ul>
+<h2 id="5-安装命令codex-宿主集成实现后由-install-hint-给出">5. 安装命令（Codex 宿主集成实现后由 install-hint 给出）</h2>
+<pre><code class="lang-text">codex plugin marketplace add &lt;owner/repo[@ref] 或本地目录&gt;
+codex plugin add &lt;插件&gt;@&lt;市场&gt;</code></pre>
+<p>tsw 不改写 <code>~/.codex/config.toml</code>；需要信任的 hooks 由用户在 Codex 中确认。</p>
+<footer>本页由同目录的 <a href="CX009-distribution.md">CX009-distribution.md</a> 生成，内容与 Markdown 版本一致。</footer>
+</main>
+</div>
+</body>
+</html>
