@@ -36,10 +36,11 @@
     const cards = Array.from(board.querySelectorAll("article.card"));
     const ORDER = board.dataset.order.split(" ");
     const KINDS = board.dataset.kinds.split(" ");
-    const statusLabels = {}, kindLabels = {};
+    const statusLabels = Object.create(null), kindLabels = Object.create(null);
     for (const b of tools.querySelectorAll("[data-st]")) statusLabels[b.dataset.st] = b.dataset.label;
     for (const b of tools.querySelectorAll("[data-kind]")) kindLabels[b.dataset.kind] = b.dataset.label;
     const text = new Map(cards.map(c => [c, c.textContent.toLowerCase()]));
+    const byId = new Map(cards.map(c => [c.id, c]));
     const q = $("q"), repo = $("repo"), flag = $("flag"), sort = $("sort"), group = $("group");
     const DEFAULT_CLOSED = {status: ["accepted", "cancelled"]};
     let state;
@@ -77,7 +78,7 @@
         const v = JSON.parse(store.get("closed:" + mode) || "null");
         if (Array.isArray(v)) return new Set(v);
       } catch (_) { /* ignore a damaged entry */ }
-      return new Set(DEFAULT_CLOSED[mode] || []);
+      return new Set(Object.hasOwn(DEFAULT_CLOSED, mode) ? DEFAULT_CLOSED[mode] : []);
     }
     function remember(mode, key, open) {
       const set = closed(mode);
@@ -145,10 +146,25 @@
       details.addEventListener("toggle", () => remember(mode, key, details.open));
       return details;
     }
+    function normalize() {
+      // A restored choice that is no longer on the board (or never was) is dropped before
+      // filtering, so the controls, the cards and the count always come from one state.
+      const offered = select => Array.from(select.options).map(o => o.value);
+      if (!offered(repo).includes(state.repo)) state.repo = "";
+      if (!offered(flag).includes(state.flag)) state.flag = "";
+      if (!Object.hasOwn(SORTS, state.sort)) state.sort = "status";
+      if (!Object.hasOwn(GROUPS, state.group)) state.group = "status";
+      state.st = state.st.filter(v => v in statusLabels);
+      state.kind = state.kind.filter(v => v in kindLabels);
+    }
+    function reset() {
+      state = {...parse(""), sort: state.sort, group: state.group};
+    }
     function render() {
+      normalize();
       const words = state.q.toLowerCase().split(/\s+/).filter(Boolean);
-      const shown = cards.filter(c => matches(c, state, words)).sort(SORTS[state.sort] || SORTS.status);
-      const mode = GROUPS[state.group] ? state.group : "status";
+      const shown = cards.filter(c => matches(c, state, words)).sort(SORTS[state.sort]);
+      const mode = state.group;
       const buckets = new Map();
       for (const card of shown) {
         const key = GROUPS[mode](card);
@@ -165,9 +181,6 @@
       $("mine").setAttribute("aria-pressed", String(state.flag === "user"));
       if (q.value !== state.q) q.value = state.q;
       repo.value = state.repo;
-      if (repo.value !== state.repo) { // a repository no longer on the board
-        state.repo = ""; repo.value = "";
-      }
       flag.value = state.flag; sort.value = state.sort; group.value = mode;
       save();
     }
@@ -175,10 +188,10 @@
       return list.includes(value) ? list.filter(v => v !== value) : [...list, value];
     }
     function reveal(id) {
-      const card = document.getElementById(id);
-      if (!card || !card.matches("article.card")) return;
-      if (!card.isConnected || !board.contains(card)) {
-        state = {...parse(""), sort: state.sort, group: state.group};
+      const card = byId.get(id); // filtered-out cards are detached, so not in the document
+      if (!card) return;
+      if (!board.contains(card)) {
+        reset();
         render();
       }
       const details = card.closest("details.group");
@@ -196,7 +209,7 @@
       if (b.dataset.st) state.st = toggle(state.st, b.dataset.st);
       else if (b.dataset.kind) state.kind = toggle(state.kind, b.dataset.kind);
       else if (b.id === "mine") state.flag = state.flag === "user" ? "" : "user";
-      else if (b.id === "clear") state = {...parse(""), sort: state.sort, group: state.group};
+      else if (b.id === "clear") reset();
       else if (b.id === "open-all" || b.id === "close-all") {
         for (const d of board.querySelectorAll("details.group")) d.open = b.id === "open-all";
         return;
@@ -214,6 +227,7 @@
         tools.scrollIntoView({block: "start"});
       });
     }
+    $("clear-empty").addEventListener("click", () => { reset(); render(); });
     q.addEventListener("input", () => { state.q = q.value; render(); });
     repo.addEventListener("change", () => { state.repo = repo.value; render(); });
     flag.addEventListener("change", () => { state.flag = flag.value; render(); });
