@@ -6,7 +6,8 @@
     python tools/gate.py --verify-ci DIR ...     the aggregate CI ``Gate`` check
 
 Steps: ``lint`` (ruff, ruff format, pyright, actionlint), ``stdlib`` (runtime imports only the
-standard library), ``docs`` (tools/docs.py check), ``tests`` (each tier as its own pytest run),
+standard library), ``docs`` (tools/docs.py check), ``tests`` (each tier on its own, its test
+files split into ``--jobs`` parallel pytest processes whose results are merged),
 ``catalog`` (use-case and transition coverage of this run). Results go to ``--results-dir``
 (default ``.local/gate/<run id>/``) together with ``summary.json``.
 
@@ -21,7 +22,9 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,6 +41,7 @@ from tsw.machine.runner import tool_names  # noqa: E402
 
 STEPS = ("lint", "stdlib", "docs", "tests", "catalog")
 CI_TIERS = ("unit", "component", "surface", "conformance")
+MAX_JOBS = 8
 
 
 def _tool(name: str) -> str:
@@ -50,6 +54,32 @@ def _tool(name: str) -> str:
     if found is None:
         raise FileNotFoundError(f"找不到 {name}，请先 pip install -r requirements-dev.txt")
     return found
+
+
+def default_jobs() -> int:
+    """Parallel pytest processes per tier: the CPU count, at most ``MAX_JOBS``."""
+    return max(1, min(os.cpu_count() or 1, MAX_JOBS))
+
+
+def _shards(tier_dir: Path, jobs: int) -> list[list[Path]]:
+    """Split a tier's test files into at most ``jobs`` sets of similar size.
+
+    A file's size in bytes stands in for its run time: the largest file goes to the lightest
+    set first. Every test file is in exactly one set; the split depends only on the files.
+    """
+    files = sorted(
+        {*tier_dir.glob("test_*.py"), *tier_dir.glob("*_test.py")},
+        key=lambda path: (-path.stat().st_size, path.name),
+    )
+    if not files:
+        return [[tier_dir]]
+    shards: list[list[Path]] = [[] for _ in range(min(jobs, len(files)))]
+    loads = [0] * len(shards)
+    for path in files:
+        lightest = loads.index(min(loads))
+        shards[lightest].append(path)
+        loads[lightest] += path.stat().st_size
+    return [sorted(shard) for shard in shards]
 
 
 def _run(cmd: list[str], env: dict[str, str] | None = None) -> tuple[int, str]:
@@ -109,64 +139,121 @@ class Gate:
         code, output = _run([sys.executable, "-X", "utf8", "tools/docs.py", "check"])
         self.record("docs", code == 0, output.splitlines())
 
-    def tests(self, tiers: list[str]) -> None:
+    def tests(self, tiers: list[str], jobs: int) -> None:
         problems: list[str] = []
-        for tier in tiers:
-            result_file = self.results_dir / f"{tier}.json"
-            result_file.unlink(missing_ok=True)
-            env = dict(os.environ)
-            env["TSW_RESULTS_FILE"] = str(result_file)
-            env["PYTHONPATH"] = str(ROOT)
-            env["PYTHONUTF8"] = "1"
-            started = time.time()
-            code, output = _run(
-                [
-                    sys.executable,
-                    "-m",
-                    "coverage",
-                    "run",
-                    f"--data-file={self.results_dir / f'.coverage.{tier}'}",
-                    "-m",
-                    "pytest",
-                    f"tests/{tier}",
-                    "-q",
-                    "-p",
-                    "no:cacheprovider",
-                    f"--junitxml={self.results_dir / f'{tier}.xml'}",
-                ],
-                env=env,
-            )
-            (self.results_dir / f"{tier}.log").write_text(output, encoding="utf-8")
-            summary = {"collected": 0, "passed": 0, "failed": 0, "skipped": 0, "exit": code}
-            if not result_file.is_file():
-                problems.append(f"{tier}: 没有生成结果文件（{output.splitlines()[-1:]}）")
-            else:
-                data = json.loads(result_file.read_text(encoding="utf-8"))
-                if data["started"] < started - 1:
-                    problems.append(f"{tier}: 结果文件不是本次运行生成的")
-                for test in data["tests"]:
-                    outcome = str(test["outcome"])
-                    key = outcome if outcome in ("passed", "failed", "skipped") else "failed"
-                    summary[key] += 1
-                    self.test_results.append(test)
-                summary["collected"] = int(data["collected"])
-                if summary["collected"] == 0:
-                    problems.append(f"{tier}: 没有发现任何测试")
-                if code != 0:
-                    problems.append(f"{tier}: pytest 退出码 {code}，详见 {tier}.log")
-                    problems.extend(line for line in output.splitlines() if "FAILED" in line)
-            self.tiers[tier] = summary
-            print(
-                f"    {tier}: {summary['collected']} collected, {summary['passed']} passed, "
-                f"{summary['failed']} failed, {summary['skipped']} skipped"
-            )
+        with tempfile.TemporaryDirectory(prefix="tsw-gate-", ignore_cleanup_errors=True) as tmp:
+            for tier in tiers:
+                problems += self._tier(tier, jobs, Path(tmp))
         problems += self._coverage(tiers)
         self.record("tests", not problems, problems)
 
+    def _tier(self, tier: str, jobs: int, tmp: Path) -> list[str]:
+        """Run one tier as parallel pytest processes over disjoint sets of its test files.
+
+        Each process (shard) has its own result file, coverage data file, junit file and
+        ``--basetemp``; the shards are merged into ``<tier>.json``, ``<tier>.xml`` and
+        ``<tier>.log``, the same evidence as one run of the whole tier.
+        """
+        problems: list[str] = []
+        for pattern in (f"{tier}.*", f".coverage.{tier}*"):
+            for stale in self.results_dir.glob(pattern):
+                stale.unlink()
+        shards = _shards(ROOT / "tests" / tier, jobs)
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(ROOT)
+        env["PYTHONUTF8"] = "1"
+        started = time.time()
+        procs: list[tuple[int, subprocess.Popen[str], Path]] = []
+        for index, files in enumerate(shards, start=1):
+            shard_env = dict(env)
+            shard_env["TSW_RESULTS_FILE"] = str(self.results_dir / f"{tier}.{index}.json")
+            log = self.results_dir / f"{tier}.{index}.out"
+            with log.open("w", encoding="utf-8") as out:
+                proc = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-m",
+                        "coverage",
+                        "run",
+                        f"--data-file={self.results_dir / f'.coverage.{tier}.{index}'}",
+                        "-m",
+                        "pytest",
+                        *(path.relative_to(ROOT).as_posix() for path in files),
+                        "-q",
+                        "-p",
+                        "no:cacheprovider",
+                        f"--basetemp={tmp / f'{tier}-{index}'}",
+                        f"--junitxml={self.results_dir / f'{tier}.{index}.xml'}",
+                    ],
+                    cwd=ROOT,
+                    env=shard_env,
+                    stdout=out,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            procs.append((index, proc, log))
+        summary: dict[str, Any] = {"collected": 0, "passed": 0, "failed": 0, "skipped": 0}
+        summary.update({"exit": 0, "processes": len(shards)})
+        merged: dict[str, Any] = {"started": started, "finished": started, "exitstatus": 0}
+        merged.update({"collected": 0, "tests": []})
+        logs: list[str] = []
+        suites = ET.Element("testsuites")
+        for index, proc, log in procs:
+            code = proc.wait()
+            output = log.read_text(encoding="utf-8", errors="replace").strip()
+            log.unlink()
+            logs.append(f"===== {tier} {index}/{len(shards)}（退出码 {code}）=====\n{output}")
+            summary["exit"] = summary["exit"] or code
+            junit = self.results_dir / f"{tier}.{index}.xml"
+            if junit.is_file():
+                suites.extend(ET.parse(junit).getroot())
+                junit.unlink()
+            result_file = self.results_dir / f"{tier}.{index}.json"
+            if not result_file.is_file():
+                problems.append(f"{tier}[{index}]: 没有生成结果文件（{output.splitlines()[-1:]}）")
+                continue
+            data = json.loads(result_file.read_text(encoding="utf-8"))
+            result_file.unlink()
+            if data["started"] < started - 1:
+                problems.append(f"{tier}[{index}]: 结果文件不是本次运行生成的")
+            merged["finished"] = max(merged["finished"], data["finished"])
+            merged["collected"] += int(data["collected"])
+            merged["tests"] += data["tests"]
+            if code != 0:
+                problems.append(f"{tier}[{index}]: pytest 退出码 {code}，详见 {tier}.log")
+                problems.extend(line for line in output.splitlines() if "FAILED" in line)
+        merged["exitstatus"] = summary["exit"]
+        (self.results_dir / f"{tier}.log").write_text("\n\n".join(logs) + "\n", encoding="utf-8")
+        ET.ElementTree(suites).write(self.results_dir / f"{tier}.xml", encoding="utf-8")
+        if not any(f"{tier}[" in problem and "结果文件" in problem for problem in problems):
+            (self.results_dir / f"{tier}.json").write_text(
+                json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        for test in merged["tests"]:
+            outcome = str(test["outcome"])
+            key = outcome if outcome in ("passed", "failed", "skipped") else "failed"
+            summary[key] += 1
+            self.test_results.append(test)
+        summary["collected"] = merged["collected"]
+        summary["seconds"] = round(time.time() - started, 1)
+        if summary["collected"] == 0:
+            problems.append(f"{tier}: 没有发现任何测试")
+        self.tiers[tier] = summary
+        print(
+            f"    {tier}: {summary['collected']} collected, {summary['passed']} passed, "
+            f"{summary['failed']} failed, {summary['skipped']} skipped "
+            f"（{len(shards)} 个进程，{summary['seconds']}s）"
+        )
+        return problems
+
     def _coverage(self, tiers: list[str]) -> list[str]:
         """Combine and report line coverage. The number is not a gate; missing evidence is."""
-        data_files = [self.results_dir / f".coverage.{tier}" for tier in tiers]
-        missing = [path.name for path in data_files if not path.is_file()]
+        data_files = sorted(
+            path for tier in tiers for path in self.results_dir.glob(f".coverage.{tier}.*")
+        )
+        missing = [t for t in tiers if not any(self.results_dir.glob(f".coverage.{t}.*"))]
         if missing:
             return [f"缺少覆盖数据：{missing}"]
         combined = self.results_dir / ".coverage"
@@ -271,6 +358,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="TaskSteward gate")
     parser.add_argument("--steps", default=",".join(STEPS))
     parser.add_argument("--tier", action="append", choices=CI_TIERS)
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=default_jobs(),
+        help=f"每个层级并行的 pytest 进程数（默认为 CPU 数，至多 {MAX_JOBS}；1 为不并行）",
+    )
     parser.add_argument("--results-dir")
     parser.add_argument("--verify-ci", metavar="ARTIFACTS")
     parser.add_argument(
@@ -285,6 +378,8 @@ def main(argv: list[str] | None = None) -> int:
     unknown = [step for step in steps if step not in STEPS]
     if unknown:
         parser.error(f"未知步骤 {unknown}")
+    if args.jobs < 1:
+        parser.error("--jobs 至少为 1")
     tiers: list[str] = list(args.tier or CI_TIERS)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     results_dir = Path(args.results_dir) if args.results_dir else ROOT / ".local" / "gate" / run_id
@@ -297,7 +392,7 @@ def main(argv: list[str] | None = None) -> int:
     if "docs" in steps:
         gate.docs()
     if "tests" in steps:
-        gate.tests(tiers)
+        gate.tests(tiers, args.jobs)
     if "catalog" in steps:
         if "tests" not in steps:
             gate.record("catalog", False, "catalog 步骤需要同一次运行中的 tests 步骤")
