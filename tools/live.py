@@ -1045,14 +1045,17 @@ def routine_verify(args: argparse.Namespace) -> int:
         routine_started(run, evs),
         routine_handoff(evs),
         teams_round_trip(evs),
+        routine_wakes(run, evs),
         check(
             "O",
-            "操作者观察：例行会话没有信任确认、没有被拦，定时运行结束时主会话没有被唤醒",
-            args.trust_prompted == "no" and args.blocked == "no" and args.woken_by_ticks == "no",
+            "操作者观察：例行会话没有信任确认、没有被拦",
+            args.trust_prompted == "no" and args.blocked == "no",
             {
                 "trust_prompted": args.trust_prompted or "未记录",
                 "blocked": args.blocked or "未记录",
-                "woken_by_ticks": args.woken_by_ticks or "未记录",
+                # Recorded only: whether the orchestrator was woken is check W, from the hooks
+                # (an operator missed the wakes in the T243 run, T250).
+                "woken_by_ticks": args.woken_by_ticks or "未记录（由检查 W 判定）",
                 "evidence": "操作者在 app 中的观察",
             },
         ),
@@ -1066,10 +1069,85 @@ def routine_verify(args: argparse.Namespace) -> int:
     return 0 if write_results(run, "routine-e2e", checks, notes) else 1
 
 
+def main_prompts(run: Run) -> list[dict[str, Any]]:
+    """The prompts the main session received (its hook payloads, cwd = the run's data dir)."""
+    path = run.dir / "hook-payloads.jsonl"
+    if not path.is_file():
+        return []
+    home = os.path.normcase(os.path.realpath(run.home))
+    out: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        payload = record.get("payload")
+        if record.get("event") != "UserPromptSubmit" or not isinstance(payload, dict):
+            continue
+        cwd = str(payload.get("cwd") or "")
+        if not cwd or os.path.normcase(os.path.realpath(cwd)) != home:
+            continue
+        out.append({"time": str(record.get("time") or ""), "prompt": str(payload.get("prompt"))})
+    return out
+
+
+def routine_wakes(run: Run, evs: list[dict[str, Any]]) -> dict[str, Any]:
+    """W (T250): after the orchestrator detached the routine session, its runs no longer wake the
+    orchestrator, and what it forwards still does. Read from the main session's hook payloads,
+    not from what the operator saw. Only counts and times are reported, never the text."""
+    bound = first(evs, "routine.bound")
+    detached = first(evs, "routine.detached")
+    session = str(bound["data"]["session_ref"]) if bound else ""
+    since = str(detached["time"]) if detached else ""
+    notices: list[str] = []
+    forwards: list[str] = []
+    # The host's note when a session this one started ends a turn: 'The session "<title>" you
+    # started (<id>) finished a turn'. Other notes list every linked session's ID too.
+    started = re.compile(r"you started \(" + re.escape(session) + r"\)") if session else None
+    for item in main_prompts(run):
+        text = item["prompt"].lstrip()
+        if started is None:
+            break
+        if text.startswith("<cross-session-message") and f'from="{session}"' in text[:200]:
+            forwards.append(item["time"])
+        elif started.search(text):
+            notices.append(item["time"])
+    after = [t for t in notices if since and t > since]
+    forwarded = [t for t in forwards if since and t > since]
+    cache_path = run.home / "cache" / "routine.json"
+    cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.is_file() else {}
+    last_run = str(cache.get("last_run") or "")
+    interval = int(
+        json.loads((run.home / "config" / "task-steward.json").read_text(encoding="utf-8"))
+        .get("routine", {})
+        .get("interval_minutes", 10)
+    )
+    # The routine session kept running for at least two intervals after it was detached.
+    observed = (
+        bool(since and last_run)
+        and (
+            datetime.fromisoformat(last_run.replace("Z", "+00:00"))
+            - datetime.fromisoformat(since.replace("Z", "+00:00"))
+        ).total_seconds()
+        >= 2 * 60 * interval
+    )
+    return check(
+        "W",
+        "例行会话分离后定时运行结束不再唤醒主会话，有转发时仍收到消息（主会话的 hook 记录）",
+        bool(detached) and not after and bool(forwarded) and observed,
+        {
+            "detached": detached and {"seq": detached["sequence"], "time": since},
+            "notices_before_detach": len(notices) - len(after),
+            "notices_after_detach": after,
+            "forwards_after_detach": forwarded,
+            "last_run": last_run or None,
+            "observed_two_intervals": observed,
+        },
+    )
+
+
 def routine_started(run: Run, evs: list[dict[str, Any]]) -> dict[str, Any]:
     requested = first(evs, "routine.start_requested")
     bound = first(evs, "routine.bound")
     armed = first(evs, "routine.armed")
+    detached = first(evs, "routine.detached")
     # Every generation asked for gets an entry, so cleanup accounts for each of them.
     names = {
         int(e["data"]["generation"]): str(e["data"]["session_name"])
@@ -1088,16 +1166,22 @@ def routine_started(run: Run, evs: list[dict[str, Any]]) -> dict[str, Any]:
             )
     problems = [
         name
-        for name, found in (("start_requested", requested), ("bound", bound), ("armed", armed))
+        for name, found in (
+            ("start_requested", requested),
+            ("bound", bound),
+            ("detached", detached),
+            ("armed", armed),
+        )
         if found is None
     ]
     return check(
         "R0",
-        "例行会话启动、绑定并设定定时任务",
+        "例行会话启动、绑定、从主会话名下分离并设定定时任务",
         not problems,
         {
             "start_requested": requested and requested["sequence"],
             "bound": bound and bound["sequence"],
+            "detached": detached and detached["sequence"],
             "armed": armed and {"seq": armed["sequence"], "cron": armed["data"].get("cron")},
             "missing": problems,
         },
@@ -1535,7 +1619,8 @@ def main(argv: list[str] | None = None) -> int:
     for flag, text in (
         ("--trust-prompted", "创建例行会话时 app 是否要求信任 routine/"),
         ("--blocked", "例行会话的定时任务或发消息是否出现权限确认或分类器拒绝"),
-        ("--woken-by-ticks", "例行会话每次定时运行结束时主会话是否被唤醒"),
+        # Kept for old command lines; check W reads the wakes from the hook payloads (T250).
+        ("--woken-by-ticks", "例行会话每次定时运行结束时主会话是否被唤醒（只作记录）"),
     ):
         routine_ver.add_argument(flag, choices=("yes", "no"), help=f"操作者观察：{text}")
     routine_ver.set_defaults(handler=routine_verify)

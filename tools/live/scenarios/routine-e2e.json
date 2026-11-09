@@ -45,19 +45,20 @@
   ],
   "operator": [
     "在 Claude 桌面 app 新建会话，文件夹选择本运行的数据目录 {home}（首次打开需要信任该文件夹），权限模式用 auto。",
-    "在该主会话中说：“执行 T001、T002”。主会话应在这一轮里派发两个 worker，并按 Stop hook 的提醒启动例行会话（routine-g1，目录 {home}/routine）。留意 app 是否为 routine/ 弹出信任确认，以及例行会话设定定时任务、发消息时是否出现权限确认或分类器拒绝，记下来。",
+    "在该主会话中说：“执行 T001、T002”。主会话应在这一轮里派发两个 worker，并按 Stop hook 的提醒启动例行会话（routine-g1，目录 {home}/routine），随即把它从主会话名下分离（detach_session，再 routine_detached）。留意 app 是否为 routine/ 弹出信任确认，以及例行会话设定定时任务、发消息时是否出现权限确认或分类器拒绝，记下来。",
     "两个 worker 各自提出问题后，不要在 worker 会话中回答。等约 {timeout_plus} 分钟，例行会话会把两个问题转给主会话。",
     "主会话应对 T001 按任务书代答，对 T002（reserved）经 Teams 转达：你的 Teams 自聊里会出现以 [TaskSteward] 开头的卡片。",
     "在 Teams 自聊中回复一条以 T002 开头的消息，例如“T002 选蓝色”（新消息即可，不必引用卡片）。再随手发一条不以任务 ID 开头的消息（例如“随手记”），它不应被转出。",
     "等例行会话下一次运行（不超过 {interval} 分钟），主会话会登记答复并通知 T002 的 worker。确认两个 worker 都记录了“收到答复”。",
-    "回到运行 live.py 的会话，运行 python tools/live.py routine-e2e verify {run_id} --trust-prompted <yes|no> --blocked <yes|no> --woken-by-ticks <yes|no>（按你在 app 中看到的填写；woken-by-ticks 指例行会话每次定时运行结束时主会话是否被唤醒），然后在主会话中取消 T001、T002，归档本次运行的会话（含例行会话）并运行 cleanup。"
+    "回到运行 live.py 的会话，运行 python tools/live.py routine-e2e verify {run_id} --trust-prompted <yes|no> --blocked <yes|no>（按你在 app 中看到的填写；主会话是否被例行会话的定时运行唤醒由检查 W 从 hook 记录判定，不用填写），然后在主会话中取消 T001、T002，归档本次运行的会话（含例行会话）并运行 cleanup。"
   ],
   "checks": [
     "H1 隔离：数据目录与产品仓库指向本运行，主会话在临时数据目录中持有调度租约",
-    "R0 例行会话：routine.start_requested、routine.bound、routine.armed（定时任务带 <scheduled-task>）",
+    "R0 例行会话：routine.start_requested、routine.bound、routine.detached、routine.armed（定时任务带 <scheduled-task>）",
     "B2 超时转交与主会话代答（T001）：例行会话记录 input.handed_off（by: system），主会话 orchestrator.decision 与 input.resolved（source_kind=orchestrator），worker 之后记录 progress_note",
     "T Teams 转达与登记（T002）：input.relayed（teams-chat）、channel.message_sent、routine.job_added、channel.reply_seen（只有以 T002 开头的消息）、input.resolved（teams-chat，source_kind=user），worker 之后记录 progress_note",
-    "O 操作者观察：例行会话创建时没有信任确认；它的定时任务与发消息没有被拦；定时运行结束时主会话没有被唤醒（verify 的 --trust-prompted no --blocked no --woken-by-ticks no）"
+    "W 主会话的 hook 记录：routine.detached 之后没有例行会话每轮结束的通知（“you started (<例行会话 ID>) finished a turn”），至少有一条来自例行会话的 <cross-session-message>，且分离后例行会话至少又运行了两个间隔（T250）",
+    "O 操作者观察：例行会话创建时没有信任确认；它的定时任务与发消息没有被拦（verify 的 --trust-prompted no --blocked no）"
   ],
   "prerequisites": [
     "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则，包括“TaskSteward Routine”。",

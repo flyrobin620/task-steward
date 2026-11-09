@@ -1,6 +1,6 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -23,6 +23,7 @@
 | 评审器 | Codex App Server 一次性线程 | P2 的 oneshot 能力 + `roles.reviewer.session` |
 | 待答问题的投递与回收 | 用户在子会话直接答复；转交后经 Teams 自聊（`teams-chat`，§7） | P3 |
 | 例行会话的定时运行 | 会话内定时任务 `CronCreate` / `CronDelete`，`clear_session` 清空上下文（§6） | P2（`timer` 能力） |
+| 例行会话空跑不唤醒主会话 | 主会话启动后 `detach_session`（§6.1） | P2（`detach` 能力） |
 | 控制根 = 私有 Git 仓库 | ledger、runs 随仓库提交 | P4 + 数据目录 |
 
 ## 2. 宿主集成 `claude-code`
@@ -104,7 +105,12 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 
 1. `routine_start` 返回会话名 `routine-g<K>`、执行目录（数据目录下的 `routine/`，磁盘上的实际写法）与 `start_session` 参数：`initiation: user_asked`、`context: fresh`、`use_worktree: false`、`roles.routine` 的 `model` / `effort`，以及按 §3 映射为宿主名称的权限模式（事件中的 `host_permission_mode`）；`prompt` 只写短指令（“你是 TaskSteward 的例行会话。调用 `whoami`，再调用 `routine_board`，逐行执行。”），`background` 写明例行会话的职责（≥80 字）。
 2. 主会话调用 `start_session`，再用返回的会话 ID 调用 `routine_bind`。结果未知时按会话名用 `list_sessions {linked:true}` 对账。
-3. 新目录第一次使用时 app 要求用户确认信任，确认只能在用户看着主会话时弹出（CC001 §3），所以启动只在用户 turn 中进行。
+3. `claude-app` 声明 `detach`，`routine_start` 返回 `detach: true`：主会话随即调用 `mcp__ccd_session_mgmt__detach_session(session_id)`，成功后 `routine_detached`（`generation`），再用 `SendMessage` 告诉例行会话“已绑定，调用 routine_board 开始”。原因：app 在主会话启动的会话（linked side session）每结束一轮、主会话空闲时，都用 side-sessions-event 继续主会话一轮（`start_session` 的 `wake_when_done` 说明：“whether or not this is set”），不区分这一轮是不是定时任务触发、有没有转发内容；`detach_session` 的说明：“it stops nesting under the session that started it, is no longer archived with it, and that session is no longer told when its turns end”。分离后：
+   - 例行会话转发用的 `send_message` 按会话 ID 发给主会话，与是否 linked 无关；主会话也按会话 ID 给它发消息（`stale` 时）。
+   - 它不再出现在主会话的 `list_sessions {linked:true}` 与 linked 列表中，按会话名对账只在分离之前进行。
+   - 主会话被归档时不再连带归档它；它继续把结果转给下一个持有调度租约的主会话。关闭例行会话（`routine.enabled=false`）时主会话停止、归档它，`stop_session` 与 `archive_session` 对非本会话启动的会话可能要用户确认（auto 模式由分类器判断）。
+   - `detach_session` 不能撤销，没有确认卡片，不受派发窗口限制（不创建会话）。分离失败或没有记录时 `attention` 的 `routine` 为 `attached`，主会话的 Stop hook 在任何一轮提醒补做；本版本之前启动的例行会话也这样迁移。
+4. 新目录第一次使用时 app 要求用户确认信任，确认只能在用户看着主会话时弹出（CC001 §3），所以启动只在用户 turn 中进行。
 
 数据目录的 `CLAUDE.md` 与 `orchestrate` skill 也会被 `routine/` 中的会话读到；二者已写明角色不是 orchestrator 时忽略（§2）。例行会话的指令由 SessionStart hook 注入（CC001 §6）。
 
@@ -127,7 +133,7 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 
 ### 6.3 宿主侧护栏与允许规则
 
-例行会话角色见 CC001 §5；hooks 对它执行 CC008 的 CC-B8、CC-B10（已撤销、待绑定）与 CC-B11（不编辑、不运行命令、不建会话）。与 worker 的执行目录一样，`routine/` 不带权限规则（带规则的目录会再次要求信任，决定 0003）：例行会话的定时任务、取数、转发与清空上下文由用户设置中的 auto 模式规则“TaskSteward Routine”放行（`tsw host install-hint` 给出，CC008 §6），创建它的 `start_session` 由“TaskSteward Worker Dispatch”覆盖。
+例行会话角色见 CC001 §5；hooks 对它执行 CC008 的 CC-B8、CC-B10（已撤销、待绑定）与 CC-B11（不编辑、不运行命令、不建会话）。与 worker 的执行目录一样，`routine/` 不带权限规则（带规则的目录会再次要求信任，决定 0003）：例行会话的定时任务、取数、转发与清空上下文由用户设置中的 auto 模式规则“TaskSteward Routine”放行（`tsw host install-hint` 给出，CC008 §6），创建它的 `start_session` 与随后的 `detach_session` 由“TaskSteward Worker Dispatch”覆盖。
 
 ### 6.4 主会话的“处理转交问题” skill
 
@@ -138,14 +144,15 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 3. 需要用户时 `input_relay`：用户正在主会话中时转达到 `main-session`；否则按配置的渠道（如 `teams-chat`，§7）发出；
 4. Teams 中转来的消息：判断它是否回答了问题，是答复时 `input_resolve`（来源为渠道 `teams-chat` 与消息 ID），再告诉 worker；不是答复时不登记。
 
-### 6.5 待验证（T243 live）
+### 6.5 待验证（T243、T250 live）
 
 | 编号 | 假设 | 不成立时 |
 | --- | --- | --- |
-| R1 | 由定时任务触发的一轮结束时，app 不用 `side-sessions-event` 唤醒主会话（只在子会话的第一轮或主会话发起的一轮结束时唤醒） | 主会话创建后对例行会话调用 `detach_session`，此后按会话 ID 发消息 |
+| R1 | 由定时任务触发的一轮结束时，app 不用 `side-sessions-event` 唤醒主会话（只在子会话的第一轮或主会话发起的一轮结束时唤醒） | **不成立**（T250）：T243 live 自己的 hook 记录显示例行会话每轮结束（包括空跑）都唤醒主会话，当时的检查 O 只取操作者观察而漏判。已改为启动后 `detach_session`（§6.1），live 检查改为从 hook 记录判定（R5） |
 | R2 | `clear_session("self")` 之后，会话内的定时任务仍然有效 | 清空后定时任务失效，按恢复规则（DN006 §8.9.6）由主会话发消息让例行会话重新设定；或把 `context_reset_hours` 设得很大，只依赖宿主的自动压缩 |
 | R3 | 例行会话能按会话 ID 给主会话发消息 | 改用 `SendMessage`（`to` 为 `local_…` 会话 ID） |
 | R4 | `SendMessageToSelf` 返回消息 ID、chat ID 与发送者 ID；`ListChatMessages` 能读回用户在自聊中的消息与发送者 | 发送者取自读回的卡片消息 |
+| R5 | 分离后例行会话空跑结束时主会话不再收到 side-sessions-event；例行会话的转发仍以 `<cross-session-message` 送达主会话，没有确认卡片（T250 live routine-e2e 的检查 W，从主会话的 hook 记录判定） | 转发改用 `SendMessage`（`to` 为主会话 ID）；仍需确认时把放行写进 auto 规则 |
 
 ## 7. `teams-chat` 渠道
 

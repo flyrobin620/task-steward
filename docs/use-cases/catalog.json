@@ -467,7 +467,7 @@
       "id": "UC-ROUTINE-001",
       "title": "例行会话按例行表运行脚本，把超时的会话内问题转给主会话（DN006 §8.9）",
       "actor": "主会话 / 例行会话 / tsw",
-      "acceptance": "主会话在用户 turn 中 routine_start（routine.start_requested，返回会话名、目录与创建参数）、start_session、routine_bind（routine.bound，旧代次撤销）；例行会话的角色按会话 ID 解析，只列出例行工具，hooks 拦下它的编辑、命令行与建会话（CC-B11），定时提示须带 <scheduled-task>；routine_board 返回到期的例行项与维护动作（首次与续期时 arm、按间隔 clear_context、失效后重新 arm），并把运行时间记在 cache/routine.json；routine_armed 记录 routine.armed；routine_run 运行 handoff-scan，把超时且用户未回复的会话内问题记为 input.handed_off（by: system），返回发给主会话的原文；attention 的 routine 给出 missing / starting / unarmed / stale，主会话 Stop hook 在用户 turn 提醒启动、在失效时提醒发消息",
+      "acceptance": "主会话在用户 turn 中 routine_start（routine.start_requested，返回会话名、目录与创建参数）、start_session、routine_bind（routine.bound，旧代次撤销），宿主在被启动会话每轮结束时唤醒启动者时（routine_start 返回 detach: true）随即分离它并 routine_detached（routine.detached，只对当前代次、只一次）；例行会话的角色按会话 ID 解析，只列出例行工具，hooks 拦下它的编辑、命令行与建会话（CC-B11），定时提示须带 <scheduled-task>；routine_board 返回到期的例行项与维护动作（首次与续期时 arm、按间隔 clear_context、失效后重新 arm），并把运行时间记在 cache/routine.json；routine_armed 记录 routine.armed；routine_run 运行 handoff-scan，把超时且用户未回复的会话内问题记为 input.handed_off（by: system），返回发给主会话的原文；attention 的 routine 给出 missing / starting / attached / unarmed / stale，主会话 Stop hook 在用户 turn 提醒启动、在失效时提醒发消息、在任何一轮提醒分离仍挂在名下（attached）的例行会话",
       "surfaces": [
         "mcp",
         "hook"
@@ -475,6 +475,7 @@
       "claims": [
         "tool:routine_start",
         "tool:routine_bind",
+        "tool:routine_detached",
         "tool:routine_armed",
         "tool:routine_run",
         "mcp:routine_board"

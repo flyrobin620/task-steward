@@ -721,6 +721,17 @@ class Guard:
                     f"mcp__ccd_session_mgmt__send_message 给它（{routine[0].get('session_id')}）"
                     "发消息“运行 routine_board”，让它重新设定定时任务。"
                 )
+            if state == "attached":
+                # Not limited to the user's turn: detaching creates no session (CC006 §6.1).
+                reasons.append(
+                    f"例行会话 routine-g{routine[0].get('generation')}"
+                    f"（{routine[0].get('session_id')}）还挂在本会话名下（attention 的 routine 为 "
+                    "attached），它每结束一轮都会唤醒你：调用 "
+                    "mcp__ccd_session_mgmt__detach_session(session_id=它的会话 ID)，成功后 "
+                    f"routine_detached（generation: {routine[0].get('generation')}）。"
+                    "它已经分离或不是本会话启动的（get_session 的 detached 为 true，或 "
+                    "parentSessionId 不是本会话）时，同样调用 routine_detached，在 note 中写明。"
+                )
             if state == "missing" and user_turn:
                 reasons.append(
                     "这是用户的 turn：例行会话还没有启动（attention 的 routine 为 missing）。"

@@ -173,7 +173,8 @@ def routine_attention(
     now: str | None = None,
 ) -> list[dict[str, Any]]:
     """The routine session when it needs the orchestrator (DN006 §8.9.6–§8.9.7): ``missing`` while
-    tasks are being worked on, ``starting`` (to reconcile), ``unarmed`` or ``stale``."""
+    tasks are being worked on, ``starting`` (to reconcile), ``attached`` (to detach), ``unarmed``
+    or ``stale``."""
     state = routine_mod.status(conn, config, now or utc_now(), cache)
     if state["state"] in ("ok", "disabled"):
         return []

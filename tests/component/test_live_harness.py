@@ -12,7 +12,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -398,3 +399,70 @@ def test_routine_e2e_teams_check_accepts_a_real_round_trip(
     ]
     result = live.teams_round_trip(evs)
     assert result["status"] == "passed", result
+
+
+@pytest.mark.use_case("UC-ROUTINE-001")
+def test_routine_e2e_reads_the_orchestrator_wakes_from_the_hooks(tmp_path: Path) -> None:
+    """Check W (T250): after the detach, a routine run's end no longer wakes the orchestrator;
+    its forwards still do. Read from the main session's hook payloads, not the operator."""
+    run_dir = tmp_path / "run"
+    home = run_dir / "home"
+    (home / "config").mkdir(parents=True)
+    (home / "cache").mkdir()
+    (home / "config" / "task-steward.json").write_text(
+        json.dumps({"version": 1, "routine": {"interval_minutes": 2}}), encoding="utf-8"
+    )
+    (home / "cache" / "routine.json").write_text(
+        json.dumps({"generation": 1, "last_run": "2026-11-09T10:10:00Z"}), encoding="utf-8"
+    )
+    rid = "local_r"
+    linked = f"(Linked sessions now: worker = local_w (idle); routine-g1 = {rid} (idle).)"
+
+    def note(session: str) -> str:
+        return (
+            f'<system-reminder>\nThe session "x" you started ({session}) finished a turn. {linked}'
+        )
+
+    def write(*prompts: tuple[str, str, Path]) -> None:
+        lines = [
+            json.dumps(
+                {
+                    "event": "UserPromptSubmit",
+                    "time": t,
+                    "payload": {"cwd": str(cwd), "prompt": text},
+                }
+            )
+            for t, text, cwd in prompts
+        ]
+        (run_dir / "hook-payloads.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    forward = f'<cross-session-message from="{rid}" from-name="r">handoff</cross-session-message>'
+    evs = [
+        {"sequence": 1, "type": "routine.bound", "data": {"session_ref": rid}, "time": "t"},
+        {
+            "sequence": 2,
+            "type": "routine.detached",
+            "data": {"generation": 1},
+            "time": "2026-11-09T10:00:00Z",
+        },
+    ]
+    run = cast(live.Run, SimpleNamespace(dir=run_dir, home=home))
+    write(
+        ("2026-11-09T09:58:00Z", note(rid), home),  # before the detach: counted apart
+        ("2026-11-09T10:03:00Z", note("local_w"), home),  # a worker; lists the routine's ID
+        ("2026-11-09T10:05:00Z", forward, home),
+        ("2026-11-09T10:07:00Z", note(rid), tmp_path),  # another session's prompt
+    )
+    passed = live.routine_wakes(run, evs)
+    assert passed["status"] == "passed", passed
+    assert passed["evidence"]["notices_before_detach"] == 1
+    assert passed["evidence"]["forwards_after_detach"] == ["2026-11-09T10:05:00Z"]
+    # A routine run that still wakes the orchestrator after the detach fails the check.
+    write(("2026-11-09T10:05:00Z", forward, home), ("2026-11-09T10:06:00Z", note(rid), home))
+    woken = live.routine_wakes(run, evs)
+    assert woken["status"] == "failed"
+    assert woken["evidence"]["notices_after_detach"] == ["2026-11-09T10:06:00Z"]
+    # So does a run with no detach at all (the T243 run), or nothing forwarded after it.
+    assert live.routine_wakes(run, evs[:1])["status"] == "failed"
+    write(("2026-11-09T09:59:00Z", forward, home))
+    assert live.routine_wakes(run, evs)["status"] == "failed"

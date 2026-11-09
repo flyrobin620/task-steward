@@ -1,6 +1,6 @@
 # DN006 插件层：宿主集成、会话、人类渠道与数据存储
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN008 校验原则](DN008-guardrails.md) · 实现：[CC006 Claude Code 插件](claude-code/CC006-plugins.md)
 
@@ -174,6 +174,8 @@ class SessionCaps:
     prestart: bool                  # 能否先创建会话、之后再投递任务书（两阶段启动）
     reuse_session: bool             # 停止后能否续用同一会话
     open_existing_dir: bool         # 能否在已有目录（tsw 创建的 worktree）启动会话
+    timer: bool                     # 能否在会话内定时唤醒（例行会话，§8.9）
+    detach: bool                    # 宿主在被启动会话每轮结束时通知启动者，且能解除这层关系（§8.9.7）
 ```
 
 ### 7.2 接口
@@ -439,7 +441,8 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | 做什么 | 每次运行：读取到期的例行项（`routine_board`），逐行执行——需要宿主工具取数据的，先按这一行写明的调用取数（§8.9.3），再调用 `routine_run` 运行这一行的脚本；脚本结果需要转发时，把 tsw 给出的消息原样发给主会话 |
 | 不做什么 | 不作任何判断：做哪一行、取什么数据、结果是否转发、发给谁、发什么，都由例行项与脚本决定；内容上的判断一律由主会话按 skill 完成。不改代码、不建会话、不运行命令 |
 | 工具 | 只有例行工具：`whoami`、`routine_board`、`routine_run`、`routine_armed`（按角色列出，DN008 §6）。宿主侧另有 block list 拦下编辑、命令行与建会话（Claude Code 见 CC008 的 CC-B11） |
-| 执行者 | 由宿主实现提供：主会话所在宿主是 delegated、tsw 不能唤醒它的会话时（Claude app），执行者是一个由宿主定时唤醒的子会话（[CC006 §6](claude-code/CC006-plugins.md)）。宿主为 direct（tsw 能自己创建、唤醒会话）时，例行表可以由 tsw 进程执行，本版本不实现 |
+| 执行者 | 由宿主实现提供：主会话所在宿主是 delegated、tsw 不能唤醒它的会话时（Claude app），执行者是一个由主会话启动、由宿主定时唤醒的会话（[CC006 §6](claude-code/CC006-plugins.md)）。宿主为 direct（tsw 能自己创建、唤醒会话）时，例行表可以由 tsw 进程执行，本版本不实现 |
+| 只在有转发时唤醒主会话 | 例行会话每次运行都结束一轮，大多数运行没有要转发的内容。宿主在被启动会话每轮结束时通知并唤醒启动者时（适配器声明 `detach`，例如 Claude app），主会话启动例行会话后立即把它从自己名下分离（§8.9.7），之后只有例行会话发来的转发消息唤醒主会话。不采用“空跑时不结束这一轮”：宿主的定时唤醒只在会话空闲时触发，长回合还会挡住主会话发来的消息，这一轮终究要结束（T250） |
 
 #### 8.9.2 例行表
 
@@ -503,12 +506,13 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | 上下文随运行增长 | 每 `routine.context_reset_hours`（默认 24）返回一次 `clear_context`。例行表与脚本都在 tsw 中，执行者每次运行只依赖定时提示与 `routine_board` 的返回，清空不丢失状态 |
 | 定时任务失效（宿主重启、清空时丢失、设定失败） | 超过 `routine.stale_after_intervals`（默认 3）个间隔没有运行记录时，`attention` 把例行会话标为 `stale`；主会话下次运行时给它发消息，它运行 `routine_board`，后者判定失效并返回 `arm` |
 | 绑定后一直没有设定定时任务（第一次运行没有完成） | 过了同样的失效窗口，同样标为 `stale`，由主会话发消息让它运行 |
+| 仍挂在主会话名下（适配器声明 `detach`，已绑定但没有 `routine.detached`） | `attention` 标为 `attached`；主会话在任何一轮（不限用户 turn）分离它并用 `routine_detached` 记录。分离之前它每轮结束都会唤醒主会话，所以主会话最迟在下一次被它唤醒时补做；本版本之前启动的例行会话也这样迁移 |
 | 会话不存在（被归档、删除，或找不到） | `attention` 标为 `missing`，主会话在下一个用户 turn 重新启动（§8.9.7） |
 | 用户关闭例行会话（`routine.enabled=false`） | 主会话停止并归档现有会话；超时转交只在主会话运行 `sync` 时发生，Teams 答复不再自动回收 |
 
 #### 8.9.7 启动与参数
 
-例行会话在用户第一次要求执行待办的那一轮由主会话启动：`routine_start` 记录 `routine.start_requested`（代次、会话名 `routine-g<K>`、执行目录 `routine/`）并返回创建会话的参数，主会话用会话适配器创建会话后用 `routine_bind` 记录 `routine.bound`；结果未知时按会话名对账（§4.1）。会话 ID 等于当前代次的例行会话时角色为例行会话，旧代次的为已撤销（DN001 §7.1）。`attention` 的 `routine` 给出状态：`missing`、`starting`、`unarmed`、`ok`、`stale`。
+例行会话在用户第一次要求执行待办的那一轮由主会话启动：`routine_start` 记录 `routine.start_requested`（代次、会话名 `routine-g<K>`、执行目录 `routine/`）并返回创建会话的参数，主会话用会话适配器创建会话后用 `routine_bind` 记录 `routine.bound`；结果未知时按会话名对账（§4.1）。适配器声明 `detach` 时（`routine_start` 返回 `detach: true`），主会话随即把会话从自己名下分离，再用 `routine_detached` 记录 `routine.detached`；分离之后例行会话不再随主会话归档，转发仍按会话 ID 发给调度租约的持有者，主会话也仍按会话 ID 给它发消息，按会话名对账只在分离之前进行。会话 ID 等于当前代次的例行会话时角色为例行会话，旧代次的为已撤销（DN001 §7.1）。`attention` 的 `routine` 给出状态：`missing`、`starting`、`attached`、`unarmed`、`ok`、`stale`（`attached` 先于后两者报告）。
 
 参数见 DN003 §3.1b：`roles.routine`（会话适配器、模型，默认 `claude-sonnet-5-5`、effort `low`、权限模式）与 `routine`（`enabled`、`interval_minutes` 默认 10、`renew_after_days`、`context_reset_hours`、`stale_after_intervals`；`teams_lookback_hours` 已弃用）。承载例行会话的会话适配器须为 `interactive`，并声明 `timer`（会话内的定时唤醒）。
 
