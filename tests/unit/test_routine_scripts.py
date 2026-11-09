@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -11,6 +12,7 @@ from tsw.machine.routine import (
     CARD_PREFIX,
     cron_for,
     fetched_messages,
+    id_time,
     next_page,
     plain_text,
     select_replies,
@@ -189,3 +191,25 @@ def test_next_page_reads_the_whole_window_one_page_at_a_time() -> None:
     assert next_page([_msg("1", "x")], chat_id="c", since=WINDOW) is None
     assert next_page(None, chat_id="c", since=WINDOW) is None
     assert next_page("not json", chat_id="c", since=WINDOW) is None
+
+
+def _teams_id(at: str) -> str:
+    """A Teams message ID: the time the message was created, in milliseconds."""
+    return str(int(datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp() * 1000))
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_quick_reply_on_a_newer_page_than_its_card() -> None:
+    # Teams created the card at 09:00:00; tsw recorded it at 09:00:30; the user replied at
+    # 09:00:10. Read one page at a time, the reply's page does not hold the card.
+    card = _teams_id("2026-11-05T09:00:00Z")
+    assert id_time(card) == datetime(2026, 11, 5, 9, tzinfo=timezone.utc)
+    assert id_time("card-1") is None and id_time("0000000000001") is None
+    reply = [_msg("r", "T001 用 C", at="2026-11-05T09:00:10Z")]
+    waiting = _q("T001", 2, card, "2026-11-05T09:00:30Z")
+    older = _q("T001", 1, "card-1", "2026-11-05T08:00:00Z", status="resolved")
+    for requests in ([waiting], [older, waiting]):
+        found = select_replies(
+            reply, requests=requests, sender_id=None, since=WINDOW, exclude=set()
+        )
+        assert [(m["request_id"], m["pending"]) for m in found] == [("Q-T001-2", True)]

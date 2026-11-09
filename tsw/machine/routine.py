@@ -480,6 +480,18 @@ def _created(message: Mapping[str, Any]) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+# Teams message IDs are the time the message was created, in milliseconds since the epoch.
+_ID_TIMES = (datetime(2000, 1, 1, tzinfo=timezone.utc), datetime(2100, 1, 1, tzinfo=timezone.utc))
+
+
+def id_time(message_id: str) -> datetime | None:
+    """The time a Teams message ID stands for, or None for an ID of another form."""
+    if not message_id.isdigit() or len(message_id) != 13:
+        return None
+    at = datetime.fromtimestamp(int(message_id) / 1000, tz=timezone.utc)
+    return at if _ID_TIMES[0] <= at < _ID_TIMES[1] else None
+
+
 def starting_task(words: str, tasks: Iterable[str]) -> str | None:
     """The ID the message starts with, followed by nothing, a space or punctuation."""
     upper = words.upper()
@@ -535,7 +547,13 @@ def select_replies(
     ``message_id`` of the card, ``sent_at``, ``status``), oldest first."""
     messages = fetched_messages(fetched)
     cards = {str(r["message_id"]): str(r["request_id"]) for r in requests}
+    # When each card went out. Pages are read one at a time, so a card is often not on the page
+    # its replies are on: its ID tells the time then (review r1 of T243 a2).
     card_times: dict[str, datetime] = {}
+    for message_id, request_id in cards.items():
+        at = id_time(message_id)
+        if at is not None:
+            card_times[request_id] = at
     for message in messages:
         created = _created(message)
         request_id = cards.get(str(message.get("id") or ""))

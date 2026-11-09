@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="706c713cf0f9585478028335bd8afa06f1e3f0423f1fd870e81cced0d3b6ab4f">
+<meta name="tsw-source-sha256" content="817266a5ab7200613c0c097a94f946b07340a475d0217e8107b6f975b932f382">
 <title>DN006 插件层：宿主集成、会话、人类渠道与数据存储</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -243,7 +243,7 @@ class VerifiedSource:              # DN002 G-USER 的统一证据
 <table><thead><tr><th>项目</th><th>内容</th></tr></thead><tbody><tr><td>输入</td><td>无（读账本）</td></tr><tr><td>脚本</td><td>找出所有超过 <code>input.in_session_timeout_minutes</code>、用户在 worker 会话中没有任何回复、尚未转交的会话内问题（§8.1b）；对每一个记录 <code>input.handed_off</code>（<code>by: system</code>）</td></tr><tr><td>结果</td><td>这次转交的问题列表（任务 ID、问题编号、问题全文、是否 <code>reserved</code>、worker 会话）</td></tr><tr><td>转发</td><td><code>if_any</code>：“以下问题超时转交给你，按 skill 处理：…”</td></tr></tbody></table>
 <p>主会话按“处理转交问题”的 skill 判断（§8.1b、§8.2）：在授权内代答（<code>handoff_resolve</code>，并告诉 worker 继续），或经人类渠道问用户（<code>input_relay</code>，例如 Teams，§8.7）。</p>
 <h4 id="895-teams-例行项teams-replies">8.9.5 Teams 例行项：<code>teams-replies</code></h4>
-<table><thead><tr><th>项目</th><th>内容</th></tr></thead><tbody><tr><td>输入</td><td>Teams chat ID、用户本人在 Teams 中的 ID、等待中的任务 ID 列表（<code>channel_sent</code> 加入，问题不再待答时移出）</td></tr><tr><td>读取窗口</td><td>从该 chat 中最早一个仍待答的 Teams 问题的卡片登记时间起（提前 5 分钟，容纳两边时钟与登记先后的差），到现在。窗口内的消息全部读取，不限条数（用户 2026-11-09）。<code>routine.teams_lookback_hours</code> 不再使用</td></tr><tr><td>取数</td><td>从最新一页起，每次一页（每页 10 条，单次工具结果须在宿主的长度上限内），每页单独交给 <code>routine_run</code>（§8.9.3）。这一页有下一页、且其中最早的消息不早于窗口起点时，<code>routine_run</code> 返回 <code>next</code>；否则这一行读完。Claude Code 的工具与参数见 CC006 §6.2</td></tr><tr><td>脚本</td><td>从这一页的消息中选出：发送者是用户本人（消息带发送者时）、在读取窗口内、不是 tsw 发出的、此前没有转过、去掉格式后的正文以问题编号或列表中某个任务 ID 开头（后接空白或标点）的消息，并对应到它回答的问题：以问题编号开头的就是那个问题；以任务 ID 开头的是该任务在这条消息之前发出卡片的最近一个 Teams 问题（更早问题的回复不会算到之后才问的问题上）；对应不到的不转出。对每条记录 <code>channel.reply_seen</code>（消息 ID、任务 ID、问题编号、问题是否仍待答、原文），之后不再转出</td></tr><tr><td>结果</td><td>选出的消息（任务 ID、问题编号、消息 ID、时间、原文）</td></tr><tr><td>转发</td><td><code>if_any</code>：“Teams 中有以下答复，按 skill 判断并登记：…”</td></tr></tbody></table>
+<table><thead><tr><th>项目</th><th>内容</th></tr></thead><tbody><tr><td>输入</td><td>Teams chat ID、用户本人在 Teams 中的 ID、等待中的任务 ID 列表（<code>channel_sent</code> 加入，问题不再待答时移出）</td></tr><tr><td>读取窗口</td><td>从该 chat 中最早一个仍待答的 Teams 问题的卡片登记时间起（提前 5 分钟，容纳两边时钟与登记先后的差），到现在。窗口内的消息全部读取，不限条数（用户 2026-11-09）。<code>routine.teams_lookback_hours</code> 不再使用</td></tr><tr><td>取数</td><td>从最新一页起，每次一页（每页 10 条，单次工具结果须在宿主的长度上限内），每页单独交给 <code>routine_run</code>（§8.9.3）。这一页有下一页、且其中最早的消息不早于窗口起点时，<code>routine_run</code> 返回 <code>next</code>；否则这一行读完。Claude Code 的工具与参数见 CC006 §6.2</td></tr><tr><td>脚本</td><td>从这一页的消息中选出：发送者是用户本人（消息带发送者时）、在读取窗口内、不是 tsw 发出的、此前没有转过、去掉格式后的正文以问题编号或列表中某个任务 ID 开头（后接空白或标点）的消息，并对应到它回答的问题：以问题编号开头的就是那个问题；以任务 ID 开头的是该任务在这条消息之前发出卡片的最近一个 Teams 问题（更早问题的回复不会算到之后才问的问题上；卡片的发出时间取 Teams 消息 ID 所表示的创建时间，卡片不在同一页时也能比较）；对应不到的不转出。对每条记录 <code>channel.reply_seen</code>（消息 ID、任务 ID、问题编号、问题是否仍待答、原文），之后不再转出</td></tr><tr><td>结果</td><td>选出的消息（任务 ID、问题编号、消息 ID、时间、原文）</td></tr><tr><td>转发</td><td><code>if_any</code>：“Teams 中有以下答复，按 skill 判断并登记：…”</td></tr></tbody></table>
 <p>一行处理所有在同一个 chat 中等待的 Teams 问题：同时有几个问题在等时，输入列表中就有几个任务 ID。每个任务同一时间最多一个待答的会话内问题；问题已不再待答时转出的消息标明“迟到”，由主会话按 §8.1c 记为迟到答复。</p>
 <h4 id="896-执行者的维护">8.9.6 执行者的维护</h4>
 <p>例行会话作为执行者时，<code>routine_board</code> 同时返回它自身的维护动作；各宿主的具体做法见实现文档（Claude Code 见 CC006 §6）。</p>
