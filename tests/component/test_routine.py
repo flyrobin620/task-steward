@@ -84,6 +84,7 @@ def test_start_bind_and_role(home: Home) -> None:
     data = out["events"][0]["data"]
     assert data["session_name"] == "routine-g1" and data["model"] == "claude-sonnet-5-5"
     assert data["effort"] == "low" and data["permission_mode"] == "auto"
+    assert data["host_permission_mode"] == "auto"  # the Claude app's name for it
     # Between creation and binding the session is listed as the routine session it will be.
     with h.ledger.view() as conn:
         pending = resolve(conn, home, {"CLAUDE_CODE_HOST_SESSION_ID": "r1"}, home.root / "routine")
@@ -157,6 +158,10 @@ def test_board_arms_renews_clears_and_recovers(home: Home) -> None:
             "last_run": h.clock.now,
         }
     ]
+    # Bound but never armed (stopped before its first run finished): stale after the window.
+    h.clock.now = "2026-11-05T00:31:00Z"
+    assert attention(h, {})[0]["state"] == "stale"
+    h.clock.now = "2026-11-05T00:00:00Z"
     h.run("routine_armed", routine, job_ref="job-1", cron=arm["cron"], interval_minutes=10)
     assert attention(h, cache) == []
     h.clock.now = "2026-11-05T00:10:00Z"

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="d16ccb33d0a8686cb79d3ce0ac1fedab3f06b40cb3bee298514649ccd02535b0">
+<meta name="tsw-source-sha256" content="94a04fef3485ae60625816673421c62337b06dab30ff6b05b4215310ad30b34e">
 <title>CC006 Claude Code 插件</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -93,7 +93,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p>DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 tsw 进程唤醒，所以例行表的执行者是一个子会话：<code>claude-app</code> 声明 <code>timer</code>，会话内定时任务（<code>CronCreate</code>）由 app 在会话进程中执行，只在 app 打开时运行。</p>
 <h3 id="61-启动">6.1 启动</h3>
 <p>主会话在用户第一次要求执行待办的那一轮（用户本人的 turn，CC001 §4）启动：</p>
-<ol><li><code>routine_start</code> 返回会话名 <code>routine-g&lt;K&gt;</code>、执行目录（数据目录下的 <code>routine/</code>，磁盘上的实际写法）与 <code>start_session</code> 参数：<code>initiation: user_asked</code>、<code>context: fresh</code>、<code>use_worktree: false</code>、<code>roles.routine</code> 的 <code>model</code> / <code>effort</code> / <code>permission_mode</code>；<code>prompt</code> 只写短指令（“你是 TaskSteward 的例行会话。调用 <code>whoami</code>，再调用 <code>routine_board</code>，逐行执行。”），<code>background</code> 写明例行会话的职责（≥80 字）。</li><li>主会话调用 <code>start_session</code>，再用返回的会话 ID 调用 <code>routine_bind</code>。结果未知时按会话名用 <code>list_sessions {linked:true}</code> 对账。</li><li>新目录第一次使用时 app 要求用户确认信任，确认只能在用户看着主会话时弹出（CC001 §3），所以启动只在用户 turn 中进行。</li></ol>
+<ol><li><code>routine_start</code> 返回会话名 <code>routine-g&lt;K&gt;</code>、执行目录（数据目录下的 <code>routine/</code>，磁盘上的实际写法）与 <code>start_session</code> 参数：<code>initiation: user_asked</code>、<code>context: fresh</code>、<code>use_worktree: false</code>、<code>roles.routine</code> 的 <code>model</code> / <code>effort</code>，以及按 §3 映射为宿主名称的权限模式（事件中的 <code>host_permission_mode</code>）；<code>prompt</code> 只写短指令（“你是 TaskSteward 的例行会话。调用 <code>whoami</code>，再调用 <code>routine_board</code>，逐行执行。”），<code>background</code> 写明例行会话的职责（≥80 字）。</li><li>主会话调用 <code>start_session</code>，再用返回的会话 ID 调用 <code>routine_bind</code>。结果未知时按会话名用 <code>list_sessions {linked:true}</code> 对账。</li><li>新目录第一次使用时 app 要求用户确认信任，确认只能在用户看着主会话时弹出（CC001 §3），所以启动只在用户 turn 中进行。</li></ol>
 <p>数据目录的 <code>CLAUDE.md</code> 与 <code>orchestrate</code> skill 也会被 <code>routine/</code> 中的会话读到；二者已写明角色不是 orchestrator 时忽略（§2）。例行会话的指令由 SessionStart hook 注入（CC001 §6）。</p>
 <h3 id="62-每次运行">6.2 每次运行</h3>
 <p>定时提示（由 <code>routine_board</code> 的 <code>arm</code> 动作给出）：<code>&lt;scheduled-task&gt;调用 routine_board，逐行执行例行项，原样转发结果；没有例行项就结束这一轮。&lt;/scheduled-task&gt;</code>。提示自身就足够完成一次运行，所以清空上下文后定时任务继续有效时，下一次运行不需要任何记忆。</p>

@@ -38,7 +38,7 @@ from tsw.lease import format_time, lease_row, parse_time
 from tsw.machine.ask_user import handed_off_event, handoff_due
 from tsw.machine.base import ToolEnv, flag, integer, opt_text, text, tool
 from tsw.machine.model import row_dict, task
-from tsw.plugins.catalog import SESSIONS
+from tsw.plugins.catalog import PERMISSION_NAMES, SESSIONS
 
 WORKDIR = "routine"  # the routine session's directory, relative to the data directory
 HANDOFF_SCAN = "handoff-scan"
@@ -146,7 +146,15 @@ def status(
         "last_run": _last_run(current, cache),
     }
     if current["armed_at"] is None:
-        return {"state": "unarmed", **out}
+        # Bound but never armed (it stopped before its first run finished): after the same
+        # window as a stopped timer it needs waking too.
+        bound_at = parse_time(str(current["bound_at"]))
+        window = timedelta(
+            minutes=int(config.get("routine.interval_minutes"))
+            * int(config.get("routine.stale_after_intervals"))
+        )
+        late = parse_time(now) - bound_at > window and not _last_run(current, cache)
+        return {"state": "stale" if late else "unarmed", **out}
     return {"state": "stale" if _stale(current, config, now, cache) else "ok", **out}
 
 
@@ -603,6 +611,10 @@ def routine_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     "model": env.config.get("roles.routine.model"),
                     "effort": env.config.get("roles.routine.effort"),
                     "permission_mode": env.config.get("roles.routine.permission_mode"),
+                    # What the host's session tool takes (start_session's permission_mode).
+                    "host_permission_mode": PERMISSION_NAMES.get(
+                        caps.host if caps is not None else "", {}
+                    ).get(str(env.config.get("roles.routine.permission_mode"))),
                     "prompt": START_PROMPT,
                     "background": START_BACKGROUND,
                 },

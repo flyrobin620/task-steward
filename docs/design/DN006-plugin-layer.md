@@ -500,6 +500,7 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | 宿主的定时任务有期限（Claude Code 为 7 天） | 超过 `routine.renew_after_days`（默认 6）后返回 `arm`，先删旧任务再设新任务 |
 | 上下文随运行增长 | 每 `routine.context_reset_hours`（默认 24）返回一次 `clear_context`。例行表与脚本都在 tsw 中，执行者每次运行只依赖定时提示与 `routine_board` 的返回，清空不丢失状态 |
 | 定时任务失效（宿主重启、清空时丢失、设定失败） | 超过 `routine.stale_after_intervals`（默认 3）个间隔没有运行记录时，`attention` 把例行会话标为 `stale`；主会话下次运行时给它发消息，它运行 `routine_board`，后者判定失效并返回 `arm` |
+| 绑定后一直没有设定定时任务（第一次运行没有完成） | 过了同样的失效窗口，同样标为 `stale`，由主会话发消息让它运行 |
 | 会话不存在（被归档、删除，或找不到） | `attention` 标为 `missing`，主会话在下一个用户 turn 重新启动（§8.9.7） |
 | 用户关闭例行会话（`routine.enabled=false`） | 主会话停止并归档现有会话；超时转交只在主会话运行 `sync` 时发生，Teams 答复不再自动回收 |
 

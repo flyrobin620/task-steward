@@ -318,3 +318,18 @@ def test_routine_settings(home: Home) -> None:
         },
     )
     assert "roles.routine.permission_mode: 不能高于 roles.orchestrator.permission_mode" in problems
+    # A configuration written before the routine session existed stays valid: the default
+    # follows the orchestrator's mode down (PR #22 review).
+    older = {
+        "roles": {
+            "orchestrator": {"permission_mode": "edits"},
+            "worker": {"permission_mode": "edits"},
+        }
+    }
+    home.path("config/task-steward.json").write_text(
+        json.dumps({"version": 1, **older}), encoding="utf-8"
+    )
+    config = load_config(home)
+    assert config.valid, config.problems
+    assert config.get("roles.routine.permission_mode") == "edits"
+    assert config.sources["roles.routine.permission_mode"] == "derived"

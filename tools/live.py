@@ -1034,6 +1034,7 @@ def routine_verify(args: argparse.Namespace) -> int:
     ]
     for sid in sorted({str(e["actor"]["session_id"]) for e in orch}):
         run.bind_main(sid)
+    reconcile_sessions(run, evs)  # the workers, for cleanup
     checks = [
         check(
             "H1",
@@ -1069,8 +1070,22 @@ def routine_started(run: Run, evs: list[dict[str, Any]]) -> dict[str, Any]:
     requested = first(evs, "routine.start_requested")
     bound = first(evs, "routine.bound")
     armed = first(evs, "routine.armed")
-    if bound is not None:
-        run.record("claude-session", "routine", state="created", ref=bound["data"]["session_ref"])
+    # Every generation asked for gets an entry, so cleanup accounts for each of them.
+    names = {
+        int(e["data"]["generation"]): str(e["data"]["session_name"])
+        for e in evs
+        if e["type"] == "routine.start_requested"
+    }
+    for name in names.values():
+        run.record("claude-session", name)
+    for e in evs:
+        if e["type"] == "routine.bound" and int(e["data"]["generation"]) in names:
+            run.record(
+                "claude-session",
+                names[int(e["data"]["generation"])],
+                state="created",
+                ref=str(e["data"]["session_ref"]),
+            )
     problems = [
         name
         for name, found in (("start_requested", requested), ("bound", bound), ("armed", armed))

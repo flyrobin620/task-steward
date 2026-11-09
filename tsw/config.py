@@ -528,9 +528,15 @@ def _validate(config: EffectiveConfig, home: Home) -> None:
         and routine_mode in PERMISSION_ORDER
         and PERMISSION_ORDER.index(routine_mode) > PERMISSION_ORDER.index(orch_mode)
     ):
-        problems.append(
-            "roles.routine.permission_mode: 不能高于 roles.orchestrator.permission_mode"
-        )
+        if config.sources.get("roles.routine.permission_mode") == "default":
+            # A configuration written before the routine session existed must stay valid: the
+            # default follows the orchestrator's mode down (DN003 §3.1).
+            values["roles"]["routine"]["permission_mode"] = orch_mode
+            config.sources["roles.routine.permission_mode"] = "derived"
+        else:
+            problems.append(
+                "roles.routine.permission_mode: 不能高于 roles.orchestrator.permission_mode"
+            )
     interval = get(values, "routine.interval_minutes")
     if (
         isinstance(interval, int)

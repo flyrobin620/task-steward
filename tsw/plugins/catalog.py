@@ -109,4 +109,13 @@ CHANNELS: dict[str, ChannelCaps] = {
 }
 
 HOST_INTEGRATIONS = ("claude-code",)
+# Neutral permission modes (DN003 §3.1) as each host names them (CC006 §3).
+PERMISSION_NAMES: dict[str, dict[str, str]] = {
+    "claude-code": {
+        "ask": "default",
+        "edits": "acceptEdits",
+        "auto": "auto",
+        "full": "bypassPermissions",
+    },
+}
 STORAGE_BACKENDS = ("fs",)
