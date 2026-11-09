@@ -468,12 +468,12 @@ class Guard:
                 "每次运行（定时提示或主会话的消息）：调用 routine_board；按 maintenance 设定定时"
                 "任务（arm：有 replace 时先 CronDelete，再 CronCreate，recurring: true，cron 与 "
                 "prompt 原样，然后 routine_armed 登记），逐行执行 jobs（有 fetch 的先按 tool 与 "
-                "arguments 取数；fetch 有 pages 时，结果中有 pages.next 且最早的消息不早于 "
-                "pages.until 就把它作为 pages.argument 继续取下一页，所有页按顺序放进一个列表，"
-                "再调用 routine_run：参数为该行的 run（没有 run 时为 job_id）加上 fetched；"
-                "没有 fetch 的直接 routine_run），"
-                "forward.send 为 true 时用 mcp__ccd_session_mgmt__send_message 把 message 原样发给 "
-                "session_id；有 clear_context 时最后调用 "
+                "arguments 取数，再调用 routine_run：参数为该行的 run（没有 run 时为 job_id）加上 "
+                "fetched（取到的这一页，原样）；没有 fetch 的直接 routine_run）。每次 routine_run "
+                "之后：forward.send 为 true 时用 mcp__ccd_session_mgmt__send_message 把 message "
+                "原样发给 session_id；返回 next 时按 next 的 tool 与 arguments 取下一页，再用 "
+                "next.run 加上这一页调用 routine_run，直到不再返回 next（不管多少页，一页一次，"
+                "不要合并、不要自行截断）。有 clear_context 时最后调用 "
                 'mcp__ccd_session_mgmt__clear_session(session_id="self")。'
                 "不作任何判断，不改文件、不运行命令、不建会话；遇到问题发消息告诉主会话。",
             )

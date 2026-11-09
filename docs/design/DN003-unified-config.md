@@ -211,7 +211,7 @@
 | `routine.renew_after_days` | 6 | 定时任务设定后超过这么多天就重新设定（宿主的定时任务有期限，Claude Code 为 7 天）；续期在超过之后的第一次运行时进行，所以它加上一个运行间隔须小于宿主的期限 |
 | `routine.context_reset_hours` | 24 | 例行会话每隔这么久清空一次自己的上下文 |
 | `routine.stale_after_intervals` | 3 | 超过这么多个间隔没有运行记录时，认为定时任务已失效，由主会话让例行会话重新设定 |
-| `routine.teams_lookback_hours` | 24 | Teams 例行项每次读取最近多少小时的消息（DN006 §8.9.5） |
+| `routine.teams_lookback_hours` | 24 | 已弃用，不再使用：Teams 例行项从最早一个待答问题的卡片起读取全部消息（DN006 §8.9.5）。保留以便旧配置照常加载 |
 
 超时阈值仍是 `input.in_session_timeout_minutes`：默认例行项 `handoff-scan` 每次运行时转交已到期的问题，所以实际转交时间在阈值之后、一个运行间隔之内。
 

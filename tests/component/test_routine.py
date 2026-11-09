@@ -254,7 +254,9 @@ def test_teams_round_trip(home: Home) -> None:
     assert teams["job_id"] == "teams-replies" and teams["input"]["tasks"] == ["T001"]
     assert teams["run"] == {"job_id": "teams-replies", "chat_id": "chat-1"}
     assert teams["fetch"]["tool"] == "mcp__teams__ListChatMessages"
-    assert teams["fetch"]["arguments"] == {"chatId": "chat-1", "top": 50}
+    assert teams["fetch"]["arguments"] == {"chatId": "chat-1", "top": routine_mod.TEAMS_READ_TOP}
+    # The window starts just before the waiting question's card, however long ago that was.
+    assert teams["fetch"]["since"] == "2026-11-05T00:05:00Z"
     fetched = {
         "messages": [
             {
@@ -279,6 +281,24 @@ def test_teams_round_trip(home: Home) -> None:
     assert "T001 用方案 B" in message and request_id in message
     again = run_job(h, routine, "teams-replies", chat_id="chat-1", fetched=fetched)
     assert again == ([], "")  # passed on once
+    # One page at a time: the script asks for the next page until it reaches back past the card.
+    run = {"job_id": "teams-replies", "chat_id": "chat-1"}
+    with h.ledger.view() as conn:
+        assert routine_mod.run_next(conn, "teams-replies", run, "claude-code") is None
+        follow = routine_mod.run_next(
+            conn, "teams-replies", {**run, "fetched": {**fetched, "nextLink": "p2"}}, "claude-code"
+        )
+        assert follow == {
+            "tool": "mcp__teams__ListChatMessages",
+            "arguments": {"chatId": "chat-1", "nextLink": "p2"},
+            "run": run,
+        }
+        older = {
+            "messages": [{"id": "x", "createdDateTime": "2026-11-05T00:04:59Z"}],
+            "nextLink": "p3",
+        }
+        assert routine_mod.run_next(conn, "teams-replies", {**run, "fetched": older}, "x") is None
+        assert routine_mod.run_next(conn, "handoff-scan", {"fetched": fetched}, "x") is None
     # The orchestrator decides it answers the question and records it with the Teams source.
     out = h.run(
         "input_resolve",
