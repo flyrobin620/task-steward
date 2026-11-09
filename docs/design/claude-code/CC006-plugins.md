@@ -114,8 +114,8 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 
 | 例行表给出的内容 | 例行会话调用的工具 |
 | --- | --- |
-| 例行项没有 `fetch` | `routine_run(job_id)` |
-| 例行项的 `fetch` 为 `teams.read_chat` | `mcp__teams__ListChatMessages`（`chatId`，`top`）；结果有 `nextLink` 且最早的消息不早于 `pages.until` 时，用 `nextLink` 继续取下一页；所有页按顺序放进一个列表，原样交给 `routine_run(job_id, fetched)` |
+| 例行项没有 `fetch` | `routine_run`，参数为该行的 `run`（没有时为 `job_id`） |
+| 例行项的 `fetch` 为 `teams.read_chat` | `mcp__teams__ListChatMessages`（`chatId`，`top`）；结果有 `nextLink` 且最早的消息不早于 `pages.until` 时，用 `nextLink` 继续取下一页；所有页按顺序放进一个列表，与该行的 `run`（`job_id` 与 `chat_id`）一起交给 `routine_run` |
 | `routine_run` 返回非空的 `forward` | `mcp__ccd_session_mgmt__send_message`，`session_id` 为 `forward` 中的主会话 ID，正文原样 |
 | 维护动作 `arm` | 有旧任务引用时先 `CronDelete`；再 `CronCreate`（`recurring: true`，`durable: false`，`cron` 与 `prompt` 原样）；然后 `routine_armed` 登记返回的任务引用 |
 | 维护动作 `clear_context` | 本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`：app 在这一轮结束、会话空闲后清空 |

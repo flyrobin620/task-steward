@@ -37,7 +37,7 @@ from tsw.home import Home
 from tsw.lease import format_time, lease_row, parse_time
 from tsw.machine.ask_user import handed_off_event, handoff_due
 from tsw.machine.base import ToolEnv, flag, integer, opt_text, text, tool
-from tsw.machine.model import loads, row_dict, task
+from tsw.machine.model import row_dict, task
 from tsw.plugins.catalog import SESSIONS
 
 WORKDIR = "routine"  # the routine session's directory, relative to the data directory
@@ -226,10 +226,10 @@ def board(
     jobs: list[dict[str, Any]] = [
         {"job_id": HANDOFF_SCAN, "script": "handoff_scan", "every": 1, "forward": "if_any"}
     ]
-    teams = teams_job(conn)
-    if teams is not None and teams["tasks"]:
-        host = str(config.get("plugins.host_integration"))
-        since = format_time(parse_time(now) - _hours(config.get("routine.teams_lookback_hours")))
+    host = str(config.get("plugins.host_integration"))
+    since = format_time(parse_time(now) - _hours(config.get("routine.teams_lookback_hours")))
+    # One row per chat that still has a waiting Teams question (cards may go to several chats).
+    for teams in teams_jobs(conn):
         jobs.append(
             {
                 "job_id": TEAMS_REPLIES,
@@ -237,6 +237,8 @@ def board(
                 "every": 1,
                 "forward": "if_any",
                 "input": {"chat_id": teams["chat_id"], "tasks": teams["tasks"]},
+                # Pass these to routine_run as they are, with what the fetch returned.
+                "run": {"job_id": TEAMS_REPLIES, "chat_id": teams["chat_id"]},
                 "fetch": {
                     "kind": "teams.read_chat",
                     "chat_id": teams["chat_id"],
@@ -275,40 +277,56 @@ def orchestrator_session(conn: sqlite3.Connection, now: str) -> str | None:
 # ---------------------------------------------------------------------- the Teams job
 
 
-def teams_job(conn: sqlite3.Connection) -> dict[str, Any] | None:
-    """The ``teams-replies`` job with its derived input: the tasks whose Teams question is still
-    waiting. A task leaves the list as soon as its question is no longer pending (DN006 §8.7)."""
-    row = row_dict(
-        conn.execute("SELECT * FROM routine_jobs WHERE job_id = ?", (TEAMS_REPLIES,)).fetchone()
-    )
-    if row is None:
-        return None
-    inp = loads(row["input"], {})
+def teams_jobs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """The ``teams-replies`` rows, one per chat that has a waiting Teams question.
+
+    Each row's input is derived from the ledger: the chat's tasks whose Teams question is still
+    waiting (a task leaves as soon as its question is no longer pending, DN006 §8.7), the Teams
+    questions of those tasks in that chat (older ones included: a reply is matched to the
+    question it answers, never pinned on whatever question waits now), the user's Teams ID from
+    the latest card, and every message tsw sent, to leave out."""
+    if (
+        conn.execute("SELECT 1 FROM routine_jobs WHERE job_id = ?", (TEAMS_REPLIES,)).fetchone()
+        is None
+    ):
+        return []
     cards = [
         dict(r)
         for r in conn.execute(
-            "SELECT m.task_id, m.request_id, m.message_id, MIN(m.sent_at) AS sent_at, r.status "
-            "FROM channel_messages m JOIN input_requests r ON r.request_id = m.request_id "
-            "WHERE m.channel = ? GROUP BY m.request_id ORDER BY m.task_id, sent_at",
+            "SELECT m.chat_id, m.task_id, m.request_id, m.message_id, MIN(m.sent_at) AS sent_at, "
+            "r.status FROM channel_messages m JOIN input_requests r "
+            "ON r.request_id = m.request_id WHERE m.channel = ? "
+            "GROUP BY m.chat_id, m.request_id ORDER BY m.chat_id, m.task_id, sent_at",
             (TEAMS_CHANNEL,),
         )
     ]
-    waiting = sorted({c["task_id"] for c in cards if c["status"] == "pending"})
     outbound = {
         str(r["message_id"])
         for r in conn.execute(
             "SELECT message_id FROM channel_messages WHERE channel = ?", (TEAMS_CHANNEL,)
         )
     }
-    return {
-        "chat_id": inp.get("chat_id"),
-        "sender_id": inp.get("sender_id"),
-        "tasks": waiting,
-        # The Teams questions of the waiting tasks, older ones included: a reply is matched to
-        # the question it answers, never pinned on whatever question is waiting now.
-        "requests": [c for c in cards if c["task_id"] in waiting],
-        "outbound": outbound,
-    }
+    jobs: list[dict[str, Any]] = []
+    for chat_id in sorted({str(c["chat_id"]) for c in cards}):
+        here = [c for c in cards if c["chat_id"] == chat_id]
+        waiting = sorted({c["task_id"] for c in here if c["status"] == "pending"})
+        if not waiting:
+            continue
+        sender = conn.execute(
+            "SELECT sender_id FROM channel_messages WHERE channel = ? AND chat_id = ? "
+            "AND sender_id IS NOT NULL ORDER BY sent_at DESC LIMIT 1",
+            (TEAMS_CHANNEL, chat_id),
+        ).fetchone()
+        jobs.append(
+            {
+                "chat_id": chat_id,
+                "sender_id": sender["sender_id"] if sender else None,
+                "tasks": waiting,
+                "requests": [c for c in here if c["task_id"] in waiting],
+                "outbound": outbound,
+            }
+        )
+    return jobs
 
 
 _TAGS = re.compile(r"<[^>]+>")
@@ -648,9 +666,15 @@ def routine_run(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         if job_id == HANDOFF_SCAN:
             return [handed_off_event(due, "system") for due in handoff_due(ctx.conn, ctx.now)]
         if job_id == TEAMS_REPLIES:
-            job = teams_job(ctx.conn)
+            chat_id = opt_text(inp, "chat_id")
+            job = next((j for j in teams_jobs(ctx.conn) if j["chat_id"] == chat_id), None)
             if job is None:
-                raise rejected("例行表中没有这一行", reason="unknown_job", job_id=job_id)
+                raise rejected(
+                    "例行表中没有这一行（chat_id 取自 routine_board 的 run）",
+                    reason="unknown_job",
+                    job_id=job_id,
+                    chat_id=chat_id,
+                )
             seen = {
                 str(r["message_id"])
                 for r in ctx.conn.execute("SELECT message_id FROM channel_replies")
@@ -728,23 +752,15 @@ def channel_sent(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 },
             )
         ]
-        job = row_dict(
-            ctx.conn.execute(
-                "SELECT input FROM routine_jobs WHERE job_id = ?", (TEAMS_REPLIES,)
-            ).fetchone()
-        )
-        wanted = {"chat_id": chat_id, "sender_id": sender_id}
-        if job is None:
+        exists = ctx.conn.execute(
+            "SELECT 1 FROM routine_jobs WHERE job_id = ?", (TEAMS_REPLIES,)
+        ).fetchone()
+        if exists is None:
+            # The chats and the tasks to watch come from the cards themselves (teams_jobs).
             drafts.append(
                 EventDraft(
                     type="routine.job_added",
-                    data={"job_id": TEAMS_REPLIES, "script": "teams_replies", "input": wanted},
-                )
-            )
-        elif loads(job["input"], {}) != wanted:
-            drafts.append(
-                EventDraft(
-                    type="routine.job_updated", data={"job_id": TEAMS_REPLIES, "input": wanted}
+                    data={"job_id": TEAMS_REPLIES, "script": "teams_replies", "input": {}},
                 )
             )
         return drafts

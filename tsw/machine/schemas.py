@@ -331,6 +331,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     "routine_run": schema(
         ["job_id"],
         job_id={**S, "description": "routine_board 列出的例行项"},
+        chat_id={**S, "description": "Teams 例行项：取自该行 run 中的 chat_id"},
         fetched={"description": "这一行 fetch 要求取的原始数据（宿主工具的返回值，原样）"},
     ),
     "channel_sent": schema(

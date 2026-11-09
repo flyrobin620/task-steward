@@ -1152,7 +1152,10 @@ def teams_round_trip(evs: list[dict[str, Any]]) -> dict[str, Any]:
     source = (resolved or {}).get("data", {}).get("source") or {}
     if resolved is None:
         problems.append("问题没有得到答复")
-    elif source.get("channel") != "teams-chat" or resolved["data"].get("source_kind") != "user":
+    elif (
+        source.get("channel") != "teams-chat"
+        or resolved["data"].get("source_kind", "user") != "user"
+    ):
         problems.append(f"答复来源不是 Teams 中的用户：{source.get('channel')}")
     note = resolved and _after(evs, "worker.progress", "T002", resolved["sequence"])
     if resolved is not None and note is None:

@@ -470,7 +470,8 @@ class Guard:
                 "prompt 原样，然后 routine_armed 登记），逐行执行 jobs（有 fetch 的先按 tool 与 "
                 "arguments 取数；fetch 有 pages 时，结果中有 pages.next 且最早的消息不早于 "
                 "pages.until 就把它作为 pages.argument 继续取下一页，所有页按顺序放进一个列表，"
-                "再 routine_run(job_id, fetched)；没有 fetch 的直接 routine_run），"
+                "再调用 routine_run：参数为该行的 run（没有 run 时为 job_id）加上 fetched；"
+                "没有 fetch 的直接 routine_run），"
                 "forward.send 为 true 时用 mcp__ccd_session_mgmt__send_message 把 message 原样发给 "
                 "session_id；有 clear_context 时最后调用 "
                 'mcp__ccd_session_mgmt__clear_session(session_id="self")。'

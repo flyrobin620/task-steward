@@ -16,7 +16,11 @@ from typing import Any
 
 import pytest
 
+from tests.machine_harness import MACHINE, Harness
 from tools import live
+from tsw import lease
+from tsw.home import Home
+from tsw.machine.base import Caller
 
 STUB = Path(live.LIVE / "gh_stub.py")
 
@@ -338,3 +342,59 @@ def test_a_new_main_session_never_inherits_an_archived_one(
     # Recording a different session under an archived name does not keep the archive mark.
     run.record("claude-session", "main", state="created", ref="local_b")
     assert next(e for e in run.manifest()["entries"] if e["name"] == "main")["state"] == "created"
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_routine_e2e_teams_check_accepts_a_real_round_trip(
+    home: Home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The routine-e2e Teams check reads the events the real tools write (review r2 F1)."""
+    monkeypatch.setattr(lease, "this_machine", lambda: MACHINE)
+    h = Harness(home, {"plugins": {"human_channels": ["in-session", "teams-chat"]}})
+    out = h.run("routine_start", user_turn=True)
+    h.run("routine_bind", generation=out["events"][0]["data"]["generation"], session_id="r")
+    routine = Caller(role="routine", session_id="r", machine=MACHINE)
+    h.register("T002")
+    h.plan("T002")
+    worker = h.dispatch("T002")
+    asked = h.run("ask_user", worker, task_id="T002", question="红色还是蓝色？", reserved=True)
+    request = asked["events"][0]["data"]["request_id"]
+    h.clock.now = "2026-11-05T00:10:00Z"
+    h.run("routine_run", routine, job_id="handoff-scan")
+    h.run("input_relay", task_id="T002", request_id=request, channel="teams-chat")
+    h.run("channel_sent", task_id="T002", request_id=request, chat_id="c", message_id="card")
+    reply = {
+        "id": "m1",
+        "createdDateTime": "2026-11-05T00:12:00Z",
+        "body": {"content": "T002 蓝色"},
+    }
+    h.run("routine_run", routine, job_id="teams-replies", chat_id="c", fetched=[reply])
+    h.run(
+        "input_resolve",
+        task_id="T002",
+        request_id=request,
+        answer="蓝色",
+        user_source={
+            "channel": "teams-chat",
+            "principal": "teams",
+            "message_ref": "m1",
+            "text": "T002 蓝色",
+            "request_id": request,
+            "target": ["T002", 1, "answer"],
+        },
+    )
+    h.run("progress_note", worker, task_id="T002", text="收到答复：蓝色")
+    evs = [
+        {
+            "sequence": e.sequence,
+            "type": e.type,
+            "task_id": e.task_id,
+            "attempt": e.attempt,
+            "actor": e.actor,
+            "data": e.data,
+            "time": e.time,
+        }
+        for e in h.ledger.storage.read(since=0)
+    ]
+    result = live.teams_round_trip(evs)
+    assert result["status"] == "passed", result

@@ -243,6 +243,7 @@ def test_teams_round_trip(home: Home) -> None:
     jobs = board(h, routine, cache)["jobs"]
     teams = jobs[1]
     assert teams["job_id"] == "teams-replies" and teams["input"]["tasks"] == ["T001"]
+    assert teams["run"] == {"job_id": "teams-replies", "chat_id": "chat-1"}
     assert teams["fetch"]["tool"] == "mcp__teams__ListChatMessages"
     assert teams["fetch"]["arguments"] == {"chatId": "chat-1", "top": 50}
     fetched = {
@@ -261,10 +262,14 @@ def test_teams_round_trip(home: Home) -> None:
             },
         ]
     }
-    events, message = run_job(h, routine, "teams-replies", fetched=fetched)
+    assert reason_of(lambda: h.run("routine_run", routine, job_id="teams-replies")) == (
+        "unknown_job"
+    )
+    events, message = run_job(h, routine, "teams-replies", chat_id="chat-1", fetched=fetched)
     assert [(e["type"], e["data"]["message_id"]) for e in events] == [("channel.reply_seen", "r1")]
     assert "T001 用方案 B" in message and request_id in message
-    assert run_job(h, routine, "teams-replies", fetched=fetched) == ([], "")  # passed on once
+    again = run_job(h, routine, "teams-replies", chat_id="chat-1", fetched=fetched)
+    assert again == ([], "")  # passed on once
     # The orchestrator decides it answers the question and records it with the Teams source.
     out = h.run(
         "input_resolve",
@@ -284,16 +289,30 @@ def test_teams_round_trip(home: Home) -> None:
     assert h.status("T001") == "in_progress"
     # Answered: the task leaves the Teams job's list, and the job is no longer run.
     assert [j["job_id"] for j in board(h, routine, cache)["jobs"]] == ["handoff-scan"]
-    # A second question in another chat updates the job's input.
+    # Questions waiting in two chats (the configured chat changed in between): one row each, and
+    # a reply is read only in the chat its question went to.
     _, second = asked(h, "T002")
+    _, third = asked(h, "T003")
     h.clock.now = "2026-11-05T00:30:00Z"
     run_job(h, routine, "handoff-scan")
-    h.run("input_relay", task_id="T002", request_id=second, channel="teams-chat")
-    updated = h.run(
-        "channel_sent", task_id="T002", request_id=second, chat_id="chat-2", message_id="card-2"
-    )
-    assert [e["type"] for e in updated["events"]] == ["channel.message_sent", "routine.job_updated"]
-    assert board(h, routine, cache)["jobs"][1]["input"] == {"chat_id": "chat-2", "tasks": ["T002"]}
+    for task_id, request, chat, card in (
+        ("T002", second, "chat-1", "card-2"),
+        ("T003", third, "chat-2", "card-3"),
+    ):
+        h.run("input_relay", task_id=task_id, request_id=request, channel="teams-chat")
+        out = h.run(
+            "channel_sent", task_id=task_id, request_id=request, chat_id=chat, message_id=card
+        )
+        assert [e["type"] for e in out["events"]] == ["channel.message_sent"]
+    rows = [j for j in board(h, routine, cache)["jobs"] if j["job_id"] == "teams-replies"]
+    assert [(j["input"]["chat_id"], j["input"]["tasks"]) for j in rows] == [
+        ("chat-1", ["T002"]),
+        ("chat-2", ["T003"]),
+    ]
+    reply = {"id": "r3", "createdDateTime": "2026-11-05T00:40:00Z", "body": {"content": "T003 好"}}
+    assert run_job(h, routine, "teams-replies", chat_id="chat-1", fetched=[reply]) == ([], "")
+    events, _ = run_job(h, routine, "teams-replies", chat_id="chat-2", fetched=[reply])
+    assert [e["data"]["request_id"] for e in events] == [third]
 
 
 @pytest.mark.use_case("UC-ROUTINE-001")

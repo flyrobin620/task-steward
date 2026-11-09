@@ -208,7 +208,7 @@
 | --- | --- | --- |
 | `routine.enabled` | `true` | 是否启动例行会话。关闭后超时转交只在主会话运行 `sync` 时发生，Teams 答复不再自动回收 |
 | `routine.interval_minutes` | 10 | 运行间隔（分钟）；须能整除 60，或为 60 的整数倍且能整除 1440（宿主的定时任务按 cron 表达式设定） |
-| `routine.renew_after_days` | 6 | 定时任务设定后超过这么多天就重新设定（宿主的定时任务有期限，Claude Code 为 7 天）；须小于宿主的期限 |
+| `routine.renew_after_days` | 6 | 定时任务设定后超过这么多天就重新设定（宿主的定时任务有期限，Claude Code 为 7 天）；续期在超过之后的第一次运行时进行，所以它加上一个运行间隔须小于宿主的期限 |
 | `routine.context_reset_hours` | 24 | 例行会话每隔这么久清空一次自己的上下文 |
 | `routine.stale_after_intervals` | 3 | 超过这么多个间隔没有运行记录时，认为定时任务已失效，由主会话让例行会话重新设定 |
 | `routine.teams_lookback_hours` | 24 | Teams 例行项每次读取最近多少小时的消息（DN006 §8.9.5） |

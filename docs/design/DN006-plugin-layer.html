@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="b167d486377b31a50d32a068b43f2f34c5d61de671b5eb5b825aaa0d24a06a07">
+<meta name="tsw-source-sha256" content="20979227c3442942ceadf03261e59f30e387e40f75b62d9dc1d71fcb9b207bef">
 <title>DN006 插件层：宿主集成、会话、人类渠道与数据存储</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -221,7 +221,7 @@ class VerifiedSource:              # DN002 G-USER 的统一证据
 <ul><li>交给人类时按配置 <code>input.channels</code> 同时投递到多个渠道；<strong>第一个通过核实的答复生效</strong>，记录后对其他渠道发 <code>cancel</code>（Teams 中补发“已在其他渠道答复”）。</li><li>迟到的第二份答复只记录为 <code>input.late_response</code>，不覆盖已生效的答复；内容冲突时由主会话判断是否需要再次确认。</li><li>超时不是答复；请求过期后只能再次提醒或保持等待。</li></ul>
 <h3 id="87-teams-答复的回收与登记">8.7 Teams 答复的回收与登记</h3>
 <p>Teams 工具只有宿主中的模型能调用（delegated），回收因此是 poll，由例行表中的 Teams 例行项（§8.9.5）完成。主会话与例行会话都不运行时不回收，问题保持待答；不承诺离线回收。</p>
-<ol><li><strong>发送</strong>：主会话 <code>input_relay</code>（<code>channel: teams-chat</code>）记录 <code>input.relayed</code>，返回卡片正文与目标 chat（<code>input.teams.chat</code>，默认用户本人的自聊）。卡片以 <code>[TaskSteward]</code> 开头，写明任务 ID、问题编号、问题全文、worker 会话链接，以及答复方式：“回复时以任务 ID 开头，例如 <code>T241 用方案 A</code>”。主会话发送后调用 <code>channel_sent</code>，登记 chat ID、卡片消息 ID 与发送者（用户本人在 Teams 中的 ID，取自发送结果）；tsw 把该任务 ID 加入 Teams 例行项的输入列表，没有这一行时新建。</li><li><strong>回收</strong>：例行项的脚本按 §8.9.5 取出 chat 中最近 <code>routine.teams_lookback_hours</code>（默认 24）小时内、发送者是用户本人、正文以问题编号或列表中某个任务 ID 开头的消息，排除 tsw 自己发出的消息（按登记的出站消息 ID）与已经转给主会话的消息，对应到它回答的问题，转给主会话。脚本不判断内容。</li><li><strong>登记</strong>：主会话收到转来的消息后按 skill 判断它是否回答了问题。是答复时用 <code>input_resolve</code> 登记，来源为 <code>VerifiedSource</code>（渠道 <code>teams-chat</code>、Teams 消息 ID、消息原文、问题的决定对象），满足 G-USER，经 T12 让 worker 继续，并用消息把答复告诉 worker。不是答复（例如“稍后回复”）时不登记，问题保持待答。问题已答复、取消或过时后才到的消息，按 §8.1c 记为 <code>input.late_response</code>。</li><li><strong>移出</strong>：任务的问题不再待答（任何渠道答复、取消、过时）时，tsw 把它的任务 ID 从输入列表中移除；列表为空时这一行停用，下次有 Teams 转达时重新启用。</li></ol>
+<ol><li><strong>发送</strong>：主会话 <code>input_relay</code>（<code>channel: teams-chat</code>）记录 <code>input.relayed</code>，返回卡片正文与目标 chat（<code>input.teams.chat</code>，默认用户本人的自聊）。卡片以 <code>[TaskSteward]</code> 开头，写明任务 ID、问题编号、问题全文、worker 会话链接，以及答复方式：“回复时以任务 ID 开头，例如 <code>T241 用方案 A</code>”。主会话发送后调用 <code>channel_sent</code>，登记 chat ID、卡片消息 ID 与发送者（用户本人在 Teams 中的 ID，取自发送结果）；tsw 把该任务 ID 加入这个 chat 的 Teams 例行项的输入列表：每个还有待答问题的 chat 一行（配置的 chat 改了之后，旧 chat 中的问题照样回收）。</li><li><strong>回收</strong>：例行项的脚本按 §8.9.5 取出 chat 中最近 <code>routine.teams_lookback_hours</code>（默认 24）小时内、发送者是用户本人、正文以问题编号或列表中某个任务 ID 开头的消息，排除 tsw 自己发出的消息（按登记的出站消息 ID）与已经转给主会话的消息，对应到它回答的问题，转给主会话。脚本不判断内容。</li><li><strong>登记</strong>：主会话收到转来的消息后按 skill 判断它是否回答了问题。是答复时用 <code>input_resolve</code> 登记，来源为 <code>VerifiedSource</code>（渠道 <code>teams-chat</code>、Teams 消息 ID、消息原文、问题的决定对象），满足 G-USER，经 T12 让 worker 继续，并用消息把答复告诉 worker。不是答复（例如“稍后回复”）时不登记，问题保持待答。问题已答复、取消或过时后才到的消息，按 §8.1c 记为 <code>input.late_response</code>。</li><li><strong>移出</strong>：任务的问题不再待答（任何渠道答复、取消、过时）时，tsw 把它的任务 ID 从输入列表中移除；列表为空时这一行停用，下次有 Teams 转达时重新启用。</li></ol>
 <p>只有以问题编号或等待中任务 ID 开头的消息才会被转出，用户平时在 chat 里记的笔记不会；tsw 自己发的卡片以 <code>[TaskSteward]</code> 开头，并且按出站消息 ID 排除（DN008 §9 第 5 条）。本版本不发提醒，也不补发“已在其他渠道答复”，不经 Teams 发决定摘要（<code>notify</code>）；<code>input.teams_poll</code> 保留但不再起作用，回收间隔就是例行表的运行间隔。</p>
 <p>如果用户为 Graph 配置了独立的后台凭据，<code>teams-graph</code> 实现可以改为 direct，由 tsw 进程直接执行同一个例行项；规则不变。</p>
 <h3 id="88-hub-portal">8.8 Hub Portal</h3>

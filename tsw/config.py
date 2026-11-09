@@ -589,6 +589,20 @@ def _validate_plugins(values: dict[str, Any], problems: list[str], warnings: lis
             problems.append(
                 f"roles.routine.session: {routine} 不能承载例行会话（须 interactive 且有 timer）"
             )
+        renew = get(values, "routine.renew_after_days")
+        interval = get(values, "routine.interval_minutes")
+        if (
+            caps.timer_days is not None
+            and isinstance(renew, int)
+            and isinstance(interval, int)
+            and renew * 1440 + interval >= caps.timer_days * 1440
+        ):
+            # The renewal happens at the first run after renew_after_days: it must come before
+            # the host drops the timer.
+            problems.append(
+                f"routine.renew_after_days: 须在 {routine} 的定时任务到期（{caps.timer_days} 天）"
+                "前续期（续期天数加一个运行间隔要小于该期限）"
+            )
         if (
             caps.execution == "delegated"
             and orchestrator is not None

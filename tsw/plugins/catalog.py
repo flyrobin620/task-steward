@@ -25,6 +25,7 @@ class SessionCaps:
     reuse_session: bool
     open_existing_dir: bool
     timer: bool = False  # the host wakes the session on a schedule (DN006 §8.9)
+    timer_days: int | None = None  # how long the host keeps a recurring timer, if limited
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ SESSIONS: dict[str, SessionCaps] = {
         reuse_session=True,
         open_existing_dir=True,
         timer=True,  # CronCreate in the session (CC006 §6)
+        timer_days=7,  # recurring CronCreate tasks expire after seven days
     ),
     "claude-headless": SessionCaps(
         host="claude-code",

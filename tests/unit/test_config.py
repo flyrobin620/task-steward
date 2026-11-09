@@ -295,6 +295,12 @@ def test_routine_settings(home: Home) -> None:
     assert any(p.startswith("routine.interval_minutes:") for p in problems)
     problems = _problems(home, {"routine": {"interval_minutes": 90}})
     assert any(p.startswith("routine.interval_minutes:") for p in problems)
+    # Renewal comes at the first run after renew_after_days, before the host's 7-day expiry.
+    for days in (7, 8):
+        problems = _problems(home, {"routine": {"renew_after_days": days}})
+        assert any(p.startswith("routine.renew_after_days:") for p in problems), days
+    assert not _problems(home, {"routine": {"renew_after_days": 5, "interval_minutes": 1440}})
+    assert _problems(home, {"routine": {"renew_after_days": 6, "interval_minutes": 1440}})
     problems = _problems(home, {"roles": {"routine": {"session": "codex-exec"}}})
     assert any("不能承载例行会话" in p for p in problems)
     # A disabled routine session needs no adapter that can carry it.
