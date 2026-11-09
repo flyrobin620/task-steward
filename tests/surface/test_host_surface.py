@@ -471,6 +471,10 @@ def test_render_updates_the_plugin_and_session_start_reports_a_stale_copy(
     assert report["update"]["ran"] and report["update"]["returncode"] == 0, report
     assert report["update"]["command"] == "claude plugin update task-steward@task-steward"
     assert [c["current"] for c in report["installed"]] == [True]
+    # The state before the update stays in the report: the old copy and how it differed.
+    assert report["before"][0]["path"] == str(stale)
+    assert report["before"][0]["version"] == "0.1.0-dev"
+    assert report["before"][0]["differs"] == ["hooks/hooks.json", "skills/orchestrate/SKILL.md"]
     assert "重启" in report["next"]
     # Idempotent: rendering again runs the update again and changes nothing.
     code, again = run_json("host", "render", env=env)

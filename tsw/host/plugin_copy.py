@@ -150,6 +150,7 @@ def update(env: Mapping[str, str]) -> dict[str, Any]:
             "output": _tail(f"{proc.stdout}\n{proc.stderr}"),
         }
     after = installed_copies(env)
+    report["before"] = before
     report["installed"] = after
     if all(c["current"] for c in after):
         if not all(c["current"] for c in before):
