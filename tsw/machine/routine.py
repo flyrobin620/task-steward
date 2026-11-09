@@ -25,7 +25,7 @@ import html
 import json
 import re
 import sqlite3
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -397,7 +397,7 @@ def starting_task(words: str, tasks: Iterable[str]) -> str | None:
 def _question_for(
     words: str,
     created: datetime | None,
-    requests: list[Mapping[str, Any]],
+    requests: Sequence[Mapping[str, Any]],
     card_times: Mapping[str, datetime],
 ) -> Mapping[str, Any] | None:
     """The question a reply answers (DN008 §9: the reply must lead to the question's number).
@@ -425,7 +425,7 @@ def _question_for(
 def select_replies(
     fetched: Any,
     *,
-    requests: list[Mapping[str, Any]],
+    requests: Sequence[Mapping[str, Any]],
     sender_id: str | None,
     since: str,
     exclude: set[str],
