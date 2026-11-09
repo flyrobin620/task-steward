@@ -677,7 +677,7 @@
       "id": "UC-HOST-004",
       "title": "Claude Code 插件包与生成文件",
       "actor": "用户",
-      "acceptance": "插件清单、MCP 注册、hooks 配置都指向插件内的启动器；插件复制到产品仓库之外（插件缓存）时按 TSW_REPO、产品仓库、数据目录记录的 product_repo 找到运行时；插件不携带 skill；本仓库自带本地插件市场；tsw host render 生成数据目录的 CLAUDE.md 与项目 skill .claude/skills/orchestrate/SKILL.md，install-hint 给出安装步骤与 auto 模式规则且不修改全局设置；worker 的执行目录不写权限规则，早先 tsw 写下、只含 tsw 规则的 settings.local.json 在 attempt_start 时删除，含其他内容的不动",
+      "acceptance": "插件清单、MCP 注册、hooks 配置都指向插件内的启动器；插件复制到产品仓库之外（插件缓存）时按 TSW_REPO、产品仓库、数据目录记录的 product_repo 找到运行时；插件不携带 skill，开发期插件清单与市场条目不写 version；已安装的插件副本与产品 plugin/ 不一致时，主会话 SessionStart 注入不一致的文件与更新命令，tsw host render 按 Claude Code 的安装记录报告每个安装是否一致；本仓库自带本地插件市场；tsw host render 生成数据目录的 CLAUDE.md 与项目 skill .claude/skills/orchestrate/SKILL.md，install-hint 给出安装步骤与 auto 模式规则且不修改全局设置；worker 的执行目录不写权限规则，早先 tsw 写下、只含 tsw 规则的 settings.local.json 在 attempt_start 时删除，含其他内容的不动",
       "surfaces": [
         "mcp",
         "cli"

@@ -32,6 +32,13 @@
 
 插件由 Claude Code 复制到插件缓存运行，缓存里没有 `tsw` 运行时。启动器按顺序查找：`TSW_REPO` 环境变量、插件所在的产品仓库（源码树或原地使用的本地市场）、`tsw init` 写入数据目录标记文件的 `product_repo`；都找不到时 MCP server 报错退出，hooks 静默放行。
 
+缓存副本只在插件的版本变化时才被替换（Claude Code 按 `plugin.json` 的 `version`、市场条目的 `version`、来源的提交 SHA 的顺序计算版本）。开发期 `plugin.json` 不写版本，版本取提交，产品仓库更新后 `claude plugin update task-steward@task-steward` 就会换上新副本；固定的版本字符串会让副本一直停在第一次安装时（T247 实测：app 运行的副本停在 2026-11-06 的 hooks 与启动器）。副本过期时：
+
+- 主会话的 SessionStart 比较 Claude Code 给 hooks 的 `CLAUDE_PLUGIN_ROOT` 与产品仓库的 `plugin/`，内容不一致时在注入的上下文中写明不一致的文件与更新命令，主会话转告用户；原地加载（二者是同一目录）或一致时不提示。
+- `tsw host render` 的输出带 `plugin`：按 Claude Code 的安装记录（`installed_plugins.json`）列出每个 task-steward 安装是否与 `plugin/` 一致，不一致时给出更新命令。
+
+两者都只读，不改 Claude Code 的设置与缓存。
+
 规则执行：hooks 调用 `tsw guard`，按 [CC008](CC008-guardrails.md) 的 block list 拦截已知的错误动作；tsw 已把关的动作在主会话由数据目录中生成的允许规则放行，在 worker 由用户设置中的 auto 模式规则放行（执行目录不带权限规则，CC008 §6）。
 
 ## 3. 会话适配器

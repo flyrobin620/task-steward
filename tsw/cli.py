@@ -25,6 +25,7 @@ from tsw.host.guard import run as run_guard
 from tsw.host.identity import HOST_CLI_COMMANDS, SESSION_ENV
 from tsw.host.identity import resolve as resolve_identity
 from tsw.host.mcp import serve
+from tsw.host.plugin_copy import status as plugin_status
 from tsw.importer import renumber
 from tsw.importer.orchestrator_agent import run_import as run_import_orchestrator_agent
 from tsw.ledger import Ledger
@@ -294,7 +295,9 @@ def _cmd_host_render(args: argparse.Namespace) -> dict[str, Any]:
     home = _home(args)
     with FsStorage(home).writer():
         written = render_instructions(home)
-    return {"written": [str(p) for p in written]}
+    # Render cannot refresh the plugin itself, which is Claude Code's copy: say whether that copy
+    # is the product's current plugin/ and how to update it (T247).
+    return {"written": [str(p) for p in written], "plugin": plugin_status(os.environ)}
 
 
 def _cmd_host_install_hint(args: argparse.Namespace) -> dict[str, Any]:

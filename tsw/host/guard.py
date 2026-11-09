@@ -26,6 +26,7 @@ from tsw.home import Home
 from tsw.host import inbox as inbox_mod
 from tsw.host import shell
 from tsw.host.identity import HOST_CLI_COMMANDS, Identity, resolve, within
+from tsw.host.plugin_copy import session_hint
 from tsw.ledger import Ledger
 from tsw.machine import routine as routine_mod
 from tsw.machine.ask_user import handoff_due, is_automated, session_message
@@ -531,6 +532,9 @@ class Guard:
                 f"{k} {len(v) if k != 'inbox' else v[0]['count']}" for k, v in items.items()
             )
             lines.append(f"attention：{summary}。按 orchestrate skill 处理。")
+        stale = session_hint(self.env)
+        if stale:
+            lines.append(stale)
         return context("SessionStart", "".join(lines))
 
     def on_PreToolUse(self, who: Identity) -> dict[str, Any] | None:
