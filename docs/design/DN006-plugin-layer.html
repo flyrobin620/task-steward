@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="0808ceeb19dbe1fc6cddacf0835e2a35e223d99fcd871f9eedba6999f5603a20">
+<meta name="tsw-source-sha256" content="f703d56b1c225900fd062655300fece103d802f316bce1f95c854afb3f33bba6">
 <title>DN006 插件层：宿主集成、会话、人类渠道与数据存储</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -100,7 +100,9 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
     def render_instructions(self, roles: RoleSources, config: EffectiveConfig) -&gt; list[GeneratedFile]: ...
     def render_tools(self, mcp: McpServerSpec) -&gt; list[GeneratedFile]: ...
     def render_guards(self, policy: Policy, role: Role, scope: WritableScope) -&gt; list[GeneratedFile]: ...
-    def install_hint(self, data_dir: Path) -&gt; str: ...   # 给用户的一次性安装说明，不自动修改全局配置</code></pre>
+    def install_hint(self, data_dir: Path) -&gt; str: ...   # 给用户的一次性安装说明，不自动修改全局配置
+    def update_plugin(self) -&gt; PluginReport: ...          # 让宿主运行的插件与产品一致（幂等），报告前后状态</code></pre>
+<p><code>tsw host render</code> 依次调用 <code>render_*</code> 与 <code>update_plugin</code>：产品更新后用户只运行这一个命令。各宿主让插件跟上产品的做法不同（Claude Code 要运行它自己的插件更新命令，见 CC006 §2），所以由宿主集成包装（用户 2026-11-09 决定）。<code>update_plugin</code> 只更新已安装的插件，不替用户安装，也不改宿主的设置。</p>
 <p>所有宿主的流程说明由同一份来源（<code>plugins/common/roles/*.md</code>）生成，避免几份平台说明各自漂移。</p>
 <h3 id="63-实现">6.3 实现</h3>
 <table><thead><tr><th>实现</th><th>流程说明与工具注册</th><th>规则执行</th><th>规则强度</th></tr></thead><tbody><tr><td><code>claude-code</code></td><td>插件：<code>.claude-plugin/plugin.json</code>、<code>.mcp.json</code>；数据目录：<code>CLAUDE.md</code> 与主会话入口 skill <code>.claude/skills/orchestrate/SKILL.md</code>（<code>tsw host render</code> 生成）</td><td>PreToolUse / Stop / SessionStart hooks 调用 <code>tsw guard</code></td><td>enforced</td></tr><tr><td><code>codex</code></td><td><code>AGENTS.md</code> 片段、<code>.codex/agents/task-worker.toml</code>、<code>codex mcp add tsw</code> 命令</td><td><code>workspace-write</code> 沙箱的可写根限定为执行目录与草稿目录；命令审批规则</td><td>写入范围 enforced，其余 advisory</td></tr><tr><td><code>copilot</code></td><td><code>.github/agents/task-worker.agent.md</code>、skill、Copilot MCP 配置</td><td>会话权限模式与允许的工具集</td><td>advisory（待验证）</td></tr><tr><td><code>remote-hub</code></td><td>远程会话中枢的 controller 意图与 worker 指派模板</td><td>依所选会话宿主</td><td>依宿主</td></tr></tbody></table>

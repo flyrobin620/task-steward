@@ -25,6 +25,7 @@ from tsw.host.guard import run as run_guard
 from tsw.host.identity import HOST_CLI_COMMANDS, SESSION_ENV
 from tsw.host.identity import resolve as resolve_identity
 from tsw.host.mcp import serve
+from tsw.host.plugin_copy import update as update_plugin
 from tsw.importer import renumber
 from tsw.importer.orchestrator_agent import run_import as run_import_orchestrator_agent
 from tsw.ledger import Ledger
@@ -294,7 +295,9 @@ def _cmd_host_render(args: argparse.Namespace) -> dict[str, Any]:
     home = _home(args)
     with FsStorage(home).writer():
         written = render_instructions(home)
-    return {"written": [str(p) for p in written]}
+    # Keeping the host current is part of rendering for it: the plugin is Claude Code's cached
+    # copy, which only Claude Code's own update replaces (T247; idempotent).
+    return {"written": [str(p) for p in written], "plugin": update_plugin(os.environ)}
 
 
 def _cmd_host_install_hint(args: argparse.Namespace) -> dict[str, Any]:

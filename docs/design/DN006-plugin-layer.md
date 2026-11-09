@@ -134,7 +134,10 @@ class HostIntegration(Protocol):
     def render_tools(self, mcp: McpServerSpec) -> list[GeneratedFile]: ...
     def render_guards(self, policy: Policy, role: Role, scope: WritableScope) -> list[GeneratedFile]: ...
     def install_hint(self, data_dir: Path) -> str: ...   # 给用户的一次性安装说明，不自动修改全局配置
+    def update_plugin(self) -> PluginReport: ...          # 让宿主运行的插件与产品一致（幂等），报告前后状态
 ```
+
+`tsw host render` 依次调用 `render_*` 与 `update_plugin`：产品更新后用户只运行这一个命令。各宿主让插件跟上产品的做法不同（Claude Code 要运行它自己的插件更新命令，见 CC006 §2），所以由宿主集成包装（用户 2026-11-09 决定）。`update_plugin` 只更新已安装的插件，不替用户安装，也不改宿主的设置。
 
 所有宿主的流程说明由同一份来源（`plugins/common/roles/*.md`）生成，避免几份平台说明各自漂移。
 

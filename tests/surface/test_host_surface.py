@@ -207,6 +207,9 @@ def test_the_users_turn_is_reminded_to_prestart(home: Path) -> None:
 def test_plugin_package_and_generated_files(home: Path) -> None:
     manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "task-steward"
+    # A fixed version keeps Claude Code on the first copy it cached (T247): until the first
+    # release, the version comes from the commit.
+    assert "version" not in manifest
     servers = json.loads((PLUGIN / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]
     assert "${CLAUDE_PLUGIN_ROOT}/bin/tsw_launch.py" in servers["tsw"]["args"]
     hooks = json.loads((PLUGIN / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
@@ -221,6 +224,7 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
         (REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
     )
     assert market["plugins"][0]["source"] == "./plugin"
+    assert "version" not in market["plugins"][0]
     skill = home / ".claude" / "skills" / "orchestrate" / "SKILL.md"
     skill.parent.mkdir(parents=True)
     skill.write_text("stale", encoding="utf-8")
@@ -232,6 +236,8 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert code == 0
     handle_input = home / ".claude" / "skills" / "handle-input" / "SKILL.md"
     assert [Path(p) for p in out["written"]] == [home / "CLAUDE.md", skill, handle_input, settings]
+    # The test's Claude configuration directory has no plugin installed.
+    assert out["plugin"]["installed"] == [] and "note" in out["plugin"]
     assert "handoff_resolve" in handle_input.read_text(encoding="utf-8")
     # The actions tsw guards itself are allowed; what the user had there is kept (DN006 §6.3).
     written = json.loads(settings.read_text(encoding="utf-8"))
@@ -389,3 +395,136 @@ def test_protocol_versions_and_invalid_messages(home: Path) -> None:
         (6, -32602),
     ]
     assert replies[-1] == {"jsonrpc": "2.0", "id": 8, "result": {}}
+
+
+def stale_copy(root: Path) -> Path:
+    """A cached copy as Claude Code kept it from an older product: a changed hook list, a file
+    since removed from plugin/, and Claude Code's own bookkeeping that never counts."""
+    copy = root / "cache" / "task-steward" / "task-steward" / "0.1.0-dev"
+    shutil.copytree(PLUGIN, copy)
+    hooks = copy / "hooks" / "hooks.json"
+    hooks.write_text(hooks.read_text(encoding="utf-8").replace("|CronCreate", ""), "utf-8")
+    (copy / "skills" / "orchestrate").mkdir(parents=True)
+    (copy / "skills" / "orchestrate" / "SKILL.md").write_text("old", encoding="utf-8")
+    (copy / ".in_use").mkdir()
+    (copy / ".in_use" / "4242").write_text("", encoding="utf-8")
+    return copy
+
+
+FAKE_CLAUDE = r"""
+import json, os, shutil, sys
+from pathlib import Path
+
+with open(os.environ["FAKE_CLAUDE_LOG"], "a", encoding="utf-8") as log:
+    log.write(" ".join(sys.argv[1:]) + "\n")
+if sys.argv[1:] == ["plugin", "update", "task-steward@task-steward"]:
+    root = Path(os.environ["CLAUDE_CODE_PLUGIN_CACHE_DIR"])
+    records = json.loads((root / "installed_plugins.json").read_text(encoding="utf-8"))
+    for install in records["plugins"]["task-steward@task-steward"]:
+        fresh = root / "cache" / "task-steward" / "task-steward" / "fedcba987654"
+        if not fresh.exists():
+            shutil.copytree(os.environ["FAKE_CLAUDE_SOURCE"], fresh)
+        install["installPath"] = str(fresh)
+    (root / "installed_plugins.json").write_text(json.dumps(records), encoding="utf-8")
+    print("Updated task-steward. Restart to apply changes.")
+"""
+
+
+def fake_claude(tmp_path: Path, source: Path) -> dict[str, str]:
+    """A ``claude`` command on PATH standing in for Claude Code's plugin update: it points every
+    task-steward install at a fresh copy of ``source`` and logs its arguments."""
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    script = bin_dir / "fake_claude.py"
+    script.write_text(FAKE_CLAUDE, encoding="utf-8")
+    (bin_dir / "claude.cmd").write_text(f'@"{sys.executable}" "{script}" %*\r\n', encoding="utf-8")
+    shell = bin_dir / "claude"
+    shell.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+    shell.chmod(0o755)
+    return {
+        "PATH": str(bin_dir),
+        "FAKE_CLAUDE_LOG": str(tmp_path / "claude.log"),
+        "FAKE_CLAUDE_SOURCE": str(source),
+    }
+
+
+@pytest.mark.use_case("UC-HOST-004")
+def test_render_updates_the_plugin_and_session_start_reports_a_stale_copy(
+    home: Path, tmp_path: Path
+) -> None:
+    plugins = tmp_path / "plugins"
+    stale = stale_copy(plugins)
+    records = {
+        "version": 2,
+        "plugins": {
+            "task-steward@task-steward": [
+                {"scope": "user", "installPath": str(stale), "version": "0.1.0-dev"}
+            ]
+        },
+    }
+    (plugins / "installed_plugins.json").write_text(json.dumps(records), encoding="utf-8")
+    fake = fake_claude(tmp_path, PLUGIN)
+    env = child_env(CLAUDE_CODE_PLUGIN_CACHE_DIR=str(plugins), **fake)
+    code, out = run_json("host", "render", env=env)
+    assert code == 0
+    report = out["plugin"]
+    assert report["update"]["ran"] and report["update"]["returncode"] == 0, report
+    assert report["update"]["command"] == "claude plugin update task-steward@task-steward"
+    assert [c["current"] for c in report["installed"]] == [True]
+    # The state before the update stays in the report: the old copy and how it differed.
+    assert report["before"][0]["path"] == str(stale)
+    assert report["before"][0]["version"] == "0.1.0-dev"
+    assert report["before"][0]["differs"] == ["hooks/hooks.json", "skills/orchestrate/SKILL.md"]
+    assert "重启" in report["next"]
+    # Idempotent: rendering again runs the update again and changes nothing.
+    code, again = run_json("host", "render", env=env)
+    assert code == 0 and [c["current"] for c in again["plugin"]["installed"]] == [True]
+    assert "next" not in again["plugin"]
+    log = (tmp_path / "claude.log").read_text(encoding="utf-8").splitlines()
+    assert log == ["plugin update task-steward@task-steward"] * 2
+
+    def started(root: Path | None) -> str:
+        extra = {"CLAUDE_CODE_HOST_SESSION_ID": "orch-9"}
+        if root is not None:
+            extra["CLAUDE_PLUGIN_ROOT"] = str(root)
+        proc = launch(
+            PLUGIN / "bin" / "tsw_launch.py",
+            "guard",
+            "SessionStart",
+            env=child_env(**extra),
+            cwd=home,
+            stdin=json.dumps({"cwd": str(home)}),
+        )
+        assert proc.returncode == 0, proc.stderr
+        return str(json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"])
+
+    warned = started(stale)
+    assert "插件副本" in warned and "hooks/hooks.json" in warned and "tsw host render" in warned
+    fresh = Path(again["plugin"]["installed"][0]["path"])
+    for root in (fresh, PLUGIN, None):
+        assert "插件副本" not in started(root)
+
+
+@pytest.mark.use_case("UC-HOST-004")
+def test_render_reports_a_copy_the_update_did_not_replace(home: Path, tmp_path: Path) -> None:
+    plugins = tmp_path / "plugins"
+    stale = stale_copy(plugins)
+    records = {
+        "plugins": {"task-steward@task-steward": [{"scope": "user", "installPath": str(stale)}]}
+    }
+    (plugins / "installed_plugins.json").write_text(json.dumps(records), encoding="utf-8")
+    # An update that leaves the old copy in place, as the fixed version string did.
+    fake = fake_claude(tmp_path, stale)
+    code, out = run_json(
+        "host", "render", env=child_env(CLAUDE_CODE_PLUGIN_CACHE_DIR=str(plugins), **fake)
+    )
+    assert code == 0
+    report = out["plugin"]
+    assert report["installed"][0]["differs"] == ["hooks/hooks.json", "skills/orchestrate/SKILL.md"]
+    assert "claude plugin uninstall task-steward@task-steward" in report["next"]
+    # Without a claude command nothing runs and the report says so.
+    empty = tmp_path / "empty-bin"
+    empty.mkdir()
+    env = child_env(CLAUDE_CODE_PLUGIN_CACHE_DIR=str(plugins), PATH=str(empty))
+    code, out = run_json("host", "render", env=env)
+    assert code == 0 and out["plugin"]["update"]["ran"] is False
