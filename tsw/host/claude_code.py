@@ -84,10 +84,14 @@ def clear_worker_settings(workdir: Path) -> bool:
     Only a file that is exactly what tsw wrote goes (and ``.claude/`` when it is left empty):
     the worker rules, with or without the merge rule, and nothing else. A file with anything
     more or less, such as rules the user allowed in that session, may be the user's and stays
-    as it is. Returns whether a file was removed.
+    as it is. A link anywhere on the way (``.claude`` or the file itself) may lead outside the
+    execution directory, to a file tsw never wrote, so it stays too. Returns whether a file was
+    removed.
     """
     settings = workdir / WORKER_SETTINGS_PATH
-    if not settings.is_file():
+    if settings.parent.is_symlink() or settings.is_symlink() or not settings.is_file():
+        return False
+    if settings.resolve().parent != (workdir.resolve() / WORKER_SETTINGS_PATH.parent):
         return False
     try:
         loaded: Any = json.loads(settings.read_text(encoding="utf-8"))

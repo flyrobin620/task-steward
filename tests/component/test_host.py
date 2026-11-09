@@ -19,6 +19,7 @@ from tsw.errors import TswError
 from tsw.events import EventDraft
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
+from tsw.host.claude_code import clear_worker_settings
 from tsw.host.guard import Guard
 from tsw.host.identity import SESSION_ENV, resolve
 from tsw.host.mcp import Server, serve
@@ -865,6 +866,31 @@ def test_a_workers_scheduled_prompts_must_be_tagged(h: Harness, tmp_path: Path) 
         tool_input={"prompt": "<scheduled-task>检查待办</scheduled-task>"},
     )
     assert tagged_own.run("PreToolUse") is None
+
+
+@mark.use_case("UC-HOST-004")
+@pytest.mark.parametrize("link", [".claude", "settings.local.json"])
+def test_clearing_old_rules_never_follows_a_link_out_of_the_directory(
+    tmp_path: Path, link: str
+) -> None:
+    """A link may lead to a file tsw never wrote, outside the execution directory: it stays."""
+    outside = tmp_path / "shared" / ".claude"
+    outside.mkdir(parents=True)
+    target = outside / "settings.local.json"
+    rules = ["mcp__plugin_task-steward_tsw", "SendMessage", "mcp__ccd_session_mgmt__send_message"]
+    target.write_text(json.dumps({"permissions": {"allow": rules}}), encoding="utf-8")
+    workdir = tmp_path / "work" / "T001" / "a1"
+    try:
+        if link == ".claude":
+            workdir.mkdir(parents=True)
+            (workdir / ".claude").symlink_to(outside, target_is_directory=True)
+        else:
+            (workdir / ".claude").mkdir(parents=True)
+            (workdir / ".claude" / "settings.local.json").symlink_to(target)
+    except OSError as exc:  # pragma: no cover - Windows without the symlink privilege
+        pytest.skip(f"cannot create a symbolic link here: {exc}")
+    assert clear_worker_settings(workdir) is False
+    assert target.is_file()
 
 
 @mark.use_case("UC-HOST-004")

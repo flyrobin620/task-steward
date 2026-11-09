@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="5b3a4dcacc1d489b9459bb87504948d7eb9991dc1ba1792255f238c32ded768c">
+<meta name="tsw-source-sha256" content="949bd87985acec734f1a81b9ba1f0ea004bb9bcf80da20b9e0567dc1a52b8763">
 <title>CC008 Claude Code 上的护栏</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -83,7 +83,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p>auto 模式分类器另有自己的规则（<code>autoMode.allow</code> / <code>soft_deny</code>），其中“Merge Without Review”把 worker 合并自己的 PR 判为未经评审的合并（live 中即使命中允许规则的合并也出现过被拒）。Claude Code 只从用户设置、命令行设置与托管设置读取 <code>autoMode</code>，项目设置与本地设置中的一律忽略（Claude Code 2.1.302 中核实），所以 tsw 不能把它与允许规则一起生成：<code>tsw host install-hint</code> 给出两条规则，由用户加入自己的用户设置（用户 2026-11-08 决定：凡是 tsw 已把关、分类器仍会误拦的动作，都用 auto 模式规则在策略层放行）：“TaskSteward Worker Dispatch”（主会话以 <code>attempt_start</code> 返回的会话名与 <code>cwd</code>、只指向任务书的短指令创建 worker 会话；live 中同样的短指令创建曾被分类器以“Blocked by classifier”拒绝一次，用户重试后通过）与“TaskSteward Worker Merge”（限 worker 会话、本任务的 PR、单独的 <code>gh pr merge … -R …</code>，不含 <code>--admin</code> 与绕过检查；不看任务类型）。worker 的 tsw 工具与发给主会话的消息没有对应的规则：分类器本来就不拦它们（上表）；如果 live 中出现误拦，再按同一原则在 install hint 中加一条覆盖它们的规则。<code>attempt_start</code> 同时返回执行目录在磁盘上的实际写法 <code>cwd</code>：app 拒绝大小写不同的同一目录。</p>
 <p>Claude Code 对复合命令（<code>;</code>、<code>&amp;&amp;</code>、管道）逐段核对允许规则，有一段不在规则内就交给权限模式与分类器判断。live 中单独的 <code>gh pr merge … -R …</code> 直接执行，而后面接了 <code>git fetch</code> 等命令的同一合并被分类器以“Merge Without Review”拒绝；worker 指令因此要求合并命令单独运行，auto 模式规则也只描述单独的合并命令。</p>
 <p>worker 能写自己的执行目录，所以 CC-B2 拦下编辑类工具对执行目录与数据目录中 <code>.claude/settings*.json</code> 的修改：遇到权限拒绝时不自行添加允许规则，而是告诉用户；在执行目录中写规则还会让下一次在该目录打开会话时要求信任，数据目录中的文件会被 tsw 重新生成覆盖。允许规则只放行动作本身；动作的授权仍由账本、配置与用户来源决定，主会话代答也仍然不是用户批准（DN006 §8.1b）。</p>
-<ul><li>其余一切动作仍由 Claude Code 的权限模式与分类器判断：tsw 不放宽它不检查的动作。</li><li>执行目录在哪里都一样：tsw 不在任何执行目录中写规则，worker 的放行只来自用户设置；数据目录之外的执行目录（如仓库 worktree）仍需用户在第一次使用时确认信任。</li></ul>
+<ul><li>其余一切动作仍由 Claude Code 的权限模式与分类器判断：tsw 不放宽它不检查的动作。</li><li>tsw 不在任何执行目录中写规则，worker 的放行只来自用户设置。已知缺口：“TaskSteward Worker Merge”只描述执行目录为数据目录下 <code>work/&lt;任务&gt;/&lt;attempt&gt;</code> 的 worker（规则文本不随本次修改，用户已安装的规则继续有效）；执行目录在数据目录之外（如仓库 worktree）的 worker 合并时可能被分类器拦下，这类目录也仍需用户在第一次使用时确认信任。需要时由用户在用户设置中为该目录补一条规则，或把执行目录放在 <code>work/</code> 之下。</li></ul>
 <h2 id="7-对其他文档与代码的影响">7. 对其他文档与代码的影响</h2>
 <p>本次已随文档拆分修订的：DN001 §1、§4、§7、§8.2、§10、§11 的措辞，DN002 §3.5 的合并目标，DN006 §6.3 的规则强度、§8.1a 第 3、4 步与 §8.1b 定时提示段（移入本文 §3）。其余待实现时修订：</p>
 <table><thead><tr><th>位置</th><th>修订</th></tr></thead><tbody><tr><td>DN003 §3.5 <code>executable_hashing</code> 执行点、DN003 新增 <code>guardrails.disabled</code>；DN006 §8.1a <code>user_answer</code> 新增 <code>waive_rules</code> 与事件 <code>guardrail.waived</code></td><td>按 §3、§5</td></tr><tr><td>DN006 §8.5 <code>verify</code> 与 <code>principal</code>；§8.6 Teams 核实；§8.8 Portal；§9.7 导入授权</td><td>按 DN008 §9 与 §5.5</td></tr><tr><td>代码注释：<code>guard.py</code> 模块说明“Hooks are the enforced boundary”；<code>identity.py</code>、<code>cli.py</code>、<code>guard.py</code> 中“could claim / invent”式注释</td><td>改为护栏的说法</td></tr><tr><td>代码、指令与工具中指向 DN006 §6.3 权限规则的引用（<code>tsw/host/claude_code.py</code>、<code>guard.py</code>、<code>mcp.py</code>、<code>tools/live.py</code>，以及 <code>orchestrate_skill.md</code>、<code>plugin/roles/worker.md</code> 中的相关说明）</td><td>改为指向本文 §6</td></tr><tr><td>宿主能力 <code>enforcement: enforced \| advisory</code></td><td>取值不变（契约），解释为机械检查覆盖的程度</td></tr></tbody></table>
