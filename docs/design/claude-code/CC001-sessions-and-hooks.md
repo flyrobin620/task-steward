@@ -1,6 +1,6 @@
 # CC001 Claude Code 上的会话与 hooks
 
-- 状态：设计草案（T242 r2 自 DN001 拆出，待用户确认）
+- 状态：设计草案（T242 r2 自 DN001 拆出；T243 增加例行会话）
 - 日期：2026-11-08
 - 实现：[DN001 总体架构](../DN001-architecture.md)
 - 相关：[CC006 Claude Code 插件](CC006-plugins.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -50,6 +50,7 @@ tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC �
 - 新会话的 MCP server 在主会话绑定之前就已列出工具。实测 Claude Code 不会因 `notifications/tools/list_changed` 重新获取列表，所以待绑定会话的第一次列表就是 worker 的（DN001 §7.1）。
 - worker 绑定后 MCP server 发出 `notifications/tools/list_changed`（客户端空闲时也由后台每 2 秒检查一次），客户端据此刷新工具列表。
 - hooks 拿到同一个会话 ID（环境变量）以及 payload 中的内部会话 ID、cwd、权限模式。
+- 例行会话（DN006 §8.9）同样按会话 ID 解析：会话 ID 等于当前代次已绑定的例行会话 → 例行会话角色；等于旧代次的例行会话 → 已撤销。尚未绑定、但会话目录是数据目录下的 `routine/` 且有一个正在启动的代次时，与待绑定的 worker 一样，第一次工具列表就按例行会话列出，除 `whoami` 外的调用等绑定后才接受。
 
 ## 6. hooks
 
@@ -58,8 +59,9 @@ tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC �
 | SessionStart | 全部 | 按会话 ID 与目录识别角色；主会话尝试领取租约，并注入未读 inbox 数与 attention 摘要；worker 注入任务 ID、brief 路径和评审规则（待命会话还提示可以先读任务书、等派发后再开始，任务书更新时重读）；待绑定会话提示等待绑定，绑定后 `phase` 为 `standby` 时只读任务书、等派发，为 `live` 时开始 |
 | PreToolUse | 已登记会话 | block list 护栏，见 [CC008 §3](CC008-guardrails.md) |
 | UserPromptSubmit | worker | 检测 `[report]`，注入回传协议提示；worker 有未获用户答复的会话内问题时，把用户消息原文记为 `input.session_message` 并告诉 worker 消息编号（注入的其他会话消息不记，DN006 §8.1a） |
+| SessionStart | routine | 注入例行会话的指令：调用 `routine_tick`，按返回的动作逐个执行，不作判断，不做其他事（CC006 §6） |
 | UserPromptSubmit | orchestrator | 记下这一轮是不是用户本人的 turn（[CC008](CC008-guardrails.md) CC-S6）：去掉宿主前置的 `<system-reminder>` 后还有内容，且不以注入消息的标记开头时是用户的 turn |
-| Stop | orchestrator | 运行只读 `attention`；有未处理 reportable 事件，有已超时未转交的会话内问题（提示运行 `sync`），或这一轮是用户的 turn 且 `needs_prestart` 非空（提示预启动）时阻止一次结束（`stop_hook_active` 防循环），几条原因合在一条提示里 |
+| Stop | orchestrator | 运行只读 `attention`；有未处理 reportable 事件，有已超时未转交的会话内问题（提示运行 `sync`），例行会话失效（提示给它发消息重新设定），或这一轮是用户的 turn 且 `needs_prestart` 非空或例行会话需要启动（提示预启动、启动例行会话）时阻止一次结束（`stop_hook_active` 防循环），几条原因合在一条提示里 |
 | Stop | worker | 记录 `worker.turn_ended` 观察事件（不改状态）；若处于 `reviewing`，提示完成这一轮再结束 |
 
 hooks 是防错护栏，不是安全边界（DN008）；skill 和 CLAUDE.md 只写流程与判断准则。
