@@ -64,11 +64,12 @@ def default_jobs() -> int:
 def _shards(tier_dir: Path, jobs: int) -> list[list[Path]]:
     """Split a tier's test files into at most ``jobs`` sets of similar size.
 
+    Test files are found the way pytest finds them under a directory, subdirectories included.
     A file's size in bytes stands in for its run time: the largest file goes to the lightest
     set first. Every test file is in exactly one set; the split depends only on the files.
     """
     files = sorted(
-        {*tier_dir.glob("test_*.py"), *tier_dir.glob("*_test.py")},
+        {*tier_dir.rglob("test_*.py"), *tier_dir.rglob("*_test.py")},
         key=lambda path: (-path.stat().st_size, path.name),
     )
     if not files:
@@ -102,6 +103,7 @@ class Gate:
         self.steps: dict[str, dict[str, Any]] = {}
         self.tiers: dict[str, dict[str, Any]] = {}
         self.test_results: list[dict[str, Any]] = []
+        self.coverage_files: dict[str, list[Path]] = {}
 
     def record(self, step: str, ok: bool, detail: list[str] | str) -> None:
         lines = detail if isinstance(detail, list) else [detail] if detail else []
@@ -164,10 +166,13 @@ class Gate:
         env["PYTHONUTF8"] = "1"
         started = time.time()
         procs: list[tuple[int, subprocess.Popen[str], Path]] = []
+        self.coverage_files[tier] = []
         for index, files in enumerate(shards, start=1):
             shard_env = dict(env)
             shard_env["TSW_RESULTS_FILE"] = str(self.results_dir / f"{tier}.{index}.json")
             log = self.results_dir / f"{tier}.{index}.out"
+            coverage_file = self.results_dir / f".coverage.{tier}.{index}"
+            self.coverage_files[tier].append(coverage_file)
             with log.open("w", encoding="utf-8") as out:
                 proc = subprocess.Popen(
                     [
@@ -175,7 +180,7 @@ class Gate:
                         "-m",
                         "coverage",
                         "run",
-                        f"--data-file={self.results_dir / f'.coverage.{tier}.{index}'}",
+                        f"--data-file={coverage_file}",
                         "-m",
                         "pytest",
                         *(path.relative_to(ROOT).as_posix() for path in files),
@@ -250,10 +255,9 @@ class Gate:
 
     def _coverage(self, tiers: list[str]) -> list[str]:
         """Combine and report line coverage. The number is not a gate; missing evidence is."""
-        data_files = sorted(
-            path for tier in tiers for path in self.results_dir.glob(f".coverage.{tier}.*")
-        )
-        missing = [t for t in tiers if not any(self.results_dir.glob(f".coverage.{t}.*"))]
+        data_files = [path for tier in tiers for path in self.coverage_files.get(tier, [])]
+        missing = [tier for tier in tiers if not self.coverage_files.get(tier)]
+        missing += [path.name for path in data_files if not path.is_file()]
         if missing:
             return [f"缺少覆盖数据：{missing}"]
         combined = self.results_dir / ".coverage"
