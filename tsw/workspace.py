@@ -109,7 +109,11 @@ def ensure(ws: Workspace) -> dict[str, Any]:
     """
     assert ws.checkout is not None and ws.worktree is not None and ws.branch is not None
     path, branch = ws.worktree, ws.branch
-    if path.is_symlink() or (path.exists() and not path.is_dir()):
+    # Whatever is there must be the directory itself: a link or a Windows junction (which
+    # is_symlink does not report) would put the worktree outside the execution directory.
+    resolved = os.path.normcase(os.path.realpath(path))
+    redirected = resolved != os.path.normcase(str(Path(os.path.realpath(path.parent)) / path.name))
+    if path.is_symlink() or redirected or (path.exists() and not path.is_dir()):
         raise rejected("worktree 路径已有其他内容", reason="worktree_conflict", path=str(path))
     if path.exists():
         code, head, _ = _git(path, "rev-parse", "--abbrev-ref", "HEAD")
@@ -156,9 +160,14 @@ def _record(ws: Workspace, *, base: str | None, created: bool, fetched: bool) ->
 def _base(ws: Workspace) -> str:
     """The base the branch starts from; only a name that resolves to a commit reaches git."""
     assert ws.checkout is not None
-    candidates = (ws.base_ref,) if ws.base_ref else BASE_CANDIDATES
-    for candidate in candidates:
-        ref = candidate.format(remote=ws.remote)
+    # A configured base_ref is a git revision as written (``HEAD^{commit}`` included); only the
+    # built-in candidates have a {remote} to fill in.
+    candidates = (
+        (ws.base_ref,)
+        if ws.base_ref
+        else tuple(c.format(remote=ws.remote) for c in BASE_CANDIDATES)
+    )
+    for ref in candidates:
         if not ref.startswith("-") and _commit(ws.checkout, ref):
             return ref
     raise rejected(

@@ -328,3 +328,36 @@ def test_a_clone_of_another_repository_on_the_task_branch_is_refused(
         h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
     assert refused.value.details["reason"] == "worktree_conflict"
     assert h.query("SELECT * FROM attempts WHERE task_id = 'T001'") == []
+
+
+@pytest.mark.parametrize("base_ref", ["main^{commit}", "main@{0}"])
+def test_a_configured_base_is_used_as_written(home: Home, tmp_path: Path, base_ref: str) -> None:
+    repo = checkout(tmp_path)
+    h = harness(home, repo, base_ref=base_ref)
+    h.register("T001")
+    h.plan("T001")
+    out = h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    assert out["events"][0]["data"]["worktree"]["base"] == base_ref
+
+
+def test_a_redirected_worktree_path_is_refused(home: Home, tmp_path: Path) -> None:
+    """A link (a junction on Windows) at the worktree path would lead outside the execution
+    directory, even to a worktree of the same repository on the task's branch."""
+    repo = checkout(tmp_path)
+    outside = tmp_path / "outside"
+    git(repo, "worktree", "add", "-q", "-b", "tsw/t001-a1", str(outside), "main")
+    h = harness(home, repo)
+    h.register("T001")
+    h.plan("T001")
+    link = h.home.root / "work" / "T001" / "a1" / "demo"
+    link.parent.mkdir(parents=True)
+    if os.name == "nt":
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(outside)], check=True, capture_output=True
+        )
+    else:
+        link.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(TswError) as refused:
+        h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    assert refused.value.details["reason"] == "worktree_conflict"
+    assert h.query("SELECT * FROM attempts WHERE task_id = 'T001'") == []
