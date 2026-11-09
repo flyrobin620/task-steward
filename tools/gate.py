@@ -70,7 +70,7 @@ def _shards(tier_dir: Path, jobs: int) -> list[list[Path]]:
     """
     files = sorted(
         {*tier_dir.rglob("test_*.py"), *tier_dir.rglob("*_test.py")},
-        key=lambda path: (-path.stat().st_size, path.name),
+        key=lambda path: (-path.stat().st_size, path.as_posix()),
     )
     if not files:
         return [[tier_dir]]
