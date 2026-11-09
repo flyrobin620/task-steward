@@ -20,7 +20,7 @@ def _has_runtime(root: Path) -> bool:
 
 def _claiming_home() -> Path | None:
     """The data directory that claims the session's directory (``tsw.home.claiming_home``)."""
-    start = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path.cwd()).resolve()
+    start = Path.cwd().resolve()  # the session's directory, as for tsw.home
     for folder in (start, *start.parents):
         try:
             marker = json.loads((folder / "tsw-home.json").read_text(encoding="utf-8"))

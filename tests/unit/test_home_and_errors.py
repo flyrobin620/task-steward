@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -35,7 +34,9 @@ def test_resolve_uses_repo_pointer_then_default(tmp_path: Path) -> None:
 
 
 @pytest.mark.use_case("UC-HOME-001")
-def test_a_data_directory_that_claims_sessions_wins_over_the_environment(tmp_path: Path) -> None:
+def test_a_data_directory_that_claims_sessions_wins_over_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A session working inside a claiming data directory uses it whatever TSW_HOME says
     (decision 0003: no settings file in the session's folder); the nearest data directory
     decides, and one that does not claim leaves TSW_HOME in charge."""
@@ -50,14 +51,10 @@ def test_a_data_directory_that_claims_sessions_wins_over_the_environment(tmp_pat
     assert json.loads((run.root / MARKER).read_text(encoding="utf-8"))["claim_sessions"] is True
     assert resolve_home(env, cwd=workdir) == run.root
     assert resolve_home(env, cwd=run.root) == run.root
-    # Without an explicit directory, the host's project directory is the session's.
-    assert resolve_home({**env, "CLAUDE_PROJECT_DIR": str(workdir)}) == run.root
     assert resolve_home(env, cwd=tmp_path) == real.root
-    # The test environment points the host's project directory at the test (conftest), so a
-    # checkout inside a claiming data directory does not lead the tests there.
-    assert (
-        resolve_home({**env, "CLAUDE_PROJECT_DIR": os.environ["CLAUDE_PROJECT_DIR"]}) == real.root
-    )
+    # Without an explicit directory, the current directory is the session's.
+    monkeypatch.chdir(workdir)
+    assert resolve_home(env) == run.root
     # A data directory nested in the claiming one decides for its own sessions.
     inner, _ = init_home(workdir / "inner")
     assert resolve_home(env, cwd=inner.root) == real.root

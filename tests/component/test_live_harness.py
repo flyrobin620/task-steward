@@ -114,6 +114,7 @@ def test_gh_stub_squash_merges_into_the_bare_origin(tmp_path: Path) -> None:
 
 def runtime(root: Path, *, claims: bool) -> Path:
     (root / "tsw").mkdir(parents=True)
+    (root / "tsw" / "__init__.py").write_text("", encoding="utf-8")
     text = "def claim_sessions(): ...\n" if claims else "def resolve_home(): ...\n"
     (root / "tsw" / "home.py").write_text(text, encoding="utf-8")
     return root
@@ -132,9 +133,17 @@ def test_prepare_checks_the_runtime_the_installed_plugin_will_use(tmp_path: Path
     with pytest.raises(SystemExit, match="TSW_REPO"):
         live.installed_runtime_claims({"TSW_HOME": str(real), "TSW_REPO": str(old)})
     assert live.installed_runtime_claims({"TSW_HOME": str(real), "TSW_REPO": str(new)}) == new
+    # A TSW_REPO without the package is skipped by the launcher, which takes the recorded one.
+    broken = tmp_path / "broken"
+    (broken / "tsw").mkdir(parents=True)
+    (broken / "tsw" / "home.py").write_text("def claim_sessions(): ...\n", encoding="utf-8")
+    env = {"TSW_HOME": str(real), "TSW_REPO": str(broken)}
+    assert live.installed_runtime_claims(env) == new
     (real / "tsw-home.json").write_text(json.dumps({"product_repo": str(old)}), encoding="utf-8")
     with pytest.raises(SystemExit, match="product_repo"):
         live.installed_runtime_claims({"TSW_HOME": str(real)})
+    with pytest.raises(SystemExit, match="product_repo"):
+        live.installed_runtime_claims({"TSW_HOME": str(real), "TSW_REPO": str(broken)})
     with pytest.raises(SystemExit, match="无法确定"):
         live.installed_runtime_claims({})
 

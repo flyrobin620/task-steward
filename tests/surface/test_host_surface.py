@@ -318,16 +318,23 @@ def test_a_session_inside_a_claiming_data_directory_uses_it(home: Path, tmp_path
     marker = json.loads((home / "tsw-home.json").read_text(encoding="utf-8"))
     del marker["product_repo"]
     (home / "tsw-home.json").write_text(json.dumps(marker), encoding="utf-8")
-    env = child_env(TSW_HOME=str(home))
+    env = child_env(TSW_HOME=str(home), CLAUDE_CODE_HOST_SESSION_ID="orch-run")
     env.pop("PYTHONPATH")
-    env.pop("CLAUDE_PROJECT_DIR", None)
     found = launch(launcher, "home", "--json", env=env, cwd=workdir)
     assert found.returncode == 0, found.stderr
     assert Path(json.loads(found.stdout.splitlines()[-1])["home"]) == run.resolve()
-    project = launch(
-        launcher, "home", "--json", env={**env, "CLAUDE_PROJECT_DIR": str(workdir)}, cwd=tmp_path
+    # The MCP server resolves the session's identity in the same directory: a session in the
+    # claiming data directory is its main session and may write.
+    request = "".join(
+        json.dumps(m) + "\n" for m in (INIT, NOTE, call(2, "whoami"), call(3, "lease_acquire"))
     )
-    assert Path(json.loads(project.stdout.splitlines()[-1])["home"]) == run.resolve()
+    served = launch(launcher, "mcp", env=env, cwd=run, stdin=request)
+    assert served.returncode == 0, served.stderr
+    by_id = {r["id"]: r for r in map(json.loads, served.stdout.splitlines()) if "id" in r}
+    who = payload(by_id[2])
+    assert (who["role"], Path(who["cwd"]).resolve()) == ("orchestrator", run.resolve())
+    assert "expires_at" in payload(by_id[3])
+    assert (run / "locks").is_dir() and not (home / "locks" / "lease.json").exists()
 
 
 @pytest.mark.use_case("UC-HOST-001")

@@ -2,9 +2,9 @@
 
 The data directory is separate from the product repository. It is located in this order:
 a data directory that claims the sessions working inside it (``claim_sessions`` in its
-``tsw-home.json``, set with ``tsw init --claim-sessions``) when the session's directory is in
-it; the ``TSW_HOME`` environment variable; the path recorded in ``<repo>/.local/tsw-home``;
-finally ``~/.tsw``.
+``tsw-home.json``, set with ``tsw init --claim-sessions``) when the current directory, the
+session's, is in it; the ``TSW_HOME`` environment variable; the path recorded in
+``<repo>/.local/tsw-home``; finally ``~/.tsw``.
 """
 
 from __future__ import annotations
@@ -78,19 +78,15 @@ def claiming_home(start: Path) -> Path | None:
     return None
 
 
-def session_dir(env: Mapping[str, str]) -> Path:
-    """The directory of the session a hook or the MCP server runs for."""
-    project = env.get("CLAUDE_PROJECT_DIR")
-    return Path(project) if project else Path.cwd()
-
-
 def resolve_home(
     env: Mapping[str, str] | None = None,
     repo_root: Path | None = None,
     cwd: Path | None = None,
 ) -> Path:
     environ = os.environ if env is None else env
-    claimed = claiming_home((cwd or session_dir(environ)).resolve())
+    # The session's directory: the host starts the MCP server and hooks in it (CC001 §5), the
+    # same directory the MCP server resolves the session's identity with.
+    claimed = claiming_home((cwd or Path.cwd()).resolve())
     if claimed is not None:
         return claimed
     explicit = environ.get("TSW_HOME")

@@ -2,10 +2,10 @@
 
 Every test runs with its own data directory and a scrubbed environment: no inherited
 ``CLAUDE*`` / ``ANTHROPIC*`` / ``CODEX*`` variables, and ``HOME`` / ``USERPROFILE`` /
-``CLAUDE_CONFIG_DIR`` / ``CODEX_HOME`` point into the test's temporary directory. So does
-``CLAUDE_PROJECT_DIR``: tsw looks for a data directory that claims the session's directory
-before ``TSW_HOME`` (``tsw.home.claiming_home``), and a checkout inside such a data directory
-must not lead a test, or a process it starts, there.
+``CLAUDE_CONFIG_DIR`` / ``CODEX_HOME`` point into the test's temporary directory. tsw looks
+for a data directory that claims the current directory before ``TSW_HOME``
+(``tsw.home.claiming_home``), so the tests refuse to run from a checkout inside one: they and
+the processes they start would use that data directory.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from tsw.home import Home, init_home
+from tsw.home import Home, claiming_home, init_home
 from tsw.ledger import Ledger
 
 SCRUBBED_PREFIXES = ("CLAUDE", "ANTHROPIC", "CODEX")
@@ -33,7 +33,7 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             monkeypatch.delenv(key, raising=False)
     user = tmp_path / "user"
     user.mkdir()
-    for key in ("HOME", "USERPROFILE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "CLAUDE_PROJECT_DIR"):
+    for key in ("HOME", "USERPROFILE", "CLAUDE_CONFIG_DIR", "CODEX_HOME"):
         monkeypatch.setenv(key, str(user))
     data_home = tmp_path / "tsw-home"
     monkeypatch.setenv("TSW_HOME", str(data_home))
@@ -112,6 +112,13 @@ _CONFIG: dict[str, pytest.Config] = {}
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionstart(session: pytest.Session) -> None:
     _CONFIG["config"] = session.config
+    claimed = claiming_home(Path.cwd().resolve())
+    if claimed is not None:
+        pytest.exit(
+            f"测试在声明了 claim_sessions 的数据目录 {claimed} 之中运行，会读写它；"
+            "换到该目录之外的检出再运行",
+            returncode=4,
+        )
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:

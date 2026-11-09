@@ -105,17 +105,18 @@ def installed_runtime_claims(env: Mapping[str, str] | None = None) -> Path:
     and so is a run whose runtime cannot be determined. Returns the runtime the workers use.
     """
     environ = os.environ if env is None else env
-    chosen: Path | None = None
-    source = ""
+    candidates: list[tuple[Path, str]] = []
     if environ.get("TSW_REPO"):
-        chosen, source = Path(environ["TSW_REPO"]).expanduser(), "TSW_REPO"
-    else:
-        real = environ.get("TSW_HOME")
-        marker = Path(real).expanduser() / "tsw-home.json" if real else None
-        if marker is not None and marker.is_file():
-            repo = json.loads(marker.read_text(encoding="utf-8")).get("product_repo")
-            if repo:
-                chosen, source = Path(str(repo)), f"数据目录 {real} 的 product_repo"
+        candidates.append((Path(environ["TSW_REPO"]).expanduser(), "TSW_REPO"))
+    real = environ.get("TSW_HOME")
+    marker = Path(real).expanduser() / "tsw-home.json" if real else None
+    if marker is not None and marker.is_file():
+        repo = json.loads(marker.read_text(encoding="utf-8")).get("product_repo")
+        if repo:
+            candidates.append((Path(str(repo)), f"数据目录 {real} 的 product_repo"))
+    # The launcher skips a candidate without the package and takes the next one.
+    usable = [(p, s) for p, s in candidates if (p / "tsw" / "__init__.py").is_file()]
+    chosen, source = usable[0] if usable else (None, "")
     home_py = chosen / "tsw" / "home.py" if chosen is not None else None
     if chosen is None or home_py is None or not home_py.is_file():
         raise SystemExit(
