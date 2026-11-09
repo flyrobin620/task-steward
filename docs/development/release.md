@@ -9,7 +9,7 @@ v1 开发期间不发布：没有版本标签、没有发布流水线，也不�
 
 开发期间 `plugin/.claude-plugin/plugin.json` 与市场条目都不写 `version`：Claude Code 只在计算出的版本
 变化时替换已安装的插件副本，固定的版本字符串会让副本永远停在第一次安装时；不写时版本取提交。产品更新后
-运行 `claude plugin update task-steward@task-steward` 并重启会话（CC006 §2）。
+运行 `tsw host render`（它会运行 `claude plugin update`）并重启会话（CC006 §2）。
 
 ## 发布规则（第一次发布前确定细节）
 
