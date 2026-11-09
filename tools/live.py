@@ -50,6 +50,7 @@ sys.path.insert(0, str(ROOT))
 
 from tools.checks.repo import utf8_stdio  # noqa: E402
 from tsw.home import Home  # noqa: E402
+from tsw.machine.ask_user import user_words  # noqa: E402
 from tsw.storage.fs import FsStorage  # noqa: E402
 
 LIVE = ROOT / "tools" / "live"
@@ -1108,10 +1109,12 @@ def routine_wakes(run: Run, evs: list[dict[str, Any]]) -> dict[str, Any]:
     # started (<id>) finished a turn'. Other notes list every linked session's ID too.
     started = re.compile(r"you started \(" + re.escape(session) + r"\)") if session else None
     for item in main_prompts(run) if started is not None else []:
-        text = item["prompt"].lstrip()
-        if text.startswith("<cross-session-message") and f'from="{session}"' in text[:200]:
+        # The app may put its own reminders in front of a forwarded message; a notice can sit in
+        # one of those reminders, so both are looked for, independently.
+        words = user_words(item["prompt"])
+        if words.startswith("<cross-session-message") and f'from="{session}"' in words[:200]:
             forwards.append(item["time"])
-        elif started is not None and started.search(text):
+        if started is not None and started.search(item["prompt"]):
             notices.append(item["time"])
     after = [t for t in notices if since and t > since]
     forwarded = [t for t in forwards if since and t > since]

@@ -487,6 +487,11 @@ def test_routine_e2e_reads_the_orchestrator_wakes_from_the_hooks(tmp_path: Path)
     cache(1, [at(2), at(2, 5), at(4)], [at(2, 40), at(4, 20)])
     assert live.routine_wakes(run, forwarding)["evidence"]["turns_after_detach"] == 2
     assert live.routine_wakes(run, forwarding)["status"] == "passed"
+    # The app may put its own reminders in front of a forward (Copilot review): still a forward.
+    reminded = f"<system-reminder>\n{linked}\n</system-reminder>\n{forward(rid)}"
+    write((at(2, 30), reminded, home))
+    assert live.routine_wakes(run, forwarding)["evidence"]["forwards_after_detach"] == [at(2, 30)]
+    assert live.routine_wakes(run, forwarding)["status"] == "passed"
     # No detach at all (the T243 run), or nothing forwarded after it.
     assert live.routine_wakes(run, evs[:1])["status"] == "failed"
     write(("2026-11-09T09:59:00Z", forward(rid), home))
