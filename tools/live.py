@@ -93,6 +93,28 @@ def outside_real_home(path: Path) -> None:
         )
 
 
+def installed_runtime_claims() -> None:
+    """The runtime the installed plugin uses must know claiming data directories.
+
+    A worker's folder carries no settings, so its session gets the user's ``TSW_HOME`` (the real
+    data directory). The cached plugin finds its runtime through that data directory's
+    ``product_repo``; only a runtime that knows ``claim_sessions`` then turns to the run's data
+    directory. An older one would work in the real data directory, so the run is refused.
+    """
+    real = os.environ.get("TSW_HOME")
+    marker = Path(real).expanduser() / "tsw-home.json" if real else None
+    if marker is None or not marker.is_file():
+        return
+    repo = json.loads(marker.read_text(encoding="utf-8")).get("product_repo")
+    home_py = Path(str(repo)) / "tsw" / "home.py" if repo else None
+    if home_py is None or "claim_sessions" not in home_py.read_text(encoding="utf-8"):
+        raise SystemExit(
+            f"live: 已安装的插件经数据目录 {real} 的 product_repo（{repo}）找到的运行时还不认识"
+            " claim_sessions，worker 会话会落到真实数据目录；先把该检出更新到含 claim_sessions"
+            " 的 main，再准备运行"
+        )
+
+
 def utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -719,13 +741,14 @@ def session_settings(run: Run, directory: Path) -> None:
     """Point sessions opened in ``directory`` at this run's data directory.
 
     The user's own settings give every Claude Code session ``TSW_HOME`` (their real data
-    directory). Project settings of the folder a session is opened in override it, so the run's
-    main session and workers resolve this run's data directory, never the real one. The file
-    carries no permission rules: tsw writes none into execution directories, and a worker's
-    actions, its merge included, are allowed by the user's auto-mode rules as in a real data
-    directory (decision 0003). The run's tasks call the GitHub stand-in by its full path (a
-    session's shell does not take ``PATH`` from project settings); the hooks still recognise
-    ``gh`` by its program name.
+    directory). Only the main session's folder, the run's data directory, gets this file: the
+    operator trusts that folder anyway when opening the main session. Execution directories get
+    none, as in a real data directory (decision 0003): a folder with its own settings asks for
+    trust again, which is what the run checks. Workers find the run's data directory because it
+    claims the sessions working inside it (``tsw init --claim-sessions``). The file carries no
+    permission rules. The run's tasks call the GitHub stand-in by its full path (a session's
+    shell does not take ``PATH`` from project settings); the hooks still recognise ``gh`` by its
+    program name.
     """
     run.check_inside(directory)
     settings = directory / ".claude" / "settings.local.json"
@@ -766,11 +789,12 @@ def selected(spec: Mapping[str, Any], names: Iterable[str] | None) -> list[dict[
 def host_prepare(args: argparse.Namespace) -> int:
     spec = scenario("host-e2e")
     tasks = selected(spec, (args.tasks or "").split(","))
+    installed_runtime_claims()
     run = Run.create("host-e2e")
     manifest = run.manifest()
     manifest["tasks"] = [str(t["task_id"]) for t in tasks]
     run.save(manifest)
-    tsw(run, "init")
+    tsw(run, "init", "--claim-sessions")
     tsw(run, "host", "render")
     run.record("dir", "home", state="created", ref=str(run.home))
     base = init_repo(run, REPO_FILES)
@@ -816,8 +840,6 @@ def host_prepare(args: argparse.Namespace) -> int:
             fill(task["goal"], values),
             *[a for item in task["acceptance"] for a in ("--acceptance", item)],
         )
-        for attempt in ("a1", "a2"):
-            session_settings(run, run.home / "work" / task["task_id"] / attempt)
     code = "、".join(str(t["task_id"]) for t in tasks if t["kind"] != "research")
     life = any(t["task_id"] == "T003" for t in tasks)
     values["code_tasks"] = code
@@ -1002,9 +1024,10 @@ def permission_rules(run: Run, tasks: list[dict[str, Any]]) -> dict[str, Any]:
         return [str(r) for r in (data.get("permissions") or {}).get("allow") or []]
 
     main = allow(run.home / ".claude" / "settings.json")
+    # An execution directory has no settings file at all (decision 0003).
     workers = {
-        str(t["task_id"]): allow(
-            run.home / "work" / str(t["task_id"]) / "a1" / ".claude" / "settings.local.json"
+        str(t["task_id"]): sorted(
+            p.name for p in (run.home / "work" / str(t["task_id"]) / "a1" / ".claude").glob("*")
         )
         for t in tasks
     }
@@ -1015,7 +1038,7 @@ def permission_rules(run: Run, tasks: list[dict[str, Any]]) -> dict[str, Any]:
     )
     return check(
         "P",
-        "权限规则：主会话放行会话管理与 tsw 工具；worker 的执行目录没有权限规则",
+        "权限规则：主会话放行会话管理与 tsw 工具；worker 的执行目录没有任何设置文件",
         ok,
         {"main": main, **workers},
     )

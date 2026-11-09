@@ -19,7 +19,7 @@ from tsw import __version__, lease
 from tsw.config import EffectiveConfig, lease_minutes, load_config
 from tsw.errors import EXIT_CODES, ErrorCode, TswError
 from tsw.events import utc_now
-from tsw.home import Home, init_home, open_home, record_product_repo, resolve_home
+from tsw.home import Home, claim_sessions, init_home, open_home, record_product_repo, resolve_home
 from tsw.host.claude_code import install_hint, render_instructions
 from tsw.host.guard import run as run_guard
 from tsw.host.identity import HOST_CLI_COMMANDS, SESSION_ENV
@@ -74,7 +74,15 @@ def _cmd_init(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)
     home, created = init_home(root)
     record_product_repo(home, REPO_ROOT)
-    return {"home": str(home.root), "created": created, "product_repo": str(REPO_ROOT)}
+    claimed = bool(getattr(args, "claim_sessions", False))
+    if claimed:
+        claim_sessions(home)
+    return {
+        "home": str(home.root),
+        "created": created,
+        "product_repo": str(REPO_ROOT),
+        **({"claim_sessions": True} if claimed else {}),
+    }
 
 
 def _cmd_home(args: argparse.Namespace) -> dict[str, Any]:
@@ -344,7 +352,12 @@ def build_parser() -> argparse.ArgumentParser:
         command.set_defaults(handler=handler)
         return command
 
-    add(sub, "init", _cmd_init, "初始化数据目录")
+    init = add(sub, "init", _cmd_init, "初始化数据目录")
+    init.add_argument(
+        "--claim-sessions",
+        action="store_true",
+        help="在其中工作的会话一律使用本数据目录，不看 TSW_HOME（live 运行等隔离场景）",
+    )
     add(sub, "home", _cmd_home, "显示数据目录位置")
 
     task = sub.add_parser("task", help="任务").add_subparsers(

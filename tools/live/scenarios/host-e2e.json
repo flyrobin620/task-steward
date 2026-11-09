@@ -77,7 +77,7 @@
   ],
   "checks": [
     "H1 隔离：数据目录与产品仓库指向本运行，主会话在临时数据目录中持有调度租约",
-    "P 权限规则：主会话放行会话管理与 tsw 工具；worker 的执行目录没有 tsw 写下的权限规则，worker 的 tsw 工具、发消息与合并由用户设置中的 auto 模式规则与分类器放行",
+    "P 权限规则：主会话放行会话管理与 tsw 工具；worker 的执行目录没有任何设置文件（worker 经 claim_sessions 找到本运行的数据目录），worker 的 tsw 工具、发消息与合并由用户设置中的 auto 模式规则与分类器放行",
     "H2 预启动与派发：任务书送达，每个任务都进入执行；运行包含 T003 时还有预启动",
     "H3 自评审：每个交付任务（T001 code、T002 design）至少一轮 codex-app-server 评审完成并以 finalize 定稿",
     "H4 提交与技术验收：每个交付任务的 worker.submitted 与 task.accepted",
@@ -88,6 +88,7 @@
   ],
   "prerequisites": [
     "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则“TaskSteward Worker Merge”与“TaskSteward Worker Dispatch”（worker 的执行目录不带权限规则，合并与派发依赖它们；Claude Code 不读取项目设置中的 autoMode）。",
+    "已安装插件所用的运行时（真实数据目录 tsw-home.json 的 product_repo 指向的检出）已更新到含 claim_sessions 的 main；prepare 会检查。",
     "worker 会话中如出现权限确认或分类器拒绝（tsw 工具、发给主会话的消息、合并），记下原文：这是本场景要验证的内容。"
   ]
 }
