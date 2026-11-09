@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -11,6 +12,8 @@ from tsw.machine.routine import (
     CARD_PREFIX,
     cron_for,
     fetched_messages,
+    id_time,
+    next_page,
     plain_text,
     select_replies,
     starting_task,
@@ -73,7 +76,7 @@ def test_select_replies_keeps_only_the_users_answers() -> None:
         _msg("2", "<p>T001 用方案 A</p>"),
         _msg("3", "随手记一条笔记"),  # the user's own notes in the chat
         _msg("4", "T002 好的", sender="someone-else"),
-        _msg("5", "T001 迟一点", at="2026-11-03T00:00:00Z"),  # before the lookback window
+        _msg("5", "T001 迟一点", at="2026-11-03T00:00:00Z"),  # before the read window
         _msg("6", "T003 不在等待中的任务"),
         _msg("7", "T002 用 B", at="2026-11-05T00:01:00Z"),
         _msg("8", "T001 已转过的"),
@@ -146,3 +149,87 @@ def test_fetched_messages_accepts_envelopes_and_pages() -> None:
     requests = [_q("T001", 1, "card", "2026-11-04T23:00:00Z")]
     found = select_replies(pages, requests=requests, sender_id="u1", since=WINDOW, exclude=set())
     assert [m["message_id"] for m in found] == ["1", "2"]  # no sender, no time: kept
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_tool_result_with_text_after_the_json() -> None:
+    # The Teams tools append a correlation line after the JSON they return.
+    one = {"id": "1", "content": "T001 a"}
+    text = json.dumps({"messages": [one], "nextLink": "p2"}) + "CorrelationId: abc, TimeStamp: x"
+    assert fetched_messages(text) == [one]
+    assert next_page(text, chat_id="c", since=WINDOW) == {"chatId": "c", "nextLink": "p2"}
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_next_page_reads_the_whole_window_one_page_at_a_time() -> None:
+    def page(*times: str, link: str | None = "p-next") -> dict[str, Any]:
+        out: dict[str, Any] = {"messages": [_msg(str(i), "x", at=t) for i, t in enumerate(times)]}
+        if link:
+            out["nextLink"] = link
+        return out
+
+    # Every message on the page is inside the window and there is more: read on.
+    inside = page("2026-11-05T00:09:00Z", "2026-11-04T00:00:00Z")
+    assert next_page(inside, chat_id="c", since=WINDOW) == {"chatId": "c", "nextLink": "p-next"}
+    # The page reaches back past the window's start: done.
+    assert (
+        next_page(page("2026-11-05T00:09:00Z", "2026-11-03T23:59:59Z"), chat_id="c", since=WINDOW)
+        is None
+    )
+    # The last page of the chat: done.
+    assert next_page(page("2026-11-05T00:09:00Z", link=None), chat_id="c", since=WINDOW) is None
+    # A page without dated messages tells nothing about the window: read on.
+    assert next_page(page(), chat_id="c", since=WINDOW) == {"chatId": "c", "nextLink": "p-next"}
+    # A list of pages from an older routine session: the last page decides.
+    older = [inside, page("2026-11-03T00:00:00Z")]
+    assert next_page(older, chat_id="c", since=WINDOW) is None
+    assert next_page([page("2026-11-03T00:00:00Z"), inside], chat_id="c", since=WINDOW) == {
+        "chatId": "c",
+        "nextLink": "p-next",
+    }
+    # Plain messages and nothing at all name no next page.
+    assert next_page([_msg("1", "x")], chat_id="c", since=WINDOW) is None
+    assert next_page(None, chat_id="c", since=WINDOW) is None
+    assert next_page("not json", chat_id="c", since=WINDOW) is None
+
+
+def _teams_id(at: str) -> str:
+    """A Teams message ID: the time the message was created, in milliseconds."""
+    return str(int(datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp() * 1000))
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_quick_reply_on_a_newer_page_than_its_card() -> None:
+    # Teams created the card at 09:00:00; tsw recorded it at 09:00:30; the user replied at
+    # 09:00:10. Read one page at a time, the reply's page does not hold the card.
+    card = _teams_id("2026-11-05T09:00:00Z")
+    assert id_time(card) == datetime(2026, 11, 5, 9, tzinfo=timezone.utc)
+    assert id_time("card-1") is None and id_time("0000000000001") is None
+    reply = [_msg("r", "T001 用 C", at="2026-11-05T09:00:10Z")]
+    waiting = _q("T001", 2, card, "2026-11-05T09:00:30Z")
+    older = _q("T001", 1, "card-1", "2026-11-05T08:00:00Z", status="resolved")
+    for requests in ([waiting], [older, waiting]):
+        found = select_replies(
+            reply, requests=requests, sender_id=None, since=WINDOW, exclude=set()
+        )
+        assert [(m["request_id"], m["pending"]) for m in found] == [("Q-T001-2", True)]
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_reply_in_the_same_second_as_its_card() -> None:
+    # The tool gives whole seconds; the IDs give milliseconds. Both sides use the IDs.
+    card = "1793869200050"  # 2026-11-05T09:00:00.050Z
+    reply = _msg("1793869200900", "T001 用 C", at="2026-11-05T09:00:00Z")  # .900, same second
+    waiting = _q("T001", 2, card, "2026-11-05T09:00:30Z")
+    older = _q("T001", 1, "card-1", "2026-11-05T08:00:00Z", status="resolved")
+    card_msg = _msg(card, f"{CARD_PREFIX} T001 Q-T001-2", at="2026-11-05T09:00:00Z")
+    for requests in ([waiting], [older, waiting]):
+        for page in ([reply], [reply, card_msg]):  # the card on another page, or on this one
+            found = select_replies(
+                page, requests=requests, sender_id=None, since=WINDOW, exclude={card}
+            )
+            assert [(m["request_id"], m["pending"]) for m in found] == [("Q-T001-2", True)]
+    # Before the card, within the same second: not an answer to it.
+    early = _msg("1793869200010", "T001 先说一句", at="2026-11-05T09:00:00Z")
+    found = select_replies([early], requests=[waiting], sender_id=None, since=WINDOW, exclude=set())
+    assert found == []

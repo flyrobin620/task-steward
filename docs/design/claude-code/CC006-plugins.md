@@ -115,7 +115,8 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 | 例行表给出的内容 | 例行会话调用的工具 |
 | --- | --- |
 | 例行项没有 `fetch` | `routine_run`，参数为该行的 `run`（没有时为 `job_id`） |
-| 例行项的 `fetch` 为 `teams.read_chat` | `mcp__teams__ListChatMessages`（`chatId`，`top`）；结果有 `nextLink` 且最早的消息不早于 `pages.until` 时，用 `nextLink` 继续取下一页；所有页按顺序放进一个列表，与该行的 `run`（`job_id` 与 `chat_id`）一起交给 `routine_run` |
+| 例行项的 `fetch` 为 `teams.read_chat` | `mcp__teams__ListChatMessages`（`chatId`，`top`），把返回值原样（只这一页）与该行的 `run`（`job_id` 与 `chat_id`）一起交给 `routine_run`。返回值是 JSON 后接一行 `CorrelationId: …`，脚本只读开头的 JSON |
+| `routine_run` 返回 `next` | 按 `next.tool` 与 `next.arguments`（`chatId`、`nextLink`）取下一页，再用 `next.run` 加上这一页调用 `routine_run`；直到不再返回 `next`。不合并页，不自行截断。`fetch.pages` 已弃用，只给本版本之前启动的例行会话用 |
 | `routine_run` 返回非空的 `forward` | `mcp__ccd_session_mgmt__send_message`，`session_id` 为 `forward` 中的主会话 ID，正文原样 |
 | 维护动作 `arm` | 有旧任务引用时先 `CronDelete`；再 `CronCreate`（`recurring: true`，`durable: false`，`cron` 与 `prompt` 原样）；然后 `routine_armed` 登记返回的任务引用 |
 | 维护动作 `clear_context` | 本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`：app 在这一轮结束、会话空闲后清空 |

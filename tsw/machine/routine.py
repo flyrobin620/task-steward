@@ -63,7 +63,12 @@ START_BACKGROUND = (
 FETCH_TOOLS: dict[str, dict[str, str]] = {
     "claude-code": {"teams.read_chat": "mcp__teams__ListChatMessages"},
 }
-TEAMS_READ_TOP = 50
+# One page of a chat at a time: a page has to fit in one host tool result (a self chat holds
+# long notes; 50 messages did not fit in the T243 live run). Paging reads the rest (DN006 §8.9.5).
+TEAMS_READ_TOP = 10
+# The read window starts this long before the earliest waiting card: the clocks of tsw and Teams
+# differ, and tsw records a card after Teams created it.
+TEAMS_WINDOW_MARGIN = timedelta(minutes=5)
 
 
 def _cmd(env: ToolEnv, op: str, inp: Mapping[str, Any], build: Any) -> Command:
@@ -236,9 +241,9 @@ def board(
         {"job_id": HANDOFF_SCAN, "script": "handoff_scan", "every": 1, "forward": "if_any"}
     ]
     host = str(config.get("plugins.host_integration"))
-    since = format_time(parse_time(now) - _hours(config.get("routine.teams_lookback_hours")))
     # One row per chat that still has a waiting Teams question (cards may go to several chats).
     for teams in teams_jobs(conn):
+        since = teams["since"]
         jobs.append(
             {
                 "job_id": TEAMS_REPLIES,
@@ -254,9 +259,11 @@ def board(
                     "since": since,
                     "tool": FETCH_TOOLS.get(host, {}).get("teams.read_chat"),
                     "arguments": {"chatId": teams["chat_id"], "top": TEAMS_READ_TOP},
-                    # Newest first, a page at a time: keep reading while the result names a
-                    # next page and its oldest message is not older than ``since``; pass all
-                    # pages, in order, as a list.
+                    # Newest first, one page at a time: pass each page to routine_run on its own;
+                    # while routine_run returns ``next``, fetch with its arguments and run again.
+                    "paging": "next",
+                    # Deprecated (T243 a2): how routine sessions started before ``next`` collected
+                    # every page into one list. Kept for them; routine_run still takes a list.
                     "pages": {"next": "nextLink", "argument": "nextLink", "until": since},
                 },
             }
@@ -293,7 +300,9 @@ def teams_jobs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     waiting (a task leaves as soon as its question is no longer pending, DN006 §8.7), the Teams
     questions of those tasks in that chat (older ones included: a reply is matched to the
     question it answers, never pinned on whatever question waits now), the user's Teams ID from
-    the latest card, and every message tsw sent, to leave out."""
+    the latest card, every message tsw sent, to leave out, and ``since``: where the read window
+    starts, just before the earliest card of a question still waiting in the chat (user,
+    2026-11-09: every message from the question on, however many)."""
     if (
         conn.execute("SELECT 1 FROM routine_jobs WHERE job_id = ?", (TEAMS_REPLIES,)).fetchone()
         is None
@@ -335,9 +344,11 @@ def teams_jobs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "SELECT message_id FROM channel_replies WHERE chat_id = ?", (chat_id,)
             )
         }
+        first = min(parse_time(str(c["sent_at"])) for c in here if c["status"] == "pending")
         jobs.append(
             {
                 "chat_id": chat_id,
+                "since": format_time(first - TEAMS_WINDOW_MARGIN),
                 "sender_id": sender["sender_id"] if sender else None,
                 "tasks": waiting,
                 "requests": [c for c in here if c["task_id"] in waiting],
@@ -363,11 +374,7 @@ ENVELOPES = ("messages", "value", "items", "data", "results")
 def fetched_messages(fetched: Any) -> list[dict[str, Any]]:
     """The messages in what the host's chat tool returned, whatever envelope it used: one
     result, or a list of pages (each a result), or a plain list of messages."""
-    if isinstance(fetched, str):
-        try:
-            fetched = json.loads(fetched)
-        except ValueError:
-            return []
+    fetched = _decoded(fetched)
     if isinstance(fetched, Mapping):
         for key in ENVELOPES:
             inner = fetched.get(key)
@@ -385,6 +392,59 @@ def fetched_messages(fetched: Any) -> list[dict[str, Any]]:
         elif isinstance(item, Mapping):
             out.append(dict(item))
     return out
+
+
+def _decoded(fetched: Any) -> Any:
+    """A tool result given as text: the JSON value it starts with. The Teams tools append a line
+    such as ``CorrelationId: ...`` after the JSON."""
+    if not isinstance(fetched, str):
+        return fetched
+    try:
+        value, _ = json.JSONDecoder().raw_decode(fetched.lstrip())
+    except ValueError:
+        return None
+    return value
+
+
+NEXT_KEYS = ("nextLink", "@odata.nextLink")
+
+
+def _next_link(page: Any) -> str | None:
+    """The next page a host tool result names, if any."""
+    page = _decoded(page)
+    if isinstance(page, Mapping):
+        for key in NEXT_KEYS:
+            value = page.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def _is_page(item: Any) -> bool:
+    item = _decoded(item)
+    return isinstance(item, Mapping) and (
+        any(isinstance(item.get(k), list) for k in ENVELOPES) or _next_link(item) is not None
+    )
+
+
+def next_page(fetched: Any, *, chat_id: str, since: str) -> dict[str, Any] | None:
+    """The arguments of the next fetch of a ``teams-replies`` row, or None (DN006 §8.9.5).
+
+    Pages come newest first. Another page is needed while the page given names a next one and
+    its oldest message is not older than ``since`` (a page without dated messages goes on).
+    ``fetched`` is one page, or a list of pages from a routine session started before paging by
+    ``next`` (the last page decides)."""
+    fetched = _decoded(fetched)
+    last = fetched[-1] if isinstance(fetched, list) and fetched else fetched
+    if not _is_page(last):
+        return None  # a plain list of messages names no next page
+    link = _next_link(last)
+    if link is None:
+        return None
+    times = [t for t in (_created(m) for m in fetched_messages(last)) if t is not None]
+    if times and min(times) < parse_time(since):
+        return None
+    return {"chatId": chat_id, "nextLink": link}
 
 
 def _sender(message: Mapping[str, Any]) -> str | None:
@@ -410,6 +470,12 @@ def _body(message: Mapping[str, Any]) -> str:
 
 
 def _created(message: Mapping[str, Any]) -> datetime | None:
+    """When a message was created: the time its Teams ID stands for (milliseconds), else the
+    time the tool gave (``createdDateTime`` has whole seconds only). Cards and replies are
+    compared at the same precision (review r2 of T243 a2)."""
+    at = id_time(str(message.get("id") or ""))
+    if at is not None:
+        return at
     value = message.get("createdDateTime") or message.get("created") or message.get("time")
     if not isinstance(value, str):
         return None
@@ -418,6 +484,18 @@ def _created(message: Mapping[str, Any]) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+# Teams message IDs are the time the message was created, in milliseconds since the epoch.
+_ID_TIMES = (datetime(2000, 1, 1, tzinfo=timezone.utc), datetime(2100, 1, 1, tzinfo=timezone.utc))
+
+
+def id_time(message_id: str) -> datetime | None:
+    """The time a Teams message ID stands for, or None for an ID of another form."""
+    if not message_id.isdigit() or len(message_id) != 13:
+        return None
+    at = datetime.fromtimestamp(int(message_id) / 1000, tz=timezone.utc)
+    return at if _ID_TIMES[0] <= at < _ID_TIMES[1] else None
 
 
 def starting_task(words: str, tasks: Iterable[str]) -> str | None:
@@ -467,19 +545,25 @@ def select_replies(
     since: str,
     exclude: set[str],
 ) -> list[dict[str, Any]]:
-    """The ``teams_replies`` script (DN006 §8.9.5): messages from the user, within the lookback
-    window, starting with a question number or a waiting task's ID, that tsw neither sent nor
-    passed on before, each with the question it answers. Oldest first.
+    """The ``teams_replies`` script (DN006 §8.9.5): messages from the user, not older than
+    ``since`` (the read window), starting with a question number or a waiting task's ID, that tsw
+    neither sent nor passed on before, each with the question it answers. Oldest first.
 
     ``requests`` are the Teams questions with their cards (``request_id``, ``task_id``,
     ``message_id`` of the card, ``sent_at``, ``status``), oldest first."""
     messages = fetched_messages(fetched)
     cards = {str(r["message_id"]): str(r["request_id"]) for r in requests}
+    # When each card went out. Pages are read one at a time, so a card is often not on the page
+    # its replies are on: its ID tells the time then (review r1 of T243 a2).
     card_times: dict[str, datetime] = {}
+    for message_id, request_id in cards.items():
+        at = id_time(message_id)
+        if at is not None:
+            card_times[request_id] = at
     for message in messages:
         created = _created(message)
         request_id = cards.get(str(message.get("id") or ""))
-        if request_id is not None and created is not None:
+        if request_id is not None and created is not None and request_id not in card_times:
             card_times[request_id] = created
     floor = parse_time(since)
     out: list[dict[str, Any]] = []
@@ -522,6 +606,28 @@ def card(conn: sqlite3.Connection, request: Mapping[str, Any]) -> str:
         f"回复时以任务 ID 开头，例如“{task_id} 你的答复”。\n"
         f"worker 会话：{WORKER_LINK}"
     )
+
+
+def run_next(
+    conn: sqlite3.Connection, job_id: str, inp: Mapping[str, Any], host: str
+) -> dict[str, Any] | None:
+    """What a routine session does after ``routine_run`` of a row that reads by pages: fetch the
+    next page with ``tool`` and ``arguments`` and run the row again with ``run`` and that page
+    (DN006 §8.9.3). None when the row has read its whole window."""
+    if job_id != TEAMS_REPLIES:
+        return None
+    chat_id = str(inp.get("chat_id") or "")
+    job = next((j for j in teams_jobs(conn) if j["chat_id"] == chat_id), None)
+    if job is None:
+        return None
+    arguments = next_page(inp.get("fetched"), chat_id=chat_id, since=job["since"])
+    if arguments is None:
+        return None
+    return {
+        "tool": FETCH_TOOLS.get(host, {}).get("teams.read_chat"),
+        "arguments": arguments,
+        "run": {"job_id": TEAMS_REPLIES, "chat_id": chat_id},
+    }
 
 
 # ---------------------------------------------------------------------- forwarding
@@ -698,14 +804,11 @@ def routine_run(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     job_id=job_id,
                     chat_id=chat_id,
                 )
-            since = format_time(
-                parse_time(ctx.now) - _hours(env.config.get("routine.teams_lookback_hours"))
-            )
             found = select_replies(
                 fetched,
                 requests=job["requests"],
                 sender_id=job["sender_id"],
-                since=since,
+                since=job["since"],
                 exclude=job["seen"] | job["outbound"],
             )
             return [

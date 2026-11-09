@@ -113,7 +113,7 @@ DEFAULTS: dict[str, Any] = {
         "renew_after_days": 6,
         "context_reset_hours": 24,
         "stale_after_intervals": 3,
-        "teams_lookback_hours": 24,
+        "teams_lookback_hours": 24,  # deprecated: no longer read (DN006 §8.9.5)
     },
     "review": {
         "max_rounds": 3,
@@ -246,7 +246,7 @@ SCHEMA: dict[str, Any] = _obj(
         renew_after_days=_int(1),
         context_reset_hours=_int(1),
         stale_after_intervals=_int(1),
-        teams_lookback_hours=_int(1),
+        teams_lookback_hours=_int(1),  # deprecated (T243 a2): no longer read (DN003 §3.1b)
     ),
     review=_obj(
         max_rounds=_int(1),

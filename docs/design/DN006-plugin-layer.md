@@ -409,7 +409,7 @@ T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与
 Teams 工具只有宿主中的模型能调用（delegated），回收因此是 poll，由例行表中的 Teams 例行项（§8.9.5）完成。主会话与例行会话都不运行时不回收，问题保持待答；不承诺离线回收。
 
 1. **发送**：主会话 `input_relay`（`channel: teams-chat`）记录 `input.relayed`，返回卡片正文与目标 chat（`input.teams.chat`，默认用户本人的自聊）。卡片以 `[TaskSteward]` 开头，写明任务 ID、问题编号、问题全文、worker 会话链接，以及答复方式：“回复时以任务 ID 开头，例如 `T241 用方案 A`”。主会话发送后调用 `channel_sent`，登记 chat ID、卡片消息 ID 与发送者（用户本人在 Teams 中的 ID，取自发送结果）；tsw 把该任务 ID 加入这个 chat 的 Teams 例行项的输入列表：每个还有待答问题的 chat 一行（配置的 chat 改了之后，旧 chat 中的问题照样回收）。
-2. **回收**：例行项的脚本按 §8.9.5 取出 chat 中最近 `routine.teams_lookback_hours`（默认 24）小时内、发送者是用户本人、正文以问题编号或列表中某个任务 ID 开头的消息，排除 tsw 自己发出的消息（按登记的出站消息 ID）与已经转给主会话的消息，对应到它回答的问题，转给主会话。脚本不判断内容。
+2. **回收**：例行项的脚本按 §8.9.5 取出 chat 中从最早一个待答问题的卡片发出起到现在的全部消息中（不限条数，逐页读取）、发送者是用户本人、正文以问题编号或列表中某个任务 ID 开头的消息，排除 tsw 自己发出的消息（按登记的出站消息 ID）与已经转给主会话的消息，对应到它回答的问题，转给主会话。脚本不判断内容。
 3. **登记**：主会话收到转来的消息后按 skill 判断它是否回答了问题。是答复时用 `input_resolve` 登记，来源为 `VerifiedSource`（渠道 `teams-chat`、Teams 消息 ID、消息原文、问题的决定对象），满足 G-USER，经 T12 让 worker 继续，并用消息把答复告诉 worker。不是答复（例如“稍后回复”）时不登记，问题保持待答。问题已答复、取消或过时后才到的消息，按 §8.1c 记为 `input.late_response`。
 4. **移出**：任务的问题不再待答（任何渠道答复、取消、过时）时，tsw 把它的任务 ID 从输入列表中移除；列表为空时这一行停用，下次有 Teams 转达时重新启用。
 
@@ -462,8 +462,9 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 
 1. `routine_board` 返回到期的例行项（按 `job_id` 排序）与执行者自身的维护动作（定时任务的设定与续期、清空上下文，§8.9.6）。
 2. 对每一行：有 `fetch` 时，执行者用宿主工具按写明的参数取数，把原始结果交给 `routine_run`；没有时直接调用 `routine_run`。
-3. `routine_run` 在一次写入中运行脚本，必要时记录脚本的结果事件，并返回 `forward`：要发给主会话的消息全文，或空。
+3. `routine_run` 在一次写入中运行脚本，必要时记录脚本的结果事件，并返回 `forward`：要发给主会话的消息全文，或空。按页读取的例行项（`teams-replies`）还可能返回 `next`：下一页的取数工具与参数，以及再次运行要用的 `run`。是否还要下一页由脚本判断，执行者不判断。
 4. 执行者把非空的 `forward` 原样发给主会话（会话 ID 取自调度租约的持有者），不改写、不补充。主会话不在线（没有租约持有者）时不发送，结果仍在账本中，主会话下次运行 `attention` 时看到。
+5. 返回 `next` 时，执行者按它取下一页，把这一页交给 `routine_run`，回到第 3 步，直到不再返回 `next`。每次只交一页：单次工具结果有长度上限，页数没有上限。
 
 每次运行的时间写进 `cache/routine.json`，用来判断执行者是否失效（§8.9.6）；只有脚本改变了账本事实时才记事件，避免每个间隔一条事件。
 
@@ -483,8 +484,9 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | 项目 | 内容 |
 | --- | --- |
 | 输入 | Teams chat ID、用户本人在 Teams 中的 ID、等待中的任务 ID 列表（`channel_sent` 加入，问题不再待答时移出） |
-| 取数 | 读取该 chat 最近 `routine.teams_lookback_hours` 小时的消息：从最新一页起逐页读，直到最早的消息早于回看窗口或没有下一页（Claude Code 的工具与参数见 CC006 §7） |
-| 脚本 | 从取到的消息中选出：发送者是用户本人（消息带发送者时）、在回看窗口内、不是 tsw 发出的、此前没有转过、去掉格式后的正文以问题编号或列表中某个任务 ID 开头（后接空白或标点）的消息，并对应到它回答的问题：以问题编号开头的就是那个问题；以任务 ID 开头的是该任务在这条消息之前发出卡片的最近一个 Teams 问题（更早问题的回复不会算到之后才问的问题上）；对应不到的不转出。对每条记录 `channel.reply_seen`（消息 ID、任务 ID、问题编号、问题是否仍待答、原文），之后不再转出 |
+| 读取窗口 | 从该 chat 中最早一个仍待答的 Teams 问题的卡片登记时间起（提前 5 分钟，容纳两边时钟与登记先后的差），到现在。窗口内的消息全部读取，不限条数（用户 2026-11-09）。`routine.teams_lookback_hours` 不再使用 |
+| 取数 | 从最新一页起，每次一页（每页 10 条，单次工具结果须在宿主的长度上限内），每页单独交给 `routine_run`（§8.9.3）。这一页有下一页、且其中最早的消息不早于窗口起点时，`routine_run` 返回 `next`；否则这一行读完。Claude Code 的工具与参数见 CC006 §6.2 |
+| 脚本 | 从这一页的消息中选出：发送者是用户本人（消息带发送者时）、在读取窗口内、不是 tsw 发出的、此前没有转过、去掉格式后的正文以问题编号或列表中某个任务 ID 开头（后接空白或标点）的消息，并对应到它回答的问题：以问题编号开头的就是那个问题；以任务 ID 开头的是该任务在这条消息之前发出卡片的最近一个 Teams 问题（更早问题的回复不会算到之后才问的问题上；卡片的发出时间取 Teams 消息 ID 所表示的创建时间，卡片不在同一页时也能比较）；对应不到的不转出。对每条记录 `channel.reply_seen`（消息 ID、任务 ID、问题编号、问题是否仍待答、原文），之后不再转出 |
 | 结果 | 选出的消息（任务 ID、问题编号、消息 ID、时间、原文） |
 | 转发 | `if_any`：“Teams 中有以下答复，按 skill 判断并登记：…” |
 
@@ -508,7 +510,7 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 
 例行会话在用户第一次要求执行待办的那一轮由主会话启动：`routine_start` 记录 `routine.start_requested`（代次、会话名 `routine-g<K>`、执行目录 `routine/`）并返回创建会话的参数，主会话用会话适配器创建会话后用 `routine_bind` 记录 `routine.bound`；结果未知时按会话名对账（§4.1）。会话 ID 等于当前代次的例行会话时角色为例行会话，旧代次的为已撤销（DN001 §7.1）。`attention` 的 `routine` 给出状态：`missing`、`starting`、`unarmed`、`ok`、`stale`。
 
-参数见 DN003 §3.1b：`roles.routine`（会话适配器、模型，默认 `claude-sonnet-5-5`、effort `low`、权限模式）与 `routine`（`enabled`、`interval_minutes` 默认 10、`renew_after_days`、`context_reset_hours`、`stale_after_intervals`、`teams_lookback_hours`）。承载例行会话的会话适配器须为 `interactive`，并声明 `timer`（会话内的定时唤醒）。
+参数见 DN003 §3.1b：`roles.routine`（会话适配器、模型，默认 `claude-sonnet-5-5`、effort `low`、权限模式）与 `routine`（`enabled`、`interval_minutes` 默认 10、`renew_after_days`、`context_reset_hours`、`stale_after_intervals`；`teams_lookback_hours` 已弃用）。承载例行会话的会话适配器须为 `interactive`，并声明 `timer`（会话内的定时唤醒）。
 
 ## 9. P4 存储后端与数据目录
 

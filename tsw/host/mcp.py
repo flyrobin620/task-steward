@@ -267,7 +267,14 @@ class Server:
             # The app refuses a cwd spelled differently from the folder on disk.
             out["cwd"] = os.path.realpath(self.home.root / routine_mod.WORKDIR)
         if name == "routine_run":
-            out["forward"] = self._forward(str(args.get("job_id") or ""), out, ledger)
+            job_id = str(args.get("job_id") or "")
+            out["forward"] = self._forward(job_id, out, ledger)
+            with ledger.view() as conn:
+                following = routine_mod.run_next(
+                    conn, job_id, args, str(config.get("plugins.host_integration"))
+                )
+            if following is not None:
+                out["next"] = following
         return out
 
     def _forward(self, job_id: str, out: Mapping[str, Any], ledger: Ledger) -> dict[str, Any]:
