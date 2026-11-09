@@ -5,8 +5,9 @@ the MCP server and for hooks alike. A session bound to an attempt is that attemp
 session opened in the data directory is the orchestrator role; anything else may only ask who
 it is. A session that was ever bound to an attempt keeps that binding: once the attempt is
 replaced or closed the session is ``revoked`` (it may only ask who it is and read), and it never
-falls back to the orchestrator role even if it is opened in the data directory. The working
-directory is a consistency check, never the identity itself.
+falls back to the orchestrator role even if it is opened in the data directory. The session
+bound to the newest routine generation is the routine session (DN006 §8.9); one bound to an older
+generation is revoked. The working directory is a consistency check, never the identity itself.
 """
 
 from __future__ import annotations
@@ -52,7 +53,7 @@ def within(path: Path, root: Path) -> bool:
 
 @dataclass(frozen=True)
 class Identity:
-    role: str  # orchestrator | worker | revoked | none
+    role: str  # orchestrator | worker | routine | revoked | none
     session_id: str | None
     cwd: Path
     task_id: str | None = None
@@ -63,6 +64,7 @@ class Identity:
     writable_roots: tuple[Path, ...] = field(default_factory=tuple)
     cwd_consistent: bool = True
     pending: bool = False  # not bound yet, but started in a starting attempt's directory
+    pending_role: str | None = None  # the role a pending session is about to get
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -77,6 +79,7 @@ class Identity:
             "writable_roots": [str(p) for p in self.writable_roots],
             "cwd_consistent": self.cwd_consistent,
             "pending": self.pending,
+            **({"pending_role": self.pending_role} if self.pending_role else {}),
         }
 
 
@@ -116,8 +119,46 @@ def resolve(conn: sqlite3.Connection, home: Home, env: Mapping[str, str], cwd: P
                 writable_roots=tuple(roots),
                 cwd_consistent=consistent,
             )
+    if session:
+        routine = row_dict(
+            conn.execute(
+                "SELECT * FROM routine_sessions WHERE session_ref = ? "
+                "ORDER BY generation DESC LIMIT 1",
+                (session,),
+            ).fetchone()
+        )
+        if routine is not None:
+            gen = f"routine-g{routine['generation']}"
+            if routine["status"] != "bound":
+                return Identity(
+                    role="revoked",
+                    session_id=session,
+                    cwd=cwd,
+                    attempt=gen,
+                    phase=str(routine["status"]),
+                    cwd_consistent=False,
+                )
+            return Identity(
+                role="routine",
+                session_id=session,
+                cwd=cwd,
+                attempt=gen,
+                phase="live",
+                cwd_consistent=within(cwd, home.root / str(routine["workdir"])),
+            )
     if session and _norm(cwd) == _norm(home.root):
         return Identity(role="orchestrator", session_id=session, cwd=cwd)
+    starting = _awaiting_routine(conn, home, cwd) if session else None
+    if starting is not None:
+        return Identity(
+            role="none",
+            session_id=session,
+            cwd=cwd,
+            attempt=f"routine-g{starting['generation']}",
+            phase="starting",
+            pending=True,
+            pending_role="routine",
+        )
     pending = _awaiting_session(conn, home, cwd) if session else None
     if pending is not None:
         return Identity(
@@ -128,8 +169,19 @@ def resolve(conn: sqlite3.Connection, home: Home, env: Mapping[str, str], cwd: P
             attempt=str(pending["attempt"]),
             phase=str(pending["phase"]),
             pending=True,
+            pending_role="worker",
         )
     return Identity(role="none", session_id=session, cwd=cwd)
+
+
+def _awaiting_routine(conn: sqlite3.Connection, home: Home, cwd: Path) -> dict[str, Any] | None:
+    """The routine generation being created in ``cwd`` (the data directory's ``routine/``)."""
+    row = row_dict(
+        conn.execute("SELECT * FROM routine_sessions ORDER BY generation DESC LIMIT 1").fetchone()
+    )
+    if row is None or row["status"] != "starting" or row["session_ref"] is not None:
+        return None
+    return row if within(cwd, home.root / str(row["workdir"])) else None
 
 
 def _awaiting_session(conn: sqlite3.Connection, home: Home, cwd: Path) -> dict[str, Any] | None:

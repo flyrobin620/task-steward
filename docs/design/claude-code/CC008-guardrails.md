@@ -1,6 +1,6 @@
 # CC008 Claude Code 上的护栏
 
-- 状态：设计草案（T242 r2，待用户确认）
+- 状态：设计草案（T242 r2；T243 增加例行会话的规则）
 - 日期：2026-11-08
 - 实现：[DN008 校验原则](../DN008-guardrails.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC006 Claude Code 插件](CC006-plugins.md)
@@ -25,7 +25,7 @@
 
 ## 3. block list
 
-所有规则只在已登记的会话（主会话、worker、已撤销、待绑定）中生效，无关会话不受影响。规则只看工具名、目标路径前缀、命令中的程序与子命令（分词，不解析路径、重定向、变量与脚本）。
+所有规则只在已登记的会话（主会话、worker、例行会话、已撤销、待绑定）中生效，无关会话不受影响。规则只看工具名、目标路径前缀、命令中的程序与子命令（分词，不解析路径、重定向、变量与脚本）。
 
 | 编号 | 会话 | 触发 | 防的错误 | 拒绝信息中的正确做法 |
 | --- | --- | --- | --- | --- |
@@ -36,9 +36,10 @@
 | CC-B5 | worker | `gh pr create`，仓库没有 `delivery.create_pr` | 同上 | 同上 |
 | CC-B6 | worker | `gh pr merge`，或 `gh api` 调用 REST 合并路径（`…/pulls/<n>/merge`）或 GraphQL `mergePullRequest`（只看这两种写法，不看评论正文等其他参数里的 “merge” 一词：现状对此误拦，本任务回复评审线程时实测）；仓库没有 `delivery.merge`（不看任务类型，T245） | 不该由 worker 合并时合并，主会话流程随之错乱 | 提交时用 `merge_skipped` 说明，由主会话合并。**不可放行**：它是 G-SUBMIT 合并授权的镜像，放行后合并记录仍会被 G-SUBMIT 拒绝；需要 worker 合并时由用户修改 `delivery.merge`（用户在会话外手工编辑，或经主会话 `config_change`），然后在原 worker 中重试：hook 与 G-SUBMIT 每次都重新读取配置，不需要重启会话 |
 | CC-B7 | worker | 有合并授权，但 `gh pr merge` 没有 `-R HOST/OWNER/NAME` 或本仓库的 PR 链接与配置的 `host`（默认 `github.com`）、`repository` 一致；或用 `gh api` 合并 | 按当前目录或遗留的 `GH_HOST` 合并了别的仓库或别的主机的 PR（目标错误） | `gh pr merge <编号> -R github.com/<owner>/<name>`，或该仓库的 PR 链接 |
-| CC-B8 | worker、主会话 | `CronCreate` / `ScheduleWakeup` 的提示不以 `<scheduled-task>` 开头 | 定时提示到达时与用户消息无法区分：worker 的被记成用户答复（live `host-e2e` 实测，误认来源）；主会话的被当成用户本人的 turn，CC-S4 随之要求在不能创建会话的 turn 中预启动（T244） | 提示以 `<scheduled-task>` 开头、`</scheduled-task>` 结束 |
-| CC-B9 | 主会话 | `start_session` 的会话名不是已落账、代次有效的 attempt | 没有先 `attempt_start` 就建会话，或重复建会话 | 先 `attempt_start`，用返回的会话名。**不可放行**：没有落账的会话无法绑定到 attempt（DN002 §6） |
+| CC-B8 | worker、主会话、例行会话 | `CronCreate` / `ScheduleWakeup` 的提示不以 `<scheduled-task>` 开头 | 定时提示到达时与用户消息无法区分：worker 的被记成用户答复（live `host-e2e` 实测，误认来源）；主会话的被当成用户本人的 turn，CC-S4 随之要求在不能创建会话的 turn 中预启动（T244） | 提示以 `<scheduled-task>` 开头、`</scheduled-task>` 结束 |
+| CC-B9 | 主会话 | `start_session` 的会话名不是已落账、代次有效的 attempt，也不是正在启动的例行会话代次 | 没有先 `attempt_start` / `routine_start` 就建会话，或重复建会话 | 先 `attempt_start`（例行会话先 `routine_start`），用返回的会话名。**不可放行**：没有落账的会话无法绑定到 attempt（DN002 §6） |
 | CC-B10 | 已撤销 / 待绑定 | 编辑类工具、Bash、`start_session` | 已被替换的会话继续写；绑定前就开始工作（状态漂移） | 已撤销：回到主会话；待绑定：等主会话绑定后的消息 |
+| CC-B11 | 例行会话 | 编辑类工具、Bash、`start_session` | 例行会话自己去“处理”问题（改代码、跑命令、建会话），越过“只执行例行动作、不作判断”的分工（DN006 §8.9） | 只执行例行表（`routine_board`）中的例行项；其余事项发消息交主会话 |
 
 **escape**（DN008 §5 第 4 条）：每条拒绝信息以规则编号开头，写出上表的正确做法；可放行的规则还写明“动作确属任务需要时，问用户；用户同意后用 `user_answer` 登记放行这条规则”。CC-B6、CC-B9 是状态机守卫的镜像，不能放行或关闭（`waive_rules` 与 `guardrails.disabled` 中出现它们时以 `invalid_input` 拒绝），只给出状态机的路径。其余规则的做法：
 
@@ -58,9 +59,10 @@
 | CC-S1 | SessionStart | 识别角色；主会话领取租约并注入 attention 摘要；worker 注入任务与回传规则；待绑定会话提示等待绑定 | 保留（不是拦截） |
 | CC-S2 | UserPromptSubmit（worker） | worker 有待答问题时，把用户消息原文记为 `input.session_message` 并告诉 worker 编号；去掉宿主前置的 `<system-reminder>`（T241）；以 `<cross-session-message` `<side-sessions-event` `<task-notification` `<ci-monitor-event` `<scheduled-task` 开头的注入消息不记 | 保留。前置 reminder 的修复是必需的：本任务中用户在 worker 会话的回复以 `<system-reminder>` 开头，`main` 上的实现把它当成注入消息没有记录，worker 因而无法登记答复 |
 | CC-S3 | UserPromptSubmit（worker） | 检测 `[report]` 并提示回传 | 保留 |
-| CC-S4 | Stop（主会话） | 有未处理的回传或到期未转交的问题时阻止结束一次；这一轮是用户的 turn（CC-S6）且 `attention` 的 `needs_prestart` 非空时也阻止一次，提示为列出的任务预启动（DN002 §5.6）。几条原因合在一条提示里，`stop_hook_active` 时不再阻止 | 保留；预启动提醒为 T244 新增 |
+| CC-S4 | Stop（主会话） | 有未处理的回传、到期未转交的问题或失效的例行会话（`attention` 的 `routine` 为 `stale`，提示给它发消息重新设定）时阻止结束一次；这一轮是用户的 turn（CC-S6）且 `attention` 的 `needs_prestart` 非空或例行会话需要启动（`missing`）时也阻止一次，提示为列出的任务预启动（DN002 §5.6）、启动例行会话（DN006 §8.9.2）。几条原因合在一条提示里，`stop_hook_active` 时不再阻止 | 保留；预启动提醒为 T244 新增，例行会话提醒为 T243 新增 |
 | CC-S5 | Stop（worker） | 评审进行中时阻止结束一次；记录 `worker.turn_ended` | 保留 |
 | CC-S6 | UserPromptSubmit（主会话） | 记下这一轮是不是用户本人的 turn：按 CC-S2 的同一规则判断（去掉前置 `<system-reminder>` 后为空或以注入标记开头的不是），写入数据目录 `cache/turns/<会话>.json`；Stop 读取后即删除，hook 没有看到开头的一轮（没有 `UserPromptSubmit`）因此不算用户的 turn | T244 新增 |
+| CC-S7 | SessionStart（例行会话） | 注入例行会话指令（CC006 §6） | T243 新增 |
 
 **CC-S4 预启动提醒的背景与 escape**：只有用户本人的 turn 能创建会话（CC001 §4）。2026-11-07 主会话登记了等待依赖的任务后，没有在之后的用户 turn 里为它预启动，用户提醒后才补上；之后要等用户再发消息才能创建，依赖链因此停住。Stop hook 本身不知道这一轮由谁触发，所以由 CC-S6 在一轮开始时记下。提醒只在用户的 turn、本会话没有被另一个主会话的有效租约排除（另一个会话持有租约时本会话不能预启动）、列表非空时出现，每轮最多一次。escape：用户要求先不开始、或预启动确实不合适时，主会话说明原因后直接结束（第二次 Stop 带 `stop_hook_active`，不再阻止）；用户也可以关闭预启动（`scheduling.prestart.enabled`）。标记只是缓存：写入失败时这一轮不提醒，不影响其他行为（DN008 §8 第 2 条）。
 
@@ -148,7 +150,7 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 
 `start_session` 与 `send_message` 等会话工具由 app 自己的分类器把关，不受 `permissions.allow` 约束（live 中允许规则已生效，带“worker 自行合并”的任务书正文仍被拦截）。用户 2026-11-07 决定：创建 worker 会话时 `prompt` 只写短指令（角色、attempt、任务书路径），`background` 只写任务标题、仓库与执行目录，任务书正文（含交付与合并方式）由 worker 从 `runs/` 读取；合并的把关点因此在 worker 实际合并时，由 auto 模式规则与 hooks 守卫承担，而不是在创建会话时由 app 分类器判断。会话可能在 `attempt_reconcile` 之前开始第一轮（`whoami` 仍为 pending），主会话绑定后发消息通知它。
 
-auto 模式分类器另有自己的规则（`autoMode.allow` / `soft_deny`），其中“Merge Without Review”把 worker 合并自己的 PR 判为未经评审的合并（live 中即使命中允许规则的合并也出现过被拒）。Claude Code 只从用户设置、命令行设置与托管设置读取 `autoMode`，项目设置与本地设置中的一律忽略（Claude Code 2.1.302 中核实），所以 tsw 不能把它与允许规则一起生成：`tsw host install-hint` 给出两条规则，由用户加入自己的用户设置（用户 2026-11-08 决定：凡是 tsw 已把关、分类器仍会误拦的动作，都用 auto 模式规则在策略层放行）：“TaskSteward Worker Dispatch”（主会话以 `attempt_start` 返回的会话名与 `cwd`、只指向任务书的短指令创建 worker 会话；live 中同样的短指令创建曾被分类器以“Blocked by classifier”拒绝一次，用户重试后通过）与“TaskSteward Worker Merge”（限 worker 会话、本任务的 PR、单独的 `gh pr merge … -R …`，不含 `--admin` 与绕过检查；不看任务类型）。worker 的 tsw 工具与发给主会话的消息没有对应的规则：分类器本来就不拦它们（上表）；如果 live 中出现误拦，再按同一原则在 install hint 中加一条覆盖它们的规则。`attempt_start` 同时返回执行目录在磁盘上的实际写法 `cwd`：app 拒绝大小写不同的同一目录。
+auto 模式分类器另有自己的规则（`autoMode.allow` / `soft_deny`），其中“Merge Without Review”把 worker 合并自己的 PR 判为未经评审的合并（live 中即使命中允许规则的合并也出现过被拒）。Claude Code 只从用户设置、命令行设置与托管设置读取 `autoMode`，项目设置与本地设置中的一律忽略（Claude Code 2.1.302 中核实），所以 tsw 不能把它与允许规则一起生成：`tsw host install-hint` 给出三条规则，由用户加入自己的用户设置（用户 2026-11-08 决定：凡是 tsw 已把关、分类器仍会误拦的动作，都用 auto 模式规则在策略层放行）：“TaskSteward Worker Dispatch”（主会话以 `attempt_start` 返回的会话名与 `cwd`、只指向任务书的短指令创建 worker 会话；live 中同样的短指令创建曾被分类器以“Blocked by classifier”拒绝一次，用户重试后通过）与“TaskSteward Worker Merge”（限 worker 会话、本任务的 PR、单独的 `gh pr merge … -R …`，不含 `--admin` 与绕过检查；不看任务类型），以及“TaskSteward Routine”（限例行会话：按 `routine_board` 的返回设定、续期自己的定时任务，读取 tsw 指定的 Teams chat，把 tsw 生成的消息发给主会话，清空自己的上下文；T243）。worker 的 tsw 工具与发给主会话的消息没有对应的规则：分类器本来就不拦它们（上表）；如果 live 中出现误拦，再按同一原则在 install hint 中加一条覆盖它们的规则。`attempt_start` 同时返回执行目录在磁盘上的实际写法 `cwd`：app 拒绝大小写不同的同一目录。
 
 Claude Code 对复合命令（`;`、`&&`、管道）逐段核对允许规则，有一段不在规则内就交给权限模式与分类器判断。live 中单独的 `gh pr merge … -R …` 直接执行，而后面接了 `git fetch` 等命令的同一合并被分类器以“Merge Without Review”拒绝；worker 指令因此要求合并命令单独运行，auto 模式规则也只描述单独的合并命令。
 

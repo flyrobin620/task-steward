@@ -53,6 +53,7 @@ PERMISSION_KEYS = (
     "roles.*.session",
     "roles.reviewer",
     "roles.worker.allow_in_task_subagents",
+    "routine.enabled",
     "plugins",
     "input.triage",
     "input.channels",

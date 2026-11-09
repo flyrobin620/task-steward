@@ -3,8 +3,9 @@
 The plugin in ``plugin/`` carries what every session needs wherever it runs: the MCP
 registration and the hooks. It is enabled at user scope, so it carries no orchestrator skill.
 This module generates the orchestrator's instructions into the data directory: ``CLAUDE.md`` and
-the project skill ``.claude/skills/orchestrate/SKILL.md``, which only a session opened in the
-data directory discovers. It also generates the permission rules for the actions tsw guards
+the project skills ``.claude/skills/orchestrate/SKILL.md`` and ``handle-input`` (questions handed
+over by the routine session, CC006 §6.4), which only a session opened in the data directory
+discovers. It also generates the permission rules for the actions tsw guards
 itself (CC008 §6): ``.claude/settings.json`` in the data directory for the orchestrator. A
 worker's execution directory gets no settings file: a folder that brings its own permission
 rules asks for trust again even under a trusted data directory, so a worker relies on the
@@ -26,6 +27,8 @@ from tsw.storage.fs import atomic_write
 PLUGIN_DIR = Path(__file__).resolve().parent.parent.parent / "plugin"
 ORCHESTRATE_SKILL = Path(__file__).resolve().parent / "orchestrate_skill.md"
 SKILL_PATH = Path(".claude") / "skills" / "orchestrate" / "SKILL.md"
+HANDLE_INPUT_SKILL = Path(__file__).resolve().parent / "handle_input_skill.md"
+HANDLE_INPUT_PATH = Path(".claude") / "skills" / "handle-input" / "SKILL.md"
 SETTINGS_PATH = Path(".claude") / "settings.json"
 WORKER_SETTINGS_PATH = Path(".claude") / "settings.local.json"
 # The plugin ``task-steward`` registers the MCP server ``tsw`` (plugin/.mcp.json).
@@ -54,8 +57,8 @@ CAPABILITIES = {
 CLAUDE_MD = """# TaskSteward 数据目录
 
 这里是 TaskSteward 的数据目录，在这里打开的会话是主会话。执行目录在本目录之下的
-worker 子会话也会读到本文件与 `orchestrate` skill：`whoami` 的角色不是 orchestrator 时，
-忽略二者，按任务书工作。
+worker 子会话与例行会话（`routine/`）也会读到本文件与项目 skill：`whoami` 的角色不是
+orchestrator 时，忽略二者：worker 按任务书工作，例行会话按会话开始时的说明运行例行表。
 
 - 用户要求执行、继续、恢复或调整待办时，按 `orchestrate` skill 工作；
   普通解释与维护不开始执行真实待办。
@@ -73,9 +76,11 @@ def render_instructions(home: Home) -> list[Path]:
     atomic_write(claude_md, CLAUDE_MD.encode("utf-8"))
     skill = home.root / SKILL_PATH
     atomic_write(skill, ORCHESTRATE_SKILL.read_bytes())
+    handle_input = home.root / HANDLE_INPUT_PATH
+    atomic_write(handle_input, HANDLE_INPUT_SKILL.read_bytes())
     settings = home.root / SETTINGS_PATH
     allow_actions(settings, ORCHESTRATOR_ALLOW)
-    return [claude_md, skill, settings]
+    return [claude_md, skill, handle_input, settings]
 
 
 def clear_worker_settings(workdir: Path) -> bool:
@@ -162,13 +167,25 @@ AUTO_MODE_WORKER_DISPATCH = (
     "start_session to create a worker session is the user's standing instruction to run their "
     "TaskSteward tasks, when the session's name is the session_name and its cwd the cwd that "
     "tsw's attempt_start just returned, and its prompt only points the worker at its brief "
-    "under runs/. The brief's delivery terms, including a worker merging its own pull request "
+    "under runs/; the same holds for the routine session, named and placed by tsw's "
+    "routine_start. The brief's delivery terms, including a worker merging its own pull request "
     "(TaskSteward Worker Merge), were authorized by the user. tsw's PreToolUse hook refuses a "
     "start_session whose name tsw did not record. This is not Create Unsafe Agents, Merge "
     "Without Review or Self-Approval. It does not cover sessions in any other folder or with "
     "any other name."
 )
-AUTO_MODE_RULES = (AUTO_MODE_WORKER_DISPATCH, AUTO_MODE_WORKER_MERGE)
+AUTO_MODE_ROUTINE = (
+    "TaskSteward Routine: In a TaskSteward routine session (its working directory is routine/ "
+    "under a TaskSteward data directory and tsw's whoami reports role routine), doing exactly "
+    "what tsw's routine_board returned is the user's standing instruction: arming or renewing "
+    "the session's own recurring CronCreate task with the prompt tsw gave (deleting the one it "
+    "replaces with CronDelete), reading the Teams chat tsw named with ListChatMessages, sending "
+    "the message tsw produced to the TaskSteward main session with send_message, and clearing "
+    "its own context with clear_session(self). The main session started this session in the "
+    "user's turn (TaskSteward Worker Dispatch covers it). It does not cover any other chat, "
+    "message, session or tool."
+)
+AUTO_MODE_RULES = (AUTO_MODE_WORKER_DISPATCH, AUTO_MODE_WORKER_MERGE, AUTO_MODE_ROUTINE)
 
 
 def install_hint(home: Home) -> str:
@@ -183,14 +200,16 @@ def install_hint(home: Home) -> str:
             "2. 安装插件：/plugin install task-steward@task-steward",
             f"3. 设置环境变量 TSW_HOME={home.root}（或在仓库的 .local/tsw-home 中写入该路径），",
             "   让 worktree 中的 worker 会话也能找到数据目录。",
-            "4. 运行 tsw host render，在数据目录生成主会话的 CLAUDE.md 与",
-            "   .claude/skills/orchestrate/SKILL.md（产品更新后重新运行）。",
+            "4. 运行 tsw host render，在数据目录生成主会话的 CLAUDE.md 与项目 skill",
+            "   .claude/skills/orchestrate/、handle-input/（产品更新后重新运行）。",
+            "   需要经 Teams 问你时，在配置 plugins.human_channels 中加入 teams-chat。",
             f"5. 在数据目录 {home.root} 中打开一个会话作为主会话。",
             "插件只提供 tsw MCP server 与 hooks，在任何目录的会话里都生效；orchestrate skill",
             "是数据目录的项目 skill，只有在数据目录打开的会话会加载。tsw 不修改任何全局设置。",
-            "6. auto 权限模式下，Claude Code 的分类器会把主会话派发 worker、worker 自行合并 PR",
-            "   当作未经授权。worker 的执行目录不带权限规则（带规则的目录会再次要求信任），",
-            "   worker 的放行都来自这里。由你在用户设置（~/.claude/settings.json，",
+            "6. auto 权限模式下，Claude Code 的分类器会把主会话派发 worker、worker 自行合并 PR、",
+            "   例行会话的定时任务与转发当作未经授权。worker 与例行会话的目录不带权限规则",
+            "   （带规则的目录会再次要求信任），它们的放行都来自这里。由你在用户设置",
+            "   （~/.claude/settings.json，",
             "   与已有的 autoMode 合并）中加入下面的 auto 模式规则（不采用 worker 合并时可省略",
             "   合并那一条）；",
             "   Claude Code 不读取项目设置中的 autoMode，tsw 也不会替你修改用户设置：",

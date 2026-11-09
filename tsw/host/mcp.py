@@ -29,13 +29,14 @@ from tsw.host.claude_code import clear_worker_settings
 from tsw.host.identity import Identity, resolve, within
 from tsw.host.maintenance import Maintenance
 from tsw.ledger import Ledger
+from tsw.machine import routine as routine_mod
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.config_tools import CONFIG_TOOLS
 from tsw.machine.model import loads, row_dict, task
 from tsw.machine.runner import run_tool
 from tsw.machine.schemas import SCHEMAS, SOURCE
 from tsw.review.run import run_round
-from tsw.storage.fs import FsStorage
+from tsw.storage.fs import FsStorage, atomic_write
 from tsw.tasks import task_row
 
 # Protocol revisions this server implements (tools only, no batching), newest first. A client
@@ -55,7 +56,7 @@ INTERNAL_ERROR = -32603
 # registry. Keys are tool names, values (roles, description, input schema).
 HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
     "whoami": (
-        ("orchestrator", "worker", "revoked", "none"),
+        ("orchestrator", "worker", "routine", "revoked", "none"),
         "调用者的角色、任务、attempt 与可写路径",
         EMPTY,
     ),
@@ -81,6 +82,11 @@ HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
         EMPTY,
     ),
     "lease_status": (("orchestrator",), "调度租约状态", EMPTY),
+    "routine_board": (
+        ("routine",),
+        "例行表中这次要执行的例行项与维护动作（DN006 §8.9.3）：逐行执行，原样转发结果",
+        EMPTY,
+    ),
     "lease_acquire": (("orchestrator",), "领取或续期调度租约（本会话）", EMPTY),
     "config_show": (
         ("orchestrator",),
@@ -178,12 +184,12 @@ class Server:
     def tools(self, who: Identity) -> list[dict[str, Any]]:
         # A session started for an attempt that is not bound yet sees the worker's tools from
         # its first listing (hosts may never ask again); calls still wait for the binding.
-        role = "worker" if who.pending else who.role
+        role = (who.pending_role or "worker") if who.pending else who.role
         listed: list[dict[str, Any]] = []
         for name, (roles, description, schema) in HOST_TOOLS.items():
             if role in roles:
                 listed.append({"name": name, "description": description, "inputSchema": schema})
-        if role in ("orchestrator", "worker"):
+        if role in ("orchestrator", "worker", "routine"):
             for name, spec in sorted(REGISTRY.tools.items()):
                 if role in spec.roles:
                     listed.append(
@@ -212,6 +218,12 @@ class Server:
             raise rejected("当前角色不能使用该工具", reason="role_denied", role=who.role, tool=name)
         if name == "whoami":
             return who.to_dict()
+        if who.pending and who.pending_role == "routine":
+            raise rejected(
+                "例行会话还没有绑定：等主会话完成绑定（routine_bind）后再调用",
+                reason="not_bound",
+                generation=who.attempt,
+            )
         if who.pending:
             raise rejected(
                 "本会话还没有绑定到 attempt：等主会话完成绑定（attempt_reconcile）后再调用",
@@ -251,7 +263,36 @@ class Server:
             self._prepare_workdir(args)
         if name == "attempt_start":
             self._session_dir(out, ledger)
+        if name == "routine_start" and out.get("events"):
+            # The app refuses a cwd spelled differently from the folder on disk.
+            out["cwd"] = os.path.realpath(self.home.root / routine_mod.WORKDIR)
+        if name == "routine_run":
+            out["forward"] = self._forward(str(args.get("job_id") or ""), out, ledger)
         return out
+
+    def _forward(self, job_id: str, out: Mapping[str, Any], ledger: Ledger) -> dict[str, Any]:
+        """What the routine session passes on to the orchestrator, word for word."""
+        with ledger.view() as conn:
+            message = routine_mod.forward_text(conn, job_id, out.get("events") or [])
+            target = routine_mod.orchestrator_session(conn, utc_now())
+        if not message:
+            return {"send": False}
+        if target is None:
+            return {"send": False, "note": "主会话不在线：结果已在账本中，主会话下次运行时会看到"}
+        return {"send": True, "session_id": target, "message": message}
+
+    def _routine_board(self, who: Identity, config: EffectiveConfig, ledger: Ledger) -> Any:
+        cache_path = self.home.cache_dir / "routine.json"
+        with ledger.view() as conn:
+            result, kept = routine_mod.board(
+                conn, config, utc_now(), routine_mod.load_cache(self.home), who.session_id
+            )
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(cache_path, json.dumps(kept).encode("utf-8"))
+        except OSError:  # a lost run time only makes the next run arm once more
+            pass
+        return result
 
     def _prepare_workdir(self, args: Mapping[str, Any]) -> None:
         """A research task's execution directory lives under ``work/`` and is created here."""
@@ -297,6 +338,8 @@ class Server:
         config: EffectiveConfig,
         ledger: Ledger,
     ) -> Any:
+        if name == "routine_board":
+            return self._routine_board(who, config.require_valid(), ledger)
         if name == "lease_acquire":
             command = lease.acquire(
                 str(who.session_id),
@@ -369,7 +412,9 @@ class Server:
             if name == "inbox":
                 return inbox_mod.inbox(conn, ledger.storage, config)
             if name == "attention":
-                return inbox_mod.attention(conn, ledger.storage, config)
+                return inbox_mod.attention(
+                    conn, ledger.storage, config, routine_mod.load_cache(self.home)
+                )
             row = row_dict(conn.execute("SELECT * FROM leases WHERE name = 'scheduler'").fetchone())
             if row is None or row["holder_session"] is None:
                 return {"lease": None}

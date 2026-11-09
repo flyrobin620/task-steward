@@ -177,8 +177,18 @@ def test_reviewer_on_the_worker_model_is_a_warning(home: Home) -> None:
 def test_channels_and_decision_digest(home: Home) -> None:
     problems = _problems(home, {"input": {"channels": ["teams-chat"]}})
     assert "input.channels: teams-chat 未在 plugins.human_channels 中加载" in problems
-    problems = _problems(home, {"plugins": {"human_channels": ["teams-chat"]}})
-    assert "plugins.human_channels: 本版本不提供人类渠道 teams-chat" in problems
+    problems = _problems(home, {"plugins": {"human_channels": ["hub-portal"]}})
+    assert "plugins.human_channels: 本版本不提供人类渠道 hub-portal" in problems
+    # teams-chat answers questions but does not notify in this version (DN006 §8.6).
+    assert not _problems(home, {"plugins": {"human_channels": ["in-session", "teams-chat"]}})
+    problems = _problems(
+        home,
+        {
+            "plugins": {"human_channels": ["in-session", "teams-chat"]},
+            "input": {"decision_digest": {"channel": "teams-chat"}},
+        },
+    )
+    assert any("不是已加载且支持 notify 的渠道" in p for p in problems)
     problems = _problems(home, {"input": {"decision_digest": {"channel": "in-session"}}})
     assert any("不是已加载且支持 notify 的渠道" in p for p in problems)
     problems = _problems(home, {"input": {"decision_digest": {"channel": None}}})
@@ -275,3 +285,51 @@ def test_a_merge_authorization_names_its_repository(home: Home) -> None:
     assert any("repositories.demo.repository" in p for p in problems)
     named = {**repo, "repository": "example/demo"}
     assert _problems(home, {"version": 1, "repositories": {"demo": named}}) == []
+
+
+def test_routine_settings(home: Home) -> None:
+    """The routine session's parameters (DN003 §3.1b)."""
+    assert not _problems(home, {"routine": {"interval_minutes": 15}})
+    assert not _problems(home, {"routine": {"interval_minutes": 120}})
+    problems = _problems(home, {"routine": {"interval_minutes": 7}})
+    assert any(p.startswith("routine.interval_minutes:") for p in problems)
+    problems = _problems(home, {"routine": {"interval_minutes": 90}})
+    assert any(p.startswith("routine.interval_minutes:") for p in problems)
+    # Renewal comes at the first run after renew_after_days, before the host's 7-day expiry.
+    for days in (7, 8):
+        problems = _problems(home, {"routine": {"renew_after_days": days}})
+        assert any(p.startswith("routine.renew_after_days:") for p in problems), days
+    assert not _problems(home, {"routine": {"renew_after_days": 5, "interval_minutes": 1440}})
+    assert _problems(home, {"routine": {"renew_after_days": 6, "interval_minutes": 1440}})
+    problems = _problems(home, {"roles": {"routine": {"session": "codex-exec"}}})
+    assert any("不能承载例行会话" in p for p in problems)
+    # A disabled routine session needs no adapter that can carry it.
+    assert not _problems(
+        home, {"routine": {"enabled": False}, "roles": {"routine": {"session": "codex-exec"}}}
+    )
+    problems = _problems(
+        home,
+        {
+            "roles": {
+                "orchestrator": {"permission_mode": "edits"},
+                "worker": {"permission_mode": "edits"},
+                "routine": {"permission_mode": "full"},
+            }
+        },
+    )
+    assert "roles.routine.permission_mode: 不能高于 roles.orchestrator.permission_mode" in problems
+    # A configuration written before the routine session existed stays valid: the default
+    # follows the orchestrator's mode down (PR #22 review).
+    older = {
+        "roles": {
+            "orchestrator": {"permission_mode": "edits"},
+            "worker": {"permission_mode": "edits"},
+        }
+    }
+    home.path("config/task-steward.json").write_text(
+        json.dumps({"version": 1, **older}), encoding="utf-8"
+    )
+    config = load_config(home)
+    assert config.valid, config.problems
+    assert config.get("roles.routine.permission_mode") == "edits"
+    assert config.sources["roles.routine.permission_mode"] == "derived"

@@ -14,6 +14,7 @@ from tsw.ledger import Ledger
 from tsw.machine import ask_user as _ask_user
 from tsw.machine import config_tools as _config_tools
 from tsw.machine import orchestrator as _orchestrator
+from tsw.machine import routine as _routine
 from tsw.machine import worker as _worker
 from tsw.machine.ask_user import handed_off_event, handoff_due
 from tsw.machine.base import REGISTRY, Caller, Tool, ToolEnv, check_caller, check_version
@@ -21,7 +22,7 @@ from tsw.machine.guards import dependency_problems, invalidated, topological
 from tsw.machine.model import OCCUPYING, loads, next_item_id
 
 # Importing the tool modules registers their tools.
-TOOL_MODULES = (_orchestrator, _worker, _config_tools, _ask_user)
+TOOL_MODULES = (_orchestrator, _worker, _config_tools, _ask_user, _routine)
 
 SYNC = Tool(
     "sync", ("orchestrator", "system"), lambda inp, env: sync_command(env), description="系统规则"

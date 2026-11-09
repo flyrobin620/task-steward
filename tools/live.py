@@ -3,6 +3,7 @@
     python tools/live.py reviewer [--reviewer codex-app-server]   run the reviewer scenario
     python tools/live.py host-e2e prepare                          set up a run for the Claude app
     python tools/live.py host-e2e verify RUN_ID [--trust-prompted yes|no] [--blocked yes|no]
+    python tools/live.py routine-e2e prepare | verify RUN_ID [...]  the routine session, Teams
                                                                   check the run's ledger
     python tools/live.py cleanup RUN_ID [--archived SESSION ...]   finish a run's cleanup
     python tools/live.py list                                       runs and their state
@@ -803,10 +804,18 @@ def selected(spec: Mapping[str, Any], names: Iterable[str] | None) -> list[dict[
 
 
 def host_prepare(args: argparse.Namespace) -> int:
-    spec = scenario("host-e2e")
-    tasks = selected(spec, (args.tasks or "").split(","))
+    return prepare("host-e2e", args)
+
+
+def routine_prepare(args: argparse.Namespace) -> int:
+    return prepare("routine-e2e", args)
+
+
+def prepare(name: str, args: argparse.Namespace) -> int:
+    spec = scenario(name)
+    tasks = selected(spec, (getattr(args, "tasks", None) or "").split(","))
     installed_runtime_claims()
-    run = Run.create("host-e2e")
+    run = Run.create(name)
     manifest = run.manifest()
     manifest["tasks"] = [str(t["task_id"]) for t in tasks]
     run.save(manifest)
@@ -837,6 +846,7 @@ def host_prepare(args: argparse.Namespace) -> int:
         "timeout_plus": str(timeout + 1),
         "home": str(run.home),
         "run_id": run.id,
+        "interval": str((spec["config"].get("routine") or {}).get("interval_minutes", 10)),
     }
     session_settings(run, run.home)
     for task in tasks:
@@ -868,7 +878,7 @@ def host_prepare(args: argparse.Namespace) -> int:
     )
     steps = [fill(s, values) for s in spec["operator"]]
     operator = [
-        f"# live host-e2e {run.id}",
+        f"# live {name} {run.id}",
         "",
         "开始前确认：",
         "",
@@ -1012,6 +1022,174 @@ def host_verify(args: argparse.Namespace) -> int:
         "GitHub（push 目标、PR、合并）由运行目录内的 origin.git 与 gh 替身模拟，相关证据为模拟证据"
     )
     return 0 if write_results(run, "host-e2e", checks, notes) else 1
+
+
+def routine_verify(args: argparse.Namespace) -> int:
+    """The routine session, the handoff by the system rule and the Teams round trip."""
+    run = Run.open(args.run_id)
+    evs = events(run)
+    marker = json.loads((run.home / "tsw-home.json").read_text(encoding="utf-8"))
+    orch = [
+        e for e in evs if e["actor"].get("role") == "orchestrator" and e["actor"].get("session_id")
+    ]
+    for sid in sorted({str(e["actor"]["session_id"]) for e in orch}):
+        run.bind_main(sid)
+    reconcile_sessions(run, evs)  # the workers, for cleanup
+    checks = [
+        check(
+            "H1",
+            "隔离：数据目录与产品仓库指向本运行，主会话在其中操作",
+            Path(marker.get("product_repo", "")).resolve() == ROOT.resolve() and bool(orch),
+            f"product_repo=<repo>; 主会话事件 {len(orch)} 条",
+        ),
+        routine_started(run, evs),
+        routine_handoff(evs),
+        teams_round_trip(evs),
+        check(
+            "O",
+            "操作者观察：例行会话没有信任确认、没有被拦，定时运行结束时主会话没有被唤醒",
+            args.trust_prompted == "no" and args.blocked == "no" and args.woken_by_ticks == "no",
+            {
+                "trust_prompted": args.trust_prompted or "未记录",
+                "blocked": args.blocked or "未记录",
+                "woken_by_ticks": args.woken_by_ticks or "未记录",
+                "evidence": "操作者在 app 中的观察",
+            },
+        ),
+    ]
+    notes = [
+        hook_summary(run),
+        "Teams 卡片与回复经用户真实的 Teams 自聊（真实证据）；GitHub 不参与本场景",
+        "清空上下文（context_reset_hours，最短 1 小时）不在本场景的时长内，"
+        "CC006 §6.5 的 R2 未在本次运行中验证",
+    ]
+    return 0 if write_results(run, "routine-e2e", checks, notes) else 1
+
+
+def routine_started(run: Run, evs: list[dict[str, Any]]) -> dict[str, Any]:
+    requested = first(evs, "routine.start_requested")
+    bound = first(evs, "routine.bound")
+    armed = first(evs, "routine.armed")
+    # Every generation asked for gets an entry, so cleanup accounts for each of them.
+    names = {
+        int(e["data"]["generation"]): str(e["data"]["session_name"])
+        for e in evs
+        if e["type"] == "routine.start_requested"
+    }
+    for name in names.values():
+        run.record("claude-session", name)
+    for e in evs:
+        if e["type"] == "routine.bound" and int(e["data"]["generation"]) in names:
+            run.record(
+                "claude-session",
+                names[int(e["data"]["generation"])],
+                state="created",
+                ref=str(e["data"]["session_ref"]),
+            )
+    problems = [
+        name
+        for name, found in (("start_requested", requested), ("bound", bound), ("armed", armed))
+        if found is None
+    ]
+    return check(
+        "R0",
+        "例行会话启动、绑定并设定定时任务",
+        not problems,
+        {
+            "start_requested": requested and requested["sequence"],
+            "bound": bound and bound["sequence"],
+            "armed": armed and {"seq": armed["sequence"], "cron": armed["data"].get("cron")},
+            "missing": problems,
+        },
+    )
+
+
+def _after(evs: list[dict[str, Any]], kind: str, task: str, seq: int) -> dict[str, Any] | None:
+    return next(
+        (e for e in evs if e["type"] == kind and e["task_id"] == task and e["sequence"] > seq),
+        None,
+    )
+
+
+def routine_handoff(evs: list[dict[str, Any]]) -> dict[str, Any]:
+    asked = first(evs, "input.escalated", "T001", kind="in_session")
+    if asked is None:
+        return check("B2", "超时转交与主会话代答（T001）", False, "没有 in_session 的提问")
+    request = asked["data"]["request_id"]
+    handed = first(evs, "input.handed_off", "T001", request_id=request)
+    decision = first(evs, "orchestrator.decision", "T001", request_id=request)
+    resolved = first(evs, "input.resolved", "T001", request_id=request)
+    problems: list[str] = []
+    if handed is None:
+        problems.append("没有 input.handed_off")
+    elif handed["data"].get("by") != "system" or handed["actor"].get("role") != "routine":
+        problems.append(f"不是例行会话按系统规则转交：{handed['data'].get('by')}")
+    if decision is None or resolved is None:
+        problems.append("主会话没有代答")
+    elif resolved["data"].get("source_kind") != "orchestrator":
+        problems.append(f"答复来源不是主会话：{resolved['data'].get('source_kind')}")
+    note = resolved and _after(evs, "worker.progress", "T001", resolved["sequence"])
+    if resolved is not None and note is None:
+        problems.append("worker 没有在答复之后记录进展")
+    return check(
+        "B2",
+        "超时转交（例行会话，by: system）与主会话代答（T001）",
+        not problems,
+        {
+            "escalated": asked["sequence"],
+            "handed_off": handed and {"seq": handed["sequence"], "by": handed["data"].get("by")},
+            "decision": decision and decision["sequence"],
+            "resolved": resolved and resolved["sequence"],
+            "worker_progress": note and note["sequence"],
+            "problems": problems,
+        },
+    )
+
+
+def teams_round_trip(evs: list[dict[str, Any]]) -> dict[str, Any]:
+    asked = first(evs, "input.escalated", "T002", kind="in_session")
+    if asked is None:
+        return check("T", "Teams 转达与登记（T002）", False, "没有 in_session 的提问")
+    request = asked["data"]["request_id"]
+    relayed = first(evs, "input.relayed", "T002", request_id=request, channel="teams-chat")
+    sent = first(evs, "channel.message_sent", "T002", request_id=request)
+    added = first(evs, "routine.job_added", job_id="teams-replies")
+    seen = [e for e in evs if e["type"] == "channel.reply_seen"]
+    resolved = first(evs, "input.resolved", "T002", request_id=request)
+    problems: list[str] = []
+    for name, found in (("relayed", relayed), ("sent", sent), ("job_added", added)):
+        if found is None:
+            problems.append(f"没有 {name}")
+    if not seen:
+        problems.append("例行表没有取出 Teams 回复")
+    if any(not str(e["data"].get("text", "")).upper().startswith("T002") for e in seen):
+        problems.append("取出了不以 T002 开头的消息")
+    source = (resolved or {}).get("data", {}).get("source") or {}
+    if resolved is None:
+        problems.append("问题没有得到答复")
+    elif (
+        source.get("channel") != "teams-chat"
+        or resolved["data"].get("source_kind", "user") != "user"
+    ):
+        problems.append(f"答复来源不是 Teams 中的用户：{source.get('channel')}")
+    note = resolved and _after(evs, "worker.progress", "T002", resolved["sequence"])
+    if resolved is not None and note is None:
+        problems.append("worker 没有在答复之后记录进展")
+    return check(
+        "T",
+        "经 Teams 转达、例行表取出回复、主会话登记（T002）",
+        not problems,
+        {
+            "relayed": relayed and relayed["sequence"],
+            "card_sent": sent and sent["sequence"],
+            "job_added": added and added["sequence"],
+            "replies_seen": [{"seq": e["sequence"], "text": e["data"].get("text")} for e in seen],
+            "resolved": resolved
+            and {"seq": resolved["sequence"], "channel": source.get("channel")},
+            "worker_progress": note and note["sequence"],
+            "problems": problems,
+        },
+    )
 
 
 def observed(args: argparse.Namespace) -> dict[str, Any]:
@@ -1349,6 +1527,18 @@ def main(argv: list[str] | None = None) -> int:
         help="操作者观察：worker 的 tsw 工具、发给主会话的消息或合并是否出现权限确认或分类器拒绝",
     )
     ver.set_defaults(handler=host_verify)
+    routine = sub.add_parser("routine-e2e", help="例行会话与 Teams 渠道（需要用户在场）")
+    routine_steps = routine.add_subparsers(dest="step", required=True)
+    routine_steps.add_parser("prepare").set_defaults(handler=routine_prepare)
+    routine_ver = routine_steps.add_parser("verify")
+    routine_ver.add_argument("run_id")
+    for flag, text in (
+        ("--trust-prompted", "创建例行会话时 app 是否要求信任 routine/"),
+        ("--blocked", "例行会话的定时任务或发消息是否出现权限确认或分类器拒绝"),
+        ("--woken-by-ticks", "例行会话每次定时运行结束时主会话是否被唤醒"),
+    ):
+        routine_ver.add_argument(flag, choices=("yes", "no"), help=f"操作者观察：{text}")
+    routine_ver.set_defaults(handler=routine_verify)
     clean = sub.add_parser("cleanup", help="记录已归档的会话并报告剩余对象")
     clean.add_argument("run_id")
     clean.add_argument("--archived", action="append", help="已归档并用 get_session 读回的会话 ID")

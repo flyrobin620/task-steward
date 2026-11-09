@@ -24,6 +24,8 @@ class SessionCaps:
     prestart: bool
     reuse_session: bool
     open_existing_dir: bool
+    timer: bool = False  # the host wakes the session on a schedule (DN006 §8.9)
+    timer_days: int | None = None  # how long the host keeps a recurring timer, if limited
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,8 @@ SESSIONS: dict[str, SessionCaps] = {
         prestart=True,
         reuse_session=True,
         open_existing_dir=True,
+        timer=True,  # CronCreate in the session (CC006 §6)
+        timer_days=7,  # recurring CronCreate tasks expire after seven days
     ),
     "claude-headless": SessionCaps(
         host="claude-code",
@@ -97,7 +101,21 @@ CHANNELS: dict[str, ChannelCaps] = {
     "in-session": ChannelCaps(
         request_response=True, notify=False, collect="push", execution="direct"
     ),
+    # Cards go out from the orchestrator; replies come back through the routine board
+    # (DN006 §8.7). No notify in this version.
+    "teams-chat": ChannelCaps(
+        request_response=True, notify=False, collect="poll", execution="delegated"
+    ),
 }
 
 HOST_INTEGRATIONS = ("claude-code",)
+# Neutral permission modes (DN003 §3.1) as each host names them (CC006 §3).
+PERMISSION_NAMES: dict[str, dict[str, str]] = {
+    "claude-code": {
+        "ask": "default",
+        "edits": "acceptEdits",
+        "auto": "auto",
+        "full": "bypassPermissions",
+    },
+}
 STORAGE_BACKENDS = ("fs",)

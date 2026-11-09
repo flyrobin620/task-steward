@@ -19,7 +19,7 @@ from tsw.errors import rejected
 from tsw.lease import require_lease
 from tsw.machine.model import current_attempt, task
 
-ROLES = ("orchestrator", "worker", "system")
+ROLES = ("orchestrator", "worker", "routine", "system")
 
 
 @dataclass(frozen=True)

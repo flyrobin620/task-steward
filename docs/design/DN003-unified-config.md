@@ -1,6 +1,6 @@
 # DN003 统一配置
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置；T243 增加 `roles.routine` 与 `routine`）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN004 worker 自评审](DN004-worker-self-review.md)
 
@@ -36,8 +36,8 @@
     "triage": "orchestrator_judgment",
     "channels": ["in-session", "teams-chat"],
     "in_session_timeout_minutes": 10,
-    "decision_digest": {"enabled": true, "schedule": "daily_and_on_task_done", "channel": "teams-chat"},
-    "teams_poll": {"interval_minutes": 5, "max_interval_minutes": 30}
+    "decision_digest": {"enabled": true, "schedule": "daily_and_on_task_done", "channel": "local"},
+    "teams": {"chat": "self"}
   },
   "roles": {
     "orchestrator": {
@@ -62,7 +62,21 @@
       "effort": "medium",
       "context_window": 1200000,
       "timeout_seconds": 1800
+    },
+    "routine": {
+      "session": "claude-app",
+      "model": "claude-sonnet-5-5",
+      "effort": "low",
+      "permission_mode": "auto"
     }
+  },
+  "routine": {
+    "enabled": true,
+    "interval_minutes": 10,
+    "renew_after_days": 6,
+    "context_reset_hours": 24,
+    "stale_after_intervals": 3,
+    "teams_lookback_hours": 24
   },
   "review": {
     "max_rounds": 3,
@@ -83,7 +97,7 @@
     "max_workers": 5,
     "lease_minutes": 120,
     "prestart": {"enabled": true, "max_standby": 10},
-    "wake": {"worker_message_parent": true, "reportable_events": ["worker.submitted", "worker.question", "input.handed_off", "task.paused", "report_back"]}
+    "wake": {"worker_message_parent": true, "reportable_events": ["worker.submitted", "worker.question", "input.handed_off", "channel.reply_seen", "task.paused", "report_back"]}
   },
   "sessions": {
     "name_pattern": "{task_id_lower}-{attempt}-g{generation}",
@@ -162,6 +176,8 @@
 | `worker.allow_in_task_subagents` | 布尔 | worker 能否在自己任务内使用 Agent 子代理 |
 | `reviewer.session` / `fallback_session` | 会话适配器名 | 评审所用会话适配器，可与主会话、worker 不同；须具备 `oneshot`、`direct`、`read_only_enforced`（DN006 §7.4） |
 | `reviewer.model` / `effort` / `timeout_seconds` | — | 默认 `gpt-6-astra` / `medium`；只读由所选适配器强制，不另设字段 |
+| `routine.session` | 会话适配器名 | 承载例行会话（DN006 §8.9）的会话适配器，须具备 `interactive` 与 `timer`；delegated 适配器必须与主会话同一宿主 |
+| `routine.model` / `effort` / `permission_mode` | 同上 | 默认 `claude-sonnet-5-5` / `low` / `auto`：例行会话只执行 tsw 算好的动作，不需要强模型；权限模式不能高于主会话：没有显式设置时取默认值与主会话模式中较低的一个，显式设置得更高时校验失败 |
 
 已删除字段：`roles.comparison`（Astra 对照版）。导入历史配置时如出现该字段，记录为已忽略，不报错。
 
@@ -181,7 +197,23 @@
 | `input.in_session_timeout_minutes` | 10 | worker 在自己会话中提问后，用户这么久没有任何回复就转交主会话（DN006 §8.1b） |
 | `input.channels` | 已加载的全部 `request_response` 渠道 | 升级时同时投递的渠道；必须是已加载渠道的子集；第一个通过核实的答复生效 |
 | `input.decision_digest` | 每日及任务完成时，经 Teams | 把主会话的自主决定汇总通知用户，便于事后核对（DN006 §8.4）；`channel` 为 `"local"` 时只写入 STATUS 页与验收报告 |
-| `input.teams_poll` | 5 分钟，退避到 30 分钟 | Teams 渠道的轮询间隔（主会话运行时） |
+| `input.teams.chat` | `self` | Teams 问题卡片发到哪个 chat：`self` 为用户本人的自聊，也可以写 chat ID（DN006 §8.7） |
+| `input.teams_poll` | 不设置 | 已不起作用（T243）：Teams 答复由例行表的 Teams 例行项回收，间隔为 `routine.interval_minutes`（DN006 §8.7）。为兼容旧配置仍接受该字段 |
+
+### 3.1b `routine`
+
+例行会话与例行表（DN006 §8.9）的参数：
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `routine.enabled` | `true` | 是否启动例行会话。关闭后超时转交只在主会话运行 `sync` 时发生，Teams 答复不再自动回收 |
+| `routine.interval_minutes` | 10 | 运行间隔（分钟）；须能整除 60，或为 60 的整数倍且能整除 1440（宿主的定时任务按 cron 表达式设定） |
+| `routine.renew_after_days` | 6 | 定时任务设定后超过这么多天就重新设定（宿主的定时任务有期限，Claude Code 为 7 天）；续期在超过之后的第一次运行时进行，所以它加上一个运行间隔须小于宿主的期限 |
+| `routine.context_reset_hours` | 24 | 例行会话每隔这么久清空一次自己的上下文 |
+| `routine.stale_after_intervals` | 3 | 超过这么多个间隔没有运行记录时，认为定时任务已失效，由主会话让例行会话重新设定 |
+| `routine.teams_lookback_hours` | 24 | Teams 例行项每次读取最近多少小时的消息（DN006 §8.9.5） |
+
+超时阈值仍是 `input.in_session_timeout_minutes`：默认例行项 `handoff-scan` 每次运行时转交已到期的问题，所以实际转交时间在阈值之后、一个运行间隔之内。
 
 ### 3.2 `review`
 
@@ -253,7 +285,8 @@ tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命�
 7. 别名全局唯一，不能与其他仓库 ID 冲突。`delivery.merge` 为 `true` 的仓库必须写明 `repository`（`owner/name`）。
 8. `input.channels` 中的每个渠道都必须已在 `plugins.human_channels` 中加载，且能力为 `request_response`；未显式设置时取已加载的全部 `request_response` 渠道。
 9. `input.decision_digest.enabled=true` 时，`channel` 必须为 `"local"`（只写入 STATUS 页与验收报告，不经任何渠道通知），或是已加载且支持 `notify` 的渠道；合并后缺少 `channel` 视为配置错误。`null` 只用于合并时删除字段（§5a），不作为业务取值。
-10. 校验针对合并后的有效配置（默认值 + 数据目录配置 + 本机覆盖），`tsw config show --effective` 可查看结果。
+10. `routine.enabled=true` 时，`roles.routine.session` 必须是已加载的、具备 `interactive` 与 `timer` 的会话适配器（delegated 时与主会话同宿主），权限模式不高于主会话；`routine.interval_minutes` 按 §3.1b 的取值范围检查。
+11. 校验针对合并后的有效配置（默认值 + 数据目录配置 + 本机覆盖），`tsw config show --effective` 可查看结果。
 
 ## 5. 本机覆盖
 
@@ -315,7 +348,7 @@ tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命�
 | `repositories.*.delivery`、`repositories.*.repository` / `host` / `provider`（交付与合并的目标）、`repositories.*.auth_profile`、`repositories.*.commit_identity`，以及新增或删除整个 `repositories.<id>` | 远端交付授权、交付目标与身份 |
 | `accounts` | 凭据引用 |
 | `policies` | 用户保留的决定与约定 |
-| `roles.*.permission_mode`、`roles.*.session`、`roles.reviewer`（全部）、`roles.worker.allow_in_task_subagents` | 角色权限模式、会话宿主、评审器 |
+| `roles.*.permission_mode`、`roles.*.session`、`roles.reviewer`（全部）、`roles.worker.allow_in_task_subagents`、`routine.enabled` | 角色权限模式、会话宿主、评审器；是否运行例行会话 |
 | `plugins` | 加载的会话适配器、人类渠道与存储决定能力边界 |
 | `input.triage`、`input.channels` | 主会话能否自行判断、问题投到哪里 |
 | `review.block_on`、`review.max_rounds`、`review.orchestrator_extension_limit` | 评审门槛与主会话可自行追加的上限 |

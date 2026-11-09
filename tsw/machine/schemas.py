@@ -310,8 +310,37 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         ["task_id", "request_id", "channel"],
         task_id=S,
         request_id=S,
-        channel={**S, "description": "main-session 或已加载的其他人类渠道"},
+        channel={**S, "description": "main-session 或已加载的其他人类渠道（如 teams-chat）"},
         note=S,
+    ),
+    "routine_start": schema(
+        ["user_turn"],
+        user_turn={**B, "description": "这一轮是不是用户本人的 turn（只有它能创建会话）"},
+    ),
+    "routine_bind": schema(
+        ["generation", "session_id"],
+        generation={**INT, "description": "routine_start 返回的代次"},
+        session_id={**S, "description": "start_session 返回的会话 ID"},
+    ),
+    "routine_armed": schema(
+        ["job_ref", "cron", "interval_minutes"],
+        job_ref={**S, "description": "宿主定时工具返回的任务引用（如 CronCreate 的 job ID）"},
+        cron=S,
+        interval_minutes=INT,
+    ),
+    "routine_run": schema(
+        ["job_id"],
+        job_id={**S, "description": "routine_board 列出的例行项"},
+        chat_id={**S, "description": "Teams 例行项：取自该行 run 中的 chat_id"},
+        fetched={"description": "这一行 fetch 要求取的原始数据（宿主工具的返回值，原样）"},
+    ),
+    "channel_sent": schema(
+        ["task_id", "request_id", "chat_id", "message_id"],
+        task_id=S,
+        request_id=S,
+        chat_id={**S, "description": "卡片所在的 Teams chat ID（发送结果中的 chatId）"},
+        message_id={**S, "description": "卡片的 Teams 消息 ID"},
+        sender_id={**S, "description": "发送者（用户本人）在 Teams 中的 ID，发送结果中有时给出"},
     ),
     "config_change": schema(
         ["ops", "reason"],
