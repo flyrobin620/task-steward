@@ -347,7 +347,17 @@ REPO_FILES = {
     "AGENTS.md": "# live-repo\n\n- 测试：`python -m unittest`\n- PR 用 squash 合并。\n",
     "calc.py": CALC,
     "test_calc.py": CALC_TEST,
+    # A worker in the repository's worktree has the repository's skills (check W).
+    ".claude/skills/live-repo-probe/SKILL.md": (
+        "---\nname: live-repo-probe\ndescription: live-repo 的探针 skill，只在被问到时使用。\n"
+        "---\n回答 live-repo-probe ok。\n"
+    ),
 }
+# The data directory's skill a worker in a worktree finds listed in its brief (check W).
+HOME_SKILL = (
+    "---\nname: live-home-probe\ndescription: 数据目录的探针 skill，只在被问到时使用。\n"
+    "---\n回答 live-home-probe ok。\n"
+)
 
 
 def events(run: Run) -> list[dict[str, Any]]:
@@ -822,6 +832,9 @@ def prepare(name: str, args: argparse.Namespace) -> int:
     run.save(manifest)
     tsw(run, "init", "--claim-sessions")
     tsw(run, "host", "render")
+    probe = run.home / ".claude" / "skills" / "live-home-probe" / "SKILL.md"
+    probe.parent.mkdir(parents=True, exist_ok=True)
+    probe.write_text(HOME_SKILL, encoding="utf-8", newline="\n")
     run.record("dir", "home", state="created", ref=str(run.home))
     base = init_repo(run, REPO_FILES)
     run.record("dir", "repo", state="created", ref=str(run.repo), base=base)
@@ -847,6 +860,7 @@ def prepare(name: str, args: argparse.Namespace) -> int:
         "timeout_plus": str(timeout + 1),
         "home": str(run.home),
         "run_id": run.id,
+        "repo": str(run.repo),
         "interval": str((spec["config"].get("routine") or {}).get("interval_minutes", 10)),
     }
     session_settings(run, run.home)
@@ -1005,6 +1019,7 @@ def host_verify(args: argparse.Namespace) -> int:
     )
     life = {k: seqs(evs, k, "T003") for k in ("task.paused", "task.resumed", "task.cancelled")}
     checks.append(check("H5", "取消与恢复：T003 暂停、恢复、取消", all(life.values()), life))
+    checks.append(worktrees(run, evs, submitted))
     checks.append(b1(evs))
     checks.append(b2(evs))
     checks.append(scheduled_prompts(run, evs))
@@ -1292,6 +1307,42 @@ def teams_round_trip(evs: list[dict[str, Any]]) -> dict[str, Any]:
             "worker_progress": note and note["sequence"],
             "problems": problems,
         },
+    )
+
+
+def worktrees(
+    run: Run, evs: list[dict[str, Any]], submitted: Mapping[str, dict[str, Any] | None]
+) -> dict[str, Any]:
+    """Check W (CC006 §8): a delivering task's session works in the worktree tsw made inside
+    its execution directory, and its report names the repository's instruction file and the
+    probe skills of the repository and of the data directory."""
+    details: dict[str, Any] = {}
+    ok = bool(submitted)
+    for task_id, sub in submitted.items():
+        starts = [
+            e for e in evs if e["type"] == "attempt.start_requested" and e["task_id"] == task_id
+        ]
+        made = [e["data"].get("worktree") or {} for e in starts]
+        attempt_id = str(starts[-1]["data"].get("attempt")) if starts else "a1"
+        expected = run.home / "work" / task_id / attempt_id / "live-repo"
+        in_worktree = bool(made) and all(
+            m.get("path") and Path(str(m["path"])).resolve() == expected.resolve() for m in made
+        )
+        report = ""
+        if sub is not None:
+            path = run.home / str((sub["data"].get("report") or {}).get("md_path") or "")
+            report = path.read_text(encoding="utf-8") if path.is_file() else ""
+        named = {
+            word: word in report for word in ("AGENTS.md", "live-repo-probe", "live-home-probe")
+        }
+        details[task_id] = {"worktree": made, "report_names": named}
+        ok = ok and in_worktree and all(named.values())
+    return check(
+        "W",
+        "仓库 worktree：会话目录是 tsw 创建的 worktree；报告写明读了 AGENTS.md、"
+        "列出仓库与数据目录的 probe skill",
+        ok,
+        details,
     )
 
 

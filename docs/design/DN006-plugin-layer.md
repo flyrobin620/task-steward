@@ -1,6 +1,6 @@
 # DN006 插件层：宿主集成、会话、人类渠道与数据存储
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN008 校验原则](DN008-guardrails.md) · 实现：[CC006 Claude Code 插件](claude-code/CC006-plugins.md)
 
@@ -529,7 +529,7 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | --- | --- | --- |
 | 产品 repo（`task-steward`） | tsw 代码、插件、schema、默认配置模板、角色指令来源、文档 | 是 |
 | 数据目录（`TSW_HOME`） | 用户配置、TODO 与任务书、事件账本、runs（brief、报告、评审证据、验收记录）、通知 outbox、生成视图、投影缓存 | 否 |
-| 执行目录根（`worktrees.root`） | 设计 / 开发任务的 worktree | 否（属于各业务仓库） |
+| 执行目录中的仓库 worktree（`work/<任务>/<attempt>/<仓库 id>`，[CC006 §8](claude-code/CC006-plugins.md)） | 仓库任务的 worktree，worker 的会话目录 | 否（属于各业务仓库）；`worktrees.root` 不再使用 |
 | 凭据 | 系统凭据库或用户指定的认证目录 | 否；也不放进数据目录 |
 
 数据目录的定位顺序：当前目录（宿主在会话目录中启动 MCP server 与 hooks，与解析会话身份用的是同一个目录）位于某个声明了 `claim_sessions` 的数据目录之中时，用该数据目录（只看最近的一个数据目录；它没有声明时不适用）→ 环境变量 `TSW_HOME` → 产品 repo 下 `.local/tsw-home` 中记录的路径 → 默认 `~/.tsw`。`claim_sessions` 是 `tsw-home.json` 的可选字段（`tsw init --claim-sessions` 写入），供 live 运行等隔离场景使用：宿主给所有会话同一个 `TSW_HOME`，而在会话文件夹中写设置文件来改变它会让宿主再次要求信任（决定记录 0003）。真实数据目录不需要声明：它的会话本来就从 `TSW_HOME` 得到它。主会话在数据目录中打开（它就是 DN001 所说的“控制根”）。
@@ -572,7 +572,7 @@ class StorageBackend(Protocol):
 ### 9.4 写入边界
 
 - `ledger/`、`runs/`、`todo/`、`config/`、`outbox/`、`legacy/` 只由 tsw 写入：MCP 工具、`review_run`、`submit`（把 worker 草稿导入 `runs/`）、人类渠道回调、后台轮询器都经 tsw 的写入口。`config/task-steward.json` 由主会话经 `config_change` / `config_revert` 修改（DN003 §7）；用户在会话外手工编辑仍然允许。
-- worker 的草稿（报告、证据）统一放在 `work/Txxx/aN/`，不直接写 `runs/`；`submit` 时由 tsw 复制定稿并记录内容摘要。研究任务的执行目录就是 `work/Txxx/aN/`；设计 / 开发任务的执行目录是 worktree，`work/Txxx/aN/` 作为额外可写根随 brief 和会话启动参数一起下发，P1 生成的规则执行配置把两者都列为可写范围。
+- worker 的草稿（报告、证据）统一放在 `work/Txxx/aN/`，不直接写 `runs/`；`submit` 时由 tsw 复制定稿并记录内容摘要。执行目录就是 `work/Txxx/aN/`；仓库任务的 worker 以其中由 tsw 创建的仓库 worktree `work/Txxx/aN/<仓库 id>/` 为会话目录（[CC006 §8](claude-code/CC006-plugins.md)），可写范围仍是整个执行目录。
 - tsw 的所有写入口按固定顺序准入：**先取得数据目录的共享写闸，再检查静止标记**；有标记则立即释放共享写闸并返回 `QUIESCED`，没有才执行写入，写完释放。`tsw backup` 取**排他写闸**；排他期间新的写入等待，不丢失。
 
 ### 9.5 备份与恢复

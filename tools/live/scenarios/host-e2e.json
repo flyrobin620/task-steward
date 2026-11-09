@@ -4,6 +4,7 @@
   "useCases": [
     "UC-PLAN-001",
     "UC-DISPATCH-001",
+    "UC-DISPATCH-002",
     "UC-REVIEW-001",
     "UC-REVIEW-002",
     "UC-JUDGE-001",
@@ -39,21 +40,23 @@
       "task_id": "T001",
       "title": "live：新增求和函数（会话内提问、worker 合并）",
       "kind": "code",
-      "goal": "在 live-repo 的 calc.py 中新增一个两数求和函数并补单元测试。函数名由用户决定：开始实现前用 ask_user 问用户“求和函数命名为 add 还是 plus？”，按 worker 指令在本会话提出（Claude app 中用 wrap_up 的问题与按钮：“用 add”“用 plus”）并结束这一轮；用户在本会话回答后，用 user_answer 引用 hook 给出的消息编号登记答复，按答复命名。做法：在执行目录中 git clone {origin} src，在 src 中新建分支、实现、提交，运行 python -m unittest；自评审（review_run）直到 finalize；git push origin <分支>。本次运行的 GitHub 由替身代替，命令就是 {gh}（用这个完整路径，不要加 PATH 前缀或其他前置命令）：{gh} pr create -R github.com/{repository} --head <分支> --title <标题>，再按任务书的交付授权合并：{gh} pr merge <编号> -R github.com/{repository} --squash。合并后查看主分支上合并提交的 CI：{gh} run list --commit <合并提交> -R github.com/{repository}（替身模拟一次已通过的运行）。提交时 merge 带 PR 链接、替身打印的合并提交、合并的 head（即最后一轮评审的 HEAD）、ci（commit 为合并提交，conclusion 与 url 取自上面的运行）与 live（本仓库没有 live 场景：写明“不需要：live-repo 没有 live 场景”）。",
+      "goal": "在 live-repo 的 calc.py 中新增一个两数求和函数并补单元测试。函数名由用户决定：开始实现前用 ask_user 问用户“求和函数命名为 add 还是 plus？”，按 worker 指令在本会话提出（Claude app 中用 wrap_up 的问题与按钮：“用 add”“用 plus”）并结束这一轮；用户在本会话回答后，用 user_answer 引用 hook 给出的消息编号登记答复，按答复命名。做法：会话目录就是 tsw 为本任务创建的 live-repo worktree（任务书“仓库与 worktree”一节，分支已建好），在其中实现、提交，运行 python -m unittest；自评审（review_run）直到 finalize；git push origin <分支>。本次运行的 GitHub 由替身代替，命令就是 {gh}（用这个完整路径，不要加 PATH 前缀或其他前置命令）：{gh} pr create -R github.com/{repository} --head <分支> --title <标题>，再按任务书的交付授权合并：{gh} pr merge <编号> -R github.com/{repository} --squash。合并后查看主分支上合并提交的 CI：{gh} run list --commit <合并提交> -R github.com/{repository}（替身模拟一次已通过的运行）。提交时 merge 带 PR 链接、替身打印的合并提交、合并的 head（即最后一轮评审的 HEAD）、ci（commit 为合并提交，conclusion 与 url 取自上面的运行）与 live（本仓库没有 live 场景：写明“不需要：live-repo 没有 live 场景”）。报告中写明读了哪些仓库指令文件，以及本会话可用的、名称含 probe 的 skill（仓库的与任务书列出的数据目录的）。",
       "acceptance": [
         "calc.py 有按用户答复命名的求和函数与单元测试，python -m unittest 通过",
         "会话内问题经 user_answer 登记了用户原话",
-        "PR 由 worker 自行合并，合并的 head 等于最后一轮评审的 HEAD，提交附合并提交的 CI（通过）"
+        "PR 由 worker 自行合并，合并的 head 等于最后一轮评审的 HEAD，提交附合并提交的 CI（通过）",
+        "报告写明读了仓库的 AGENTS.md，并列出仓库 skill live-repo-probe 与数据目录 skill live-home-probe"
       ]
     },
     {
       "task_id": "T002",
       "title": "live：README 加说明（设计 / 文档任务，worker 合并）",
       "kind": "design",
-      "goal": "在 live-repo 的 README.md 加一行项目说明“四则运算示例”。做法：在执行目录中 git clone {origin} src，新建分支、提交、自评审（review_run）直到 finalize、git push origin <分支>；本次运行的 GitHub 由替身代替，命令就是 {gh}（用这个完整路径，不要加 PATH 前缀或其他前置命令）：{gh} pr create -R github.com/{repository} --head <分支> --title <标题>，再按任务书的交付授权 {gh} pr merge <编号> -R github.com/{repository} --squash；合并后查看主分支上合并提交的 CI：{gh} run list --commit <合并提交> -R github.com/{repository}（替身模拟一次已通过的运行）。提交时 merge 带 PR 链接、合并提交、合并的 head、ci 与 live（写明不需要 live 的原因）。",
+      "goal": "在 live-repo 的 README.md 加一行项目说明“四则运算示例”。做法：会话目录就是 tsw 为本任务创建的 live-repo worktree（任务书“仓库与 worktree”一节，分支已建好），在其中提交、自评审（review_run）直到 finalize、git push origin <分支>；本次运行的 GitHub 由替身代替，命令就是 {gh}（用这个完整路径，不要加 PATH 前缀或其他前置命令）：{gh} pr create -R github.com/{repository} --head <分支> --title <标题>，再按任务书的交付授权 {gh} pr merge <编号> -R github.com/{repository} --squash；合并后查看主分支上合并提交的 CI：{gh} run list --commit <合并提交> -R github.com/{repository}（替身模拟一次已通过的运行）。提交时 merge 带 PR 链接、合并提交、合并的 head、ci 与 live（写明不需要 live 的原因）。报告中写明读了哪些仓库指令文件，以及本会话可用的、名称含 probe 的 skill（仓库的与任务书列出的数据目录的）。",
       "acceptance": [
         "README.md 加了说明",
-        "PR 由 worker 自行合并（任务类型为 design），合并的 head 等于最后一轮评审的 HEAD，提交附合并提交的 CI（通过）"
+        "PR 由 worker 自行合并（任务类型为 design），合并的 head 等于最后一轮评审的 HEAD，提交附合并提交的 CI（通过）",
+        "报告写明读了仓库的 AGENTS.md，并列出仓库 skill live-repo-probe 与数据目录 skill live-home-probe"
       ]
     },
     {
@@ -67,8 +70,9 @@
     }
   ],
   "operator": [
+    "开始前，在 Claude 桌面 app 以本运行的仓库检出 {repo} 为文件夹新建一个会话并信任该文件夹，然后归档这个会话：真实使用中仓库的主检出已经信任过，worker 的 worktree 沿用主检出的信任。",
     "在 Claude 桌面 app 新建会话，文件夹选择本运行的数据目录 {home}（首次打开需要信任该文件夹），权限模式用 auto。",
-    "主会话预启动或派发 worker 时，留意 app 是否为 work/ 下的执行目录弹出“信任此文件夹”的确认；worker 工作时留意它的 tsw 工具、发给主会话的消息与合并是否出现权限确认或分类器拒绝。记下来，最后 verify 时填写。",
+    "主会话预启动或派发 worker 时，留意 app 是否为 worker 的会话目录（work/ 下的仓库 worktree）弹出“信任此文件夹”的确认；worker 工作时留意它的 tsw 工具、发给主会话的消息与合并是否出现权限确认或分类器拒绝。记下来，最后 verify 时填写。",
     "在该主会话中说：“执行 {code_tasks}”{prestart_step}。",
     "T001 的 worker 会话会在侧栏标为等你回答，下一步框里有问题和按钮；点按钮回答（例如“用 add”）。",
     "{life_step}",
@@ -79,6 +83,7 @@
     "H1 隔离：数据目录与产品仓库指向本运行，主会话在临时数据目录中持有调度租约",
     "P 权限规则：主会话放行会话管理与 tsw 工具；worker 的执行目录没有任何设置文件（worker 经 claim_sessions 找到本运行的数据目录），worker 的 tsw 工具、发消息与合并由用户设置中的 auto 模式规则与分类器放行",
     "H2 预启动与派发：任务书送达，每个任务都进入执行；运行包含 T003 时还有预启动",
+    "W 仓库 worktree：每个交付任务的会话目录是 tsw 在 work/<任务>/<attempt>/live-repo 创建的 worktree（attempt.start_requested 的 worktree），提交的报告写明读了 AGENTS.md，并列出仓库 skill live-repo-probe 与数据目录 skill live-home-probe",
     "H3 自评审：每个交付任务（T001 code、T002 design）至少一轮 codex-app-server 评审完成并以 finalize 定稿",
     "H4 提交与技术验收：每个交付任务的 worker.submitted 与 task.accepted",
     "H5 暂停、恢复与取消（运行包含 T003 时）：T003 的 task.paused、task.resumed、task.cancelled",

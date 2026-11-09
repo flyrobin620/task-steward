@@ -1,6 +1,6 @@
 # CC001 Claude Code 上的会话与 hooks
 
-- 状态：设计草案（T242 r2 自 DN001 拆出；T243 增加例行会话）
+- 状态：设计草案（T242 r2 自 DN001 拆出；T243 增加例行会话；T251 仓库任务的会话目录为执行目录下的 worktree）
 - 日期：2026-11-08
 - 实现：[DN001 总体架构](../DN001-architecture.md)
 - 相关：[CC006 Claude Code 插件](CC006-plugins.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | `initiation` | `user_asked` | 用户已要求执行该任务 |
 | `context` | `fresh` | 不 fork 主会话的长上下文；任务所需背景全部在 brief 里 |
-| `cwd` | 执行目录（worktree 或研究目录），即 `attempt_start` 返回的 `cwd` | worktree 由 tsw 创建，不让 app 另建；目录不存在时 `attempt_start` 先创建（app 不接受不存在的目录，报 “folder does not exist”） |
+| `cwd` | `attempt_start` 返回的 `cwd`：仓库任务为执行目录下的仓库 worktree `<执行目录>/<仓库 id>`，其他任务为执行目录 | worktree 由 tsw 在 `attempt_start` 中创建（[CC006 §8](CC006-plugins.md)），不让 app 另建；执行目录不存在时 `attempt_start` 先创建（app 不接受不存在的目录，报 “folder does not exist”） |
 | `use_worktree` | `false` | 在已有目录中工作；app 归档会话时不会删除该目录（§7 假设 A7） |
 | `name` | `txxx-aN-gK` | K 为创建代次（DN002 §5.4），每次请求创建加 1；用于对账，在 linked 会话中唯一 |
 | `model` / `effort` | `roles.worker.model` / `roles.worker.effort` | 如实记录请求值；实际值以 `get_session` 回执为准 |
@@ -31,7 +31,7 @@
 
 先写 `attempt.start_requested` 事件，再调用工具。结果未知时按会话名对账（`list_sessions {linked:true}`），不再次创建（DN002 §6 `starting` 阶段）。
 
-新目录第一次被用作会话目录时，app 可能要求用户确认信任该目录；信任确认只能在用户正看着主会话时弹出，否则创建直接失败。预启动发生在用户本人的 turn 中，正好满足这个条件。已信任的数据目录之下的执行目录不再单独要求信任，除非该目录带有自己的设置文件：桌面 app 对带 `.claude/settings.local.json` 的文件夹会再次要求信任，即使文件中只有 `env` 与 `hooks`（2026-11-09 live 实测，确认框写明 “Execution allowed by: .claude/settings.local.json”）。因此 tsw 不在执行目录中写任何设置（[CC008](CC008-guardrails.md) §6）；需要让会话使用另一个数据目录时（如 live 运行），用会话所在的数据目录声明 `claim_sessions`（DN006 §9.1），不用设置文件。数据目录之外的执行目录（如仓库 worktree）仍须用户确认一次。
+新目录第一次被用作会话目录时，app 可能要求用户确认信任该目录；信任确认只能在用户正看着主会话时弹出，否则创建直接失败。预启动发生在用户本人的 turn 中，正好满足这个条件。已信任的数据目录之下的执行目录不再单独要求信任，除非该目录带有自己的设置文件：桌面 app 对带 `.claude/settings.local.json` 的文件夹会再次要求信任，即使文件中只有 `env` 与 `hooks`（2026-11-09 live 实测，确认框写明 “Execution allowed by: .claude/settings.local.json”）。因此 tsw 不在执行目录中写任何设置（[CC008](CC008-guardrails.md) §6）；需要让会话使用另一个数据目录时（如 live 运行），用会话所在的数据目录声明 `claim_sessions`（DN006 §9.1），不用设置文件。数据目录之外的执行目录仍须用户确认一次。仓库任务的会话目录是执行目录下的仓库 worktree，它是嵌在数据目录中的 git 仓库，数据目录的信任不覆盖它，按其主检出的信任计算：主检出已信任时不弹确认（2026-11-09 用户实测，task-steward 的 worktree），从未信任过的仓库第一次可能弹出（[CC006 §8.1](CC006-plugins.md)）。
 
 ## 4. 平台约束
 

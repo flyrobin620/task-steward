@@ -356,6 +356,27 @@
       }
     },
     {
+      "id": "UC-DISPATCH-002",
+      "title": "仓库任务的 worktree 与任务书中的仓库说明（CC006 §8）",
+      "actor": "主会话 / worker",
+      "acceptance": "仓库配置了本机 git 检出（repositories.<id>.path）的任务，attempt_start 在记录事件之前于执行目录下创建 worktree <执行目录>/<仓库 id>（分支按 worktrees.branch_pattern，基线为 base_ref 或远端默认分支），事件记录 worktree，MCP 返回的 cwd 为该 worktree；同一 attempt 的后续代次沿用已有 worktree，已有同名分支时用它；路径上已有其他内容（worktree_conflict）或 git 失败（worktree_unavailable）时拒绝且不记录事件；没有可用检出时不建 worktree，会话在执行目录中启动；任务书含“仓库与 worktree”一节：会话目录与分支（或没有 worktree 的原因）、须完整阅读并遵守的仓库指令文件（repositories.<id>.instructions，默认 AGENTS.md、CLAUDE.md、.github/copilot-instructions.md）并在报告中写明读了哪些、有 worktree 时列出数据目录的 skill（不含主会话专用的）；未配置的仓库没有这一节",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "surface": "不新增对外表面；attempt_start 的 MCP 表面由 UC-DISPATCH-001 的 surface 测试覆盖，返回的 cwd 由 component 测试经 MCP server 断言"
+      }
+    },
+    {
       "id": "UC-REVIEW-001",
       "title": "worker 自评审循环（E01–E07、评审预算、R-ROUND）",
       "actor": "worker",

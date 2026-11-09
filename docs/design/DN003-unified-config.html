@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="513b3aec41d87e4afca43c0068b140712e491cdf4b8a61a25235d3a6bda89ae3">
+<meta name="tsw-source-sha256" content="f824f81c70adf87fc09e58409dfc8d5004f63d3bc3222289e091dd696067fd98">
 <title>DN003 统一配置</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -45,7 +45,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <nav class="toc"><h2>目录</h2><a class="l2" href="#1-原则">1. 原则</a><a class="l2" href="#2-完整示例">2. 完整示例</a><a class="l2" href="#3-字段说明">3. 字段说明</a><a class="l3" href="#31-roles">3.1 roles</a><a class="l3" href="#31a-plugins-与-input">3.1a plugins 与 input</a><a class="l3" href="#31b-routine">3.1b routine</a><a class="l3" href="#32-review">3.2 review</a><a class="l3" href="#32a-policiesreserved_for_user">3.2a policies.reserved_for_user</a><a class="l3" href="#32b-ledger-与-context">3.2b ledger 与 context</a><a class="l3" href="#33-scheduling-与-sessions">3.3 scheduling 与 sessions</a><a class="l3" href="#34-repositories-与-accounts">3.4 repositories 与 accounts</a><a class="l3" href="#35-policies">3.5 policies</a><a class="l2" href="#4-校验规则">4. 校验规则</a><a class="l2" href="#5-本机覆盖">5. 本机覆盖</a><a class="l2" href="#5a-合并规则">5a. 合并规则</a><a class="l2" href="#6-生效与派生物">6. 生效与派生物</a><a class="l2" href="#7-经-tsw-工具修改配置">7. 经 tsw 工具修改配置</a><a class="l3" href="#71-工具与执行顺序">7.1 工具与执行顺序</a><a class="l3" href="#72-权限类键">7.2 权限类键</a><a class="l3" href="#73-边界">7.3 边界</a></nav>
 <main>
 <h1>DN003 统一配置</h1>
-<ul><li>状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置；T243 增加 <code>roles.routine</code> 与 <code>routine</code>）</li><li>日期：2026-11-05</li><li>相关：<a href="DN001-architecture.html">DN001 总体架构</a> · <a href="DN002-task-state-machine.html">DN002 任务状态机</a> · <a href="DN004-worker-self-review.html">DN004 worker 自评审</a></li></ul>
+<ul><li>状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置；T243 增加 <code>roles.routine</code> 与 <code>routine</code>；T251 §3.4 仓库任务的 worktree 与 <code>instructions</code>）</li><li>日期：2026-11-05</li><li>相关：<a href="DN001-architecture.html">DN001 总体架构</a> · <a href="DN002-task-state-machine.html">DN002 任务状态机</a> · <a href="DN004-worker-self-review.html">DN004 worker 自评审</a></li></ul>
 <h2 id="1-原则">1. 原则</h2>
 <ol><li><strong>一个文件</strong>：所有可调参数都在数据目录（<code>TSW_HOME</code>，DN006 §9）的 <code>config/task-steward.json</code> 中，包括各角色的模型、effort、权限模式、评审器、调度、仓库、账号引用、通知和策略。不再分散在 <code>model-settings.json</code>、<code>repositories.json</code>、<code>.codex/config.toml</code>、平台参考文档等多处。</li><li><strong>请求值与回执分开</strong>：配置是“请求值”；子会话实际的模型、effort、权限以平台回执（会话适配器的 <code>observe</code>）为准，并记录在 attempt 事件中。拿不到回执时记为“未知”，不反复追问子会话。比较请求值与回执时先规范化模型 ID：平台可能追加上下文后缀（例如请求 <code>claude-sonnet-5-5</code>，回执为 <code>claude-sonnet-5-5[1m]</code>）。</li><li><strong>不含秘密</strong>：凭据、令牌只按名称引用系统凭据库或 <code>.local</code> 中的认证目录，配置里不出现秘密值。</li><li><strong>本机覆盖受限</strong>：数据目录中的 <code>config/task-steward.local.json</code> 只能覆盖白名单中的本机路径类字段（§5），不能改模型、策略、交付授权。</li><li><strong>显式生效</strong>：修改配置后只影响新创建的会话和新调用；已有子会话不自动切换模型。需要切换时由主会话调用 <code>set_session_model</code> / <code>set_session_effort</code>，并记录事件。</li></ol>
 <h2 id="2-完整示例">2. 完整示例</h2>
@@ -160,7 +160,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
       &quot;integration_branch&quot;: &quot;tsw/integration-example-app&quot;,
       &quot;auth_profile&quot;: &quot;github-work&quot;,
       &quot;commit_identity&quot;: {&quot;name&quot;: &quot;Your Name&quot;, &quot;email&quot;: &quot;you@example.com&quot;},
-      &quot;instructions&quot;: [&quot;AGENTS.md&quot;, &quot;CLAUDE.md&quot;],
+      &quot;instructions&quot;: [&quot;AGENTS.md&quot;, &quot;.github/copilot-instructions.md&quot;],
       &quot;worktree_files&quot;: [{&quot;source&quot;: &quot;dev-settings.json&quot;, &quot;destination&quot;: &quot;.local/dev-settings.json&quot;}],
       &quot;validation&quot;: [],
       &quot;delivery&quot;: {&quot;push&quot;: true, &quot;create_pr&quot;: true, &quot;merge&quot;: false}
@@ -215,6 +215,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <ul><li><code>max_workers</code>：活动任务上限（DN002 G-SLOT）。实际并发取它与平台可用额度的较小值。</li><li><code>prestart.enabled</code> / <code>prestart.max_standby</code>：是否在用户 turn 中为已规划任务预启动 worker 会话，以及同时待命的会话上限（DN002 §5.6）。关闭预启动时，自动 turn 中变为可派发的任务都要等用户下一次发消息才能创建会话。</li><li><code>wake.worker_message_parent</code>：reportable 事件发生时，worker 是否同时用宿主的父会话消息工具给父会话发消息（DN001 §6.3；Claude Code 见 CC001 §4）。</li><li><code>sessions.archive_on_accept</code>：验收后是否归档子会话。默认 <code>false</code>，保留以便用户回看；归档时须有工具回执。</li></ul>
 <h3 id="34-repositories-与-accounts">3.4 <code>repositories</code> 与 <code>accounts</code></h3>
 <p>结构沿用 orchestrator-agent 的 <code>config/repositories.json</code> 与 <code>config/accounts.json</code>，合并为两个小节（账号只记录名称与认证目录引用，凭据本身不进数据目录），并新增 <code>aliases</code>（原 <code>repositories.md</code> 中的缩写表）。导入时自动转换（DN005 §4.4）。<code>delivery.push</code> / <code>create_pr</code> / <code>merge</code> 是该仓库的默认交付授权，具体任务仍以用户当次指令为准。<code>merge</code>（默认关闭）为 <code>true</code> 时，该仓库的任务（不看任务类型）由 worker 在门禁、评审与意见都解决后自行合并 PR，等主分支上合并提交的 CI 通过后再提交（DN002 §3.5）；此时必须写明 <code>repository</code>（<code>owner/name</code>），hooks 据此只放行合并本仓库的 PR。三者都是权限类键（§7.2）。</p>
+<p><code>path</code>（本机 git 检出）、<code>remote</code>、<code>base_ref</code>、<code>instructions</code> 决定仓库任务的 worktree 与任务书中的仓库说明（<a href="claude-code/CC006-plugins.html">CC006 §8</a>）：<code>attempt_start</code> 在执行目录下创建 <code>&lt;执行目录&gt;/&lt;仓库 id&gt;</code> 的 worktree（分支按 <code>worktrees.branch_pattern</code>，基线为 <code>base_ref</code>，未配置时取远端默认分支），worker 会话以它为会话目录；没有可用检出时不建 worktree。<code>instructions</code> 是相对仓库根的指令文件列表（如 <code>AGENTS.md</code>、<code>CLAUDE.md</code>、<code>.github/copilot-instructions.md</code>），该仓库的每份任务书都要求 worker 完整阅读并遵守；未配置时默认这三个文件，存在哪个读哪个。<code>worktrees.root</code> 在 <code>claude-code</code> 宿主中不使用（worktree 在执行目录下，字段保留）；<code>worktree_files</code> 尚未实现。</p>
 <h3 id="35-policies">3.5 <code>policies</code></h3>
 <p>集中保存原先写在 AGENTS.md 中、可由程序检查的用户约定。hooks 和门禁读取这些值：</p>
 <table><thead><tr><th>字段</th><th>来源约定</th><th>执行点</th></tr></thead><tbody><tr><td><code>executable_hashing</code></td><td>用户 2026-10-30：默认不做可执行文件哈希</td><td>宿主护栏（Claude Code 的 CC008 建议删除该规则，待用户决定）</td></tr><tr><td><code>email</code></td><td>邮件默认只存草稿</td><td>发送类 MCP 工具调用前的 hook</td></tr><tr><td><code>pr_default_state</code></td><td>以合并为目的的 PR 默认 ready-for-review</td><td><code>pr_link</code> 登记校验</td></tr><tr><td><code>user_acceptance_source_required</code></td><td>用户验收须有真实来源</td><td><code>user_accept</code> 门禁</td></tr><tr><td><code>auto_archive_days</code></td><td>已验收满 7 天归档</td><td>sync 规则 T24</td></tr></tbody></table>
