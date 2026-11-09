@@ -24,6 +24,7 @@ class SessionCaps:
     prestart: bool
     reuse_session: bool
     open_existing_dir: bool
+    timer: bool = False  # the host wakes the session on a schedule (DN006 §8.9)
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ SESSIONS: dict[str, SessionCaps] = {
         prestart=True,
         reuse_session=True,
         open_existing_dir=True,
+        timer=True,  # CronCreate in the session (CC006 §6)
     ),
     "claude-headless": SessionCaps(
         host="claude-code",
@@ -96,6 +98,11 @@ SESSIONS: dict[str, SessionCaps] = {
 CHANNELS: dict[str, ChannelCaps] = {
     "in-session": ChannelCaps(
         request_response=True, notify=False, collect="push", execution="direct"
+    ),
+    # Cards go out from the orchestrator; replies come back through the routine board
+    # (DN006 §8.7). No notify in this version.
+    "teams-chat": ChannelCaps(
+        request_response=True, notify=False, collect="poll", execution="delegated"
     ),
 }
 

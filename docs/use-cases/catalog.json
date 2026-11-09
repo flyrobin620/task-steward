@@ -438,7 +438,7 @@
       "id": "UC-ASK-001",
       "title": "worker 在自己的会话里问用户，超时转交主会话（T11、T12、DN006 §8.2–§8.5）",
       "actor": "worker / 用户 / 主会话",
-      "acceptance": "ask_user 经 T11 进入 waiting_user，问题不进入主会话 inbox，attention 只显示状态；用户在 worker 会话的消息由 UserPromptSubmit hook 记录（其他会话注入的消息不记），user_answer 必须引用本会话记录的消息，经 T12 回到离开时的子状态，可同时登记用户批准的追加轮次、延后或认定不成立；超时（input.in_session_timeout_minutes）且用户未回复时，worker 的 input_handoff 或 sync 的系统规则记录 input.handed_off（可回传），主会话 Stop hook 提示转交；转交后主会话可 handoff_resolve 代答（标为 reserved 的不行）或 input_relay 转达并以 input_resolve 记录用户原话；问题已由他人答复后用户在 worker 会话的回复记为 input.late_response 并标明被取代的答复；STATUS 页显示等待用户的问题与转交状态",
+      "acceptance": "ask_user 经 T11 进入 waiting_user，问题不进入主会话 inbox，attention 只显示状态；用户在 worker 会话的消息由 UserPromptSubmit hook 记录（其他会话注入的消息不记），user_answer 必须引用本会话记录的消息，经 T12 回到离开时的子状态，可同时登记用户批准的追加轮次、延后或认定不成立；超时（input.in_session_timeout_minutes）且用户未回复时，例行表的 handoff-scan 或 sync 的系统规则记录 input.handed_off（可回传；worker 的 input_handoff 保留），主会话 Stop hook 提示转交；转交后主会话可 handoff_resolve 代答（标为 reserved 的不行）或 input_relay 转达并以 input_resolve 记录用户原话；问题已由他人答复后用户在 worker 会话的回复记为 input.late_response 并标明被取代的答复；STATUS 页显示等待用户的问题与转交状态",
       "surfaces": [
         "mcp",
         "hook",
@@ -460,6 +460,57 @@
       ],
       "omittedTiers": {
         "unit": "规则依赖账本与投影，在 component 层经真实工具与 hook 验证",
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-ROUTINE-001",
+      "title": "例行会话按例行表运行脚本，把超时的会话内问题转给主会话（DN006 §8.9）",
+      "actor": "主会话 / 例行会话 / tsw",
+      "acceptance": "主会话在用户 turn 中 routine_start（routine.start_requested，返回会话名、目录与创建参数）、start_session、routine_bind（routine.bound，旧代次撤销）；例行会话的角色按会话 ID 解析，只列出例行工具，hooks 拦下它的编辑、命令行与建会话（CC-B11），定时提示须带 <scheduled-task>；routine_board 返回到期的例行项与维护动作（首次与续期时 arm、按间隔 clear_context、失效后重新 arm），并把运行时间记在 cache/routine.json；routine_armed 记录 routine.armed；routine_run 运行 handoff-scan，把超时且用户未回复的会话内问题记为 input.handed_off（by: system），返回发给主会话的原文；attention 的 routine 给出 missing / starting / unarmed / stale，主会话 Stop hook 在用户 turn 提醒启动、在失效时提醒发消息",
+      "surfaces": [
+        "mcp",
+        "hook"
+      ],
+      "claims": [
+        "tool:routine_start",
+        "tool:routine_bind",
+        "tool:routine_armed",
+        "tool:routine_run",
+        "mcp:routine_board"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-CHANNEL-001",
+      "title": "经 Teams 转达问题，例行表取出以任务 ID 开头的回复交主会话登记（DN006 §8.7）",
+      "actor": "主会话 / 例行会话 / 用户",
+      "acceptance": "input_relay（channel: teams-chat）记录 input.relayed 并给出以 [TaskSteward] 开头的卡片与目标 chat；主会话发送后 channel_sent 记录 channel.message_sent，例行表随之有 teams-replies（routine.job_added / job_updated）；routine_board 只在有经 Teams 转达、仍待答的问题时列出它，带取数参数；routine_run 从取到的消息中选出用户发送、在回看窗口内、以等待中任务 ID 开头、未转过的消息，记为 channel.reply_seen（可回传）并返回发给主会话的原文；卡片本身不会被选出；主会话用 input_resolve 以 teams-chat 来源登记，经 T12 让 worker 继续；问题不再待答时自动移出列表",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "tool:channel_sent"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
         "conformance": "不经过插件接口"
       }
     },

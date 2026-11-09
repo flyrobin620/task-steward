@@ -183,6 +183,45 @@ CREATE TABLE IF NOT EXISTS session_messages(
     text TEXT NOT NULL,
     sequence INTEGER NOT NULL
 );
+-- The routine session and its routine board (DN006 §8.9). Only routine.* and channel.* events
+-- write these tables, so a projection made before them stays valid.
+CREATE TABLE IF NOT EXISTS routine_sessions(
+    generation INTEGER PRIMARY KEY,
+    session_name TEXT NOT NULL,
+    workdir TEXT NOT NULL,
+    status TEXT NOT NULL,
+    session_ref TEXT,
+    requested_at TEXT NOT NULL,
+    bound_at TEXT,
+    armed_ref TEXT,
+    armed_cron TEXT,
+    armed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS routine_jobs(
+    job_id TEXT PRIMARY KEY,
+    script TEXT NOT NULL,
+    input TEXT NOT NULL,
+    added_seq INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS channel_messages(
+    message_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    sender_id TEXT,
+    sent_at TEXT NOT NULL,
+    PRIMARY KEY(channel, message_id)
+);
+CREATE TABLE IF NOT EXISTS channel_replies(
+    message_id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    sent_at TEXT,
+    sequence INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS outputs(
     task_id TEXT NOT NULL,
     output_id TEXT NOT NULL,

@@ -813,6 +813,92 @@ def task_archived(conn: sqlite3.Connection, event: Event) -> None:
     _touch(conn, event)
 
 
+# ---------------------------------------------------------------------- routine (DN006 §8.9)
+
+
+def routine_start_requested(conn: sqlite3.Connection, event: Event) -> None:
+    data = event.data
+    conn.execute(
+        "INSERT INTO routine_sessions(generation, session_name, workdir, status, requested_at) "
+        "VALUES(?, ?, ?, 'starting', ?)",
+        (int(data["generation"]), data["session_name"], data["workdir"], event.time),
+    )
+
+
+def routine_bound(conn: sqlite3.Connection, event: Event) -> None:
+    generation = int(event.data["generation"])
+    conn.execute(
+        "UPDATE routine_sessions SET status = 'replaced' WHERE generation < ? "
+        "AND status IN ('starting', 'bound')",
+        (generation,),
+    )
+    conn.execute(
+        "UPDATE routine_sessions SET status = 'bound', session_ref = ?, bound_at = ? "
+        "WHERE generation = ?",
+        (event.data["session_ref"], event.time, generation),
+    )
+
+
+def routine_armed(conn: sqlite3.Connection, event: Event) -> None:
+    conn.execute(
+        "UPDATE routine_sessions SET armed_ref = ?, armed_cron = ?, armed_at = ? "
+        "WHERE generation = ?",
+        (event.data["job_ref"], event.data["cron"], event.time, int(event.data["generation"])),
+    )
+
+
+def routine_job_added(conn: sqlite3.Connection, event: Event) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO routine_jobs(job_id, script, input, added_seq) VALUES(?, ?, ?, ?)",
+        (event.data["job_id"], event.data["script"], dumps(event.data["input"]), event.sequence),
+    )
+
+
+def routine_job_updated(conn: sqlite3.Connection, event: Event) -> None:
+    conn.execute(
+        "UPDATE routine_jobs SET input = ? WHERE job_id = ?",
+        (dumps(event.data["input"]), event.data["job_id"]),
+    )
+
+
+def routine_job_removed(conn: sqlite3.Connection, event: Event) -> None:
+    conn.execute("DELETE FROM routine_jobs WHERE job_id = ?", (event.data["job_id"],))
+
+
+def channel_message_sent(conn: sqlite3.Connection, event: Event) -> None:
+    data = event.data
+    conn.execute(
+        "INSERT OR REPLACE INTO channel_messages(message_id, channel, task_id, request_id, "
+        "chat_id, sender_id, sent_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        (
+            data["message_id"],
+            data["channel"],
+            _tid(event),
+            data["request_id"],
+            data["chat_id"],
+            data.get("sender_id"),
+            event.time,
+        ),
+    )
+
+
+def channel_reply_seen(conn: sqlite3.Connection, event: Event) -> None:
+    data = event.data
+    conn.execute(
+        "INSERT OR IGNORE INTO channel_replies(message_id, job_id, task_id, request_id, text, "
+        "sent_at, sequence) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        (
+            data["message_id"],
+            data["job_id"],
+            _tid(event),
+            data["request_id"],
+            data["text"],
+            data.get("sent_at"),
+            event.sequence,
+        ),
+    )
+
+
 REDUCERS: dict[str, Reducer] = {
     "task.planned": task_planned,
     "task.requirement_changed": requirement_changed,
@@ -872,4 +958,12 @@ REDUCERS: dict[str, Reducer] = {
     "task.user_rejected": task_user_rejected,
     "task.cancelled": task_cancelled,
     "task.archived": task_archived,
+    "routine.start_requested": routine_start_requested,
+    "routine.bound": routine_bound,
+    "routine.armed": routine_armed,
+    "routine.job_added": routine_job_added,
+    "routine.job_updated": routine_job_updated,
+    "routine.job_removed": routine_job_removed,
+    "channel.message_sent": channel_message_sent,
+    "channel.reply_seen": channel_reply_seen,
 }

@@ -280,7 +280,9 @@ def prompt_then_stop(h: Harness, prompt: str | None, session: str = "orch-1") ->
 
 @mark.use_case("UC-HOST-002")
 @mark.use_case("UC-HOST-003")
-def test_a_user_turn_does_not_end_while_tasks_wait_for_a_session(h: Harness) -> None:
+def test_a_user_turn_does_not_end_while_tasks_wait_for_a_session(home: Home) -> None:
+    # The routine session's own reminder is tested in test_routine.py.
+    h = Harness(home, {"routine": {"enabled": False}})
     h.register("T001")
     h.register("T002")
     h.plan("T001")
@@ -327,7 +329,13 @@ def test_a_user_turn_does_not_end_while_tasks_wait_for_a_session(h: Harness) -> 
 
 @mark.use_case("UC-HOST-003")
 def test_needs_prestart_respects_the_standby_limit(home: Home) -> None:
-    h = Harness(home, {"scheduling": {"prestart": {"enabled": True, "max_standby": 2}}})
+    h = Harness(
+        home,
+        {
+            "scheduling": {"prestart": {"enabled": True, "max_standby": 2}},
+            "routine": {"enabled": False},
+        },
+    )
     for task_id in ("T001", "T002", "T003"):
         h.register(task_id)
         h.plan(task_id)

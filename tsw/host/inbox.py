@@ -11,6 +11,7 @@ from tsw.config import EffectiveConfig
 from tsw.errors import rejected
 from tsw.events import Event, EventDraft, utc_now
 from tsw.lease import require_lease
+from tsw.machine import routine as routine_mod
 from tsw.machine.ask_user import handoff_due
 from tsw.machine.guards import dependency_problems, invalidated, topological
 from tsw.machine.model import OCCUPYING, loads
@@ -90,9 +91,17 @@ def reduce_acked(conn: sqlite3.Connection, event: Event) -> None:
 
 
 def attention(
-    conn: sqlite3.Connection, storage: StorageBackend, config: EffectiveConfig
+    conn: sqlite3.Connection,
+    storage: StorageBackend,
+    config: EffectiveConfig,
+    routine_cache: Mapping[str, Any] | None = None,
+    now: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """What needs the orchestrator now. Read-only: it never changes state or times."""
+    """What needs the orchestrator now. Read-only: it never changes state or times.
+
+    ``routine_cache`` is the routine session's run record (``cache/routine.json``); without it the
+    routine session's state is judged from the ledger alone.
+    """
     items: dict[str, list[dict[str, Any]]] = {
         "judgments": [
             {"item_id": r["item_id"], "task_id": r["task_id"], "trigger": r["trigger"]}
@@ -141,6 +150,7 @@ def attention(
             for r in conn.execute("SELECT task_id, pause FROM tasks WHERE status = 'paused'")
         ],
         "inbox": [{"count": len(inbox(conn, storage, config, limit=1000))}],
+        "routine": routine_attention(conn, config, routine_cache or {}, now),
     }
     invalid = invalidated(conn)
     for row in conn.execute("SELECT task_id, status FROM tasks"):
@@ -154,6 +164,33 @@ def attention(
         if current is None or current["phase"] in ("planned", "replaced", "closed"):
             items["to_start"].append({"task_id": row["task_id"]})
     return items
+
+
+def routine_attention(
+    conn: sqlite3.Connection,
+    config: EffectiveConfig,
+    cache: Mapping[str, Any],
+    now: str | None = None,
+) -> list[dict[str, Any]]:
+    """The routine session when it needs the orchestrator (DN006 §8.9.6–§8.9.7): ``missing`` while
+    tasks are being worked on, ``starting`` (to reconcile), ``unarmed`` or ``stale``."""
+    state = routine_mod.status(conn, config, now or utc_now(), cache)
+    if state["state"] in ("ok", "disabled"):
+        return []
+    if state["state"] == "missing" and not working(conn):
+        return []
+    return [state]
+
+
+def working(conn: sqlite3.Connection) -> bool:
+    """Whether the user has asked for work: some task has a session or is getting one."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM attempts WHERE phase IN ('starting', 'standby', 'live', 'stopped') "
+            "LIMIT 1"
+        ).fetchone()
+        is not None
+    )
 
 
 # Attempt phases in which a task has a session or is getting one: a prestart is refused then.

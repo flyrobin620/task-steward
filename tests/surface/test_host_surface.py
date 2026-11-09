@@ -230,7 +230,9 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     )
     code, out = run_json("host", "render")
     assert code == 0
-    assert [Path(p) for p in out["written"]] == [home / "CLAUDE.md", skill, settings]
+    handle_input = home / ".claude" / "skills" / "handle-input" / "SKILL.md"
+    assert [Path(p) for p in out["written"]] == [home / "CLAUDE.md", skill, handle_input, settings]
+    assert "handoff_resolve" in handle_input.read_text(encoding="utf-8")
     # The actions tsw guards itself are allowed; what the user had there is kept (DN006 §6.3).
     written = json.loads(settings.read_text(encoding="utf-8"))
     assert written["env"] == {"X": "1"}
@@ -253,6 +255,7 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert [r.split(":")[0] for r in rules] == [
         "TaskSteward Worker Dispatch",
         "TaskSteward Worker Merge",
+        "TaskSteward Routine",
     ]
     assert "--admin" in rules[1]
 

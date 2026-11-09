@@ -27,6 +27,7 @@ from tsw.host import inbox as inbox_mod
 from tsw.host import shell
 from tsw.host.identity import HOST_CLI_COMMANDS, Identity, resolve, within
 from tsw.ledger import Ledger
+from tsw.machine import routine as routine_mod
 from tsw.machine.ask_user import handoff_due, is_automated, session_message
 from tsw.machine.guards import merge_authorized
 from tsw.machine.model import row_dict
@@ -39,7 +40,7 @@ WRITE_TOOLS = {
     "NotebookEdit": "notebook_path",
 }
 START_SESSION = "mcp__ccd_session__start_session"
-# The host's session-scheduling tools, and the tag every scheduled prompt of a worker carries.
+# The host's session-scheduling tools, and the tag every scheduled prompt of a session carries.
 SCHEDULERS = ("CronCreate", "ScheduleWakeup")
 SCHEDULED_TAG = "<scheduled-task"
 # Under the data directory's cache/: whether each orchestrator session's current turn is the user's.
@@ -414,6 +415,21 @@ class Guard:
     def run(self, event: str) -> dict[str, Any] | None:
         who = self.identity()
         if who.role == "none":
+            if who.pending and who.pending_role == "routine":
+                if event == "SessionStart":
+                    return context(
+                        "SessionStart",
+                        "这个会话正在作为 TaskSteward 的例行会话创建，主会话随后会完成绑定。"
+                        "先调用 whoami：role 为 routine 时调用 routine_board 开始；仍未绑定"
+                        "（pending）时结束这一轮，主会话完成绑定后会发消息通知你。",
+                    )
+                if event == "PreToolUse":
+                    tool = str(self.payload.get("tool_name") or "")
+                    if tool in WRITE_TOOLS or tool in ("Bash", "PowerShell", START_SESSION):
+                        return deny(
+                            "PreToolUse", "CC-B10 例行会话还没有绑定：等主会话完成绑定后再操作"
+                        )
+                return None
             if who.pending and event == "SessionStart":
                 return context(
                     "SessionStart",
@@ -442,8 +458,21 @@ class Guard:
         if who.role == "revoked":
             return context(
                 "SessionStart",
-                f"本会话绑定的 TaskSteward attempt {who.task_id}/{who.attempt} 已{who.phase}，"
+                f"本会话绑定的 TaskSteward {_bound_name(who)} 已{who.phase}，"
                 "只能阅读，不能再写入或调用写工具。",
+            )
+        if who.role == "routine":
+            return context(
+                "SessionStart",
+                f"你是 TaskSteward 的例行会话（{who.attempt}，数据目录 {self.home.root}）。"
+                "每次运行（定时提示或主会话的消息）：调用 routine_board；按 maintenance 设定定时"
+                "任务（arm：有 replace 时先 CronDelete，再 CronCreate，recurring: true，cron 与 "
+                "prompt 原样，然后 routine_armed 登记），逐行执行 jobs（有 fetch 的先按 tool 与 "
+                "arguments 取数，再 routine_run(job_id, fetched)；没有的直接 routine_run），"
+                "forward.send 为 true 时用 mcp__ccd_session_mgmt__send_message 把 message 原样发给 "
+                "session_id；有 clear_context 时最后调用 "
+                'mcp__ccd_session_mgmt__clear_session(session_id="self")。'
+                "不作任何判断，不改文件、不运行命令、不建会话；遇到问题发消息告诉主会话。",
             )
         if who.role == "worker":
             roots = "、".join(str(p) for p in who.writable_roots)
@@ -492,7 +521,9 @@ class Guard:
             )
         else:
             with self.ledger.view() as conn:
-                items = inbox_mod.attention(conn, self.ledger.storage, self.config)
+                items = inbox_mod.attention(
+                    conn, self.ledger.storage, self.config, routine_mod.load_cache(self.home)
+                )
             summary = "，".join(
                 f"{k} {len(v) if k != 'inbox' else v[0]['count']}" for k, v in items.items()
             )
@@ -506,10 +537,18 @@ class Guard:
             if tool in WRITE_TOOLS or tool in ("Bash", "PowerShell", START_SESSION):
                 return deny(
                     "PreToolUse",
-                    f"本会话绑定的 attempt {who.task_id}/{who.attempt} 已{who.phase}，不能再写入；"
-                    "请回到主会话",
+                    f"本会话绑定的 {_bound_name(who)} 已{who.phase}，不能再写入；请回到主会话",
                 )
             return None
+        if who.role == "routine" and (
+            tool in WRITE_TOOLS or tool in ("Bash", "PowerShell", START_SESSION)
+        ):
+            # CC-B11 (CC008 §3): the routine session runs the routine board and nothing else.
+            return deny(
+                "PreToolUse",
+                "CC-B11 例行会话只执行例行表（routine_board）中的例行项：不编辑文件、不运行命令、"
+                "不建会话；其余事项发消息交主会话。确属需要时请用户自己执行",
+            )
         if who.role == "worker" and not who.cwd_consistent and tool in (*WRITE_TOOLS, "Bash"):
             command = str(tool_input.get("command") or "") if tool == "Bash" else ""
             if not self._returns_to_root(command, who):
@@ -556,7 +595,7 @@ class Guard:
                 writable_roots=who.writable_roots if who.role == "worker" else None,
             )
             return None if problem is None else deny("PreToolUse", problem)
-        if tool in SCHEDULERS and who.role in ("worker", "orchestrator"):
+        if tool in SCHEDULERS and who.role in ("worker", "orchestrator", "routine"):
             # A scheduled prompt reaches the session like a user's message. Untagged, a worker's
             # would be recorded as the user's answer (found by the live host-e2e scenario,
             # DN006 §8.1a), and the orchestrator's would count as the user's turn, where the Stop
@@ -577,10 +616,17 @@ class Guard:
                     "AND session_name = ?",
                     (name,),
                 ).fetchone()
-            if row is None:
+                newest = routine_mod.latest(conn)
+            routine = (
+                newest is not None
+                and newest["status"] == "starting"
+                and newest["session_name"] == name
+            )
+            if row is None and not routine:
                 return deny(
                     "PreToolUse",
-                    "先用 attempt_start 落账再创建会话；会话名必须是当前有效代次的名称",
+                    "先用 attempt_start（例行会话用 routine_start）落账再创建会话；"
+                    "会话名必须是当前有效代次的名称",
                 )
         return None
 
@@ -643,11 +689,20 @@ class Guard:
                 due = handoff_due(conn, utc_now())
                 # Only the user's own turn can create sessions (G-WINDOW): elsewhere a reminder
                 # could not be acted on. A session reading while another holds the lease neither.
+                may_dispatch = self._may_dispatch(conn, who)
                 prestart = (
                     inbox_mod.needs_prestart(conn, self.config)
-                    if user_turn and self._may_dispatch(conn, who)
+                    if user_turn and may_dispatch
                     else []
                 )
+                routine = (
+                    inbox_mod.routine_attention(
+                        conn, self.config, routine_mod.load_cache(self.home)
+                    )
+                    if may_dispatch
+                    else []
+                )
+            state = routine[0]["state"] if routine else None
             if pending:
                 reasons.append(
                     f"还有 {len(pending)} 条未处理的回传，先调用 inbox 处理并 inbox_ack。"
@@ -656,6 +711,18 @@ class Guard:
                 reasons.append(
                     f"有 {len(due)} 个 worker 会话中的问题已超时无人回复："
                     "运行 sync 转交，再按 inbox 处理。"
+                )
+            if state == "stale":
+                reasons.append(
+                    "例行会话已超过几个间隔没有运行（attention 的 routine 为 stale）：用 "
+                    f"mcp__ccd_session_mgmt__send_message 给它（{routine[0].get('session_id')}）"
+                    "发消息“运行 routine_board”，让它重新设定定时任务。"
+                )
+            if state == "missing" and user_turn:
+                reasons.append(
+                    "这是用户的 turn：例行会话还没有启动（attention 的 routine 为 missing）。"
+                    "按 orchestrate skill 启动：routine_start（user_turn: true）→ start_session → "
+                    "routine_bind。用户关闭了例行会话时说明原因后直接结束。"
                 )
             if prestart:
                 names = "、".join(str(item["task_id"]) for item in prestart)
@@ -666,6 +733,8 @@ class Guard:
                     "确实不该现在预启动时（例如用户要求先不开始），说明原因后直接结束。"
                 )
             return {"decision": "block", "reason": "".join(reasons)} if reasons else None
+        if who.role != "worker":
+            return None  # the routine session's turns end without anything to record
         with self.ledger.view() as conn:
             row = row_dict(
                 conn.execute(
@@ -752,6 +821,11 @@ class Guard:
             slug if isinstance(slug, str) else None,
             host if isinstance(host, str) else None,
         )
+
+
+def _bound_name(who: Identity) -> str:
+    """How a revoked session's binding is named: an attempt or a routine generation."""
+    return f"attempt {who.task_id}/{who.attempt}" if who.task_id else f"例行会话 {who.attempt}"
 
 
 def _turn_ended(who: Identity) -> Command:

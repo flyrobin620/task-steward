@@ -74,6 +74,8 @@ DEFAULTS: dict[str, Any] = {
             "schedule": "daily_and_on_task_done",
             "channel": "local",
         },
+        # Where Teams question cards go: "self" is the user's own chat (DN006 §8.7).
+        "teams": {"chat": "self"},
     },
     "roles": {
         "orchestrator": {
@@ -97,6 +99,21 @@ DEFAULTS: dict[str, Any] = {
             "effort": "medium",
             "timeout_seconds": 1800,
         },
+        # The routine session runs the routine board (DN006 §8.9); it only runs scripts.
+        "routine": {
+            "session": "claude-app",
+            "model": "claude-sonnet-5-5",
+            "effort": "low",
+            "permission_mode": "auto",
+        },
+    },
+    "routine": {
+        "enabled": True,
+        "interval_minutes": 10,
+        "renew_after_days": 6,
+        "context_reset_hours": 24,
+        "stale_after_intervals": 3,
+        "teams_lookback_hours": 24,
     },
     "review": {
         "max_rounds": 3,
@@ -123,6 +140,7 @@ DEFAULTS: dict[str, Any] = {
                 "worker.submitted",
                 "worker.question",
                 "input.handed_off",
+                "channel.reply_seen",
                 "task.paused",
                 "report_back",
             ],
@@ -200,7 +218,9 @@ SCHEMA: dict[str, Any] = _obj(
         channels=STRS,
         in_session_timeout_minutes=_int(1),
         decision_digest=_obj(enabled=B, schedule=S, channel=S),
+        # No effect since the routine board collects Teams replies (DN003 §3.1a); still accepted.
         teams_poll=_obj(interval_minutes=_int(1), max_interval_minutes=_int(1)),
+        teams=_obj(chat=S),
     ),
     roles=_obj(
         orchestrator=_obj(**ROLE_COMMON, permission_mode=_choice(*PERMISSION_ORDER)),
@@ -218,6 +238,15 @@ SCHEMA: dict[str, Any] = _obj(
             timeout_seconds=_int(1),
             executable=S,
         ),
+        routine=_obj(**ROLE_COMMON, permission_mode=_choice(*PERMISSION_ORDER)),
+    ),
+    routine=_obj(
+        enabled=B,
+        interval_minutes=_int(1),
+        renew_after_days=_int(1),
+        context_reset_hours=_int(1),
+        stale_after_intervals=_int(1),
+        teams_lookback_hours=_int(1),
     ),
     review=_obj(
         max_rounds=_int(1),
@@ -479,7 +508,7 @@ def _validate(config: EffectiveConfig, home: Home) -> None:
         return
 
     # Rule 2: model ids and efforts.
-    for role in ("orchestrator", "worker", "reviewer"):
+    for role in ("orchestrator", "worker", "reviewer", "routine"):
         model = get(values, f"roles.{role}.model")
         if isinstance(model, str) and not MODEL_ID.match(model):
             problems.append(f"roles.{role}.model: 模型 ID 格式不正确")
@@ -493,6 +522,23 @@ def _validate(config: EffectiveConfig, home: Home) -> None:
         and PERMISSION_ORDER.index(worker_mode) > PERMISSION_ORDER.index(orch_mode)
     ):
         problems.append("roles.worker.permission_mode: 不能高于 roles.orchestrator.permission_mode")
+    routine_mode = get(values, "roles.routine.permission_mode")
+    if (
+        orch_mode in PERMISSION_ORDER
+        and routine_mode in PERMISSION_ORDER
+        and PERMISSION_ORDER.index(routine_mode) > PERMISSION_ORDER.index(orch_mode)
+    ):
+        problems.append(
+            "roles.routine.permission_mode: 不能高于 roles.orchestrator.permission_mode"
+        )
+    interval = get(values, "routine.interval_minutes")
+    if (
+        isinstance(interval, int)
+        and not isinstance(interval, bool)
+        and interval > 0
+        and not (60 % interval == 0 or (interval % 60 == 0 and 1440 % interval == 0))
+    ):
+        problems.append("routine.interval_minutes: 须能整除 60，或为 60 的整数倍且能整除 1440")
 
     _validate_plugins(values, problems, config.warnings)
     _validate_input(values, problems, config.sources)
@@ -536,6 +582,19 @@ def _validate_plugins(values: dict[str, Any], problems: list[str], warnings: lis
             and SESSIONS[orchestrator].host != caps.host
         ):
             problems.append(f"roles.worker.session: delegated 的 {worker} 必须与主会话在同一宿主")
+    routine = session("roles.routine.session") if get(values, "routine.enabled") else None
+    if routine is not None:
+        caps = SESSIONS[routine]
+        if not caps.interactive or not caps.timer:
+            problems.append(
+                f"roles.routine.session: {routine} 不能承载例行会话（须 interactive 且有 timer）"
+            )
+        if (
+            caps.execution == "delegated"
+            and orchestrator is not None
+            and SESSIONS[orchestrator].host != caps.host
+        ):
+            problems.append(f"roles.routine.session: delegated 的 {routine} 必须与主会话在同一宿主")
     for role_path in ("roles.reviewer.session", "roles.reviewer.fallback_session"):
         reviewer = session(role_path)
         if reviewer is None:

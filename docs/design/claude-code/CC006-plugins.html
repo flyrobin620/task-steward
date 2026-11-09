@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="96a285075553bf85d1f4a343d2be7a7927b3c10b879123e951de559007d32215">
+<meta name="tsw-source-sha256" content="1ea76883d34b0d9539315f70391d88111d3a8ba40d955d0c78ce26e8543f3c85">
 <title>CC006 Claude Code 插件</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -101,7 +101,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p>间隔 N 分钟的 cron 表达式：N 整除 60 时为 <code>*/N * * * *</code>，N 为 60 的倍数时为 <code>0 */(N/60) * * *</code>（DN003 §3.1b）。<code>CronCreate</code> 的循环任务 7 天后到期，所以 <code>routine.renew_after_days</code> 默认 6。</p>
 <p>转发的消息以 <code>&lt;cross-session-message</code> 到达主会话，不是用户本人的 turn（CC008 的 CC-S6）；到达 worker 时也不会被记成用户答复（CC-S2）。</p>
 <h3 id="63-宿主侧护栏与允许规则">6.3 宿主侧护栏与允许规则</h3>
-<p>例行会话角色见 CC001 §5；hooks 对它执行 CC008 的 CC-B8、CC-B10（已撤销、待绑定）与 CC-B11（不编辑、不运行命令、不建会话）。<code>routine_start</code> 在 <code>routine/</code> 下写入 <code>.claude/settings.local.json</code>，允许 tsw MCP 工具、<code>send_message</code>、<code>clear_session</code>、<code>CronCreate</code> / <code>CronDelete</code> 与 <code>mcp__teams__ListChatMessages</code>，避免 auto 分类器把例行动作当作未经授权而拦下（CC008 §6）。</p>
+<p>例行会话角色见 CC001 §5；hooks 对它执行 CC008 的 CC-B8、CC-B10（已撤销、待绑定）与 CC-B11（不编辑、不运行命令、不建会话）。与 worker 的执行目录一样，<code>routine/</code> 不带权限规则（带规则的目录会再次要求信任，决定 0003）：例行会话的定时任务、取数、转发与清空上下文由用户设置中的 auto 模式规则“TaskSteward Routine”放行（<code>tsw host install-hint</code> 给出，CC008 §6），创建它的 <code>start_session</code> 由“TaskSteward Worker Dispatch”覆盖。</p>
 <h3 id="64-主会话的处理转交问题-skill">6.4 主会话的“处理转交问题” skill</h3>
 <p><code>render_instructions</code> 在数据目录生成第二个项目 skill <code>.claude/skills/handle-input/SKILL.md</code>（来源 <code>tsw/host/handle_input_skill.md</code>）。例行会话转来的消息要求主会话按它处理：</p>
 <ol><li>读问题与任务书，按 DN006 §8.2 的授权边界与因素判断；<code>reserved</code> 的问题只能转达给用户；</li><li>能代答时 <code>handoff_resolve</code>，再用 <code>send_message</code> 把决定告诉 worker，让它继续；</li><li>需要用户时 <code>input_relay</code>：用户正在主会话中时转达到 <code>main-session</code>；否则按配置的渠道（如 <code>teams-chat</code>，§7）发出；</li><li>Teams 中转来的消息：判断它是否回答了问题，是答复时 <code>input_resolve</code>（来源为渠道 <code>teams-chat</code> 与消息 ID），再告诉 worker；不是答复时不登记。</li></ol>

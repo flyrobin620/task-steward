@@ -5,7 +5,7 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
 
 # TaskSteward 主会话
 
-本 skill 只适用于主会话。执行目录位于数据目录之下（如 `work/<任务>/<attempt>`）的 worker 也可能看到它：`whoami` 的角色不是 orchestrator 时，忽略本 skill，按任务书工作。
+本 skill 只适用于主会话。执行目录位于数据目录之下（如 `work/<任务>/<attempt>`）的 worker 与例行会话（`routine/`）也可能看到它：`whoami` 的角色不是 orchestrator 时，忽略本 skill。
 
 你在数据目录中运行，是 TaskSteward 的主会话。所有状态变更都经 `tsw` 工具（MCP server `tsw`）写入账本；不要直接编辑数据目录中的文件。工具的拒绝结果带 `reason`，按原因处理，不要换个方式绕过。
 
@@ -33,13 +33,14 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
    - 派发时新建的会话：`attempt_reconcile` 之后，用 `SendMessage` 告诉它“已完成绑定，可以开始”：会话可能在绑定之前就开始了第一轮，那时 `whoami` 还是 pending。投递给待命会话（`attempt_deliver`）时，消息写明“已派发，按任务书开始”。
 3. 创建结果不明时，按会话名 `list_sessions {linked: true}` 对账，绝不再次创建；确认没有创建时 `attempt_reconcile`（`outcome: not_created`）。
 4. 不在用户 turn 时不能新建会话：任务保持就绪并在 STATUS 页显示“待启动”，下一个用户 turn 按第 1 步预启动。
-5. 自己用宿主的定时工具（`CronCreate`、`ScheduleWakeup`）安排提醒时，提示以 `<scheduled-task>` 开头、`</scheduled-task>` 结束：否则它到达时会被当成用户本人的消息，hook 会拒绝。
+5. 例行会话（DN006 §8.9）：在用户第一次要求执行待办的那一轮，与预启动、派发一起启动它（`attention` 的 `routine` 为 `missing` 时，Stop hook 在用户 turn 结束前提醒一次）。做法：`routine_start`（`user_turn: true`），再 `mcp__ccd_session__start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为返回的 `cwd`、`use_worktree: false`、`name` 为事件中的 `session_name`，`model` / `effort` / `permission_mode` / `prompt` / `background` 取事件中的值；然后 `routine_bind`（`generation`、`session_id`），再用 `SendMessage` 告诉它“已绑定，调用 routine_board 开始”。结果不明时按会话名对账，不再次创建。`routine` 为 `stale` 时（定时任务失效，例如 app 重启过），给例行会话发消息“运行 routine_board”，它会重新设定；会话不存在了就在下一个用户 turn 重新 `routine_start`。例行会话不作判断，它转来的消息按 `handle-input` skill 处理。
+6. 自己用宿主的定时工具（`CronCreate`、`ScheduleWakeup`）安排提醒时，提示以 `<scheduled-task>` 开头、`</scheduled-task>` 结束：否则它到达时会被当成用户本人的消息，hook 会拒绝。
 
 ## 回传与判断
 
 worker 先在自己的会话里直接问用户（`ask_user`），你看不到问题内容，也不用处理。只有两类事会出现在 `inbox`：
 
-- `input.handed_off`：worker 会话中的问题超时（默认 10 分钟）无人回复，转交给你。`attention` 的 `handoff_due` 列出已到期但还没转交的问题，运行 `sync` 转交。转交后你可以在授权边界内代为决定（`handoff_resolve`：回答、追加轮次、认定不成立或批准延后，写明理由与依据），或把问题转达给用户（`input_relay`，例如在本会话中问用户，答复用 `input_resolve` 附用户原话记录），也可以继续等待。worker 标了 `reserved` 的问题只能转达或等待。决定后用消息告诉 worker。用户之后在 worker 会话里的回复仍然有效：问题未决时它直接生效，已决时记为迟到答复，以用户的话为准。
+- `input.handed_off` 与 `channel.reply_seen`：worker 会话中的问题超时（默认 10 分钟）无人回复，由例行会话转交给你；或经 Teams 转达的问题在 Teams 中有了以任务 ID 开头的回复。按 `handle-input` skill 处理：在授权边界内代为决定（`handoff_resolve`），或转达给用户（`input_relay`：本会话或 Teams），或登记 Teams 中的答复（`input_resolve`），也可以继续等待。worker 标了 `reserved` 的问题只能转达或等待。决定后用消息告诉 worker。`attention` 的 `handoff_due` 列出已到期但还没转交的问题（例行会话不在时），运行 `sync` 转交。用户之后在 worker 会话里的回复仍然有效：问题未决时它直接生效，已决时记为迟到答复，以用户的话为准。
 - `worker.question`：跨任务的事（独占资源冲突、依赖调整、改动其他任务的范围）。用 `judge` 处理：
 
 - 唯一的硬边界是不越过已有授权：凭据、用户验收与退回、配置 `policies.reserved_for_user` 中的决定、超出任务书的范围，都交给用户（`decision: escalate`）。

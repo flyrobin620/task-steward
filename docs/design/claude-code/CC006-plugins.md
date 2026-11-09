@@ -126,7 +126,7 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 
 ### 6.3 宿主侧护栏与允许规则
 
-例行会话角色见 CC001 §5；hooks 对它执行 CC008 的 CC-B8、CC-B10（已撤销、待绑定）与 CC-B11（不编辑、不运行命令、不建会话）。`routine_start` 在 `routine/` 下写入 `.claude/settings.local.json`，允许 tsw MCP 工具、`send_message`、`clear_session`、`CronCreate` / `CronDelete` 与 `mcp__teams__ListChatMessages`，避免 auto 分类器把例行动作当作未经授权而拦下（CC008 §6）。
+例行会话角色见 CC001 §5；hooks 对它执行 CC008 的 CC-B8、CC-B10（已撤销、待绑定）与 CC-B11（不编辑、不运行命令、不建会话）。与 worker 的执行目录一样，`routine/` 不带权限规则（带规则的目录会再次要求信任，决定 0003）：例行会话的定时任务、取数、转发与清空上下文由用户设置中的 auto 模式规则“TaskSteward Routine”放行（`tsw host install-hint` 给出，CC008 §6），创建它的 `start_session` 由“TaskSteward Worker Dispatch”覆盖。
 
 ### 6.4 主会话的“处理转交问题” skill
 

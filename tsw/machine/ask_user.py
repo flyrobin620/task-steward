@@ -9,10 +9,12 @@
   open (``input.session_message``); ``user_answer`` (worker) cites one of them, so the user's
   words come from the host, never from the worker: T12, or ``input.late_response`` when the
   question was already answered elsewhere.
-- No reply within ``input.in_session_timeout_minutes``: ``input_handoff`` (worker) or the system
-  rule in ``sync`` records ``input.handed_off``, which wakes the orchestrator.
+- No reply within ``input.in_session_timeout_minutes``: the routine board's ``handoff-scan`` or
+  the system rule in ``sync`` records ``input.handed_off`` (``by: system``), and the routine
+  session passes it on to the orchestrator (DN006 §8.9). ``input_handoff`` (worker) is kept.
 - The orchestrator then answers within its authority (``handoff_resolve``, T12) or relays the
-  question to the user (``input_relay``; the answer comes back through ``input_resolve``).
+  question to the user (``input_relay``: in its own session or through Teams, DN006 §8.7; the
+  answer comes back through ``input_resolve``).
 """
 
 from __future__ import annotations
@@ -583,16 +585,16 @@ def input_relay(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         allowed = relay_channels(env.config)
         if channel not in allowed:
             raise rejected("不能转达到这个渠道", reason="invalid_channel", allowed=allowed)
-        return [
-            EventDraft(
-                type="input.relayed",
-                task_id=task_id,
-                data={
-                    "request_id": request["request_id"],
-                    "channel": channel,
-                    "note": opt_text(inp, "note"),
-                },
-            )
-        ]
+        data: dict[str, Any] = {
+            "request_id": request["request_id"],
+            "channel": channel,
+            "note": opt_text(inp, "note"),
+        }
+        if channel == "teams-chat":
+            # The card the orchestrator sends next, then registers with channel_sent (DN006 §8.7).
+            from tsw.machine.routine import card  # noqa: PLC0415  (routine imports this module)
+
+            data |= {"card": card(ctx.conn, request), "chat": env.config.get("input.teams.chat")}
+        return [EventDraft(type="input.relayed", task_id=task_id, data=data)]
 
     return _cmd(env, "input_relay", inp, build)
