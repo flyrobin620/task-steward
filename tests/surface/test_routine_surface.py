@@ -65,7 +65,7 @@ def test_the_routine_session_end_to_end(home: Path) -> None:
     cwd = Path(started["cwd"])
     assert cwd.is_dir() and cwd.name == "routine"
     data = started["events"][0]["data"]
-    assert data["session_name"] == "routine-g1"
+    assert data["session_name"] == "routine-g1" and data["detach"] is True
     # Before the binding the new session already sees the routine tools.
     pending = by_id(mcp(home, cwd, "r-1", INIT, NOTE, LIST, call(2, "routine_board")))
     names = {t["name"] for t in pending[1]["result"]["tools"]}
@@ -80,9 +80,11 @@ def test_the_routine_session_end_to_end(home: Path) -> None:
             INIT,
             NOTE,
             call(3, "routine_bind", generation=1, session_id="r-1"),
+            call(4, "routine_detached", generation=1),
         )
     )
     assert "error" not in bound[3]
+    assert payload(bound[4])["events"][0]["type"] == "routine.detached"
     run = by_id(
         mcp(
             home,

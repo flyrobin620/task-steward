@@ -197,6 +197,13 @@ CREATE TABLE IF NOT EXISTS routine_sessions(
     armed_cron TEXT,
     armed_at TEXT
 );
+-- Generations detached from the orchestrator that started them (DN006 §8.9.7, T250). Only
+-- routine.detached writes it, so a projection made before it stays valid.
+CREATE TABLE IF NOT EXISTS routine_detached(
+    generation INTEGER PRIMARY KEY,
+    detached_at TEXT NOT NULL,
+    note TEXT
+);
 CREATE TABLE IF NOT EXISTS routine_jobs(
     job_id TEXT PRIMARY KEY,
     script TEXT NOT NULL,

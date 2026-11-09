@@ -162,7 +162,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一
 | `question` | — | ✓ | 跨任务事项交主会话判断（DN006 §8.1） |
 | `ask_user` / `user_answer` / `input_handoff` | — | ✓ | 在本会话直接问用户（T11）、登记 hook 记录的用户答复（T12）、超时转交（DN006 §8.1a–§8.1b） |
 | `handoff_resolve` / `input_relay` | ✓ | — | 对转交的会话内问题代为决定（T12）或转达给用户（DN006 §8.1b） |
-| `routine_start` / `routine_bind` | ✓ | — | 启动例行会话并绑定会话（DN006 §8.9.2） |
+| `routine_start` / `routine_bind` / `routine_detached` | ✓ | — | 启动例行会话、绑定会话并记录它已从主会话名下分离（DN006 §8.9.7） |
 | `channel_sent` | ✓ | — | 登记发出的 Teams 卡片，并把任务加入 Teams 例行项（DN006 §8.7） |
 | `routine_board` / `routine_run` / `routine_armed` | — | — | 只给例行会话：读取到期的例行项、运行例行项的脚本、登记定时任务（DN006 §8.9） |
 | `review_run` / `review_triage` / `review_decide` | — | ✓ | DN004 |
@@ -190,7 +190,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一
 | 主会话 | `config_change` `config_revert` | 修改与回退统一配置（DN003 §7），不改变任务状态 |
 | worker | `progress_note` `question` `ask_user` `user_answer` `input_handoff` `review_start` `review_fail` `review_complete` `review_triage` `review_decide` `review_exhausted` `self_check_failed` `submit` `task_pause`（仅 T14）`output_link` | E01–E07、T11、T12、T13、T14 |
 | 主会话 | `handoff_resolve` `input_relay` | 转交后的 T12 与转达（DN006 §8.1b） |
-| 主会话 | `routine_start` `routine_bind` `channel_sent` | 启动、绑定例行会话；登记 Teams 卡片（DN006 §8.7、§8.9） |
+| 主会话 | `routine_start` `routine_bind` `routine_detached` `channel_sent` | 启动、绑定、分离例行会话；登记 Teams 卡片（DN006 §8.7、§8.9） |
 | 例行会话 | `routine_board` `routine_run` `routine_armed` | 运行例行表：转交到期问题（`by: system`）、取出 Teams 答复转给主会话、定时任务的设定与续期（DN006 §8.9） |
 
 主会话的写工具都要求持有调度租约（G-LEASE）；worker 工具要求调用者就是该任务当前 attempt 绑定的会话；例行工具要求调用者就是当前代次绑定的例行会话。

@@ -847,6 +847,13 @@ def routine_armed(conn: sqlite3.Connection, event: Event) -> None:
     )
 
 
+def routine_detached(conn: sqlite3.Connection, event: Event) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO routine_detached(generation, detached_at, note) VALUES(?, ?, ?)",
+        (int(event.data["generation"]), event.time, event.data.get("note")),
+    )
+
+
 def routine_job_added(conn: sqlite3.Connection, event: Event) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO routine_jobs(job_id, script, input, added_seq) VALUES(?, ?, ?, ?)",
@@ -962,6 +969,7 @@ REDUCERS: dict[str, Reducer] = {
     "routine.start_requested": routine_start_requested,
     "routine.bound": routine_bound,
     "routine.armed": routine_armed,
+    "routine.detached": routine_detached,
     "routine.job_added": routine_job_added,
     "routine.job_updated": routine_job_updated,
     "routine.job_removed": routine_job_removed,

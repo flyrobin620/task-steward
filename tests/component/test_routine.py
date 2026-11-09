@@ -3,6 +3,8 @@ projection and the hooks."""
 
 from __future__ import annotations
 
+import dataclasses
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -34,11 +36,14 @@ def reason_of(call: Callable[[], Any]) -> str:
     return str(exc.value.details.get("reason"))
 
 
-def start_routine(h: Harness, session: str = "routine-1") -> Caller:
+def start_routine(h: Harness, session: str = "routine-1", *, detach: bool = True) -> Caller:
     out = h.run("routine_start", user_turn=True)
     data = out["events"][0]["data"]
     assert (h.home.root / "routine").is_dir()
     h.run("routine_bind", generation=data["generation"], session_id=session)
+    if detach:
+        assert data["detach"] is True  # the Claude app wakes the starter on every turn
+        h.run("routine_detached", generation=data["generation"])
     return Caller(role="routine", session_id=session, machine=MACHINE)
 
 
@@ -85,6 +90,7 @@ def test_start_bind_and_role(home: Home) -> None:
     assert data["session_name"] == "routine-g1" and data["model"] == "claude-sonnet-5-5"
     assert data["effort"] == "low" and data["permission_mode"] == "auto"
     assert data["host_permission_mode"] == "auto"  # the Claude app's name for it
+    assert data["detach"] is True  # detach it from the orchestrator once bound (CC006 §6.1)
     # Between creation and binding the session is listed as the routine session it will be.
     with h.ledger.view() as conn:
         pending = resolve(conn, home, {"CLAUDE_CODE_HOST_SESSION_ID": "r1"}, home.root / "routine")
@@ -149,6 +155,12 @@ def test_board_arms_renews_clears_and_recovers(home: Home) -> None:
     assert arm["prompt"].startswith("<scheduled-task>")
     assert [j["job_id"] for j in first["jobs"]] == ["handoff-scan"]
     assert first["orchestrator_session"] == "orch-1"
+    # Recent run times stay in the cache (live evidence), at most RECENT_RUNS of them.
+    assert cache["runs"] == [h.clock.now]
+    longer = {**cache, "runs": [f"r{i}" for i in range(routine_mod.RECENT_RUNS)]}
+    with h.ledger.view() as conn:
+        kept = routine_mod.board(conn, h.config, h.clock.now, longer, routine.session_id)[1]
+    assert len(kept["runs"]) == routine_mod.RECENT_RUNS and kept["runs"][-1] == h.clock.now
     assert attention(h, cache) == [
         {
             "state": "unarmed",
@@ -374,8 +386,17 @@ def test_hooks_for_the_routine_session(home: Home) -> None:
     )
     assert tagged is None
     assert hook(h, "r1", "PreToolUse", cwd, tool_name="mcp__teams__ListChatMessages") is None
-    # A routine turn ends with nothing to record and nothing to remind.
+    # A routine turn ends with nothing in the ledger and nothing to remind; before the first
+    # board read there is no cache to add to.
     assert hook(h, "r1", "Stop", cwd) is None
+    cache_file = home.cache_dir / "routine.json"
+    assert not cache_file.exists()
+    # Once the board has run, the end of each turn joins the run times (live evidence, T250).
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(json.dumps({"generation": 1, "runs": ["t0"]}), encoding="utf-8")
+    assert hook(h, "r1", "Stop", cwd) is None
+    ends = json.loads(cache_file.read_text(encoding="utf-8"))["ends"]
+    assert len(ends) == 1 and ends[0] > "2026"
     assert hook(h, "r1", "UserPromptSubmit", cwd, prompt=routine_mod.SCHEDULED_PROMPT) is None
     assert h.query("SELECT COUNT(*) AS n FROM session_messages") == [{"n": 0}]
 
@@ -406,3 +427,62 @@ def test_the_orchestrator_is_reminded(home: Home) -> None:
     stop = hook(h, "orch-1", "Stop", home.root)
     assert stop["decision"] == "block" and "routine_board" in stop["reason"]
     assert "routine-1" in stop["reason"]
+
+
+@pytest.mark.use_case("UC-ROUTINE-001")
+def test_an_attached_routine_session_is_detached(home: Home) -> None:
+    h = Harness(home)
+    h.register("T001")
+    h.plan("T001")
+    h.dispatch("T001")
+    # Bound but not detached (it was started before T250, or the detach was not recorded): every
+    # turn it ends wakes the orchestrator, so the orchestrator detaches it first.
+    routine = start_routine(h, detach=False)
+    cache: dict[str, Any] = {}
+    board(h, routine, cache)
+    assert attention(h, cache) == [
+        {
+            "state": "attached",
+            "generation": 1,
+            "session_name": "routine-g1",
+            "session_id": "routine-1",
+            "armed_at": None,
+            "last_run": h.clock.now,
+        }
+    ]
+    # The reminder comes in any turn, not only the user's: detaching creates no session.
+    injected = '<cross-session-message from="w">x</cross-session-message>'
+    hook(h, "orch-1", "UserPromptSubmit", home.root, prompt=injected)
+    stop = hook(h, "orch-1", "Stop", home.root)
+    assert stop["decision"] == "block"
+    assert "detach_session" in stop["reason"] and "routine_detached" in stop["reason"]
+    assert "routine-1" in stop["reason"] and "generation: 1" in stop["reason"]
+    # Only the generation in charge, and only once.
+    assert reason_of(lambda: h.run("routine_detached", generation=2)) == "invalid_generation"
+    h.run("routine_detached", generation=1, note="已由主会话在 T250 实测中分离")
+    assert h.query("SELECT generation, note FROM routine_detached") == [
+        {"generation": 1, "note": "已由主会话在 T250 实测中分离"}
+    ]
+    assert reason_of(lambda: h.run("routine_detached", generation=1)) == "already_detached"
+    assert attention(h, cache)[0]["state"] == "unarmed"
+    # Only the orchestrator records it.
+    assert reason_of(lambda: h.run("routine_detached", routine, generation=1)) == "role_denied"
+    # A new generation starts attached again until it is detached in turn.
+    start_routine(h, "routine-2", detach=False)
+    assert attention(h, {})[0]["state"] == "attached"
+    h.run("routine_detached", generation=2)
+    assert attention(h, {})[0]["state"] != "attached"
+
+
+@pytest.mark.use_case("UC-ROUTINE-001")
+def test_no_detach_where_the_host_does_not_wake_the_starter(
+    home: Home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    caps = routine_mod.SESSIONS["claude-app"]
+    monkeypatch.setitem(routine_mod.SESSIONS, "claude-app", dataclasses.replace(caps, detach=False))
+    h = Harness(home)
+    out = h.run("routine_start", user_turn=True)
+    assert out["events"][0]["data"]["detach"] is False
+    h.run("routine_bind", generation=1, session_id="routine-1")
+    with h.ledger.view() as conn:
+        assert routine_mod.status(conn, h.config, h.clock.now, {})["state"] == "unarmed"

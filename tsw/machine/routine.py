@@ -16,11 +16,14 @@ programs: the routine session decides nothing.
 
 The routine session itself is started by the orchestrator (``routine_start`` / ``routine_bind``)
 and keeps its host timer armed (``routine_armed``); ``board`` tells it when to arm, renew or
-clear its context (DN006 §8.9.6).
+clear its context (DN006 §8.9.6). Where the host tells the starting session about every turn of a
+session it started, the orchestrator detaches the routine session right after binding it
+(``routine_detached``), so only forwarded results wake the orchestrator (DN006 §8.9.7).
 """
 
 from __future__ import annotations
 
+import contextlib
 import html
 import json
 import re
@@ -39,6 +42,7 @@ from tsw.machine.ask_user import handed_off_event, handoff_due
 from tsw.machine.base import ToolEnv, flag, integer, opt_text, text, tool
 from tsw.machine.model import row_dict, task
 from tsw.plugins.catalog import PERMISSION_NAMES, SESSIONS
+from tsw.storage.fs import atomic_write
 
 WORKDIR = "routine"  # the routine session's directory, relative to the data directory
 HANDOFF_SCAN = "handoff-scan"
@@ -59,6 +63,7 @@ START_BACKGROUND = (
     "（例如把超时无人回复的会话内问题转交主会话、取出 Teams 中等待中的问题的答复），"
     "把脚本给出的消息原样转给主会话。它不改代码、不运行命令、不建会话，也不作任何判断。"
 )
+RECENT_RUNS = 24  # run times kept in cache/routine.json (DN006 §8.9.3)
 # Host tools for the data a job fetches before its script runs, by host integration (CC006 §6).
 FETCH_TOOLS: dict[str, dict[str, str]] = {
     "claude-code": {"teams.read_chat": "mcp__teams__ListChatMessages"},
@@ -112,6 +117,22 @@ def by_session(conn: sqlite3.Connection, session_ref: str) -> dict[str, Any] | N
     )
 
 
+def detached(conn: sqlite3.Connection, generation: int) -> bool:
+    """Whether this generation was detached from the orchestrator that started it."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM routine_detached WHERE generation = ?", (generation,)
+        ).fetchone()
+        is not None
+    )
+
+
+def must_detach(config: EffectiveConfig) -> bool:
+    """The routine session's adapter wakes its starter on every turn until detached."""
+    caps = SESSIONS.get(str(config.get("roles.routine.session")))
+    return caps is not None and caps.detach
+
+
 def require_routine(conn: sqlite3.Connection, env: ToolEnv) -> dict[str, Any]:
     """The caller must be the routine session in charge."""
     row = bound(conn)
@@ -150,6 +171,10 @@ def status(
         "armed_at": current["armed_at"],
         "last_run": _last_run(current, cache),
     }
+    if must_detach(config) and not detached(conn, int(current["generation"])):
+        # Still nested under the orchestrator: every turn it ends wakes the orchestrator, which
+        # detaches it then, in any turn (DN006 §8.9.6).
+        return {"state": "attached", "generation": int(current["generation"]), **out}
     if current["armed_at"] is None:
         # Bound but never armed (it stopped before its first run finished): after the same
         # window as a stopped timer it needs waking too.
@@ -237,6 +262,10 @@ def board(
         maintenance.append({"action": "clear_context"})
         kept["last_reset"] = now
     kept["last_run"] = now
+    # The latest runs, for the evidence of a live run (a host timer fires only while the session
+    # is idle, so a run proves the one before it ended). Losing them changes nothing here.
+    recent = kept.get("runs")
+    kept["runs"] = [*(recent if isinstance(recent, list) else [])[-(RECENT_RUNS - 1) :], now]
     jobs: list[dict[str, Any]] = [
         {"job_id": HANDOFF_SCAN, "script": "handoff_scan", "every": 1, "forward": "if_any"}
     ]
@@ -724,6 +753,8 @@ def routine_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     ).get(str(env.config.get("roles.routine.permission_mode"))),
                     "prompt": START_PROMPT,
                     "background": START_BACKGROUND,
+                    # Detach the session from the orchestrator right after binding it.
+                    "detach": bool(caps is not None and caps.detach),
                 },
             )
         ]
@@ -756,6 +787,29 @@ def routine_bind(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         ]
 
     return _cmd(env, "routine_bind", inp, build)
+
+
+@tool(
+    "routine_detached",
+    "orchestrator",
+    description="记录例行会话已从主会话名下分离（routine.detached，DN006 §8.9.7）",
+)
+def routine_detached(inp: Mapping[str, Any], env: ToolEnv) -> Command:
+    generation = integer(inp, "generation", minimum=1)
+    note = opt_text(inp, "note")
+
+    def build(ctx: CommitContext) -> list[EventDraft]:
+        current = bound(ctx.conn)
+        if current is None or int(current["generation"]) != generation:
+            raise rejected("只能记录当前已绑定的例行会话代次", reason="invalid_generation")
+        if detached(ctx.conn, generation):
+            raise rejected("该代次已记录为分离", reason="already_detached")
+        data: dict[str, Any] = {"generation": generation}
+        if note:
+            data["note"] = note
+        return [EventDraft(type="routine.detached", data=data)]
+
+    return _cmd(env, "routine_detached", inp, build)
 
 
 @tool("routine_armed", "routine", description="登记已设定的定时任务（routine.armed）")
@@ -889,6 +943,18 @@ def channel_sent(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         return drafts
 
     return _cmd(env, "channel_sent", inp, build)
+
+
+def record_turn_end(home: Home, now: str) -> None:
+    """The routine session ended a turn (its Stop hook): kept next to the run times, as evidence
+    for a live run that a run ended without waking the orchestrator. Best effort."""
+    cache = load_cache(home)
+    if not cache.get("generation"):
+        return
+    ends = cache.get("ends")
+    cache["ends"] = [*(ends if isinstance(ends, list) else [])[-(RECENT_RUNS - 1) :], now]
+    with contextlib.suppress(OSError):
+        atomic_write(home.cache_dir / "routine.json", json.dumps(cache).encode("utf-8"))
 
 
 def load_cache(home: Home) -> dict[str, Any]:

@@ -26,6 +26,9 @@ class SessionCaps:
     open_existing_dir: bool
     timer: bool = False  # the host wakes the session on a schedule (DN006 §8.9)
     timer_days: int | None = None  # how long the host keeps a recurring timer, if limited
+    # The host tells the session that started another one whenever that one ends a turn, and
+    # can undo the link: the orchestrator detaches the routine session (DN006 §8.9.7).
+    detach: bool = False
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,7 @@ SESSIONS: dict[str, SessionCaps] = {
         open_existing_dir=True,
         timer=True,  # CronCreate in the session (CC006 §6)
         timer_days=7,  # recurring CronCreate tasks expire after seven days
+        detach=True,  # side-sessions-event on every turn; detach_session (CC006 §6.1)
     ),
     "claude-headless": SessionCaps(
         host="claude-code",

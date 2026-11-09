@@ -322,6 +322,14 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         generation={**INT, "description": "routine_start 返回的代次"},
         session_id={**S, "description": "start_session 返回的会话 ID"},
     ),
+    "routine_detached": schema(
+        ["generation"],
+        generation={**INT, "description": "已从主会话名下分离的例行会话代次"},
+        note={
+            **S,
+            "description": "可选：分离未由本会话完成时的原因（例如它不是本会话启动的）",
+        },
+    ),
     "routine_armed": schema(
         ["job_ref", "cron", "interval_minutes"],
         job_ref={**S, "description": "宿主定时工具返回的任务引用（如 CronCreate 的 job ID）"},
