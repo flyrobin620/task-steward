@@ -148,12 +148,13 @@ def status(
     if current["armed_at"] is None:
         # Bound but never armed (it stopped before its first run finished): after the same
         # window as a stopped timer it needs waking too.
-        bound_at = parse_time(str(current["bound_at"]))
+        seen = [t for t in (current["bound_at"], _last_run(current, cache)) if t]
+        last = max(parse_time(str(t)) for t in seen)
         window = timedelta(
             minutes=int(config.get("routine.interval_minutes"))
             * int(config.get("routine.stale_after_intervals"))
         )
-        late = parse_time(now) - bound_at > window and not _last_run(current, cache)
+        late = parse_time(now) - last > window
         return {"state": "stale" if late else "unarmed", **out}
     return {"state": "stale" if _stale(current, config, now, cache) else "ok", **out}
 

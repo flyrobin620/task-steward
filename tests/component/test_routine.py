@@ -158,8 +158,12 @@ def test_board_arms_renews_clears_and_recovers(home: Home) -> None:
             "last_run": h.clock.now,
         }
     ]
-    # Bound but never armed (stopped before its first run finished): stale after the window.
+    # Bound but never armed (it read the board, then stopped before arming): stale once the
+    # window has passed since that run, whether or not the run was cached.
+    h.clock.now = "2026-11-05T00:29:00Z"
+    assert attention(h, cache)[0]["state"] == "unarmed"
     h.clock.now = "2026-11-05T00:31:00Z"
+    assert attention(h, cache)[0]["state"] == "stale"
     assert attention(h, {})[0]["state"] == "stale"
     h.clock.now = "2026-11-05T00:00:00Z"
     h.run("routine_armed", routine, job_ref="job-1", cron=arm["cron"], interval_minutes=10)
