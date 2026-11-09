@@ -154,6 +154,12 @@ def test_board_arms_renews_clears_and_recovers(home: Home) -> None:
     assert arm["prompt"].startswith("<scheduled-task>")
     assert [j["job_id"] for j in first["jobs"]] == ["handoff-scan"]
     assert first["orchestrator_session"] == "orch-1"
+    # Recent run times stay in the cache (live evidence), at most RECENT_RUNS of them.
+    assert cache["runs"] == [h.clock.now]
+    longer = {**cache, "runs": [f"r{i}" for i in range(routine_mod.RECENT_RUNS)]}
+    with h.ledger.view() as conn:
+        kept = routine_mod.board(conn, h.config, h.clock.now, longer, routine.session_id)[1]
+    assert len(kept["runs"]) == routine_mod.RECENT_RUNS and kept["runs"][-1] == h.clock.now
     assert attention(h, cache) == [
         {
             "state": "unarmed",

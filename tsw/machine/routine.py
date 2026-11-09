@@ -61,6 +61,7 @@ START_BACKGROUND = (
     "（例如把超时无人回复的会话内问题转交主会话、取出 Teams 中等待中的问题的答复），"
     "把脚本给出的消息原样转给主会话。它不改代码、不运行命令、不建会话，也不作任何判断。"
 )
+RECENT_RUNS = 24  # run times kept in cache/routine.json (DN006 §8.9.3)
 # Host tools for the data a job fetches before its script runs, by host integration (CC006 §6).
 FETCH_TOOLS: dict[str, dict[str, str]] = {
     "claude-code": {"teams.read_chat": "mcp__teams__ListChatMessages"},
@@ -259,6 +260,10 @@ def board(
         maintenance.append({"action": "clear_context"})
         kept["last_reset"] = now
     kept["last_run"] = now
+    # The latest runs, for the evidence of a live run (a host timer fires only while the session
+    # is idle, so a run proves the one before it ended). Losing them changes nothing here.
+    recent = kept.get("runs")
+    kept["runs"] = [*(recent if isinstance(recent, list) else [])[-(RECENT_RUNS - 1) :], now]
     jobs: list[dict[str, Any]] = [
         {"job_id": HANDOFF_SCAN, "script": "handoff_scan", "every": 1, "forward": "if_any"}
     ]

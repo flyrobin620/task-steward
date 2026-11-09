@@ -57,7 +57,7 @@
     "R0 例行会话：routine.start_requested、routine.bound、routine.detached、routine.armed（定时任务带 <scheduled-task>）",
     "B2 超时转交与主会话代答（T001）：例行会话记录 input.handed_off（by: system），主会话 orchestrator.decision 与 input.resolved（source_kind=orchestrator），worker 之后记录 progress_note",
     "T Teams 转达与登记（T002）：input.relayed（teams-chat）、channel.message_sent、routine.job_added、channel.reply_seen（只有以 T002 开头的消息）、input.resolved（teams-chat，source_kind=user），worker 之后记录 progress_note",
-    "W 主会话的 hook 记录：routine.detached 之后没有例行会话每轮结束的通知（“you started (<例行会话 ID>) finished a turn”），至少有一条来自例行会话的 <cross-session-message>，且分离后例行会话至少又运行了两个间隔（T250）",
+    "W 主会话的 hook 记录：routine.detached 之后没有例行会话每轮结束的通知（“you started (<例行会话 ID>) finished a turn”），至少有一条来自例行会话的 <cross-session-message>，且分离后至少有一次没有转发、已经结束（之后又有一次运行；宿主的定时任务只在会话空闲时触发）的运行；证据都属于最新绑定的代次（T250）",
     "O 操作者观察：例行会话创建时没有信任确认；它的定时任务与发消息没有被拦（verify 的 --trust-prompted no --blocked no）"
   ],
   "prerequisites": [

@@ -409,12 +409,6 @@ def test_routine_e2e_reads_the_orchestrator_wakes_from_the_hooks(tmp_path: Path)
     home = run_dir / "home"
     (home / "config").mkdir(parents=True)
     (home / "cache").mkdir()
-    (home / "config" / "task-steward.json").write_text(
-        json.dumps({"version": 1, "routine": {"interval_minutes": 2}}), encoding="utf-8"
-    )
-    (home / "cache" / "routine.json").write_text(
-        json.dumps({"generation": 1, "last_run": "2026-11-09T10:10:00Z"}), encoding="utf-8"
-    )
     rid = "local_r"
     linked = f"(Linked sessions now: worker = local_w (idle); routine-g1 = {rid} (idle).)"
 
@@ -423,46 +417,83 @@ def test_routine_e2e_reads_the_orchestrator_wakes_from_the_hooks(tmp_path: Path)
             f'<system-reminder>\nThe session "x" you started ({session}) finished a turn. {linked}'
         )
 
+    def forward(session: str) -> str:
+        return f'<cross-session-message from="{session}" from-name="r">x</cross-session-message>'
+
     def write(*prompts: tuple[str, str, Path]) -> None:
         lines = [
             json.dumps(
-                {
-                    "event": "UserPromptSubmit",
-                    "time": t,
-                    "payload": {"cwd": str(cwd), "prompt": text},
-                }
+                {"event": "UserPromptSubmit", "time": t, "payload": {"cwd": str(cwd), "prompt": p}}
             )
-            for t, text, cwd in prompts
+            for t, p, cwd in prompts
         ]
         (run_dir / "hook-payloads.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    forward = f'<cross-session-message from="{rid}" from-name="r">handoff</cross-session-message>'
-    evs = [
-        {"sequence": 1, "type": "routine.bound", "data": {"session_ref": rid}, "time": "t"},
-        {
-            "sequence": 2,
-            "type": "routine.detached",
-            "data": {"generation": 1},
-            "time": "2026-11-09T10:00:00Z",
-        },
-    ]
+    def cache(generation: int, *runs: str) -> None:
+        (home / "cache" / "routine.json").write_text(
+            json.dumps({"generation": generation, "runs": list(runs)}), encoding="utf-8"
+        )
+
+    def bound(seq: int, generation: int, session: str) -> dict[str, Any]:
+        data = {"generation": generation, "session_ref": session}
+        return {"sequence": seq, "type": "routine.bound", "data": data, "time": "t"}
+
+    def detached(seq: int, generation: int, time: str) -> dict[str, Any]:
+        data = {"generation": generation}
+        return {"sequence": seq, "type": "routine.detached", "data": data, "time": time}
+
+    evs = [bound(1, 1, rid), detached(2, 1, "2026-11-09T10:00:00Z")]
     run = cast(live.Run, SimpleNamespace(dir=run_dir, home=home))
+    # Runs at 10:02 (forwards), 10:04 (idle, ended: the 10:06 run started) and 10:06.
+    cache(
+        1,
+        "2026-11-09T09:58:00Z",
+        "2026-11-09T10:02:00Z",
+        "2026-11-09T10:04:00Z",
+        "2026-11-09T10:06:00Z",
+    )
     write(
-        ("2026-11-09T09:58:00Z", note(rid), home),  # before the detach: counted apart
+        ("2026-11-09T09:58:30Z", note(rid), home),  # before the detach: counted apart
+        ("2026-11-09T10:02:30Z", forward(rid), home),
         ("2026-11-09T10:03:00Z", note("local_w"), home),  # a worker; lists the routine's ID
-        ("2026-11-09T10:05:00Z", forward, home),
-        ("2026-11-09T10:07:00Z", note(rid), tmp_path),  # another session's prompt
+        ("2026-11-09T10:05:00Z", note(rid), tmp_path),  # another session's prompt
     )
     passed = live.routine_wakes(run, evs)
     assert passed["status"] == "passed", passed
     assert passed["evidence"]["notices_before_detach"] == 1
-    assert passed["evidence"]["forwards_after_detach"] == ["2026-11-09T10:05:00Z"]
-    # A routine run that still wakes the orchestrator after the detach fails the check.
-    write(("2026-11-09T10:05:00Z", forward, home), ("2026-11-09T10:06:00Z", note(rid), home))
-    woken = live.routine_wakes(run, evs)
-    assert woken["status"] == "failed"
-    assert woken["evidence"]["notices_after_detach"] == ["2026-11-09T10:06:00Z"]
-    # So does a run with no detach at all (the T243 run), or nothing forwarded after it.
-    assert live.routine_wakes(run, evs[:1])["status"] == "failed"
-    write(("2026-11-09T09:59:00Z", forward, home))
+    assert passed["evidence"]["idle_runs_ended"] == ["2026-11-09T10:04:00Z"]
+    # A run that still wakes the orchestrator after the detach fails the check.
+    write(("2026-11-09T10:02:30Z", forward(rid), home), ("2026-11-09T10:04:30Z", note(rid), home))
+    assert live.routine_wakes(run, evs)["evidence"]["notices_after_detach"] == [
+        "2026-11-09T10:04:30Z"
+    ]
     assert live.routine_wakes(run, evs)["status"] == "failed"
+    # No idle run known to have ended: only forwarding runs, or the idle one is the last.
+    write(
+        ("2026-11-09T10:02:30Z", forward(rid), home), ("2026-11-09T10:04:30Z", forward(rid), home)
+    )
+    assert live.routine_wakes(run, evs)["status"] == "failed"
+    write(("2026-11-09T10:02:30Z", forward(rid), home))
+    cache(1, "2026-11-09T10:02:00Z", "2026-11-09T10:04:00Z")
+    assert live.routine_wakes(run, evs)["status"] == "failed"
+    cache(1, "2026-11-09T10:02:00Z", "2026-11-09T10:04:00Z", "2026-11-09T10:06:00Z")
+    assert live.routine_wakes(run, evs)["status"] == "passed"
+    # No detach at all (the T243 run), or nothing forwarded after it.
+    assert live.routine_wakes(run, evs[:1])["status"] == "failed"
+    write(("2026-11-09T09:59:00Z", forward(rid), home))
+    assert live.routine_wakes(run, evs)["status"] == "failed"
+    # A newer generation needs its own detach and evidence; the old one's do not count.
+    write(
+        ("2026-11-09T10:02:30Z", forward(rid), home),
+        ("2026-11-09T10:20:00Z", note("local_r2"), home),
+    )
+    newer = [*evs, bound(3, 2, "local_r2")]
+    cache(2, "2026-11-09T10:12:00Z", "2026-11-09T10:14:00Z", "2026-11-09T10:16:00Z")
+    assert live.routine_wakes(run, newer)["status"] == "failed"
+    write(
+        ("2026-11-09T10:12:30Z", forward("local_r2"), home),
+        ("2026-11-09T10:20:00Z", note("local_r2"), home),
+    )
+    woken = live.routine_wakes(run, [*newer, detached(4, 2, "2026-11-09T10:10:00Z")])
+    assert woken["status"] == "failed" and woken["evidence"]["generation"] == 2
+    assert woken["evidence"]["notices_after_detach"] == ["2026-11-09T10:20:00Z"]

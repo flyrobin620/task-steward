@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -1089,56 +1090,50 @@ def main_prompts(run: Run) -> list[dict[str, Any]]:
 
 
 def routine_wakes(run: Run, evs: list[dict[str, Any]]) -> dict[str, Any]:
-    """W (T250): after the orchestrator detached the routine session, its runs no longer wake the
+    """W (T250): once the routine session in charge was detached, its runs no longer wake the
     orchestrator, and what it forwards still does. Read from the main session's hook payloads,
-    not from what the operator saw. Only counts and times are reported, never the text."""
-    bound = first(evs, "routine.bound")
-    detached = first(evs, "routine.detached")
+    not from what the operator saw; only counts and times are reported, never the text.
+
+    All evidence belongs to the newest bound generation. An idle run is proven to have ended by
+    the next run (the host timer fires only while the session is idle), and the main session's
+    record covers that time, so an idle run after the detach is required."""
+    bounds = [e for e in evs if e["type"] == "routine.bound"]
+    bound = bounds[-1] if bounds else None
+    generation = int(bound["data"]["generation"]) if bound else None
     session = str(bound["data"]["session_ref"]) if bound else ""
+    detached = first(evs, "routine.detached", generation=generation) if bound is not None else None
     since = str(detached["time"]) if detached else ""
     notices: list[str] = []
     forwards: list[str] = []
     # The host's note when a session this one started ends a turn: 'The session "<title>" you
     # started (<id>) finished a turn'. Other notes list every linked session's ID too.
     started = re.compile(r"you started \(" + re.escape(session) + r"\)") if session else None
-    for item in main_prompts(run):
+    for item in main_prompts(run) if started is not None else []:
         text = item["prompt"].lstrip()
-        if started is None:
-            break
         if text.startswith("<cross-session-message") and f'from="{session}"' in text[:200]:
             forwards.append(item["time"])
-        elif started.search(text):
+        elif started is not None and started.search(text):
             notices.append(item["time"])
     after = [t for t in notices if since and t > since]
     forwarded = [t for t in forwards if since and t > since]
     cache_path = run.home / "cache" / "routine.json"
     cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.is_file() else {}
-    last_run = str(cache.get("last_run") or "")
-    interval = int(
-        json.loads((run.home / "config" / "task-steward.json").read_text(encoding="utf-8"))
-        .get("routine", {})
-        .get("interval_minutes", 10)
-    )
-    # The routine session kept running for at least two intervals after it was detached.
-    observed = (
-        bool(since and last_run)
-        and (
-            datetime.fromisoformat(last_run.replace("Z", "+00:00"))
-            - datetime.fromisoformat(since.replace("Z", "+00:00"))
-        ).total_seconds()
-        >= 2 * 60 * interval
-    )
+    same = generation is not None and cache.get("generation") == generation
+    runs = sorted(str(t) for t in cache.get("runs") or [] if same and since and str(t) > since)
+    # A run after the detach that forwarded nothing and ended (the next run started).
+    idle = [a for a, b in itertools.pairwise(runs) if not any(a <= t < b for t in forwarded)]
     return check(
         "W",
         "例行会话分离后定时运行结束不再唤醒主会话，有转发时仍收到消息（主会话的 hook 记录）",
-        bool(detached) and not after and bool(forwarded) and observed,
+        bool(detached) and not after and bool(forwarded) and bool(idle),
         {
+            "generation": generation,
             "detached": detached and {"seq": detached["sequence"], "time": since},
             "notices_before_detach": len(notices) - len(after),
             "notices_after_detach": after,
             "forwards_after_detach": forwarded,
-            "last_run": last_run or None,
-            "observed_two_intervals": observed,
+            "runs_after_detach": runs,
+            "idle_runs_ended": idle,
         },
     )
 
