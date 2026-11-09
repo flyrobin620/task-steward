@@ -23,6 +23,7 @@ session it started, the orchestrator detaches the routine session right after bi
 
 from __future__ import annotations
 
+import contextlib
 import html
 import json
 import re
@@ -41,6 +42,7 @@ from tsw.machine.ask_user import handed_off_event, handoff_due
 from tsw.machine.base import ToolEnv, flag, integer, opt_text, text, tool
 from tsw.machine.model import row_dict, task
 from tsw.plugins.catalog import PERMISSION_NAMES, SESSIONS
+from tsw.storage.fs import atomic_write
 
 WORKDIR = "routine"  # the routine session's directory, relative to the data directory
 HANDOFF_SCAN = "handoff-scan"
@@ -941,6 +943,18 @@ def channel_sent(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         return drafts
 
     return _cmd(env, "channel_sent", inp, build)
+
+
+def record_turn_end(home: Home, now: str) -> None:
+    """The routine session ended a turn (its Stop hook): kept next to the run times, as evidence
+    for a live run that a run ended without waking the orchestrator. Best effort."""
+    cache = load_cache(home)
+    if not cache.get("generation"):
+        return
+    ends = cache.get("ends")
+    cache["ends"] = [*(ends if isinstance(ends, list) else [])[-(RECENT_RUNS - 1) :], now]
+    with contextlib.suppress(OSError):
+        atomic_write(home.cache_dir / "routine.json", json.dumps(cache).encode("utf-8"))
 
 
 def load_cache(home: Home) -> dict[str, Any]:

@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import itertools
 import json
 import os
 import re
@@ -1095,8 +1094,8 @@ def routine_wakes(run: Run, evs: list[dict[str, Any]]) -> dict[str, Any]:
     not from what the operator saw; only counts and times are reported, never the text.
 
     All evidence belongs to the newest bound generation. An idle run is proven to have ended by
-    the next run (the host timer fires only while the session is idle), and the main session's
-    record covers that time, so an idle run after the detach is required."""
+    the routine session's Stop hook (kept in ``cache/routine.json``), and at least one turn after
+    the detach must have ended without forwarding anything."""
     bounds = [e for e in evs if e["type"] == "routine.bound"]
     bound = bounds[-1] if bounds else None
     generation = int(bound["data"]["generation"]) if bound else None
@@ -1119,9 +1118,31 @@ def routine_wakes(run: Run, evs: list[dict[str, Any]]) -> dict[str, Any]:
     cache_path = run.home / "cache" / "routine.json"
     cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.is_file() else {}
     same = generation is not None and cache.get("generation") == generation
-    runs = sorted(str(t) for t in cache.get("runs") or [] if same and since and str(t) > since)
-    # A run after the detach that forwarded nothing and ended (the next run started).
-    idle = [a for a, b in itertools.pairwise(runs) if not any(a <= t < b for t in forwarded)]
+
+    def times(key: str) -> list[str]:
+        return sorted(str(t) for t in cache.get(key) or [] if same and since and str(t) > since)
+
+    runs, ends = times("runs"), times("ends")
+    # What the routine session forwards leaves events in the ledger (a handoff, a Teams reply).
+    results = [
+        str(e["time"])
+        for e in evs
+        if e["type"] in ("input.handed_off", "channel.reply_seen")
+        and str((e.get("actor") or {}).get("session_id")) == session
+    ]
+    # A turn runs from a board read to the next recorded end (the routine session's Stop hook);
+    # several reads before one end are one turn. An idle turn forwarded nothing.
+    turns: list[tuple[str, str]] = []
+    for start in runs:
+        end = next((t for t in ends if t >= start), None)
+        if end is not None and not (turns and turns[-1][1] == end):
+            turns.append((start, end))
+    idle = [
+        end
+        for start, end in turns
+        if not any(start <= t <= end for t in results)
+        and not any(start <= t <= end for t in forwarded)
+    ]
     return check(
         "W",
         "例行会话分离后定时运行结束不再唤醒主会话，有转发时仍收到消息（主会话的 hook 记录）",
@@ -1132,8 +1153,8 @@ def routine_wakes(run: Run, evs: list[dict[str, Any]]) -> dict[str, Any]:
             "notices_before_detach": len(notices) - len(after),
             "notices_after_detach": after,
             "forwards_after_detach": forwarded,
-            "runs_after_detach": runs,
-            "idle_runs_ended": idle,
+            "turns_after_detach": len(turns),
+            "idle_turns_ended": idle,
         },
     )
 

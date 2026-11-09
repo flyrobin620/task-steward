@@ -4,6 +4,7 @@ projection and the hooks."""
 from __future__ import annotations
 
 import dataclasses
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -385,8 +386,17 @@ def test_hooks_for_the_routine_session(home: Home) -> None:
     )
     assert tagged is None
     assert hook(h, "r1", "PreToolUse", cwd, tool_name="mcp__teams__ListChatMessages") is None
-    # A routine turn ends with nothing to record and nothing to remind.
+    # A routine turn ends with nothing in the ledger and nothing to remind; before the first
+    # board read there is no cache to add to.
     assert hook(h, "r1", "Stop", cwd) is None
+    cache_file = home.cache_dir / "routine.json"
+    assert not cache_file.exists()
+    # Once the board has run, the end of each turn joins the run times (live evidence, T250).
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(json.dumps({"generation": 1, "runs": ["t0"]}), encoding="utf-8")
+    assert hook(h, "r1", "Stop", cwd) is None
+    ends = json.loads(cache_file.read_text(encoding="utf-8"))["ends"]
+    assert len(ends) == 1 and ends[0] > "2026"
     assert hook(h, "r1", "UserPromptSubmit", cwd, prompt=routine_mod.SCHEDULED_PROMPT) is None
     assert h.query("SELECT COUNT(*) AS n FROM session_messages") == [{"n": 0}]
 

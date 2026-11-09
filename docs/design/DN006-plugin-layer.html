@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="0c5fb929ee35da321b038f2e7be3711b752185871dab8ff230427276c3b9bb02">
+<meta name="tsw-source-sha256" content="0808ceeb19dbe1fc6cddacf0835e2a35e223d99fcd871f9eedba6999f5603a20">
 <title>DN006 插件层：宿主集成、会话、人类渠道与数据存储</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -240,7 +240,7 @@ class VerifiedSource:              # DN002 G-USER 的统一证据
 <p>默认例行项 <code>handoff-scan</code> 内置在 tsw 中，始终在例行表里，不能删除，只能随 <code>routine.enabled</code> 一起停用。其他例行项由 tsw 的工具在需要时添加，例如主会话 <code>channel_sent</code> 登记第一张 Teams 卡片时加入 <code>teams-replies</code>。将来需要例行执行的事，也是新增一个内置脚本与添加它的规则。</p>
 <h4 id="893-每次运行">8.9.3 每次运行</h4>
 <ol><li><code>routine_board</code> 返回到期的例行项（按 <code>job_id</code> 排序）与执行者自身的维护动作（定时任务的设定与续期、清空上下文，§8.9.6）。</li><li>对每一行：有 <code>fetch</code> 时，执行者用宿主工具按写明的参数取数，把原始结果交给 <code>routine_run</code>；没有时直接调用 <code>routine_run</code>。</li><li><code>routine_run</code> 在一次写入中运行脚本，必要时记录脚本的结果事件，并返回 <code>forward</code>：要发给主会话的消息全文，或空。按页读取的例行项（<code>teams-replies</code>）还可能返回 <code>next</code>：下一页的取数工具与参数，以及再次运行要用的 <code>run</code>。是否还要下一页由脚本判断，执行者不判断。</li><li>执行者把非空的 <code>forward</code> 原样发给主会话（会话 ID 取自调度租约的持有者），不改写、不补充。主会话不在线（没有租约持有者）时不发送，结果仍在账本中，主会话下次运行 <code>attention</code> 时看到。</li><li>返回 <code>next</code> 时，执行者按它取下一页，把这一页交给 <code>routine_run</code>，回到第 3 步，直到不再返回 <code>next</code>。每次只交一页：单次工具结果有长度上限，页数没有上限。</li></ol>
-<p>每次运行的时间写进 <code>cache/routine.json</code>（最近一次用来判断执行者是否失效，§8.9.6；另保留最近若干次，供 live 检查使用）；只有脚本改变了账本事实时才记事件，避免每个间隔一条事件。</p>
+<p>每次运行的时间写进 <code>cache/routine.json</code>（最近一次用来判断执行者是否失效，§8.9.6；另保留最近若干次运行与例行会话每轮结束（Stop hook）的时间，供 live 检查使用）；只有脚本改变了账本事实时才记事件，避免每个间隔一条事件。</p>
 <h4 id="894-默认例行项handoff-scan">8.9.4 默认例行项：<code>handoff-scan</code></h4>
 <table><thead><tr><th>项目</th><th>内容</th></tr></thead><tbody><tr><td>输入</td><td>无（读账本）</td></tr><tr><td>脚本</td><td>找出所有超过 <code>input.in_session_timeout_minutes</code>、用户在 worker 会话中没有任何回复、尚未转交的会话内问题（§8.1b）；对每一个记录 <code>input.handed_off</code>（<code>by: system</code>）</td></tr><tr><td>结果</td><td>这次转交的问题列表（任务 ID、问题编号、问题全文、是否 <code>reserved</code>、worker 会话）</td></tr><tr><td>转发</td><td><code>if_any</code>：“以下问题超时转交给你，按 skill 处理：…”</td></tr></tbody></table>
 <p>主会话按“处理转交问题”的 skill 判断（§8.1b、§8.2）：在授权内代答（<code>handoff_resolve</code>，并告诉 worker 继续），或经人类渠道问用户（<code>input_relay</code>，例如 Teams，§8.7）。</p>

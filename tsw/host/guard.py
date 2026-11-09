@@ -747,8 +747,12 @@ class Guard:
                     "确实不该现在预启动时（例如用户要求先不开始），说明原因后直接结束。"
                 )
             return {"decision": "block", "reason": "".join(reasons)} if reasons else None
+        if who.role == "routine":
+            # Nothing to check; the end of the turn is kept as live evidence (T250).
+            routine_mod.record_turn_end(self.home, utc_now())
+            return None
         if who.role != "worker":
-            return None  # the routine session's turns end without anything to record
+            return None
         with self.ledger.view() as conn:
             row = row_dict(
                 conn.execute(
