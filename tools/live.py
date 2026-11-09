@@ -93,26 +93,41 @@ def outside_real_home(path: Path) -> None:
         )
 
 
-def installed_runtime_claims() -> None:
+def installed_runtime_claims(env: Mapping[str, str] | None = None) -> Path:
     """The runtime the installed plugin uses must know claiming data directories.
 
-    A worker's folder carries no settings, so its session gets the user's ``TSW_HOME`` (the real
-    data directory). The cached plugin finds its runtime through that data directory's
-    ``product_repo``; only a runtime that knows ``claim_sessions`` then turns to the run's data
-    directory. An older one would work in the real data directory, so the run is refused.
+    A worker's folder carries no settings, so its session gets the user's environment:
+    ``TSW_HOME`` names the real data directory. The cached plugin's launcher picks its runtime
+    in this order (``plugin/bin/tsw_launch.py``): ``TSW_REPO``; the checkout the plugin
+    directory sits in, which a cached copy never has; the ``product_repo`` recorded in the data
+    directory ``TSW_HOME`` names. Only a runtime that knows ``claim_sessions`` turns to the run's
+    data directory; an older one would work in the real data directory, so the run is refused,
+    and so is a run whose runtime cannot be determined. Returns the runtime the workers use.
     """
-    real = os.environ.get("TSW_HOME")
-    marker = Path(real).expanduser() / "tsw-home.json" if real else None
-    if marker is None or not marker.is_file():
-        return
-    repo = json.loads(marker.read_text(encoding="utf-8")).get("product_repo")
-    home_py = Path(str(repo)) / "tsw" / "home.py" if repo else None
-    if home_py is None or "claim_sessions" not in home_py.read_text(encoding="utf-8"):
+    environ = os.environ if env is None else env
+    chosen: Path | None = None
+    source = ""
+    if environ.get("TSW_REPO"):
+        chosen, source = Path(environ["TSW_REPO"]).expanduser(), "TSW_REPO"
+    else:
+        real = environ.get("TSW_HOME")
+        marker = Path(real).expanduser() / "tsw-home.json" if real else None
+        if marker is not None and marker.is_file():
+            repo = json.loads(marker.read_text(encoding="utf-8")).get("product_repo")
+            if repo:
+                chosen, source = Path(str(repo)), f"数据目录 {real} 的 product_repo"
+    home_py = chosen / "tsw" / "home.py" if chosen is not None else None
+    if chosen is None or home_py is None or not home_py.is_file():
         raise SystemExit(
-            f"live: 已安装的插件经数据目录 {real} 的 product_repo（{repo}）找到的运行时还不认识"
-            " claim_sessions，worker 会话会落到真实数据目录；先把该检出更新到含 claim_sessions"
-            " 的 main，再准备运行"
+            "live: 无法确定已安装插件在 worker 会话中使用的运行时（没有 TSW_REPO，TSW_HOME 的"
+            " tsw-home.json 也没有 product_repo）；先核实再准备运行"
         )
+    if "claim_sessions" not in home_py.read_text(encoding="utf-8"):
+        raise SystemExit(
+            f"live: 已安装的插件经 {source} 找到的运行时（{chosen}）还不认识 claim_sessions，"
+            "worker 会话会落到真实数据目录；先把该检出更新到含 claim_sessions 的 main，再准备运行"
+        )
+    return chosen
 
 
 def utc() -> str:

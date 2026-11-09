@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,8 @@ from tsw.home import (
 
 @pytest.mark.use_case("UC-HOME-001")
 def test_resolve_prefers_environment(tmp_path: Path) -> None:
-    assert resolve_home({"TSW_HOME": str(tmp_path / "a")}, repo_root=tmp_path) == tmp_path / "a"
+    env = {"TSW_HOME": str(tmp_path / "a")}
+    assert resolve_home(env, repo_root=tmp_path, cwd=tmp_path) == tmp_path / "a"
 
 
 @pytest.mark.use_case("UC-HOME-001")
@@ -27,9 +29,9 @@ def test_resolve_uses_repo_pointer_then_default(tmp_path: Path) -> None:
     pointer = tmp_path / ".local" / "tsw-home"
     pointer.parent.mkdir()
     pointer.write_text(str(tmp_path / "b") + "\n", encoding="utf-8")
-    assert resolve_home({}, repo_root=tmp_path) == tmp_path / "b"
+    assert resolve_home({}, repo_root=tmp_path, cwd=tmp_path) == tmp_path / "b"
     pointer.write_text("", encoding="utf-8")
-    assert resolve_home({}, repo_root=tmp_path) == Path("~/.tsw").expanduser()
+    assert resolve_home({}, repo_root=tmp_path, cwd=tmp_path) == Path("~/.tsw").expanduser()
 
 
 @pytest.mark.use_case("UC-HOME-001")
@@ -51,6 +53,11 @@ def test_a_data_directory_that_claims_sessions_wins_over_the_environment(tmp_pat
     # Without an explicit directory, the host's project directory is the session's.
     assert resolve_home({**env, "CLAUDE_PROJECT_DIR": str(workdir)}) == run.root
     assert resolve_home(env, cwd=tmp_path) == real.root
+    # The test environment points the host's project directory at the test (conftest), so a
+    # checkout inside a claiming data directory does not lead the tests there.
+    assert (
+        resolve_home({**env, "CLAUDE_PROJECT_DIR": os.environ["CLAUDE_PROJECT_DIR"]}) == real.root
+    )
     # A data directory nested in the claiming one decides for its own sessions.
     inner, _ = init_home(workdir / "inner")
     assert resolve_home(env, cwd=inner.root) == real.root

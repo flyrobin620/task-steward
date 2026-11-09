@@ -2,7 +2,10 @@
 
 Every test runs with its own data directory and a scrubbed environment: no inherited
 ``CLAUDE*`` / ``ANTHROPIC*`` / ``CODEX*`` variables, and ``HOME`` / ``USERPROFILE`` /
-``CLAUDE_CONFIG_DIR`` / ``CODEX_HOME`` point into the test's temporary directory.
+``CLAUDE_CONFIG_DIR`` / ``CODEX_HOME`` point into the test's temporary directory. So does
+``CLAUDE_PROJECT_DIR``: tsw looks for a data directory that claims the session's directory
+before ``TSW_HOME`` (``tsw.home.claiming_home``), and a checkout inside such a data directory
+must not lead a test, or a process it starts, there.
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             monkeypatch.delenv(key, raising=False)
     user = tmp_path / "user"
     user.mkdir()
-    for key in ("HOME", "USERPROFILE", "CLAUDE_CONFIG_DIR", "CODEX_HOME"):
+    for key in ("HOME", "USERPROFILE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "CLAUDE_PROJECT_DIR"):
         monkeypatch.setenv(key, str(user))
     data_home = tmp_path / "tsw-home"
     monkeypatch.setenv("TSW_HOME", str(data_home))
