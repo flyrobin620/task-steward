@@ -3,7 +3,7 @@ flowchart TD
     Q2([跨任务的事 · worker.question<br/>资源冲突 · 依赖调整 · 其他任务的范围]) --> J
     ASK[ask_user · T11 → waiting_user<br/>问题留在 worker 会话，不进主会话 inbox] --> U{超时前用户回复?}
     U -- 回复 --> UA[hook 记录原话 · user_answer<br/>input.resolved · source=user]
-    U -- 无回复 --> HO[input.handed_off · by system<br/>例行会话 routine_tick 或 sync]
+    U -- 无回复 --> HO[input.handed_off · by system<br/>例行表 handoff-scan 或 sync]
     HO --> J
     J{input.triage}
     J -- human_direct --> ESC
@@ -25,7 +25,7 @@ flowchart TD
     DR --> W1([worker 继续])
     ESC[交给人类<br/>转交的问题 input_relay · 跨任务的事 T11] --> CH{按渠道投递}
     CH --> S1[main-session<br/>主会话中直接问用户]
-    CH --> S2[teams-chat<br/>主会话发自聊卡片 · 例行会话回收答复]
+    CH --> S2[teams-chat<br/>主会话发卡片 · 例行表转回答复]
     CH --> S3[hub-portal<br/>Portal 问题卡片 · 回调写回]
     S1 --> V{第一个生效的答复}
     S2 --> V

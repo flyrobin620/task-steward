@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="1259b06a0847d2af658663fd7fe21a6dc039edfbc8ba89cf9c282088f672f2d1">
+<meta name="tsw-source-sha256" content="6d9a116295fda90afcb857fbedc3f50a4f70fd43730fcddb1569842176925de4">
 <title>DN003 统一配置</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -70,7 +70,8 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
     &quot;triage&quot;: &quot;orchestrator_judgment&quot;,
     &quot;channels&quot;: [&quot;in-session&quot;, &quot;teams-chat&quot;],
     &quot;in_session_timeout_minutes&quot;: 10,
-    &quot;decision_digest&quot;: {&quot;enabled&quot;: true, &quot;schedule&quot;: &quot;daily_and_on_task_done&quot;, &quot;channel&quot;: &quot;local&quot;}
+    &quot;decision_digest&quot;: {&quot;enabled&quot;: true, &quot;schedule&quot;: &quot;daily_and_on_task_done&quot;, &quot;channel&quot;: &quot;local&quot;},
+    &quot;teams&quot;: {&quot;chat&quot;: &quot;self&quot;}
   },
   &quot;roles&quot;: {
     &quot;orchestrator&quot;: {
@@ -108,7 +109,8 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
     &quot;interval_minutes&quot;: 10,
     &quot;renew_after_days&quot;: 6,
     &quot;context_reset_hours&quot;: 24,
-    &quot;stale_after_intervals&quot;: 3
+    &quot;stale_after_intervals&quot;: 3,
+    &quot;teams_lookback_hours&quot;: 24
   },
   &quot;review&quot;: {
     &quot;max_rounds&quot;: 3,
@@ -129,7 +131,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
     &quot;max_workers&quot;: 5,
     &quot;lease_minutes&quot;: 120,
     &quot;prestart&quot;: {&quot;enabled&quot;: true, &quot;max_standby&quot;: 10},
-    &quot;wake&quot;: {&quot;worker_message_parent&quot;: true, &quot;reportable_events&quot;: [&quot;worker.submitted&quot;, &quot;worker.question&quot;, &quot;input.handed_off&quot;, &quot;channel.answered&quot;, &quot;channel.unmatched&quot;, &quot;task.paused&quot;, &quot;report_back&quot;]}
+    &quot;wake&quot;: {&quot;worker_message_parent&quot;: true, &quot;reportable_events&quot;: [&quot;worker.submitted&quot;, &quot;worker.question&quot;, &quot;input.handed_off&quot;, &quot;channel.reply_seen&quot;, &quot;task.paused&quot;, &quot;report_back&quot;]}
   },
   &quot;sessions&quot;: {
     &quot;name_pattern&quot;: &quot;{task_id_lower}-{attempt}-g{generation}&quot;,
@@ -196,11 +198,11 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p><strong>不可配置的评审规则</strong>：评审是必经环节，任何人（包括主会话）都不能跳过；提交 HEAD 必须等于最后评审 HEAD。这两条是 DN002 的不变量（G-SUBMIT），配置中没有开关；配置中出现 <code>review.required</code>、<code>review.require_final_head_reviewed</code>、<code>review.on_unavailable</code> 时报错。评审器不可用、预算用完等情形由 worker 在自己的会话中问用户，超时转交主会话判断（DN006 §8.1）。</p>
 <h3 id="31a-plugins-与-input">3.1a <code>plugins</code> 与 <code>input</code></h3>
 <p><code>plugins</code> 声明加载哪些插件实现（DN006 §6–§9），每个实现自带配置 schema，校验时一并检查。三个角色各自用 <code>roles.*.session</code> 从已加载的会话适配器中选择，可以互不相同。组合示例见 DN006 §10。</p>
-<table><thead><tr><th>字段</th><th>默认</th><th>说明</th></tr></thead><tbody><tr><td><code>plugins.host_integration</code></td><td><code>claude-code</code></td><td>宿主集成（DN006 §6）：生成流程说明、工具注册与规则执行配置</td></tr><tr><td><code>plugins.sessions</code></td><td><code>claude-app</code>、<code>codex-app-server</code>、<code>codex-exec</code></td><td>加载的会话适配器；<code>roles.*.session</code> 只能引用其中的实现</td></tr><tr><td><code>plugins.human_channels</code></td><td><code>in-session</code>、<code>teams-chat</code></td><td>可用的人类渠道</td></tr><tr><td><code>plugins.storage.use</code></td><td><code>fs</code></td><td><code>fs</code> 或 <code>fs+git</code>（数据目录作为用户私有 Git 仓库）</td></tr><tr><td><code>input.triage</code></td><td><code>orchestrator_judgment</code></td><td><code>orchestrator_judgment</code>：主会话在授权边界内综合判断（DN006 §8.2）；<code>human_direct</code>：主会话不判断，一律交给人类</td></tr><tr><td><code>input.in_session_timeout_minutes</code></td><td>10</td><td>worker 在自己会话中提问后，用户这么久没有任何回复就转交主会话（DN006 §8.1b）</td></tr><tr><td><code>input.channels</code></td><td>已加载的全部 <code>request_response</code> 渠道</td><td>升级时同时投递的渠道；必须是已加载渠道的子集；第一个通过核实的答复生效</td></tr><tr><td><code>input.decision_digest</code></td><td>每日及任务完成时，经 Teams</td><td>把主会话的自主决定汇总通知用户，便于事后核对（DN006 §8.4）；<code>channel</code> 为 <code>&quot;local&quot;</code> 时只写入 STATUS 页与验收报告</td></tr><tr><td><code>input.teams_poll</code></td><td>不设置</td><td>已不起作用（T243）：Teams 答复由例行会话在每次运行时回收，间隔为 <code>routine.interval_minutes</code>（DN006 §8.7）。为兼容旧配置仍接受该字段</td></tr></tbody></table>
+<table><thead><tr><th>字段</th><th>默认</th><th>说明</th></tr></thead><tbody><tr><td><code>plugins.host_integration</code></td><td><code>claude-code</code></td><td>宿主集成（DN006 §6）：生成流程说明、工具注册与规则执行配置</td></tr><tr><td><code>plugins.sessions</code></td><td><code>claude-app</code>、<code>codex-app-server</code>、<code>codex-exec</code></td><td>加载的会话适配器；<code>roles.*.session</code> 只能引用其中的实现</td></tr><tr><td><code>plugins.human_channels</code></td><td><code>in-session</code>、<code>teams-chat</code></td><td>可用的人类渠道</td></tr><tr><td><code>plugins.storage.use</code></td><td><code>fs</code></td><td><code>fs</code> 或 <code>fs+git</code>（数据目录作为用户私有 Git 仓库）</td></tr><tr><td><code>input.triage</code></td><td><code>orchestrator_judgment</code></td><td><code>orchestrator_judgment</code>：主会话在授权边界内综合判断（DN006 §8.2）；<code>human_direct</code>：主会话不判断，一律交给人类</td></tr><tr><td><code>input.in_session_timeout_minutes</code></td><td>10</td><td>worker 在自己会话中提问后，用户这么久没有任何回复就转交主会话（DN006 §8.1b）</td></tr><tr><td><code>input.channels</code></td><td>已加载的全部 <code>request_response</code> 渠道</td><td>升级时同时投递的渠道；必须是已加载渠道的子集；第一个通过核实的答复生效</td></tr><tr><td><code>input.decision_digest</code></td><td>每日及任务完成时，经 Teams</td><td>把主会话的自主决定汇总通知用户，便于事后核对（DN006 §8.4）；<code>channel</code> 为 <code>&quot;local&quot;</code> 时只写入 STATUS 页与验收报告</td></tr><tr><td><code>input.teams.chat</code></td><td><code>self</code></td><td>Teams 问题卡片发到哪个 chat：<code>self</code> 为用户本人的自聊，也可以写 chat ID（DN006 §8.7）</td></tr><tr><td><code>input.teams_poll</code></td><td>不设置</td><td>已不起作用（T243）：Teams 答复由例行表的 Teams 例行项回收，间隔为 <code>routine.interval_minutes</code>（DN006 §8.7）。为兼容旧配置仍接受该字段</td></tr></tbody></table>
 <h3 id="31b-routine">3.1b <code>routine</code></h3>
-<p>例行会话（DN006 §8.9）的调度参数：</p>
-<table><thead><tr><th>字段</th><th>默认</th><th>说明</th></tr></thead><tbody><tr><td><code>routine.enabled</code></td><td><code>true</code></td><td>是否启动例行会话。关闭后超时转交只在主会话运行 <code>sync</code> 时发生，Teams 答复不再自动回收</td></tr><tr><td><code>routine.interval_minutes</code></td><td>10</td><td>运行间隔（分钟）；须能整除 60，或为 60 的整数倍且能整除 1440（宿主的定时任务按 cron 表达式设定）</td></tr><tr><td><code>routine.renew_after_days</code></td><td>6</td><td>定时任务设定后超过这么多天就重新设定（宿主的定时任务有期限，Claude Code 为 7 天）；须小于宿主的期限</td></tr><tr><td><code>routine.context_reset_hours</code></td><td>24</td><td>例行会话每隔这么久清空一次自己的上下文</td></tr><tr><td><code>routine.stale_after_intervals</code></td><td>3</td><td>超过这么多个间隔没有运行记录时，认为定时任务已失效，由主会话让例行会话重新设定</td></tr></tbody></table>
-<p>超时阈值仍是 <code>input.in_session_timeout_minutes</code>：例行会话每次运行时转交已到期的问题，所以实际转交时间在阈值之后、一个运行间隔之内。</p>
+<p>例行会话与例行表（DN006 §8.9）的参数：</p>
+<table><thead><tr><th>字段</th><th>默认</th><th>说明</th></tr></thead><tbody><tr><td><code>routine.enabled</code></td><td><code>true</code></td><td>是否启动例行会话。关闭后超时转交只在主会话运行 <code>sync</code> 时发生，Teams 答复不再自动回收</td></tr><tr><td><code>routine.interval_minutes</code></td><td>10</td><td>运行间隔（分钟）；须能整除 60，或为 60 的整数倍且能整除 1440（宿主的定时任务按 cron 表达式设定）</td></tr><tr><td><code>routine.renew_after_days</code></td><td>6</td><td>定时任务设定后超过这么多天就重新设定（宿主的定时任务有期限，Claude Code 为 7 天）；须小于宿主的期限</td></tr><tr><td><code>routine.context_reset_hours</code></td><td>24</td><td>例行会话每隔这么久清空一次自己的上下文</td></tr><tr><td><code>routine.stale_after_intervals</code></td><td>3</td><td>超过这么多个间隔没有运行记录时，认为定时任务已失效，由主会话让例行会话重新设定</td></tr><tr><td><code>routine.teams_lookback_hours</code></td><td>24</td><td>Teams 例行项每次读取最近多少小时的消息（DN006 §8.9.5）</td></tr></tbody></table>
+<p>超时阈值仍是 <code>input.in_session_timeout_minutes</code>：默认例行项 <code>handoff-scan</code> 每次运行时转交已到期的问题，所以实际转交时间在阈值之后、一个运行间隔之内。</p>
 <h3 id="32-review">3.2 <code>review</code></h3>
 <table><thead><tr><th>字段</th><th>默认</th><th>说明</th></tr></thead><tbody><tr><td><code>max_rounds</code></td><td>3</td><td>每个提交周期的基础评审轮次（含首轮）；有效预算还要加上主会话与用户的追加（DN002 §3.3）。用完仍有阻断项时 worker 在自己的会话中问用户，超时转交主会话判断（DN006 §8.1）：可追加轮次、认定意见不成立、批准延后或调整方向。轮次编号在 attempt 内持续递增</td></tr><tr><td><code>orchestrator_extension_limit</code></td><td>3</td><td>同一提交周期内主会话累计最多追加的轮次；再需要追加只能交给人类决定</td></tr><tr><td><code>retry_limit</code></td><td>2</td><td>单轮调用失败的重试次数</td></tr><tr><td><code>block_on</code></td><td><code>critical</code>, <code>high</code></td><td>必须处置（修复或有据拒绝）的严重级别</td></tr><tr><td><code>incremental</code></td><td><code>resume_thread</code></td><td>后续轮次复用同一 reviewer 线程，只审增量；<code>fresh</code> 表示每轮新线程全量审</td></tr><tr><td><code>prompt_templates</code></td><td>三类任务各一个</td><td>评审提示模板</td></tr><tr><td><code>output_schema</code></td><td>JSON Schema 路径</td><td>评审器输出必须满足的结构（DN004 §4）</td></tr></tbody></table>
 <h3 id="32a-policiesreserved_for_user">3.2a <code>policies.reserved_for_user</code></h3>

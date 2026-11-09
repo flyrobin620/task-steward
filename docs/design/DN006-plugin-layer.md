@@ -274,7 +274,7 @@ interactive 动作（`create`、`deliver_brief`、`send`、`stop`、`observe`、
 | --- | --- |
 | 超时 | `input.in_session_timeout_minutes`（DN003 §3.1a，默认 10 分钟），从 `ask_user` 起算 |
 | 转交条件 | 问题仍未答复、尚未转交，且在这段时间内用户没有在 worker 会话中发过任何消息 |
-| 谁来触发 | 系统规则（`by: system`）：例行会话（§8.9）每次运行时把到期的问题转交并唤醒主会话；主会话运行 `sync` 时也一并转交。worker 不再自己定时检查、转交：定时提示到达 worker 会话时与用户消息无法区分（T241 live 实测，CC008 的 CC-B8），外部进程也没有受支持的方式唤醒会话。`input_handoff` 保留（契约只增不删），worker 恰好在超时后被唤醒时仍可调用。主会话结束一轮前，Stop hook 发现有到期未转交的问题时提示运行 `sync`；`attention` 的 `handoff_due` 也列出它们 |
+| 谁来触发 | 系统规则（`by: system`）：例行表的默认例行项 `handoff-scan`（§8.9.4）每次运行时把到期的问题转交，并把结果转给主会话；主会话运行 `sync` 时也一并转交。worker 不再自己定时检查、转交：定时提示到达 worker 会话时与用户消息无法区分（T241 live 实测，CC008 的 CC-B8），外部进程也没有受支持的方式唤醒会话。`input_handoff` 保留（契约只增不删），worker 恰好在超时后被唤醒时仍可调用。主会话结束一轮前，Stop hook 发现有到期未转交的问题时提示运行 `sync`；`attention` 的 `handoff_due` 也列出它们 |
 | 事件 | `input.handed_off`（问题编号、触发者、转交时间），默认在 `scheduling.wake.reportable_events` 中，进入主会话 inbox。任务状态不变，仍为 `waiting_user` |
 
 转交之后，主会话可以：
@@ -283,7 +283,7 @@ interactive 动作（`create`、`deliver_brief`、`send`、`stop`、`observe`、
 - **转达给用户**（`input_relay`）：渠道为主会话本身（`main-session`，例如在主会话中向用户提问）或已加载、支持 `request_response` 的其他人类渠道（如 Teams，§8.6）。记录 `input.relayed`。用户经该渠道的答复由主会话用 `input_resolve` 记录，来源是该渠道核实过的 `VerifiedSource`（主会话消息、Teams 回复等），满足 G-USER，经 T12 让 worker 继续。worker 会话中的原话只能由 worker 经 `user_answer` 登记，主会话不能用 `input_resolve` 代为记录 `in-session` 来源。
 - **继续等待**：什么都不做，问题保持待答。
 
-主会话被唤醒后按 §8.2 判断：在授权内用 `handoff_resolve` 代答，并用消息告诉 worker 决定内容、让它继续；需要用户时用 `input_relay` 转达到主会话本身或人类渠道（Teams 见 §8.6、§8.7）。
+主会话被唤醒后按“处理转交问题”的 skill（宿主集成生成，Claude Code 见 CC006 §6.4）与 §8.2 判断：在授权内用 `handoff_resolve` 代答，并用消息告诉 worker 决定内容、让它继续；需要用户时用 `input_relay` 转达到主会话本身或人类渠道（Teams 见 §8.6、§8.7）。
 
 ### 8.1c 迟到的答复
 
@@ -394,7 +394,7 @@ T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与
 | 实现 | 能力 | 发送 | 回收 | 核实 |
 | --- | --- | --- | --- | --- |
 | `in-session` | request_response，push（不支持 notify） | 无需发送：worker 用 `ask_user` 记录后在自己的会话里提问（§8.1a） | 宿主集成记录用户消息原文（`input.session_message`，Claude Code 见 CC006 §4），worker 用 `user_answer` 引用消息编号登记 | 只核对问题仍待答、消息属于该 worker 会话的这个问题；注入的其他会话消息不记录（DN008 §9） |
-| `teams-chat` | request_response，poll，delegated（本版本不提供 notify） | 主会话 `input_relay` 后按返回的委托操作，用宿主的 Teams 工具向用户本人的自聊发送问题卡片（请求 ID、任务、问题、worker 会话链接），再用 `channel_sent` 登记出站消息 ID | 例行会话每次运行时读取自聊中卡片之后的新消息，交 `channel_collect` 按规则对应（§8.7） | 只核对问题仍待答、回复对应到问题编号；按登记的出站消息 ID 排除 tsw 自己发出的消息；不核对发送者（DN008 §9） |
+| `teams-chat` | request_response，poll，delegated（本版本不提供 notify） | 主会话 `input_relay` 后，按返回的卡片正文用宿主的 Teams 工具发到配置的 chat（默认用户本人的自聊），再用 `channel_sent` 登记，例行表随之加入或更新 Teams 例行项 | 例行项的脚本取出 chat 中最近的、用户发送的、以等待中任务 ID 开头的消息，转给主会话（§8.7） | 只核对问题仍待答、消息能对应到任务 ID 与问题；卡片以 `[TaskSteward]` 开头，不会被当作答复（DN008 §9） |
 | `hub-portal` | request_response，notify（Portal 通知卡片），push，direct | tsw 把请求发布到 Hub 门户（问题卡片） | Portal 用户提交答复，经认证回调写回 tsw | Portal 的 owner 认证 + 请求 ID |
 | `email-draft` | notify_only | 在邮箱生成草稿（默认不发送，沿用邮件约定） | — | — |
 
@@ -406,19 +406,16 @@ T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与
 
 ### 8.7 Teams 答复的回收与登记
 
-Teams 工具只有宿主中的模型能调用（delegated），回收因此是 poll：由例行会话（§8.9）每次运行时执行，不再由主会话轮询。主会话与例行会话都不运行时不回收，问题保持待答；不承诺离线回收。
+Teams 工具只有宿主中的模型能调用（delegated），回收因此是 poll，由例行表中的 Teams 例行项（§8.9.5）完成。主会话与例行会话都不运行时不回收，问题保持待答；不承诺离线回收。
 
-1. **发送**：主会话 `input_relay`（`channel: teams-chat`）记录 `input.relayed`，返回卡片正文与要调用的宿主动作。主会话发送后调用 `channel_sent`，登记出站消息 ID 与自聊 ID（`channel.message_sent`）。tsw 自己经渠道发出的其他消息（“已在其他渠道答复”）同样先登记再算作已发送。
-2. **读取**：只要还有经 Teams 转达、仍待答的问题，`routine_tick` 就返回一个读取动作：自聊 ID、起点（上次读到的最后一条消息之后）、要排除的出站消息 ID。例行会话用宿主的 Teams 工具读取，把消息原样（消息 ID、时间、正文、引用的消息 ID）交给 `channel_collect`。
-3. **对应**（确定性规则，DN008 §9 第 5 条）：排除已登记的出站消息后，一条消息对应问题 R，当且仅当它引用（reply）了 R 的卡片，或正文中出现 R 的请求 ID（如 `Q-T241-3`），并且只对应到一个问题。
-   - 对应到仍待答、上下文绑定（任务、revision、attempt、代次）与任务当前状态一致的问题：记录 `input.resolved`，来源为 `VerifiedSource`（渠道 `teams-chat`、Teams 消息 ID、回复原文、问题的决定对象），满足 G-USER，经 T12 让 worker 继续。同时记录 reportable 事件 `channel.answered`（问题编号、渠道、消息 ID），进入主会话 inbox。`channel_collect` 返回两条要发送的消息：告诉 worker 用户的答复与问题编号，让它继续；唤醒主会话。
-   - 对应到已答复、已取消或已过时的问题：记为 `input.late_response`，唤醒主会话判断。
-   - 对应不上（没有引用卡片也没有请求 ID，或同时对应多个问题）：记为 reportable 事件 `channel.unmatched`（消息 ID 与原文），唤醒主会话判断。只在还有经 Teams 转达、仍待答的问题时读取自聊，所以用户平时在自聊里记的笔记不会被读取。主会话认定它是某个问题的答复时，用 `input_resolve` 登记（来源为渠道 `teams-chat` 与该消息 ID）。同一条消息只报告一次。
-4. **撤回**：经 Teams 转达的问题在别处先得到答复（worker 会话中用户回答、主会话转达后在主会话回答）后，下一次 `routine_tick` 返回一条发送动作，在自聊中补发“Q-… 已在其他渠道答复”，发送后同样用 `channel_sent` 登记，回收时排除。
+1. **发送**：主会话 `input_relay`（`channel: teams-chat`）记录 `input.relayed`，返回卡片正文与目标 chat（`input.teams.chat`，默认用户本人的自聊）。卡片以 `[TaskSteward]` 开头，写明任务 ID、问题编号、问题全文、worker 会话链接，以及答复方式：“回复时以任务 ID 开头，例如 `T241 用方案 A`”。主会话发送后调用 `channel_sent`，登记 chat ID、卡片消息 ID 与发送者（用户本人在 Teams 中的 ID，取自发送结果）；tsw 把该任务 ID 加入 Teams 例行项的输入列表，没有这一行时新建。
+2. **回收**：例行项的脚本按 §8.9.5 取出 chat 中最近 `routine.teams_lookback_hours`（默认 24）小时内、发送者是用户本人、正文以列表中某个任务 ID 开头的消息，排除已经转给主会话的消息，转给主会话。脚本不判断内容。
+3. **登记**：主会话收到转来的消息后按 skill 判断它是否回答了问题。是答复时用 `input_resolve` 登记，来源为 `VerifiedSource`（渠道 `teams-chat`、Teams 消息 ID、消息原文、问题的决定对象），满足 G-USER，经 T12 让 worker 继续，并用消息把答复告诉 worker。不是答复（例如“稍后回复”）时不登记，问题保持待答。问题已答复、取消或过时后才到的消息，按 §8.1c 记为 `input.late_response`。
+4. **移出**：任务的问题不再待答（任何渠道答复、取消、过时）时，tsw 把它的任务 ID 从输入列表中移除；列表为空时这一行停用，下次有 Teams 转达时重新启用。
 
-本版本不发送提醒，也不经 Teams 发送决定摘要（`notify`）；`input.teams_poll` 保留但不再起作用，回收间隔就是例行会话的运行间隔（`routine.interval_minutes`）。
+这样既不需要读取其他消息，也不需要记下每条出站消息的 ID：只有以等待中任务 ID 开头的消息才会被转出，tsw 自己发的卡片以 `[TaskSteward]` 开头，不会命中。本版本不发提醒，也不补发“已在其他渠道答复”，不经 Teams 发决定摘要（`notify`）；`input.teams_poll` 保留但不再起作用，回收间隔就是例行表的运行间隔。
 
-如果用户为 Graph 配置了独立的后台凭据，`teams-graph` 实现可以改为 direct，由 tsw 后台进程轮询；它与 `teams-chat` 共用请求 ID 与对应规则。
+如果用户为 Graph 配置了独立的后台凭据，`teams-graph` 实现可以改为 direct，由 tsw 进程直接执行同一个例行项；规则不变。
 
 ### 8.8 Hub Portal
 
@@ -429,61 +426,88 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 3. tsw 核实后记录答复并唤醒主会话；
 4. `cancel`：把卡片标为已在其他渠道答复。
 
-### 8.9 例行会话（routine）
+### 8.9 例行会话（routine）与例行表
 
-用户 2026-11-07 决定：设一个定时运行的子会话，所有需要例行执行的事都放进去，例如会话内问题的超时转交与 Teams 答复的回收；2026-11-09 定名为**例行会话（routine）**。T241 的 live 运行表明，worker 自己定时唤醒转交在 Claude app 上行不通（§8.1b），而 tsw 进程又不能唤醒宿主会话，所以需要一个由宿主定时唤醒、只做例行工作的会话。
+用户 2026-11-07 决定：设一个定时运行的机制，所有需要例行执行的事都放进去，例如会话内问题的超时转交与 Teams 答复的回收；2026-11-09 定名为**例行会话（routine）**，并决定它是与宿主无关的平台机制：它维护一张**例行表（routine board）**，表中每一行是一个**例行项（routine job）**，执行就是对每一行运行一个脚本，并按这一行的要求把脚本结果转给主会话。例行项与 tsw 的任务（Txxx）无关：它不经状态机，不占名额，也没有 attempt。
 
-#### 8.9.1 角色
+背景：T241 的 live 运行表明，worker 自己定时唤醒转交在 Claude app 上行不通（§8.1b）；tsw 的进程又不能唤醒 app 托管的会话（Codex 与 Copilot 的桌面 app 同样如此，见 T243 报告），所以由一个能被宿主定时唤醒的执行者来跑例行表。
+
+#### 8.9.1 例行会话的职责
 
 | 项目 | 规则 |
 | --- | --- |
-| 做什么 | 每次运行调用 `routine_tick`，按返回的动作逐个执行：调用宿主工具（定时任务、读写 Teams、给会话发消息、清空自己的上下文），并把结果交回 tsw 的例行工具 |
-| 不做什么 | 不作任何判断：转交哪个问题、读哪条消息、消息对应哪个问题、给谁发什么话，都由 tsw 的确定性规则算出；对应不上的一律交主会话。不改代码、不建会话、不运行命令 |
-| 工具 | 只有例行工具：`whoami`、`routine_tick`、`routine_armed`、`channel_collect`、`channel_sent`（按角色列出，DN008 §6）。宿主侧另有 block list 拦下编辑、命令行与建会话（Claude Code 见 CC008 的 CC-B11） |
-| 会话 | 一个长期存在的子会话，执行目录为数据目录下的 `routine/`；会话名 `routine-g<K>`，K 为创建代次。新代次绑定后旧会话成为已撤销 |
-| 只在宿主打开时运行 | 定时任务由宿主在会话中执行；宿主关闭期间不运行，重新打开后由恢复规则（§8.9.4）重新设定 |
+| 做什么 | 每次运行：读取到期的例行项（`routine_board`），逐行执行——需要宿主工具取数据的，先按这一行写明的调用取数（§8.9.3），再调用 `routine_run` 运行这一行的脚本；脚本结果需要转发时，把 tsw 给出的消息原样发给主会话 |
+| 不做什么 | 不作任何判断：做哪一行、取什么数据、结果是否转发、发给谁、发什么，都由例行项与脚本决定；内容上的判断一律由主会话按 skill 完成。不改代码、不建会话、不运行命令 |
+| 工具 | 只有例行工具：`whoami`、`routine_board`、`routine_run`、`routine_armed`（按角色列出，DN008 §6）。宿主侧另有 block list 拦下编辑、命令行与建会话（Claude Code 见 CC008 的 CC-B11） |
+| 执行者 | 由宿主实现提供：主会话所在宿主是 delegated、tsw 不能唤醒它的会话时（Claude app），执行者是一个由宿主定时唤醒的子会话（[CC006 §6](claude-code/CC006-plugins.md)）。宿主为 direct（tsw 能自己创建、唤醒会话）时，例行表可以由 tsw 进程执行，本版本不实现 |
 
-#### 8.9.2 启动
+#### 8.9.2 例行表
 
-例行会话在用户第一次要求执行待办的那一轮由主会话启动（创建会话受派发窗口限制时，只能在用户本人的 turn 中进行）：
+例行表在账本中：增删改都是事件（`routine.job_added`、`routine.job_updated`、`routine.job_removed`），投影为一张表；例行表不手工编辑。每个例行项：
 
-1. `routine_start`：记录 `routine.start_requested`（代次、会话名、执行目录），创建执行目录，返回创建会话的参数（`roles.routine` 的模型、effort、权限模式，短指令 prompt）。
-2. 主会话用会话适配器创建会话（两阶段合一：prompt 就是启动指令，没有任务书），再调用 `routine_bind` 记录 `routine.bound`（会话引用）。结果未知时按会话名对账，与 worker 相同（§4.1）。
-3. 例行会话第一次运行：`whoami` 确认角色，调用 `routine_tick`，按返回的 `arm` 动作设定定时任务，再用 `routine_armed` 登记（`routine.armed`：任务引用、间隔、设定时间）。
+| 字段 | 含义 |
+| --- | --- |
+| `job_id` | 例行项编号，如 `handoff-scan`、`teams-replies` |
+| `script` | tsw 内置脚本的名称（§8.9.4、§8.9.5）。脚本是确定性的程序：相同输入得到相同结果，可以测试 |
+| `input` | 脚本的输入（例如 Teams 例行项的 chat ID 与任务 ID 列表），由添加它的工具写入，随事件更新 |
+| `fetch` | 可选：运行脚本前要用宿主工具取的数据（工具的中性名称与参数）。只有 tsw 进程拿不到的数据才这样取，例如 Teams 消息 |
+| `every` | 每隔几次运行执行一次（默认 1，即每次） |
+| `forward` | 结果怎样转给主会话：`if_any`（结果非空时转发）或 `never`；转发的消息由 tsw 按结果生成 |
+| `state` | 脚本自己的游标（例如已转发过的消息 ID），每次运行后由 `routine_run` 写回 |
+| `enabled` | 停用的行不执行（例如 Teams 例行项的任务列表为空时） |
 
-`attention` 的 `routine` 列出例行会话的状态：`missing`（启用但没有会话）、`starting`、`unarmed`、`ok`、`stale`。主会话在用户 turn 结束前看到 `missing` 时，Stop hook 与预启动提醒一起提醒一次（Claude Code 见 CC008 的 CC-S4）。
+默认例行项 `handoff-scan` 在数据目录初始化时就存在，不能删除，只能随 `routine.enabled` 一起停用。其他例行项由 tsw 的工具在需要时添加，例如主会话 `channel_sent` 登记第一张 Teams 卡片时加入 `teams-replies`。将来需要例行执行的事，也是新增一个内置脚本与添加它的规则。
 
-#### 8.9.3 每次运行（`routine_tick`）
+#### 8.9.3 每次运行
 
-`routine_tick` 是一条命令：在同一次写入中执行到期的例行规则，并按固定顺序返回动作。有规则执行时记录 `routine.ticked`（时间、执行的规则与结果摘要）；没有时只把运行时间写进 `cache/routine.json`，不写账本，避免每个间隔一条事件。运行时间只用于判断定时任务是否失效（§8.9.4）：缓存丢失时最坏是主会话多发一次“请重新设定”的消息。
+1. `routine_board` 返回到期的例行项（按 `job_id` 排序）与执行者自身的维护动作（定时任务的设定与续期、清空上下文，§8.9.6）。
+2. 对每一行：有 `fetch` 时，执行者用宿主工具按写明的参数取数，把原始结果交给 `routine_run`；没有时直接调用 `routine_run`。
+3. `routine_run` 在一次写入中运行脚本、写回 `state`，必要时记录脚本的结果事件，并返回 `forward`：要发给主会话的消息全文，或空。
+4. 执行者把非空的 `forward` 原样发给主会话（会话 ID 取自调度租约的持有者），不改写、不补充。主会话不在线（没有租约持有者）时不发送，结果仍在账本中，主会话下次运行 `attention` 时看到。
 
-| 顺序 | 规则 | 返回的动作 |
-| --- | --- | --- |
-| 1 | 定时任务需要（重新）设定：从未设定；距上次设定超过 `routine.renew_after_days`；或恢复规则判定已失效 | `arm`：间隔、定时提示全文、要先删除的旧任务引用 |
-| 2 | 会话内问题到期未转交（§8.1b） | 记录 `input.handed_off`（`by: system`）；`message` 唤醒主会话 |
-| 3 | 有经 Teams 转达、仍待答的问题 | `teams_read`（§8.7 第 2 步）；例行会话执行后调用 `channel_collect`，后者返回的 `message` 动作同样逐个执行 |
-| 4 | 经 Teams 转达的问题已在别处答复 | `teams_send`（§8.7 第 4 步） |
-| 5 | 距上次清空上下文超过 `routine.context_reset_hours` | `clear_context`：本轮其他动作完成后清空自己的上下文，记录 `routine.context_reset` |
+每次运行的时间写进 `cache/routine.json`，用来判断执行者是否失效（§8.9.6）；只有脚本改变了账本事实时才记事件，避免每个间隔一条事件。
 
-没有到期规则时动作列表为空，例行会话直接结束这一轮。规则只追加不改写：将来需要例行执行的事（例如决定摘要、过期提醒）作为新的规则加入 `routine_tick`，例行会话的指令不需要改动。
+#### 8.9.4 默认例行项：`handoff-scan`
 
-`message` 动作写明目标会话与消息全文；例行会话原样发送，不改写、不补充。唤醒主会话的消息只说明“有哪些事件待处理，运行 `attention`”，事件本身在账本与 inbox 中。
+| 项目 | 内容 |
+| --- | --- |
+| 输入 | 无（读账本） |
+| 脚本 | 找出所有超过 `input.in_session_timeout_minutes`、用户在 worker 会话中没有任何回复、尚未转交的会话内问题（§8.1b）；对每一个记录 `input.handed_off`（`by: system`） |
+| 结果 | 这次转交的问题列表（任务 ID、问题编号、问题全文、是否 `reserved`、worker 会话） |
+| 转发 | `if_any`：“以下问题超时转交给你，按 skill 处理：…” |
 
-#### 8.9.4 续期、上下文与恢复
+主会话按“处理转交问题”的 skill 判断（§8.1b、§8.2）：在授权内代答（`handoff_resolve`，并告诉 worker 继续），或经人类渠道问用户（`input_relay`，例如 Teams，§8.7）。
+
+#### 8.9.5 Teams 例行项：`teams-replies`
+
+| 项目 | 内容 |
+| --- | --- |
+| 输入 | Teams chat ID、用户本人在 Teams 中的 ID、等待中的任务 ID 列表（`channel_sent` 加入，问题不再待答时移出） |
+| 取数 | 读取该 chat 最近 `routine.teams_lookback_hours` 小时的消息（Claude Code 的工具与参数见 CC006 §7） |
+| 脚本 | 从取到的消息中选出：发送者是用户本人、去掉格式后的正文以列表中某个任务 ID 开头（任务 ID 后接空白或标点）、不在 `state` 已转发集合中的消息；记录 `channel.reply_seen`（消息 ID、任务 ID、问题编号、原文），把消息 ID 加入 `state` |
+| 结果 | 选出的消息（任务 ID、问题编号、消息 ID、时间、原文） |
+| 转发 | `if_any`：“Teams 中有以下答复，按 skill 判断并登记：…” |
+
+一行处理所有在同一个 chat 中等待的 Teams 问题：同时有几个问题在等时，输入列表中就有几个任务 ID。每个任务同一时间最多一个待答的会话内问题，所以任务 ID 足以对应到问题；消息引用的问题编号由脚本按任务当前待答的问题填入。
+
+#### 8.9.6 执行者的维护
+
+例行会话作为执行者时，`routine_board` 同时返回它自身的维护动作；各宿主的具体做法见实现文档（Claude Code 见 CC006 §6）。
 
 | 情形 | 处理 |
 | --- | --- |
-| 宿主的定时任务有期限（Claude Code 为 7 天） | 每次设定都登记设定时间；超过 `routine.renew_after_days`（默认 6）后的第一次运行返回 `arm`，先删旧任务再设新任务 |
-| 上下文随运行增长 | 每 `routine.context_reset_hours`（默认 24）清空一次。动作与规则都在 tsw 中，例行会话每次运行只依赖定时提示与 `routine_tick` 的返回，清空不丢失任何状态 |
-| 定时任务失效（宿主重启、清空上下文时丢失、设定失败） | 超过 `routine.stale_after_intervals`（默认 3）个间隔没有运行记录时，`attention` 把例行会话标为 `stale`；主会话下次运行时给例行会话发一条消息，让它运行 `routine_tick`，`routine_tick` 判定失效后返回 `arm` 重新设定。任何 turn 都能给已有会话发消息，所以不需要等用户 turn |
-| 会话不存在（被归档、删除，或找不到） | `attention` 标为 `missing`，主会话在下一个用户 turn 用新代次重新启动 |
-| 用户关闭例行会话（`routine.enabled=false`） | 不再提醒启动；主会话停止并归档现有会话。超时转交只在主会话运行 `sync` 时发生，Teams 答复不再自动回收 |
+| 执行者需要定时唤醒 | 第一次运行时返回 `arm`（间隔 `routine.interval_minutes`、定时提示全文），执行者设定后用 `routine_armed` 登记 |
+| 宿主的定时任务有期限（Claude Code 为 7 天） | 超过 `routine.renew_after_days`（默认 6）后返回 `arm`，先删旧任务再设新任务 |
+| 上下文随运行增长 | 每 `routine.context_reset_hours`（默认 24）返回一次 `clear_context`。例行表与脚本都在 tsw 中，执行者每次运行只依赖定时提示与 `routine_board` 的返回，清空不丢失状态 |
+| 定时任务失效（宿主重启、清空时丢失、设定失败） | 超过 `routine.stale_after_intervals`（默认 3）个间隔没有运行记录时，`attention` 把例行会话标为 `stale`；主会话下次运行时给它发消息，它运行 `routine_board`，后者判定失效并返回 `arm` |
+| 会话不存在（被归档、删除，或找不到） | `attention` 标为 `missing`，主会话在下一个用户 turn 重新启动（§8.9.7） |
+| 用户关闭例行会话（`routine.enabled=false`） | 主会话停止并归档现有会话；超时转交只在主会话运行 `sync` 时发生，Teams 答复不再自动回收 |
 
-#### 8.9.5 参数
+#### 8.9.7 启动与参数
 
-见 DN003 §3.3a：`roles.routine`（会话适配器、模型，默认 `claude-sonnet-5-5`、effort `low`、权限模式）与 `routine`（`enabled`、`interval_minutes` 默认 10、`renew_after_days`、`context_reset_hours`、`stale_after_intervals`）。超时阈值仍是 `input.in_session_timeout_minutes`（默认 10 分钟）。承载例行会话的会话适配器须为 `interactive`，并声明 `timer`（会话内的定时唤醒）。
+例行会话在用户第一次要求执行待办的那一轮由主会话启动：`routine_start` 记录 `routine.start_requested`（代次、会话名 `routine-g<K>`、执行目录 `routine/`）并返回创建会话的参数，主会话用会话适配器创建会话后用 `routine_bind` 记录 `routine.bound`；结果未知时按会话名对账（§4.1）。会话 ID 等于当前代次的例行会话时角色为例行会话，旧代次的为已撤销（DN001 §7.1）。`attention` 的 `routine` 给出状态：`missing`、`starting`、`unarmed`、`ok`、`stale`。
 
-Claude Code 上的做法见 [CC006 §6](claude-code/CC006-plugins.md)。
+参数见 DN003 §3.1b：`roles.routine`（会话适配器、模型，默认 `claude-sonnet-5-5`、effort `low`、权限模式）与 `routine`（`enabled`、`interval_minutes` 默认 10、`renew_after_days`、`context_reset_hours`、`stale_after_intervals`、`teams_lookback_hours`）。承载例行会话的会话适配器须为 `interactive`，并声明 `timer`（会话内的定时唤醒）。
 
 ## 9. P4 存储后端与数据目录
 

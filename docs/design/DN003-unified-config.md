@@ -36,7 +36,8 @@
     "triage": "orchestrator_judgment",
     "channels": ["in-session", "teams-chat"],
     "in_session_timeout_minutes": 10,
-    "decision_digest": {"enabled": true, "schedule": "daily_and_on_task_done", "channel": "local"}
+    "decision_digest": {"enabled": true, "schedule": "daily_and_on_task_done", "channel": "local"},
+    "teams": {"chat": "self"}
   },
   "roles": {
     "orchestrator": {
@@ -74,7 +75,8 @@
     "interval_minutes": 10,
     "renew_after_days": 6,
     "context_reset_hours": 24,
-    "stale_after_intervals": 3
+    "stale_after_intervals": 3,
+    "teams_lookback_hours": 24
   },
   "review": {
     "max_rounds": 3,
@@ -95,7 +97,7 @@
     "max_workers": 5,
     "lease_minutes": 120,
     "prestart": {"enabled": true, "max_standby": 10},
-    "wake": {"worker_message_parent": true, "reportable_events": ["worker.submitted", "worker.question", "input.handed_off", "channel.answered", "channel.unmatched", "task.paused", "report_back"]}
+    "wake": {"worker_message_parent": true, "reportable_events": ["worker.submitted", "worker.question", "input.handed_off", "channel.reply_seen", "task.paused", "report_back"]}
   },
   "sessions": {
     "name_pattern": "{task_id_lower}-{attempt}-g{generation}",
@@ -195,11 +197,12 @@
 | `input.in_session_timeout_minutes` | 10 | worker 在自己会话中提问后，用户这么久没有任何回复就转交主会话（DN006 §8.1b） |
 | `input.channels` | 已加载的全部 `request_response` 渠道 | 升级时同时投递的渠道；必须是已加载渠道的子集；第一个通过核实的答复生效 |
 | `input.decision_digest` | 每日及任务完成时，经 Teams | 把主会话的自主决定汇总通知用户，便于事后核对（DN006 §8.4）；`channel` 为 `"local"` 时只写入 STATUS 页与验收报告 |
-| `input.teams_poll` | 不设置 | 已不起作用（T243）：Teams 答复由例行会话在每次运行时回收，间隔为 `routine.interval_minutes`（DN006 §8.7）。为兼容旧配置仍接受该字段 |
+| `input.teams.chat` | `self` | Teams 问题卡片发到哪个 chat：`self` 为用户本人的自聊，也可以写 chat ID（DN006 §8.7） |
+| `input.teams_poll` | 不设置 | 已不起作用（T243）：Teams 答复由例行表的 Teams 例行项回收，间隔为 `routine.interval_minutes`（DN006 §8.7）。为兼容旧配置仍接受该字段 |
 
 ### 3.1b `routine`
 
-例行会话（DN006 §8.9）的调度参数：
+例行会话与例行表（DN006 §8.9）的参数：
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
@@ -208,8 +211,9 @@
 | `routine.renew_after_days` | 6 | 定时任务设定后超过这么多天就重新设定（宿主的定时任务有期限，Claude Code 为 7 天）；须小于宿主的期限 |
 | `routine.context_reset_hours` | 24 | 例行会话每隔这么久清空一次自己的上下文 |
 | `routine.stale_after_intervals` | 3 | 超过这么多个间隔没有运行记录时，认为定时任务已失效，由主会话让例行会话重新设定 |
+| `routine.teams_lookback_hours` | 24 | Teams 例行项每次读取最近多少小时的消息（DN006 §8.9.5） |
 
-超时阈值仍是 `input.in_session_timeout_minutes`：例行会话每次运行时转交已到期的问题，所以实际转交时间在阈值之后、一个运行间隔之内。
+超时阈值仍是 `input.in_session_timeout_minutes`：默认例行项 `handoff-scan` 每次运行时转交已到期的问题，所以实际转交时间在阈值之后、一个运行间隔之内。
 
 ### 3.2 `review`
 

@@ -59,7 +59,7 @@ tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC �
 | SessionStart | 全部 | 按会话 ID 与目录识别角色；主会话尝试领取租约，并注入未读 inbox 数与 attention 摘要；worker 注入任务 ID、brief 路径和评审规则（待命会话还提示可以先读任务书、等派发后再开始，任务书更新时重读）；待绑定会话提示等待绑定，绑定后 `phase` 为 `standby` 时只读任务书、等派发，为 `live` 时开始 |
 | PreToolUse | 已登记会话 | block list 护栏，见 [CC008 §3](CC008-guardrails.md) |
 | UserPromptSubmit | worker | 检测 `[report]`，注入回传协议提示；worker 有未获用户答复的会话内问题时，把用户消息原文记为 `input.session_message` 并告诉 worker 消息编号（注入的其他会话消息不记，DN006 §8.1a） |
-| SessionStart | routine | 注入例行会话的指令：调用 `routine_tick`，按返回的动作逐个执行，不作判断，不做其他事（CC006 §6） |
+| SessionStart | routine | 注入例行会话的指令：调用 `routine_board`，逐行执行例行项并原样转发结果，不作判断，不做其他事（CC006 §6） |
 | UserPromptSubmit | orchestrator | 记下这一轮是不是用户本人的 turn（[CC008](CC008-guardrails.md) CC-S6）：去掉宿主前置的 `<system-reminder>` 后还有内容，且不以注入消息的标记开头时是用户的 turn |
 | Stop | orchestrator | 运行只读 `attention`；有未处理 reportable 事件，有已超时未转交的会话内问题（提示运行 `sync`），例行会话失效（提示给它发消息重新设定），或这一轮是用户的 turn 且 `needs_prestart` 非空或例行会话需要启动（提示预启动、启动例行会话）时阻止一次结束（`stop_hook_active` 防循环），几条原因合在一条提示里 |
 | Stop | worker | 记录 `worker.turn_ended` 观察事件（不改状态）；若处于 `reviewing`，提示完成这一轮再结束 |

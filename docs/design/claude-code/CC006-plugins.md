@@ -96,13 +96,13 @@ worker 有待答问题时，`UserPromptSubmit` hook 把用户消息记为 `input
 
 ## 6. 例行会话
 
-DN006 §8.9 在 Claude app 上的做法。`claude-app` 声明 `timer`：会话内定时任务（`CronCreate`）由 app 在会话进程中执行，只在 app 打开时运行。
+DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 tsw 进程唤醒，所以例行表的执行者是一个子会话：`claude-app` 声明 `timer`，会话内定时任务（`CronCreate`）由 app 在会话进程中执行，只在 app 打开时运行。
 
 ### 6.1 启动
 
 主会话在用户第一次要求执行待办的那一轮（用户本人的 turn，CC001 §4）启动：
 
-1. `routine_start` 返回会话名 `routine-g<K>`、执行目录（数据目录下的 `routine/`，磁盘上的实际写法）与 `start_session` 参数：`initiation: user_asked`、`context: fresh`、`use_worktree: false`、`roles.routine` 的 `model` / `effort` / `permission_mode`；`prompt` 只写短指令（“你是 TaskSteward 的例行会话。调用 `whoami`，再调用 `routine_tick`，按返回的动作执行。”），`background` 写明例行会话的职责（≥80 字）。
+1. `routine_start` 返回会话名 `routine-g<K>`、执行目录（数据目录下的 `routine/`，磁盘上的实际写法）与 `start_session` 参数：`initiation: user_asked`、`context: fresh`、`use_worktree: false`、`roles.routine` 的 `model` / `effort` / `permission_mode`；`prompt` 只写短指令（“你是 TaskSteward 的例行会话。调用 `whoami`，再调用 `routine_board`，逐行执行。”），`background` 写明例行会话的职责（≥80 字）。
 2. 主会话调用 `start_session`，再用返回的会话 ID 调用 `routine_bind`。结果未知时按会话名用 `list_sessions {linked:true}` 对账。
 3. 新目录第一次使用时 app 要求用户确认信任，确认只能在用户看着主会话时弹出（CC001 §3），所以启动只在用户 turn 中进行。
 
@@ -110,44 +110,50 @@ DN006 §8.9 在 Claude app 上的做法。`claude-app` 声明 `timer`：会话�
 
 ### 6.2 每次运行
 
-| `routine_tick` 的动作 | 例行会话调用的工具 |
-| --- | --- |
-| `arm` | 有旧任务引用时先 `CronDelete`；再 `CronCreate`（`recurring: true`，`durable: false`，`cron` 与 `prompt` 原样使用）；然后 `routine_armed` 登记返回的任务引用 |
-| `message` | `mcp__ccd_session_mgmt__send_message`，目标为动作给出的会话 ID（主会话或 worker），正文原样 |
-| `teams_read` | `mcp__teams__ListChatMessages`（自聊 ID，`include: "attachments"`），把起点之后的消息交给 `channel_collect` |
-| `teams_send` | `mcp__teams__SendMessageToSelf`，正文原样；然后 `channel_sent` 登记消息 ID |
-| `clear_context` | 本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`：app 在这一轮结束、会话空闲后清空 |
+定时提示（由 `routine_board` 的 `arm` 动作给出）：`<scheduled-task>调用 routine_board，逐行执行例行项，原样转发结果；没有例行项就结束这一轮。</scheduled-task>`。提示自身就足够完成一次运行，所以清空上下文后定时任务继续有效时，下一次运行不需要任何记忆。
 
-定时提示由 `routine_tick` 给出，以 `<scheduled-task>` 开头（CC008 的 CC-B8 同样适用于例行会话）：“运行 `routine_tick`，按返回的动作执行；没有动作就结束这一轮”。提示自身就足够执行一次运行，所以清空上下文后定时任务继续有效时，下一次运行不需要任何记忆。
+| 例行表给出的内容 | 例行会话调用的工具 |
+| --- | --- |
+| 例行项没有 `fetch` | `routine_run(job_id)` |
+| 例行项的 `fetch` 为 `teams.read_chat` | `mcp__teams__ListChatMessages`（`chatId`，`top`），把返回的消息原样交给 `routine_run(job_id, fetched)` |
+| `routine_run` 返回非空的 `forward` | `mcp__ccd_session_mgmt__send_message`，`session_id` 为 `forward` 中的主会话 ID，正文原样 |
+| 维护动作 `arm` | 有旧任务引用时先 `CronDelete`；再 `CronCreate`（`recurring: true`，`durable: false`，`cron` 与 `prompt` 原样）；然后 `routine_armed` 登记返回的任务引用 |
+| 维护动作 `clear_context` | 本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`：app 在这一轮结束、会话空闲后清空 |
 
 间隔 N 分钟的 cron 表达式：N 整除 60 时为 `*/N * * * *`，N 为 60 的倍数时为 `0 */(N/60) * * *`（DN003 §3.1b）。`CronCreate` 的循环任务 7 天后到期，所以 `routine.renew_after_days` 默认 6。
 
-### 6.3 唤醒主会话与 worker
+转发的消息以 `<cross-session-message` 到达主会话，不是用户本人的 turn（CC008 的 CC-S6）；到达 worker 时也不会被记成用户答复（CC-S2）。
 
-例行会话用 `send_message` 按会话 ID 发消息：主会话 ID 取自调度租约的持有者，worker 取自 attempt 绑定的会话。消息以 `<cross-session-message` 到达，不是用户本人的 turn（CC008 的 CC-S6），不会被记成用户答复（CC-S2）。
+### 6.3 宿主侧护栏与允许规则
 
-### 6.4 宿主侧护栏
+例行会话角色见 CC001 §5；hooks 对它执行 CC008 的 CC-B8、CC-B10（已撤销、待绑定）与 CC-B11（不编辑、不运行命令、不建会话）。`routine_start` 在 `routine/` 下写入 `.claude/settings.local.json`，允许 tsw MCP 工具、`send_message`、`clear_session`、`CronCreate` / `CronDelete` 与 `mcp__teams__ListChatMessages`，避免 auto 分类器把例行动作当作未经授权而拦下（CC008 §6）。
 
-例行会话角色见 CC001 §5；hooks 对它执行 CC008 的 CC-B8、CC-B10（已撤销、待绑定）与 CC-B11（不编辑、不运行命令、不建会话）。数据目录的 `.claude/settings.json` 只用于主会话；`routine/` 下由 `routine_start` 写入 `.claude/settings.local.json`，允许 tsw MCP 工具、`send_message`、`clear_session`、定时工具与 Teams 读写工具，避免 auto 分类器把例行动作当作未经授权而拦下（CC008 §6）。
+### 6.4 主会话的“处理转交问题” skill
+
+`render_instructions` 在数据目录生成第二个项目 skill `.claude/skills/handle-input/SKILL.md`（来源 `tsw/host/handle_input_skill.md`）。例行会话转来的消息要求主会话按它处理：
+
+1. 读问题与任务书，按 DN006 §8.2 的授权边界与因素判断；`reserved` 的问题只能转达给用户；
+2. 能代答时 `handoff_resolve`，再用 `send_message` 把决定告诉 worker，让它继续；
+3. 需要用户时 `input_relay`：用户正在主会话中时转达到 `main-session`；否则按配置的渠道（如 `teams-chat`，§7）发出；
+4. Teams 中转来的消息：判断它是否回答了问题，是答复时 `input_resolve`（来源为渠道 `teams-chat` 与消息 ID），再告诉 worker；不是答复时不登记。
 
 ### 6.5 待验证（T243 live）
 
 | 编号 | 假设 | 不成立时 |
 | --- | --- | --- |
 | R1 | 由定时任务触发的一轮结束时，app 不用 `side-sessions-event` 唤醒主会话（只在子会话的第一轮或主会话发起的一轮结束时唤醒） | 主会话创建后对例行会话调用 `detach_session`，此后按会话 ID 发消息 |
-| R2 | `clear_session("self")` 之后，会话内的定时任务仍然有效 | 清空后定时任务失效，按恢复规则（DN006 §8.9.4）由主会话发消息让例行会话重新设定；或把 `context_reset_hours` 设得很大，只依赖宿主的自动压缩 |
-| R3 | 例行会话能按会话 ID 给主会话与同一主会话启动的 worker 发消息 | 改用 `SendMessage`（`to` 为 `local_…` 会话 ID） |
-| R4 | `SendMessageToSelf` 返回消息 ID 与自聊 ID；`ListChatMessages` 能读回用户在自聊中的回复，回复带引用消息的附件 | 只按正文中的请求 ID 对应（DN006 B3） |
+| R2 | `clear_session("self")` 之后，会话内的定时任务仍然有效 | 清空后定时任务失效，按恢复规则（DN006 §8.9.6）由主会话发消息让例行会话重新设定；或把 `context_reset_hours` 设得很大，只依赖宿主的自动压缩 |
+| R3 | 例行会话能按会话 ID 给主会话发消息 | 改用 `SendMessage`（`to` 为 `local_…` 会话 ID） |
+| R4 | `SendMessageToSelf` 返回消息 ID、chat ID 与发送者 ID；`ListChatMessages` 能读回用户在自聊中的消息与发送者 | 发送者取自读回的卡片消息 |
 
 ## 7. `teams-chat` 渠道
 
-DN006 §8.6–§8.7 在 Claude Code 上的做法。Teams 工具（`mcp__teams__*`）由用户安装，主会话与例行会话都能调用；tsw 进程不能调用，所以发送与回收都是委托操作。
+DN006 §8.6–§8.7 在 Claude Code 上的做法。Teams 工具（`mcp__teams__*`）由用户安装，主会话与例行会话都能调用；tsw 进程不能调用，所以发送与取数都由会话执行。
 
 | 步骤 | 谁 | 工具 |
 | --- | --- | --- |
-| 发送问题卡片 | 主会话 | `input_relay`（`channel: teams-chat`）返回卡片正文；主会话用 `get_session` 取 worker 会话的 `link` 填入卡片，调用 `mcp__teams__SendMessageToSelf`，再用 `channel_sent` 登记返回的消息 ID 与自聊 ID |
-| 回收答复 | 例行会话 | `teams_read` 动作：`mcp__teams__ListChatMessages`；`channel_collect` 对应与登记（DN006 §8.7 第 3 步） |
-| 告诉 worker 继续 | 例行会话 | `channel_collect` 返回的 `message` 动作：`send_message` 给 worker 会话 |
-| 补发“已在其他渠道答复” | 例行会话 | `teams_send` 动作 |
+| 发送问题卡片 | 主会话 | `input_relay`（`channel: teams-chat`）返回卡片正文与目标 chat；主会话用 `get_session` 取 worker 会话的 `link` 填入卡片；目标为 `self` 时调用 `mcp__teams__SendMessageToSelf`，否则 `mcp__teams__SendMessageToChat`；再用 `channel_sent` 登记返回的 chat ID、消息 ID 与发送者 |
+| 取出答复 | 例行会话 | Teams 例行项：`mcp__teams__ListChatMessages` 取数，`routine_run` 运行脚本，结果转给主会话 |
+| 登记答复、告诉 worker | 主会话 | `input_resolve`、`send_message`（§6.4 第 4 步） |
 
-卡片正文：请求 ID、任务与标题、问题全文、worker 会话链接，以及“在本卡片上回复，或在消息中写上请求 ID”。消息正文是 HTML，`channel_collect` 去掉标签后再找请求 ID；引用的卡片从 `messageReference` 附件取得。
+消息正文是 HTML，脚本去掉标签与首尾空白后再看是否以任务 ID 开头。

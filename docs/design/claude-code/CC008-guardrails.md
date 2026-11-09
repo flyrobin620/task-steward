@@ -39,7 +39,7 @@
 | CC-B8 | worker、主会话、例行会话 | `CronCreate` / `ScheduleWakeup` 的提示不以 `<scheduled-task>` 开头 | 定时提示到达时与用户消息无法区分：worker 的被记成用户答复（live `host-e2e` 实测，误认来源）；主会话的被当成用户本人的 turn，CC-S4 随之要求在不能创建会话的 turn 中预启动（T244） | 提示以 `<scheduled-task>` 开头、`</scheduled-task>` 结束 |
 | CC-B9 | 主会话 | `start_session` 的会话名不是已落账、代次有效的 attempt，也不是正在启动的例行会话代次 | 没有先 `attempt_start` / `routine_start` 就建会话，或重复建会话 | 先 `attempt_start`（例行会话先 `routine_start`），用返回的会话名。**不可放行**：没有落账的会话无法绑定到 attempt（DN002 §6） |
 | CC-B10 | 已撤销 / 待绑定 | 编辑类工具、Bash、`start_session` | 已被替换的会话继续写；绑定前就开始工作（状态漂移） | 已撤销：回到主会话；待绑定：等主会话绑定后的消息 |
-| CC-B11 | 例行会话 | 编辑类工具、Bash、`start_session` | 例行会话自己去“处理”问题（改代码、跑命令、建会话），越过“只执行例行动作、不作判断”的分工（DN006 §8.9） | 只执行 `routine_tick` 返回的动作；其余事项发消息交主会话 |
+| CC-B11 | 例行会话 | 编辑类工具、Bash、`start_session` | 例行会话自己去“处理”问题（改代码、跑命令、建会话），越过“只执行例行动作、不作判断”的分工（DN006 §8.9） | 只执行例行表（`routine_board`）中的例行项；其余事项发消息交主会话 |
 
 **escape**（DN008 §5 第 4 条）：每条拒绝信息以规则编号开头，写出上表的正确做法；可放行的规则还写明“动作确属任务需要时，问用户；用户同意后用 `user_answer` 登记放行这条规则”。CC-B6、CC-B9 是状态机守卫的镜像，不能放行或关闭（`waive_rules` 与 `guardrails.disabled` 中出现它们时以 `invalid_input` 拒绝），只给出状态机的路径。其余规则的做法：
 
