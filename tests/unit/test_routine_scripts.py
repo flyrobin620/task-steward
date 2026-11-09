@@ -213,3 +213,23 @@ def test_a_quick_reply_on_a_newer_page_than_its_card() -> None:
             reply, requests=requests, sender_id=None, since=WINDOW, exclude=set()
         )
         assert [(m["request_id"], m["pending"]) for m in found] == [("Q-T001-2", True)]
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_reply_in_the_same_second_as_its_card() -> None:
+    # The tool gives whole seconds; the IDs give milliseconds. Both sides use the IDs.
+    card = "1793869200050"  # 2026-11-05T09:00:00.050Z
+    reply = _msg("1793869200900", "T001 用 C", at="2026-11-05T09:00:00Z")  # .900, same second
+    waiting = _q("T001", 2, card, "2026-11-05T09:00:30Z")
+    older = _q("T001", 1, "card-1", "2026-11-05T08:00:00Z", status="resolved")
+    card_msg = _msg(card, f"{CARD_PREFIX} T001 Q-T001-2", at="2026-11-05T09:00:00Z")
+    for requests in ([waiting], [older, waiting]):
+        for page in ([reply], [reply, card_msg]):  # the card on another page, or on this one
+            found = select_replies(
+                page, requests=requests, sender_id=None, since=WINDOW, exclude={card}
+            )
+            assert [(m["request_id"], m["pending"]) for m in found] == [("Q-T001-2", True)]
+    # Before the card, within the same second: not an answer to it.
+    early = _msg("1793869200010", "T001 先说一句", at="2026-11-05T09:00:00Z")
+    found = select_replies([early], requests=[waiting], sender_id=None, since=WINDOW, exclude=set())
+    assert found == []

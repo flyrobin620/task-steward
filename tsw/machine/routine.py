@@ -470,6 +470,12 @@ def _body(message: Mapping[str, Any]) -> str:
 
 
 def _created(message: Mapping[str, Any]) -> datetime | None:
+    """When a message was created: the time its Teams ID stands for (milliseconds), else the
+    time the tool gave (``createdDateTime`` has whole seconds only). Cards and replies are
+    compared at the same precision (review r2 of T243 a2)."""
+    at = id_time(str(message.get("id") or ""))
+    if at is not None:
+        return at
     value = message.get("createdDateTime") or message.get("created") or message.get("time")
     if not isinstance(value, str):
         return None
@@ -557,7 +563,7 @@ def select_replies(
     for message in messages:
         created = _created(message)
         request_id = cards.get(str(message.get("id") or ""))
-        if request_id is not None and created is not None:
+        if request_id is not None and created is not None and request_id not in card_times:
             card_times[request_id] = created
     floor = parse_time(since)
     out: list[dict[str, Any]] = []
