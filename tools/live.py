@@ -350,6 +350,36 @@ REPO_FILES = {
 }
 
 
+def probe_marks(run: Run) -> dict[str, str]:
+    """Check W's marks: each is only in the file it proves was read or the skill it proves was
+    used, never in a task's goal or acceptance."""
+    suffix = run.id.rsplit("-", 1)[-1].upper()
+    return {
+        "agents": f"AGENTS-{suffix}",
+        "repo_skill": f"REPO-SKILL-{suffix}",
+        "home_skill": f"HOME-SKILL-{suffix}",
+    }
+
+
+def probe_skill(name: str, where: str, mark: str) -> str:
+    return (
+        f"---\nname: {name}\ndescription: {where}的探针 skill。任务要求使用它时使用。\n---\n"
+        f"把下面这个标记原样写进报告：{mark}\n"
+    )
+
+
+def host_repo_files(run: Run) -> dict[str, str]:
+    """live-repo for host-e2e: its AGENTS.md and its own skill carry check W's marks."""
+    marks = probe_marks(run)
+    return {
+        **REPO_FILES,
+        "AGENTS.md": REPO_FILES["AGENTS.md"] + f"- 规则标记（写进报告）：{marks['agents']}\n",
+        ".claude/skills/live-repo-probe/SKILL.md": probe_skill(
+            "live-repo-probe", "live-repo ", marks["repo_skill"]
+        ),
+    }
+
+
 def events(run: Run) -> list[dict[str, Any]]:
     storage = FsStorage(Home(run.home))
     return [
@@ -544,8 +574,9 @@ def review_with(run: Run, reviewer: str, budget: int, notes: list[str]) -> list[
         session_ref=WORKER_SESSION,
         brief_delivered=True,
     )
-    git_out(run.dir, "clone", "-q", str(run.origin), str(workdir))
-    git_out(workdir, "checkout", "-q", "-b", "feature")
+    # attempt_start made the task's worktree of live-repo inside the execution directory (CC006
+    # §8): the work and the review happen there.
+    workdir = Path(str(data["worktree"]["path"]))
     (workdir / "calc.py").write_text(
         CALC
         + "\n\ndef add(a: int, b: int) -> int:\n    return a + b\n"
@@ -822,8 +853,15 @@ def prepare(name: str, args: argparse.Namespace) -> int:
     run.save(manifest)
     tsw(run, "init", "--claim-sessions")
     tsw(run, "host", "render")
+    probe = run.home / ".claude" / "skills" / "live-home-probe" / "SKILL.md"
+    probe.parent.mkdir(parents=True, exist_ok=True)
+    probe.write_text(
+        probe_skill("live-home-probe", "数据目录", probe_marks(run)["home_skill"]),
+        encoding="utf-8",
+        newline="\n",
+    )
     run.record("dir", "home", state="created", ref=str(run.home))
-    base = init_repo(run, REPO_FILES)
+    base = init_repo(run, host_repo_files(run))
     run.record("dir", "repo", state="created", ref=str(run.repo), base=base)
     gh = install_gh(run)
     repository = str(spec["repository"])
@@ -847,6 +885,7 @@ def prepare(name: str, args: argparse.Namespace) -> int:
         "timeout_plus": str(timeout + 1),
         "home": str(run.home),
         "run_id": run.id,
+        "repo": str(run.repo),
         "interval": str((spec["config"].get("routine") or {}).get("interval_minutes", 10)),
     }
     session_settings(run, run.home)
@@ -1005,6 +1044,7 @@ def host_verify(args: argparse.Namespace) -> int:
     )
     life = {k: seqs(evs, k, "T003") for k in ("task.paused", "task.resumed", "task.cancelled")}
     checks.append(check("H5", "取消与恢复：T003 暂停、恢复、取消", all(life.values()), life))
+    checks.append(worktrees(run, evs, submitted))
     checks.append(b1(evs))
     checks.append(b2(evs))
     checks.append(scheduled_prompts(run, evs))
@@ -1292,6 +1332,51 @@ def teams_round_trip(evs: list[dict[str, Any]]) -> dict[str, Any]:
             "worker_progress": note and note["sequence"],
             "problems": problems,
         },
+    )
+
+
+def worktrees(
+    run: Run, evs: list[dict[str, Any]], submitted: Mapping[str, dict[str, Any] | None]
+) -> dict[str, Any]:
+    """Check W (CC006 §8): a delivering task worked in the worktree tsw made inside its
+    execution directory (attempt_start recorded it, and the submitted head is that worktree's
+    HEAD), and its report carries the marks that are only in the repository's AGENTS.md, in
+    the repository's probe skill and in the data directory's probe skill (``probe_marks``)."""
+    marks = probe_marks(run)
+    details: dict[str, Any] = {}
+    ok = bool(submitted)
+    for task_id, sub in submitted.items():
+        starts = [
+            e for e in evs if e["type"] == "attempt.start_requested" and e["task_id"] == task_id
+        ]
+        made = [e["data"].get("worktree") or {} for e in starts]
+        attempt_id = str(starts[-1]["data"].get("attempt")) if starts else "a1"
+        expected = run.home / "work" / task_id / attempt_id / "live-repo"
+        recorded = bool(made) and all(
+            m.get("path") and Path(str(m["path"])).resolve() == expected.resolve() for m in made
+        )
+        submission = (
+            ((sub or {}).get("data") or {}).get("submission") or (sub or {}).get("data") or {}
+        )
+        head = str(submission.get("head") or "")
+        worktree_head = git_out(expected, "rev-parse", "HEAD") if expected.is_dir() else ""
+        report = ""
+        if sub is not None:
+            path = run.home / str((submission.get("report") or {}).get("md_path") or "")
+            report = path.read_text(encoding="utf-8") if path.is_file() else ""
+        found = {name: mark in report for name, mark in marks.items()}
+        details[task_id] = {
+            "worktree": made,
+            "submitted_head_is_worktree_head": same_commit(head, worktree_head),
+            "marks_in_report": found,
+        }
+        ok = ok and recorded and same_commit(head, worktree_head) and all(found.values())
+    return check(
+        "W",
+        "仓库 worktree：在 tsw 创建的 worktree 中工作；报告带有只在仓库 AGENTS.md、仓库 skill 与"
+        "数据目录 skill 中出现的标记",
+        ok,
+        details,
     )
 
 

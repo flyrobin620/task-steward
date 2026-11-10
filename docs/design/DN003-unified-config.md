@@ -1,6 +1,6 @@
 # DN003 统一配置
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置；T243 增加 `roles.routine` 与 `routine`）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置；T243 增加 `roles.routine` 与 `routine`；T251 §3.4 仓库任务的 worktree 与 `instructions`）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN004 worker 自评审](DN004-worker-self-review.md)
 
@@ -126,7 +126,7 @@
       "integration_branch": "tsw/integration-example-app",
       "auth_profile": "github-work",
       "commit_identity": {"name": "Your Name", "email": "you@example.com"},
-      "instructions": ["AGENTS.md", "CLAUDE.md"],
+      "instructions": ["AGENTS.md", ".github/copilot-instructions.md"],
       "worktree_files": [{"source": "dev-settings.json", "destination": ".local/dev-settings.json"}],
       "validation": [],
       "delivery": {"push": true, "create_pr": true, "merge": false}
@@ -259,6 +259,8 @@
 ### 3.4 `repositories` 与 `accounts`
 
 结构沿用 orchestrator-agent 的 `config/repositories.json` 与 `config/accounts.json`，合并为两个小节（账号只记录名称与认证目录引用，凭据本身不进数据目录），并新增 `aliases`（原 `repositories.md` 中的缩写表）。导入时自动转换（DN005 §4.4）。`delivery.push` / `create_pr` / `merge` 是该仓库的默认交付授权，具体任务仍以用户当次指令为准。`merge`（默认关闭）为 `true` 时，该仓库的任务（不看任务类型）由 worker 在门禁、评审与意见都解决后自行合并 PR，等主分支上合并提交的 CI 通过后再提交（DN002 §3.5）；此时必须写明 `repository`（`owner/name`），hooks 据此只放行合并本仓库的 PR。三者都是权限类键（§7.2）。
+
+`path`（本机 git 检出）、`remote`、`base_ref`、`instructions` 决定仓库任务的 worktree 与任务书中的仓库说明（[CC006 §8](claude-code/CC006-plugins.md)）：`attempt_start` 在执行目录下创建 `<执行目录>/<仓库 id>` 的 worktree（分支按 `worktrees.branch_pattern`，基线为 `base_ref`，未配置时取远端默认分支），worker 会话以它为会话目录；没有可用检出时不建 worktree。`instructions` 是相对仓库根的指令文件列表（如 `AGENTS.md`、`CLAUDE.md`、`.github/copilot-instructions.md`），该仓库的每份任务书都要求 worker 完整阅读并遵守；未配置时默认这三个文件，存在哪个读哪个。`worktrees.root` 在 `claude-code` 宿主中不使用（worktree 在执行目录下，字段保留）；`worktree_files` 尚未实现。
 
 ### 3.5 `policies`
 
