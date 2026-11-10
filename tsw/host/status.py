@@ -5,6 +5,9 @@ it again does not change any business time. It is one offline file: a card per t
 status, with the user's pending items called out on the card. The inlined script
 (:mod:`tsw.host.status_assets`) adds filtering, search, sorting, regrouping and folding; without
 it the page still shows every card.
+
+The STATUS app (:mod:`tsw.host.status_app`, DN006 §8.10) renders the same page with an
+:class:`AppView`: every card then offers the user's direct actions as buttons.
 """
 
 from __future__ import annotations
@@ -17,7 +20,16 @@ from typing import Any
 from urllib.parse import quote
 
 from tsw.commands import CommitContext
-from tsw.host.status_assets import CSP, CSS, KIND_COLORS, REPO_HUES, SCRIPT, STATUS_COLORS
+from tsw.host.status_assets import (
+    APP_CSP,
+    APP_SCRIPT,
+    CSP,
+    CSS,
+    KIND_COLORS,
+    REPO_HUES,
+    SCRIPT,
+    STATUS_COLORS,
+)
 from tsw.machine.guards import invalidated
 from tsw.machine.model import OCCUPYING, loads
 from tsw.tasks import KINDS, STATUS_LABELS
@@ -102,6 +114,37 @@ class Card:
     flags: set[str] = field(default_factory=_no_flags)
 
 
+ACTION_LABELS = {"accept": "验收", "reject": "退回", "cancel": "取消"}
+
+
+@dataclass(frozen=True)
+class AppView:
+    """The STATUS app's additions: the request token and each task's direct actions.
+
+    ``actions`` maps a task to the actions it offers and, when cancel is not offered for a
+    task that could otherwise be cancelled, the reason shown instead.
+    """
+
+    token: str
+    actions: dict[str, tuple[tuple[str, ...], str | None]]
+
+
+def _actions(task_id: str, revision: Any, app: AppView) -> str:
+    offered, blocked = app.actions.get(task_id, ((), None))
+    if not offered and not blocked:
+        return ""
+    buttons = "".join(
+        f'<button type="button" class="act act-{_e(a)}" data-act="{_e(a)}">'
+        f"{_e(ACTION_LABELS.get(a, a))}</button>"
+        for a in offered
+    )
+    why = f'<small class="act-why">{_e(blocked)}</small>' if blocked else ""
+    return (
+        f'<div class="acts" data-task="{_e(task_id)}" data-revision="{_e(revision)}">'
+        f'{buttons}{why}<span class="act-result" role="status" aria-live="polite"></span></div>'
+    )
+
+
 def _outputs(conn: sqlite3.Connection) -> dict[str, list[Output]]:
     """PR links and registered outputs per task, PRs first."""
     out: dict[str, list[Output]] = {}
@@ -137,6 +180,8 @@ def _card(
     outputs: list[Output],
     deps: list[str],
     note: str | None,
+    *,
+    app: AppView | None = None,
 ) -> str:
     row = card.row
     status = str(row["status"])
@@ -222,6 +267,7 @@ def _card(
         + "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in facts)
         + "</dl>"
         + (f'<div class="links">{"".join(links)}</div>' if links else "")
+        + (_actions(task_id, row["revision"], app) if app else "")
         + more
         + "</article>"
     )
@@ -235,7 +281,7 @@ def _colors() -> str:
     return "\n".join(rules)
 
 
-def render(conn: sqlite3.Connection) -> str:
+def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
     tasks = [dict(r) for r in conn.execute("SELECT * FROM tasks ORDER BY registered_seq")]
     outputs = _outputs(conn)
     meta = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM meta")}
@@ -296,7 +342,16 @@ def render(conn: sqlite3.Connection) -> str:
         if row["status"] == "waiting_user":
             card.flags.add("user")
         if row["status"] == "done":
-            card.notes.append(("accept", "待用户验收", "查看报告与产出后在主会话验收"))
+            card.notes.append(
+                (
+                    "accept",
+                    "待用户验收",
+                    "查看报告与产出后，在本页点「验收」或「退回」"
+                    if app
+                    else f"查看报告与产出后验收：在终端运行 tsw task accept {row['task_id']}，"
+                    "或在 tsw status serve 打开的页面中点「验收」；也可以在主会话中验收",
+                )
+            )
             card.flags.add("user")
         pause = loads(row["pause"], None)
         if pause:
@@ -382,6 +437,7 @@ def render(conn: sqlite3.Connection) -> str:
                 outputs.get(c.row["task_id"], []),
                 deps.get(c.row["task_id"], []),
                 latest_note.get(c.row["task_id"]),
+                app=app,
             )
             for c in members
         )
@@ -398,16 +454,35 @@ def render(conn: sqlite3.Connection) -> str:
     )
     last = max((t["last_activity"] for t in tasks), default="—")
     order = " ".join(ORDER + tuple(s for s in present if s not in ORDER))
+    if app:
+        head = (
+            f'<meta http-equiv="Content-Security-Policy" content="{_e(APP_CSP)}">\n'
+            f'<meta name="tsw-token" content="{_e(app.token)}">'
+        )
+        app_script = f"<script>{APP_SCRIPT}</script>"
+        footer = (
+            "本页由 STATUS 应用（tsw status serve）按账本实时生成；"
+            "按钮直接写入账本，记为你本人的操作"
+        )
+    else:
+        head = f'<meta http-equiv="Content-Security-Policy" content="{_e(CSP)}">'
+        app_script = ""
+        footer = (
+            "本页由 tsw 根据账本生成，请勿手工编辑；"
+            "验收、退回、取消可运行 tsw status serve 在页面上操作"
+        )
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="{_e(CSP)}">
+{head}
 <title>TaskSteward 状态</title>
 <style>{CSS}{_colors()}</style>
-<script>{SCRIPT}</script></head>
+<script>{SCRIPT}</script>{app_script}</head>
 <body><main>
 <header class="hero"><div><div class="eyebrow">TASKSTEWARD · STATUS</div><h1>TaskSteward 状态</h1></div>
-<p class="meta">账本序号 {_e(meta.get("projected_seq", "0"))} · 最近记录 {_e(last)} · {lease_text}</p>
+<p class="meta">账本序号 {_e(meta.get("projected_seq", "0"))} · 最近记录 {_e(last)} · {
+        lease_text
+    }</p>
 <button type="button" class="ghost" id="refresh" hidden aria-pressed="false" title="每 30 秒重新载入本页">自动刷新</button>
 <button type="button" class="ghost" id="style" hidden title="朴素或鲜艳">风格：朴素</button>
 <button type="button" class="ghost" id="theme" hidden>主题：跟随系统</button></header>
@@ -426,7 +501,9 @@ def render(conn: sqlite3.Connection) -> str:
 <option value="oldest">编号：旧→新</option><option value="repo">仓库</option></select></label>
 <label>分组 <select id="group"><option value="status">按状态</option><option value="repo">按仓库</option>
 <option value="kind">按类型</option><option value="none">不分组</option></select></label></div>
-<div class="row"><span class="lbl">状态</span>{status_picks}<span class="lbl">类型</span>{kind_picks}
+<div class="row"><span class="lbl">状态</span>{status_picks}<span class="lbl">类型</span>{
+        kind_picks
+    }
 <span class="sep"></span><span class="count" id="count" role="status" aria-live="polite"></span>
 <button type="button" class="ghost" id="open-all">展开分组</button>
 <button type="button" class="ghost" id="close-all">折叠分组</button>
@@ -436,7 +513,7 @@ def render(conn: sqlite3.Connection) -> str:
 <div id="board" data-order="{_e(order)}" data-kinds="{_e(" ".join(KINDS))}">{"".join(groups)}</div>
 <p class="empty" id="empty" hidden>没有符合筛选条件的任务。<button type="button" class="ghost" id="clear-empty">清除筛选</button></p>
 {"" if cards else '<p class="empty">没有任务</p>'}
-<footer class="meta">本页由 tsw 根据账本生成，请勿手工编辑；已归档任务不在此列出（{archived} 个）。</footer>
+<footer class="meta">{footer}；已归档任务不在此列出（{archived} 个）。</footer>
 </main></body>
 </html>
 """

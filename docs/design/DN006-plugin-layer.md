@@ -373,7 +373,7 @@ class HumanChannel(Protocol):
 
 @dataclass(frozen=True)
 class VerifiedSource:              # DN002 G-USER 的统一证据
-    channel: str                   # in-session / main-session / teams-chat / hub-portal
+    channel: str                   # in-session / main-session / teams-chat / hub-portal / user-cli / status-app（后两者见 §8.10）
     principal: str | None          # 可选；不再核实发送者身份（DN008 §9）
     message_ref: str               # 会话消息引用 / Teams 消息 ID / Portal 提交 ID
     text: str                      # 用户原话
@@ -402,6 +402,8 @@ T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与
 | `teams-chat` | request_response，poll，delegated（本版本不提供 notify） | 主会话 `input_relay` 后，按返回的卡片正文用宿主的 Teams 工具发到配置的 chat（默认用户本人的自聊），再用 `channel_sent` 登记，例行表随之加入或更新 Teams 例行项 | 例行项的脚本取出 chat 中最近的、用户发送的、以等待中任务 ID 开头的消息，转给主会话（§8.7） | 只核对问题仍待答、消息能对应到任务 ID 与问题；卡片以 `[TaskSteward]` 开头，不会被当作答复（DN008 §9） |
 | `hub-portal` | request_response，notify（Portal 通知卡片），push，direct | tsw 把请求发布到 Hub 门户（问题卡片） | Portal 用户提交答复，经认证回调写回 tsw | Portal 的 owner 认证 + 请求 ID |
 | `email-draft` | notify_only | 在邮箱生成草稿（默认不发送，沿用邮件约定） | — | — |
+
+`user-cli` 与 `status-app` 不是请求与答复的渠道：它们记录用户在会话外主动做出的验收、退回与取消（§8.10）。
 
 多渠道规则：
 
@@ -520,6 +522,30 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 
 参数见 DN003 §3.1b：`roles.routine`（会话适配器、模型，默认 `claude-sonnet-5-5`、effort `low`、权限模式）与 `routine`（`enabled`、`interval_minutes` 默认 10、`renew_after_days`、`context_reset_hours`、`stale_after_intervals`；`teams_lookback_hours` 已弃用）。承载例行会话的会话适配器须为 `interactive`，并声明 `timer`（会话内的定时唤醒）。
 
+### 8.10 用户直接操作：终端命令与 STATUS 应用
+
+用户 2026-11-10 决定：用户可以不经主会话，直接验收、退回或取消任务，在终端运行 `tsw task accept` / `reject` / `cancel`，或在本机托管的 STATUS 应用（`tsw status serve`）中点卡片上的按钮。两个入口调用同一实现：状态机工具 `user_accept`、`user_reject`、`task_cancel`，调用者角色为 `user`。迁移与守卫与主会话代为登记时相同（T22、T23、T25，G-USER），只是来源由 tsw 自己记录，不由 agent 引用。
+
+| 入口 | 渠道 | 来源（`VerifiedSource`） |
+| --- | --- | --- |
+| `tsw task accept <任务> [--note <原话>]`、`tsw task reject <任务> --reason <理由>`、`tsw task cancel <任务>` | `user-cli` | `principal`：本机用户名与机器名；`message_ref`：`cli:<时间>:<进程号>`；`text`：`--note` / `--reason`，没有时为命令行本身；`target`：任务、命令读到的 revision（`--revision` 可指定）、决定类别 |
+| STATUS 应用中卡片的「验收」「退回」「取消」按钮 | `status-app` | `principal` 同上；`message_ref`：`status-app:<服务实例>:<序号>`；`text`：页面、按钮与任务，退回时附用户填写的理由；`target` 的 revision 取自页面上显示的 revision，任务在此期间已变化时 G-USER 拒绝 |
+
+为什么可以把它们当作用户本人的决定（按 DN008 §9 的模型：防的是 agent 误认来源，不是同一用户下的恶意进程）：
+
+1. 这两个渠道只由会话外的 tsw 进程写入。`user` 角色只能从这些命令取得：MCP server 不会把任何会话解析成它，`tsw tool run --role` 也不接受它；主会话调用 `user_accept` 等工具时不能使用这两个渠道（G-USER 拒绝）。
+2. 这些命令不在宿主会话中运行：命令行发现自己处在宿主会话的环境中（Claude Code 为它的会话环境变量）就拒绝，不看会话的角色，与该会话是否绑定数据目录无关；宿主护栏也照常拒绝会话运行非只读的 `tsw` 命令（DN001 §7.1）。所以会话不能替用户启动 STATUS 应用，也拿不到它的令牌。
+3. STATUS 应用只监听本机回环地址，每次启动生成一个新令牌。令牌只出现在启动它的终端输出和它打开的浏览器地址中；第一次访问后换成只能由 HTTP 读取的同站 cookie，地址中的令牌随即去掉。按钮请求还要在请求头中带页面里的令牌，并核对 `Host` 与 `Origin`，所以其他网页（包括 DNS 重绑定）不能触发按钮。
+4. 两个入口都先让用户确认：终端交互运行时先显示任务、标题与 revision，再要求输入 `y`（`--yes` 跳过）；页面按钮先弹出确认框。
+
+STATUS 应用：
+
+- 用户在终端运行 `tsw status serve` 启动（`--port` 指定端口，默认任选空闲端口；`--no-open` 不打开浏览器），Ctrl+C 停止。每次请求都从账本投影重新生成与 `views/STATUS.html` 相同的页面，并加上按钮；报告等链接指向的 `runs/`、`legacy/` 下的文件由它只读提供。
+- 按钮：`done`（待用户验收）的卡片有「验收」与「退回」（须填写理由）；处于可取消状态、且没有活动 worker（没有 `starting`、`standby`、`live` 的 attempt，没有进行中的集成）的卡片有「取消」。有活动 worker 的任务须由主会话先停止 worker，所以不显示「取消」，卡片上写明原因。操作结果（成功，或被拒绝的原因）显示在卡片上，成功后页面重新载入。
+- `views/STATUS.html` 保留：每次提交后照常生成，离线可读，会话也能读取。它没有按钮，待验收的卡片上提示用 `tsw task accept` 或 STATUS 应用。
+
+主会话不参与这些操作，下次运行时从账本看到结果。退回的任务按 T23 回到 `intake`（revision+1），由主会话按新 revision 重新规划。
+
 ## 9. P4 存储后端与数据目录
 
 存储后端只负责数据目录的读写、锁与备份；账本、投影与检索索引的分层及读取方式见 [DN007](DN007-ledger-and-context.md)。
@@ -534,6 +560,12 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | 凭据 | 系统凭据库或用户指定的认证目录 | 否；也不放进数据目录 |
 
 数据目录的定位顺序：当前目录（宿主在会话目录中启动 MCP server 与 hooks，与解析会话身份用的是同一个目录）位于某个声明了 `claim_sessions` 的数据目录之中时，用该数据目录（只看最近的一个数据目录；它没有声明时不适用）→ 环境变量 `TSW_HOME` → 产品 repo 下 `.local/tsw-home` 中记录的路径 → 默认 `~/.tsw`。`claim_sessions` 是 `tsw-home.json` 的可选字段（`tsw init --claim-sessions` 写入），供 live 运行等隔离场景使用：宿主给所有会话同一个 `TSW_HOME`，而在会话文件夹中写设置文件来改变它会让宿主再次要求信任（决定记录 0003）。真实数据目录不需要声明：它的会话本来就从 `TSW_HOME` 得到它。主会话在数据目录中打开（它就是 DN001 所说的“控制根”）。
+
+运行时与数据目录分别定位（用户 2026-11-10 要求写清）：
+
+- **运行时（tsw 代码）在产品 repo 中**。用户在终端使用时，在产品 repo 中运行一次 `python -m pip install -e .`，之后在任何目录都可以直接运行 `tsw`（Windows 的 PowerShell、cmd 与 Git Bash 运行的都是 Python `Scripts` 目录中的 `tsw.exe`）；可编辑安装运行的就是这个 repo 当前的代码，`git pull` 后不需要重装。不安装时在产品 repo 根目录运行 `python -m tsw`。插件中的启动器 `tsw_launch.py` 只给宿主用（MCP server 与 hooks），它按 `TSW_REPO`、插件所在的 repo、数据目录中 `tsw init` 记录的 `product_repo`、已安装的包依次定位运行时。
+- **数据目录按上面的顺序定位**。宿主的会话从用户设置得到 `TSW_HOME`，用户的终端通常没有。在终端运行一次 `tsw init --home <数据目录> --remember`，把它写入产品 repo 的 `.local/tsw-home`，之后终端中的命令都能找到它，不必设置 `TSW_HOME`。`tsw home` 显示找到的数据目录与依据（`claim_sessions`、`TSW_HOME`、`.local/tsw-home` 或默认）。
+- **只有两处看当前目录**：当前目录位于声明了 `claim_sessions` 的数据目录中时用该数据目录（live 等隔离场景）；`tsw review run` 在 worker 的执行目录（git worktree）中运行，评审该处的 HEAD。其他命令都不要求在数据目录或产品 repo 中运行；`backup`、`restore` 的相对路径按当前目录解析。
 
 ### 9.2 数据目录布局
 
@@ -604,6 +636,8 @@ class StorageBackend(Protocol):
 正式导入的授权检查（演练、原话是否用过）在导入锁内、任何导入写入之前进行，并以 `import_authorized` 记账；导入的每一次提交都在提交锁内重新检查调用者的租约；导入在提交之外直接写的文件（事件卷、legacy 文件、导入报告）也在持有提交锁、检查租约之后才写，写入期间其他主会话无法领取租约。租约在导入途中被他人领取时，之后的写入一律拒绝。备份与重建不改变账本事实，只在开始前检查租约。
 
 `restore`、`quiesce` / `resume-writes` 与 `host render` 不开放：恢复要求先停止会话，静止会挡住主会话自己的写入，`host render` 改写数据目录的 `CLAUDE.md` 与 skill。它们仍由用户在终端运行。
+
+由用户在终端运行的命令（安装与定位见 §9.1；README 给出示例）：`init`（`--remember`）、`home`、`host render` / `install-hint`、`lease show` / `takeover` / `release`、`backup` / `restore`、`quiesce` / `resume-writes`、`ledger audit` / `rebuild`、`config show` / `validate`，以及用户直接操作 `task accept` / `reject` / `cancel` 与 `status serve`（§8.10）。tsw 在会话中请用户运行命令时（租约被占、插件副本过期、需要 `host render`）给出的就是这些简短形式。用户自己运行 `lease takeover` 时，运行命令本身就是确认原主会话已停止的来源：`--user-source` 可省略，tsw 记为渠道 `user-cli`（§8.10）。
 
 ## 10. 组合示例
 

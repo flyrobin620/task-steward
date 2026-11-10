@@ -14,8 +14,12 @@ dependencies = []
 [project.scripts]
 tsw = "tsw.cli:main"
 
-[tool.setuptools]
-packages = ["tsw", "tsw.storage"]
+# Every subpackage and the page and skill assets: a non-editable install runs the same code.
+[tool.setuptools.packages.find]
+include = ["tsw*"]
+
+[tool.setuptools.package-data]
+tsw = ["host/*.md", "host/*.css", "host/*.js"]
 
 [tool.setuptools.dynamic]
 version = {attr = "tsw.__version__"}

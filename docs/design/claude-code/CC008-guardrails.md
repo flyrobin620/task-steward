@@ -131,6 +131,7 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 | `teams-chat`：按消息 ID 精确读回、发送者为本人（未实现） | 删除 | 只对抗他人冒充；答复登记只核对“问题仍待答、回复对应到问题编号”，并按发送时记下的消息 ID 排除 tsw 自己发出的卡片与提醒，避免把它们误记为用户答复（DN008 §9；在 T243 的 `teams-chat` 渠道中实现） |
 | `hub-portal`：owner 认证（未实现） | 简化 | owner 认证是门户自己的访问控制，不属于 tsw |
 | 只有 `pending` 且上下文绑定一致时 T12 生效，其余记为迟到答复 | 保留 | 即“问题仍待答” |
+| 用户直接操作（`user-cli`、`status-app`，DN006 §8.10）只由会话外的 tsw 命令记录 | 新增（2026-11-10） | 命令行看到 Claude Code 的会话环境变量（`CLAUDE_CODE_HOST_SESSION_ID` 或 `CLAUDECODE`）就拒绝这些命令，不看会话角色；PreToolUse 照常拒绝会话运行非只读的 `tsw` 命令（DN001 §7.1），两层都是防误认，不是防同一用户下的恶意进程 |
 
 ### 5.6 账本与其他
 

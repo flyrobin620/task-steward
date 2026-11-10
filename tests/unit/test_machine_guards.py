@@ -173,6 +173,32 @@ def test_g_user_rejects_incomplete_or_mismatched_sources(change: dict[str, Any])
     )
 
 
+@pytest.mark.use_case("UC-DIRECT-001")
+@pytest.mark.transition("G-USER")
+def test_g_user_keeps_the_direct_channels_to_the_user_caller() -> None:
+    direct = {**SOURCE, "channel": "user-cli"}
+    for channel in ("user-cli", "status-app"):
+        source: dict[str, Any] = {**SOURCE, "channel": channel}
+        assert guards.g_user(source, task_id="T001", revision=1, kind="accept", role="user")
+
+        def as_orchestrator(given: dict[str, Any] = source) -> Any:
+            return guards.g_user(given, task_id="T001", revision=1, kind="accept")
+
+        assert _reason(as_orchestrator) == "g_user"
+    assert (
+        _reason(
+            lambda: guards.g_user(SOURCE, task_id="T001", revision=1, kind="accept", role="user")
+        )
+        == "g_user"
+    )
+    assert (
+        _reason(
+            lambda: guards.g_user(direct, task_id="T001", revision=2, kind="accept", role="user")
+        )
+        == "g_user"
+    )
+
+
 @pytest.mark.transition("G-ACCEPT")
 def test_g_accept_items() -> None:
     expected = ["功能可用", "测试通过"]

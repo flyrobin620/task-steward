@@ -63,7 +63,7 @@
 | tsw core | 产品仓库 Python 包 | 账本、配置、门禁、渲染、导入、插件加载（评审器等插件见 DN006） |
 | 事件账本 | 数据目录 `ledger/` | 唯一事实来源，JSONL 追加写，带序号和前序摘要链 |
 | 投影与检索索引 | 数据目录 `cache/state.sqlite`、`cache/context.sqlite` | 可随时由账本重建的状态投影与任务卡片 / 全文索引（DN007） |
-| 渲染器 | tsw core | 每次事件提交后生成 STATUS.html / ARCHIVE.html，模型不写页面 |
+| 渲染器 | tsw core | 每次事件提交后生成 STATUS.html / ARCHIVE.html，模型不写页面；用户启动的 STATUS 应用（`tsw status serve`）按请求生成同一页面并加上验收、退回、取消按钮（DN006 §8.10） |
 | Codex reviewer | 本机 `codex` CLI | worker 调用的一次性只读评审线程 |
 
 ## 5. 角色与职责
@@ -149,7 +149,7 @@ worker 用 `ask_user` 向用户提问后，用户在子会话里的回复由宿�
 
 cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一致时拒绝写工具。worker 绑定后 MCP server 通知客户端刷新工具列表。
 
-角色只按会话解析：在已绑定数据目录的会话里（主会话、worker、已撤销），`tsw` 命令行只开放不需要声明角色的入口（`mcp`、`guard`、`review run` 与只读命令；`host render`、`restore`、`quiesce` 等维护命令由用户在会话外运行；备份、审计、重建投影与导入经 MCP 工具开放给主会话，见 DN006 §9.7），`tsw tool run --role` 等写入口由 CLI 自己拒绝，提示改用 MCP。不在 prompt 中放 token 或 capability 文件路径：会话 ID 已足够区分角色。
+角色只按会话解析：在已绑定数据目录的会话里（主会话、worker、已撤销），`tsw` 命令行只开放不需要声明角色的入口（`mcp`、`guard`、`review run` 与只读命令；`host render`、`restore`、`quiesce` 等维护命令由用户在会话外运行；备份、审计、重建投影与导入经 MCP 工具开放给主会话，见 DN006 §9.7），`tsw tool run --role` 等写入口由 CLI 自己拒绝，提示改用 MCP。用户本人的入口（`task accept` / `reject` / `cancel`、`status serve`，以及不带 `--user-source` 的 `lease takeover`）在任何宿主会话中都拒绝运行，不看会话角色（DN006 §8.10）。不在 prompt 中放 token 或 capability 文件路径：会话 ID 已足够区分角色。
 
 ### 7.2 按角色的 MCP 工具
 
@@ -162,7 +162,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一
 | `inbox` / `inbox_ack` | ✓ | — | 未处理 reportable 事件 |
 | `feedback` / `pause` / `resume` / `request_input` / `resolve_input` | ✓ | `pause` 仅自身 | T02、T12、T14、T17、T19–T21 |
 | `integrate` / `integration_withdraw` | ✓ | — | `verifying` 内部的集成事件 |
-| `accept` / `user_accept` / `user_reject` / `archive` / `cancel` | ✓ | — | T18、T22–T26；`user_*` 必须附用户消息来源 |
+| `accept` / `user_accept` / `user_reject` / `archive` / `cancel` | ✓ | — | T18、T22–T26；`user_*` 必须附用户消息来源；用户也可以在会话外直接验收、退回、取消（DN006 §8.10） |
 | `pr_link` / `output_link` | ✓ | 登记草稿，主控核验 | PR 与产出登记 |
 | `progress_note` | ✓ | ✓ | 不唤醒主会话 |
 | `question` | — | ✓ | 跨任务事项交主会话判断（DN006 §8.1） |

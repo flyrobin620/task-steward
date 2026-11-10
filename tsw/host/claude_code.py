@@ -203,6 +203,9 @@ def install_hint(home: Home) -> str:
     return "\n".join(
         [
             "TaskSteward 的 Claude Code 插件安装步骤（只需一次）：",
+            f"0. 在产品仓库 {PLUGIN_DIR.parent} 中运行 python -m pip install -e .，之后任何",
+            f"   终端都能直接运行 tsw；再运行 tsw init --home {home.root} --remember，",
+            "   终端就不必设置 TSW_HOME（人工运行的命令见 README）。",
             f"1. 在 Claude Code 中添加本地插件市场：/plugin marketplace add {plugin}",
             "2. 安装插件：/plugin install task-steward@task-steward",
             "   Claude Code 运行的是插件的缓存副本：产品仓库更新（git pull）后运行",

@@ -22,6 +22,9 @@ from tsw.machine.model import (
 from tsw.plugins.catalog import SESSIONS
 
 USER_CHANNELS = ("main-session", "in-session", "teams-chat", "hub-portal")
+# The user's own operations outside any session (DN006 §8.10): only the ``user`` caller, which
+# only the terminal commands and the STATUS app take, records them; sessions cannot use them.
+DIRECT_CHANNELS = ("user-cli", "status-app")
 SOURCE_FIELDS = ("channel", "principal", "message_ref", "text")
 
 
@@ -217,11 +220,23 @@ def g_pause(pause: Mapping[str, Any]) -> None:
 
 
 def g_user(
-    source: Mapping[str, Any] | None, *, task_id: str, revision: int, kind: str
+    source: Mapping[str, Any] | None,
+    *,
+    task_id: str,
+    revision: int,
+    kind: str,
+    role: str = "orchestrator",
 ) -> dict[str, Any]:
-    """G-USER: a verified source naming the user, the message, the words and the target."""
+    """G-USER: a verified source naming the user, the message, the words and the target.
+
+    The ``user`` caller (the user's own terminal command or STATUS app, DN006 §8.10) records the
+    direct channels and only those; every other caller records a session or channel source.
+    """
     return verified_source(
-        source, [task_id, revision, kind], mismatch="用户来源的决定对象与当前任务不一致"
+        source,
+        [task_id, revision, kind],
+        channels=DIRECT_CHANNELS if role == "user" else USER_CHANNELS,
+        mismatch="用户来源的决定对象与当前任务不一致",
     )
 
 

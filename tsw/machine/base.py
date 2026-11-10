@@ -19,7 +19,8 @@ from tsw.errors import rejected
 from tsw.lease import require_lease
 from tsw.machine.model import current_attempt, task
 
-ROLES = ("orchestrator", "worker", "routine", "system")
+# ``user`` is the user acting outside any session (DN006 §8.10); no session resolves to it.
+ROLES = ("orchestrator", "worker", "routine", "system", "user")
 
 
 @dataclass(frozen=True)

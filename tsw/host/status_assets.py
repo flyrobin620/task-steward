@@ -42,3 +42,13 @@ CSP = (
     f"script-src '{SCRIPT_HASH}'; "
     "style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"
 )
+# The STATUS app (DN006 §8.10) adds its action script and may call its own server, nothing else.
+APP_SCRIPT = (_HERE / "status_app.js").read_text(encoding="utf-8")
+APP_SCRIPT_HASH = (
+    "sha256-" + base64.b64encode(hashlib.sha256(APP_SCRIPT.encode("utf-8")).digest()).decode()
+)
+APP_CSP = (
+    "default-src 'none'; "
+    f"script-src '{SCRIPT_HASH}' '{APP_SCRIPT_HASH}'; connect-src 'self'; "
+    "style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"
+)

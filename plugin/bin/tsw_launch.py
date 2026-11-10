@@ -62,8 +62,9 @@ def launch() -> int:
         from tsw.cli import main  # noqa: PLC0415 - the path is only known at run time
     except ImportError:
         sys.stderr.write(
-            "tsw: 找不到 TaskSteward 运行时。请设置 TSW_REPO 指向产品仓库，"
-            "或在产品仓库中运行 tsw init 记录其位置。\n"
+            "tsw: 找不到 TaskSteward 运行时。在产品仓库中运行 python -m pip install -e .，"
+            "再运行 tsw init --home <数据目录> --remember 记录两者的位置；"
+            "也可以设置 TSW_REPO 指向产品仓库。\n"
         )
         # A hook must never break the session; the MCP server reports the failure.
         return 0 if sys.argv[1:2] == ["guard"] else 1

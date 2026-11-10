@@ -15,17 +15,27 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from tsw import __version__, lease
+from tsw import __version__, direct, lease
 from tsw.config import EffectiveConfig, lease_minutes, load_config
 from tsw.errors import EXIT_CODES, ErrorCode, TswError
 from tsw.events import utc_now
-from tsw.home import Home, claim_sessions, init_home, open_home, record_product_repo, resolve_home
+from tsw.home import (
+    Home,
+    claim_sessions,
+    init_home,
+    locate_home,
+    open_home,
+    record_product_repo,
+    remember_home,
+    resolve_home,
+)
 from tsw.host.claude_code import install_hint, render_instructions
 from tsw.host.guard import run as run_guard
 from tsw.host.identity import HOST_CLI_COMMANDS, SESSION_ENV
 from tsw.host.identity import resolve as resolve_identity
 from tsw.host.mcp import serve
 from tsw.host.plugin_copy import update as update_plugin
+from tsw.host.status_app import serve_status
 from tsw.importer import renumber
 from tsw.importer.orchestrator_agent import run_import as run_import_orchestrator_agent
 from tsw.ledger import Ledger
@@ -78,17 +88,24 @@ def _cmd_init(args: argparse.Namespace) -> dict[str, Any]:
     claimed = bool(getattr(args, "claim_sessions", False))
     if claimed:
         claim_sessions(home)
+    remembered = remember_home(REPO_ROOT, home.root) if args.remember else None
     return {
         "home": str(home.root),
         "created": created,
         "product_repo": str(REPO_ROOT),
         **({"claim_sessions": True} if claimed else {}),
+        **({"remembered": str(remembered)} if remembered else {}),
     }
 
 
 def _cmd_home(args: argparse.Namespace) -> dict[str, Any]:
-    root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)
-    return {"home": str(root), "initialized": (root / "tsw-home.json").is_file()}
+    root, found_by = (Path(args.home), "--home") if args.home else locate_home(repo_root=REPO_ROOT)
+    return {
+        "home": str(root),
+        "initialized": (root / "tsw-home.json").is_file(),
+        "source": found_by,
+        "product_repo": str(REPO_ROOT),
+    }
 
 
 def _cmd_task_register(args: argparse.Namespace) -> dict[str, Any]:
@@ -119,6 +136,57 @@ def _cmd_task_note(args: argparse.Namespace) -> dict[str, Any]:
         "sequence": result.last_sequence,
         "duplicate": result.duplicate,
     }
+
+
+def _confirm(args: argparse.Namespace, prompt: str) -> None:
+    """The user confirms a direct action: interactively, or with ``--yes``."""
+    if args.yes:
+        return
+    if not sys.stdin.isatty():
+        raise TswError(ErrorCode.REJECTED, "非交互运行时须加 --yes 确认", reason="not_confirmed")
+    try:
+        answer = input(f"{prompt} [y/N] ").strip().lower()
+    except EOFError:  # stdin closed: nobody can confirm
+        answer = ""
+    if answer not in ("y", "yes"):
+        raise TswError(ErrorCode.REJECTED, "已取消，没有写入", reason="not_confirmed")
+
+
+def _cli_ref() -> str:
+    return f"cli:{utc_now()}:{os.getpid()}"
+
+
+def _cmd_task_direct(args: argparse.Namespace) -> dict[str, Any]:
+    action = str(args.task_command)
+    label = direct.ACTIONS[action][2]
+    direct.require_outside_session(os.environ, f"tsw task {action} ")
+    ledger, config = _writer(args)
+    with ledger.view() as conn:
+        row = task_row(conn, args.task_id)
+    revision = args.revision if args.revision is not None else int(row["revision"])
+    _confirm(
+        args,
+        f"{label} {args.task_id}「{row['title']}」（状态 {row['status']}，revision {revision}）？",
+    )
+    words = getattr(args, "note", None) or getattr(args, "reason", None)
+    text = f"tsw task {action} {args.task_id}" + (f"：{words}" if words else "")
+    return direct.perform(
+        ledger,
+        config,
+        action,
+        args.task_id,
+        channel="user-cli",
+        message_ref=_cli_ref(),
+        text=text,
+        revision=revision,
+        reason=getattr(args, "reason", None),
+    )
+
+
+def _cmd_status_serve(args: argparse.Namespace) -> dict[str, Any]:
+    direct.require_outside_session(os.environ, "tsw status serve ")
+    serve_status(_home(args), port=args.port, open_browser=not args.no_open)
+    return {"_silent": True}
 
 
 def _cmd_task_list(args: argparse.Namespace) -> dict[str, Any]:
@@ -227,12 +295,23 @@ def _cmd_lease_release(args: argparse.Namespace) -> dict[str, Any]:
 
 def _cmd_lease_takeover(args: argparse.Namespace) -> dict[str, Any]:
     ledger, config = _lease_ledger(args)
-    try:
-        source = json.loads(args.user_source)
-    except json.JSONDecodeError as exc:
-        raise TswError(ErrorCode.REJECTED, "--user-source 必须是 JSON 对象") from exc
-    if not isinstance(source, dict):
-        raise TswError(ErrorCode.REJECTED, "--user-source 必须是 JSON 对象")
+    if args.user_source is None:
+        # The user running the command is the confirmation that the old session has stopped.
+        direct.require_outside_session(os.environ, "不带 --user-source 的 tsw lease takeover ")
+        source: Any = {
+            "channel": "user-cli",
+            "principal": direct.principal(),
+            "message_ref": _cli_ref(),
+            "text": f"tsw lease takeover --session {args.session} --from-session "
+            f"{args.from_session}" + (" --from-machine" if args.from_machine else ""),
+        }
+    else:
+        try:
+            source = json.loads(args.user_source)
+        except json.JSONDecodeError as exc:
+            raise TswError(ErrorCode.REJECTED, "--user-source 必须是 JSON 对象") from exc
+        if not isinstance(source, dict):
+            raise TswError(ErrorCode.REJECTED, "--user-source 必须是 JSON 对象")
     command = lease.takeover(
         args.session,
         machine=args.machine,
@@ -361,7 +440,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="在其中工作的会话一律使用本数据目录，不看 TSW_HOME（live 运行等隔离场景）",
     )
-    add(sub, "home", _cmd_home, "显示数据目录位置")
+    init.add_argument(
+        "--remember",
+        action="store_true",
+        help="把它记为本产品仓库的数据目录（写入 .local/tsw-home），终端不必再设 TSW_HOME",
+    )
+    add(sub, "home", _cmd_home, "显示数据目录位置与定位依据")
 
     task = sub.add_parser("task", help="任务").add_subparsers(
         dest="task_command", required=True, metavar="<task command>"
@@ -382,6 +466,19 @@ def build_parser() -> argparse.ArgumentParser:
     add(task, "list", _cmd_task_list, "列出任务")
     show = add(task, "show", _cmd_task_show, "显示任务")
     show.add_argument("task_id")
+    for name, text in (
+        ("accept", "用户验收待验收的任务（T22，用户本人在终端运行）"),
+        ("reject", "用户退回待验收的任务（T23，用户本人在终端运行）"),
+        ("cancel", "用户取消任务（T25，用户本人在终端运行；活动 worker 须先由主会话停止）"),
+    ):
+        direct_cmd = add(task, name, _cmd_task_direct, text)
+        direct_cmd.add_argument("task_id")
+        direct_cmd.add_argument("--revision", type=int, help="确认的 revision（默认当前）")
+        direct_cmd.add_argument("--yes", action="store_true", help="不再询问，直接执行")
+        if name == "reject":
+            direct_cmd.add_argument("--reason", required=True, help="退回理由")
+        else:
+            direct_cmd.add_argument("--note", help="记录的用户原话（可选）")
 
     ledger = sub.add_parser("ledger", help="账本").add_subparsers(
         dest="ledger_command", required=True, metavar="<ledger command>"
@@ -421,8 +518,8 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--from-machine", action="store_true")
             command.add_argument(
                 "--user-source",
-                required=True,
-                help='用户确认来源（JSON：{"channel","principal","message_ref","text"}）',
+                help='用户确认来源（JSON：{"channel","principal","message_ref","text"}）；'
+                "用户本人在终端运行时可省略",
             )
 
     tool_cmd = sub.add_parser("tool", help="状态机工具（与 MCP 共用实现）").add_subparsers(
@@ -479,6 +576,18 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="按用户决定排除只有任务书、旧账本未登记的任务（可重复）：不导入，也不列为待决定",
     )
+
+    status = sub.add_parser("status", help="STATUS 页面").add_subparsers(
+        dest="status_command", required=True, metavar="<status command>"
+    )
+    serve_cmd = add(
+        status,
+        "serve",
+        _cmd_status_serve,
+        "在本机启动 STATUS 应用：直接读账本，提供验收、退回、取消按钮（Ctrl+C 停止）",
+    )
+    serve_cmd.add_argument("--port", type=int, default=0, help="端口（默认任选空闲端口）")
+    serve_cmd.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
 
     add(sub, "quiesce", _cmd_quiesce, "静止数据目录（之后可直接复制）")
     add(sub, "resume-writes", _cmd_resume_writes, "解除静止")

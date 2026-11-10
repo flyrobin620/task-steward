@@ -59,14 +59,48 @@
 
 ## 开始使用（开发中）
 
-需要 Python 3.10+ 与 git。运行时只依赖标准库，在仓库根目录即可运行：
+需要 Python 3.10+ 与 git。运行时只依赖标准库。
+
+### 安装 `tsw` 命令（只需一次）
+
+在本仓库根目录运行：
 
 ```text
-python -m tsw init                 初始化数据目录（默认按 TSW_HOME 定位）
-python -m tsw task register --title "示例" --repo demo --kind code --goal "…" --acceptance "…"
-python -m tsw task list --json
-python -m tsw ledger audit
+python -m pip install -e .
+tsw init --home <数据目录> --remember
 ```
+
+第一行把 `tsw` 装进 Python 的 `Scripts` 目录（Windows 的 PowerShell、cmd 与 Git Bash 都能直接运行 `tsw`）。这是可编辑安装，运行的就是本仓库当前的代码，`git pull` 后不用重装。第二行初始化（或打开已有的）数据目录，并把它记在本仓库的 `.local/tsw-home` 中，之后终端不需要设置 `TSW_HOME`。不想安装时，在仓库根目录用 `python -m tsw` 代替 `tsw`。
+
+### 哪些命令在哪里运行
+
+- **运行时**（tsw 的代码）在本仓库：安装后 `tsw` 在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw，不需要这一步。
+- **数据目录**（账本、任务书、报告）按顺序定位：当前目录所在的、声明了 `claim_sessions` 的数据目录（只用于 live 测试隔离）→ 环境变量 `TSW_HOME` → 本仓库的 `.local/tsw-home` → `~/.tsw`。`tsw home` 显示找到的目录和依据。
+- **当前目录**只影响两件事：上面的 `claim_sessions`，以及 `tsw review run`（在 worker 的 worktree 中评审当前 HEAD）。其他命令在哪个目录运行都一样；`backup`、`restore` 的相对路径按当前目录解析。
+- 这些命令由你在**会话外的终端**中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 STATUS 应用在任何会话中都会被拒绝，以免会话替你做决定（[DN006 §8.10](docs/design/DN006-plugin-layer.md)）。
+
+### 需要你运行的命令
+
+```text
+tsw home                                     显示数据目录与定位依据
+tsw init --home <目录> --remember            初始化数据目录并记为本仓库的数据目录
+tsw host install-hint                        显示 Claude Code 插件的安装步骤
+tsw host render                              更新主会话的 CLAUDE.md、skill 与插件副本（产品更新后）
+tsw status serve                             打开 STATUS 应用：浏览器中查看任务，一键验收、退回、取消
+tsw task accept T255 [--note "看过报告"]     验收待验收的任务（先显示任务并要求确认；--yes 跳过）
+tsw task reject T255 --reason "缺少导出"     退回待验收的任务
+tsw task cancel T255                         取消任务（有运行中的 worker 时须先由主会话停止）
+tsw lease show                               查看调度租约
+tsw lease takeover --session <新主会话 ID> --from-session <原主会话 ID>
+                                             原主会话已停止时接管租约（另一台机器上的加 --from-machine）
+tsw lease release --session <主会话 ID>       释放租约
+tsw backup <空目录>  /  tsw restore <备份>   在线备份 / 恢复到空的数据目录
+tsw quiesce  /  tsw resume-writes            静止数据目录（之后可直接复制）/ 解除
+tsw ledger audit  /  tsw ledger rebuild      审计账本 / 从账本重建投影
+tsw config show  /  tsw config validate      查看 / 校验统一配置
+```
+
+`tsw status serve` 只监听本机，每次启动输出一个带一次性令牌的地址并在浏览器中打开；页面与数据目录中的 `views/STATUS.html` 相同，另有按钮，报告与 PR 链接照常可点。按 Ctrl+C 停止。`views/STATUS.html` 仍在每次提交后生成，可以离线打开，但没有按钮。
 
 开发者另需安装开发工具（`pip install -r requirements-dev.txt`），并用 `python tools/gate.py` 运行本地门禁。
 

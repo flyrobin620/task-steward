@@ -25,7 +25,10 @@ from tsw.machine.model import OCCUPYING, loads, next_item_id
 TOOL_MODULES = (_orchestrator, _worker, _config_tools, _ask_user, _routine)
 
 SYNC = Tool(
-    "sync", ("orchestrator", "system"), lambda inp, env: sync_command(env), description="系统规则"
+    "sync",
+    ("orchestrator", "system", "user"),
+    lambda inp, env: sync_command(env),
+    description="系统规则",
 )
 
 

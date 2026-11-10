@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 
-from tsw.host.status import render
-from tsw.host.status_assets import CSP, SCRIPT
+from tsw.host.status import AppView, render
+from tsw.host.status_assets import APP_CSP, APP_SCRIPT, CSP, SCRIPT
 from tsw.projection import SCHEMA_SQL
 
 mark = pytest.mark
@@ -163,3 +163,40 @@ def test_an_empty_board_says_so(conn: sqlite3.Connection) -> None:
     page = render(conn)
     assert "没有任务" in page
     assert "<article" not in page
+
+
+@mark.use_case("UC-DIRECT-002")
+def test_the_status_app_page_adds_the_direct_actions(conn: sqlite3.Connection) -> None:
+    _task(conn, "T001", "done", revision=2)
+    _task(conn, "T002", "in_progress")
+    _task(conn, "T003", "ready")
+    static = render(conn)
+    assert 'data-act="' not in static and "tsw-token" not in static
+    assert "tsw task accept T001" in _card(static, "T001")
+    app = AppView(
+        token="tok-1",
+        actions={
+            "T001": (("accept", "reject"), None),
+            "T002": ((), "worker 仍在运行：请在主会话中先停止 worker 再取消"),
+            "T003": (("cancel",), None),
+        },
+    )
+    page = render(conn, app)
+    first = _card(page, "T001")
+    assert '<div class="acts" data-task="T001" data-revision="2">' in first
+    assert 'data-act="accept"' in first and 'data-act="reject"' in first
+    assert 'data-act="' not in _card(page, "T002")
+    assert "先停止 worker" in _card(page, "T002")
+    assert 'data-act="cancel"' in _card(page, "T003")
+    assert '<meta name="tsw-token" content="tok-1">' in page
+    scripts = re.findall(r"<script>(.*?)</script>", page, re.S)
+    assert scripts == [SCRIPT, APP_SCRIPT]
+    digest = base64.b64encode(hashlib.sha256(APP_SCRIPT.encode("utf-8")).digest()).decode()
+    assert f"'sha256-{digest}'" in APP_CSP and "connect-src 'self'" in APP_CSP
+    assert f'content="{APP_CSP}"' in page.replace("&#x27;", "'")
+    # The offline page stays as it was: only the app talks to a server.
+    assert "connect-src" not in CSP
+
+
+def test_the_app_script_cannot_close_its_own_element() -> None:
+    assert "</" not in APP_SCRIPT
