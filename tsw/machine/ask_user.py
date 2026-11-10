@@ -570,6 +570,14 @@ def relay_channels(config: EffectiveConfig) -> list[str]:
     return ["main-session", *(c for c in loaded if c != CHANNEL and CHANNELS[c].request_response)]
 
 
+def user_channels(config: EffectiveConfig) -> list[str]:
+    """The human channels a handed-off question for the user goes to (DN006 §8.1b): the ones in
+    ``input.channels`` other than the worker's own session. Empty when only ``in-session`` is
+    configured; the orchestrator then tells the user in its own session (``main-session``)."""
+    allowed = relay_channels(config)
+    return [c for c in config.get("input.channels") or [] if c != CHANNEL and c in allowed]
+
+
 @tool(
     "input_relay",
     "orchestrator",
@@ -592,9 +600,14 @@ def input_relay(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         }
         if channel == "teams-chat":
             # The card the orchestrator sends next, then registers with channel_sent (DN006 §8.7).
-            from tsw.machine.routine import card  # noqa: PLC0415  (routine imports this module)
+            # card_html is what goes out (Teams shows a text message on one line, CC006 §7).
+            from tsw.machine.routine import card, card_html  # noqa: PLC0415  (imports this module)
 
-            data |= {"card": card(ctx.conn, request), "chat": env.config.get("input.teams.chat")}
+            data |= {
+                "card": card(ctx.conn, request),
+                "card_html": card_html(ctx.conn, request),
+                "chat": env.config.get("input.teams.chat"),
+            }
         return [EventDraft(type="input.relayed", task_id=task_id, data=data)]
 
     return _cmd(env, "input_relay", inp, build)

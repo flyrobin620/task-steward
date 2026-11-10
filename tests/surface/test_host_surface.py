@@ -274,14 +274,31 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     code, out = run_json("host", "render")
     assert code == 0
     handle_input = home / ".claude" / "skills" / "handle-input" / "SKILL.md"
-    assert [Path(p) for p in out["written"]] == [home / "CLAUDE.md", skill, handle_input, settings]
+    teams_chat = home / ".claude" / "skills" / "teams-chat" / "SKILL.md"
+    assert [Path(p) for p in out["written"]] == [
+        home / "CLAUDE.md",
+        skill,
+        handle_input,
+        teams_chat,
+        settings,
+    ]
     # The test's Claude configuration directory has no plugin installed.
     assert out["plugin"]["installed"] == [] and "note" in out["plugin"]
     handling = handle_input.read_text(encoding="utf-8")
-    assert "handoff_resolve" in handling
-    # Teams cards go out with WorkIQ: the self chat's path, where channel_sent's fields come from.
-    assert "mcp__workiq__create_entity" in handling and "/me/chats/48:notes/messages" in handling
-    assert "from.user.id" in handling and "mcp__teams__SendMessageToSelf" not in handling
+    assert handling.startswith("---\nname: handle-input\ndescription: ")
+    # The flow (T256): handed off, judged, then told through the configured human channels;
+    # never asked again in the main session, and the channel's details are in its own skill.
+    assert "handoff_resolve" in handling and "input.channels" in handling
+    assert "不在主会话里重复提问" in handling and "该渠道的 skill" in handling
+    assert "create_entity" not in handling and "contentType" not in handling
+    channel = teams_chat.read_text(encoding="utf-8")
+    assert channel.startswith("---\nname: teams-chat\ndescription: ")
+    # Teams cards go out with WorkIQ as rich text: the self chat's path, the HTML body, and
+    # where channel_sent's fields come from; replies and read failures are handled here too.
+    assert "mcp__workiq__create_entity" in channel and "/me/chats/48:notes/messages" in channel
+    assert '"contentType": "html"' in channel and "card_html" in channel
+    assert "from.user.id" in channel and "mcp__teams__SendMessageToSelf" not in channel
+    assert '"channel": "teams-chat"' in channel and "mcp__workiq__fetch" in channel
     # The actions tsw guards itself are allowed; what the user had there is kept (DN006 §6.3).
     written = json.loads(settings.read_text(encoding="utf-8"))
     assert written["env"] == {"X": "1"}

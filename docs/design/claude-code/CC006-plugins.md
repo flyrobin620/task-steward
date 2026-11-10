@@ -1,6 +1,6 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §6.4 问题流程 skill 与 §7 渠道 skill、富文本卡片）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -21,7 +21,7 @@
 | 派发窗口与预启动（G-WINDOW、attempt `standby`） | 只有用户本人的 turn 能在任务目录创建会话；任何 turn 都能给已有会话发消息 | P2（能力声明） |
 | 权限模式名称 | `default` / `acceptEdits` / `auto` / `bypassPermissions` | P2（映射表） |
 | 评审器 | Codex App Server 一次性线程 | P2 的 oneshot 能力 + `roles.reviewer.session` |
-| 待答问题的投递与回收 | 用户在子会话直接答复；转交后经 Teams 自聊（`teams-chat`，§7） | P3 |
+| 待答问题的投递与回收 | 用户在子会话直接答复；转交后按配置的人类渠道通知（如 Teams 自聊 `teams-chat`，§7） | P3 |
 | 例行会话的定时运行 | 会话内定时任务 `CronCreate` / `CronDelete`，`clear_session` 清空上下文（§6） | P2（`timer` 能力） |
 | 例行会话空跑不唤醒主会话 | 主会话启动后 `detach_session`（§6.1） | P2（`detach` 能力） |
 | 控制根 = 私有 Git 仓库 | ledger、runs 随仓库提交 | P4 + 数据目录 |
@@ -143,15 +143,17 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 
 例行会话角色见 CC001 §5；hooks 对它执行 CC008 的 CC-B8、CC-B10（已撤销、待绑定）与 CC-B11（不编辑、不运行命令、不建会话）。与 worker 的执行目录一样，`routine/` 不带权限规则（带规则的目录会再次要求信任，决定 0003）：例行会话的定时任务、取数、转发与清空上下文由用户设置中的 auto 模式规则“TaskSteward Routine”放行（`tsw host install-hint` 给出，CC008 §6），创建它的 `start_session` 与随后的 `detach_session` 由“TaskSteward Worker Dispatch”覆盖。
 
-### 6.4 主会话的“处理转交问题” skill
+### 6.4 主会话的问题流程 skill
 
-`render_instructions` 在数据目录生成第二个项目 skill `.claude/skills/handle-input/SKILL.md`（来源 `tsw/host/handle_input_skill.md`）。例行会话转来的消息要求主会话按它处理：
+`render_instructions` 在数据目录生成项目 skill `.claude/skills/handle-input/SKILL.md`（来源 `tsw/host/handle_input_skill.md`），写明 DN006 §8.1b 的三步（T256）：
 
-1. 读问题与任务书，按 DN006 §8.2 的授权边界与因素判断；`reserved` 的问题只能转达给用户；
-2. 能代答时 `handoff_resolve`，再用 `send_message` 把决定告诉 worker，让它继续；
-3. 需要用户时 `input_relay`：用户正在主会话中时转达到 `main-session`；否则按配置的渠道（如 `teams-chat`，§7）发出；
-4. Teams 中转来的消息：判断它是否回答了问题，是答复时 `input_resolve`（来源为渠道 `teams-chat` 与消息 ID），再告诉 worker；不是答复时不登记。
-5. Teams 读取连续失败的通知（或 `attention` 中的 `fetch_failing`）：主会话自己用 WorkIQ 读一次同一个 chat，区分是 chat 读不到还是例行会话的工具或权限有问题；后者让例行会话重试并告诉用户要做的事（例如更新 auto 模式规则），前者告诉用户回复暂时收不回来，可以在 worker 会话里直接回答。
+1. **超时转交并通知主会话**：例行会话的 `handoff-scan` 转交到期的问题，转来的消息列出问题、是否 `reserved`、worker 会话，以及配置的人类渠道（`input.channels` 中 `in-session` 以外、已加载的渠道；没有时写明转达到主会话本身）。
+2. **主会话判断**：读问题与任务书，按 DN006 §8.2 的授权边界与因素判断。能代答时 `handoff_resolve`，再用 `send_message` 把决定告诉 worker，让它继续；`reserved` 或超出授权的交给用户。
+3. **按配置的人类渠道通知用户**：对每个配置的渠道 `input_relay`，然后按与渠道同名的 skill 发出（`teams-chat` 见 §7）。配置了这样的渠道时不在主会话里重复提问、不只是等待；只有没有时才 `input_relay`（`main-session`）在主会话中告诉用户。发送失败时问题保持待答，告诉用户可以在 worker 会话里回答。
+
+渠道转回的答复与渠道的故障（Teams 的回复登记与读取失败）按渠道的 skill 处理。通用的 skill 不写渠道的工具、路径、格式与 `channel_sent` 字段：新增渠道时只加它自己的 skill，问题流程不变。
+
+改动原因：Q-T255-1 超时转交后，主会话只在主会话里提示“去 worker 会话回答”，没有经 Teams 转达。原 skill 把“用户正在本会话对话时转达到 `main-session`”与“否则转 Teams”并列，主会话据此判断出了偏差（用户 2026-11-10）。
 
 ### 6.5 待验证（T243、T250 live）
 
@@ -169,11 +171,21 @@ DN006 §8.6–§8.7 在 Claude Code 上的做法。发送与读取都用 WorkIQ 
 
 | 步骤 | 谁 | 工具 |
 | --- | --- | --- |
-| 发送问题卡片 | 主会话 | `input_relay`（`channel: teams-chat`）返回卡片正文与目标 chat；主会话用 `get_session` 取 worker 会话的 `link` 填入卡片；调用 `mcp__workiq__create_entity`，`parentUrl` 在目标为 `self` 时为 `/me/chats/48:notes/messages`（用户本人的自聊），否则为 `/me/chats/<chat>/messages`，`jsonBody` 为 `{"body": {"contentType": "text", "content": <卡片>}}`；再用 `channel_sent` 登记返回的消息：`chat_id` 取 `chatId`（没有时取路径中的 chat），`message_id` 取 `id`，`sender_id` 取 `from.user.id` |
+| 发送问题卡片 | 主会话 | `input_relay`（`channel: teams-chat`）返回富文本卡片 `card_html`、同一内容的纯文本 `card`（不发送）与目标 chat；主会话用 `get_session` 取 worker 会话的 `link`，替换卡片中所有 `{worker_link}`；调用 `mcp__workiq__create_entity`，`parentUrl` 在目标为 `self` 时为 `/me/chats/48:notes/messages`（用户本人的自聊），否则为 `/me/chats/<chat>/messages`，`jsonBody` 为 `{"body": {"contentType": "html", "content": <card_html>}}`；再用 `channel_sent` 登记返回的消息：`chat_id` 取 `chatId`（没有时取路径中的 chat），`message_id` 取 `id`，`sender_id` 取 `from.user.id` |
 | 取出答复 | 例行会话 | Teams 例行项：`mcp__workiq__fetch` 逐页取数（§6.2），`routine_run` 运行脚本，结果转给主会话 |
-| 登记答复、告诉 worker | 主会话 | `input_resolve`、`send_message`（§6.4 第 4 步） |
+| 登记答复、告诉 worker | 主会话 | `input_resolve`、`send_message` |
 
-消息正文是 HTML，脚本去掉标签与首尾空白后再看是否以任务 ID 开头。
+这些做法写在渠道自己的 skill 中：`render_instructions` 生成 `.claude/skills/teams-chat/SKILL.md`（来源 `tsw/host/teams_chat_skill.md`），包括发送、回复登记（`user_source` 的字段）与读取失败的处理（主会话自己用 WorkIQ 读一次同一个 chat，区分是 chat 读不到还是例行会话的工具或权限有问题；后者让例行会话重试并告诉用户要做的事，前者告诉用户回复暂时收不回来，可以在 worker 会话里直接回答）。问题流程 skill（§6.4）只指向它；例行会话转来的 Teams 回复与读取失败通知也指向它。
+
+卡片按问题内容排版（T256）：纯文本消息（`contentType: text`）在 Teams 中不显示换行，Q-T253-1、Q-T255-1 的卡片都挤成一行。`card_html` 只用 Teams 支持的标签（`<p>`、`<br>`、`<b>`、`<ul>`/`<li>`、`<a>`、`<codeblock><code>`）：
+
+| 部分 | 排版 |
+| --- | --- |
+| 标题 | `[TaskSteward] <任务 ID> <问题编号>`，加粗，单独一段；卡片的文字仍以 `[TaskSteward]` 开头 |
+| 任务、问题、回复方式、worker 会话 | 各自一段，字段名加粗；worker 会话为链接 |
+| 问题正文 | 空行分段，段内换行保留为 `<br>`；`-` / `*` 开头的行为列表；`1.`、`A.`、`1、` 等开头的行（选项）每行一行、保留自己的编号（回复时会说“选 A”，有序列表会重新编号）；` ``` ` 围起的代码为代码块；其余文字转义，不解释 Markdown |
+
+消息正文是 HTML，脚本去掉标签与首尾空白后再看是否以任务 ID 开头；富文本卡片去掉标签后以 `[TaskSteward]` 开头，用户的回复照旧，读取与判断都不变。
 
 ## 8. 会话能用到的 skill、MCP 与插件；仓库任务的 worktree
 
@@ -215,7 +227,7 @@ T251 依据实测与官方文档（[skills](https://code.claude.com/docs/en/skil
 - **任务书的“仓库与 worktree”一节**（仓库已配置时生成）：
   - 会话目录与分支（或没有 worktree 的原因），不要另建 worktree 或 clone；报告写在执行目录。
   - 仓库指令文件：`repositories.<id>.instructions`（相对仓库根的路径列表），未配置时默认 `AGENTS.md`、`CLAUDE.md`、`.github/copilot-instructions.md`；worker 开始前完整阅读并遵守，改动子目录前也读该子目录中的同名文件，报告写明读了哪些。各仓库的列表由主会话经 `config_change` 维护。
-  - 有 worktree 时列出数据目录的 skill（`orchestrate`、`handle-input` 只用于主会话，不列）。
+  - 有 worktree 时列出数据目录的 skill（`orchestrate`、`handle-input`、`teams-chat` 只用于主会话，不列）。
 - **评审**：`review_run` 在 worktree 中评审，按其中的提交确定范围。
 - 数据目录的 `CLAUDE.md` 不变，不为 `AGENTS.md` 原生加载改写它（用户决定）。
 - `worktrees.root` 在 `claude-code` 宿主中不使用（字段保留）；`worktrees.work_dir` 仍是执行目录的默认位置。

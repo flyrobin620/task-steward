@@ -605,8 +605,8 @@ def fetch_alert_text(conn: sqlite3.Connection, chat_id: str, entry: Mapping[str,
     return (
         f"TaskSteward 例行项 teams-replies：读取 Teams chat {chat_id} 已连续 {entry['count']} 次"
         f"失败（自 {entry['first']}，最近一次：{entry['reason']}），这个 chat 中等待中的 Teams "
-        f"问题（{'、'.join(waiting) or '无'}）的回复收不回来。按 handle-input skill 处理"
-        "（“Teams 读取失败”）。恢复之前不再重复通知。"
+        f"问题（{'、'.join(waiting) or '无'}）的回复收不回来。按 teams-chat skill 处理"
+        "（“读取失败”）。恢复之前不再重复通知。"
     )
 
 
@@ -759,7 +759,8 @@ def select_replies(
 
 
 def card(conn: sqlite3.Connection, request: Mapping[str, Any]) -> str:
-    """The question card the orchestrator sends to Teams (DN006 §8.7 step 1)."""
+    """The question card as plain text (DN006 §8.7 step 1). Teams shows a text message on one
+    line, so the card goes out as ``card_html``; this one stays for other uses (T256)."""
     task_id = str(request["task_id"])
     row = task(conn, task_id)
     return (
@@ -769,6 +770,83 @@ def card(conn: sqlite3.Connection, request: Mapping[str, Any]) -> str:
         f"回复时以任务 ID 开头，例如“{task_id} 你的答复”。\n"
         f"worker 会话：{WORKER_LINK}"
     )
+
+
+def card_html(conn: sqlite3.Connection, request: Mapping[str, Any]) -> str:
+    """The question card as a Teams rich-text message (``contentType: html``, CC006 §7): the
+    heading, the task, the question with its paragraphs, lists and code kept, how to reply and
+    the worker session's link, each on its own lines. Its text still starts with
+    ``[TaskSteward]``, so a read never takes it for a reply (DN008 §9)."""
+    task_id = str(request["task_id"])
+    row = task(conn, task_id)
+    esc = html.escape
+    return "".join(
+        [
+            f"<p><b>{esc(CARD_PREFIX)} {esc(task_id)} {esc(str(request['request_id']))}</b></p>",
+            f"<p><b>任务：</b>{esc(str(row['title']))}</p>",
+            "<p><b>问题：</b></p>",
+            question_html(str(request["question"])),
+            f"<p><b>回复方式：</b>回复时以任务 ID 开头，例如“{esc(task_id)} 你的答复”。</p>",
+            f'<p><b>worker 会话：</b><a href="{WORKER_LINK}">{WORKER_LINK}</a></p>',
+        ]
+    )
+
+
+_FENCE = re.compile(r"^\s*```")
+_BULLET = re.compile(r"^\s*[-*•]\s+(.*)$")
+_NUMBERED = re.compile(r"^\s*(?:(?:\d+|[A-Za-z])[.)]\s+|(?:\d+|[A-Za-z])、\s*)\S")
+
+
+def question_html(question: str) -> str:
+    """A question's text as Teams HTML, following its own layout: blank lines part paragraphs,
+    lines inside a paragraph keep their breaks, ``-`` / ``*`` lines become a bulleted list,
+    ``1.`` / ``A.`` lines (options are often written so) a block of their own, one per line with
+    their labels kept, and fenced code (```` ``` ````) a code block. Everything else is escaped
+    text: Teams shows no Markdown."""
+    blocks: list[str] = []
+    lines = question.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            i += 1
+            continue
+        if _FENCE.match(line):
+            body: list[str] = []
+            i += 1
+            while i < len(lines) and not _FENCE.match(lines[i]):
+                body.append(lines[i])
+                i += 1
+            i += 1  # the closing fence, when there is one
+            code = html.escape("\n".join(body))
+            blocks.append(f"<codeblock><code>{code}</code></codeblock>")
+            continue
+        if _BULLET.match(line):
+            entries: list[str] = []
+            while i < len(lines) and (found := _BULLET.match(lines[i])):
+                entries.append(f"<li>{html.escape(found.group(1).strip())}</li>")
+                i += 1
+            blocks.append(f"<ul>{''.join(entries)}</ul>")
+        elif _NUMBERED.match(line):
+            # Options keep their own labels: a reply says "A" or "2", which <ol> would renumber.
+            options: list[str] = []
+            while i < len(lines) and _NUMBERED.match(lines[i]):
+                options.append(html.escape(lines[i].strip()))
+                i += 1
+            blocks.append(f"<p>{'<br>'.join(options)}</p>")
+        else:
+            para: list[str] = []
+            while (
+                i < len(lines)
+                and lines[i].strip()
+                and not _FENCE.match(lines[i])
+                and not _BULLET.match(lines[i])
+                and not _NUMBERED.match(lines[i])
+            ):
+                para.append(html.escape(lines[i].strip()))
+                i += 1
+            blocks.append(f"<p>{'<br>'.join(para)}</p>")
+    return "".join(blocks) or "<p></p>"
 
 
 def run_next(
@@ -796,8 +874,14 @@ def run_next(
 # ---------------------------------------------------------------------- forwarding
 
 
-def forward_text(conn: sqlite3.Connection, job_id: str, events: Iterable[Mapping[str, Any]]) -> str:
-    """The message a job's result sends to the orchestrator, or "" when there is none."""
+def forward_text(
+    conn: sqlite3.Connection,
+    job_id: str,
+    events: Iterable[Mapping[str, Any]],
+    channels: Sequence[str] = (),
+) -> str:
+    """The message a job's result sends to the orchestrator, or "" when there is none.
+    ``channels`` are the human channels a question for the user goes to (``user_channels``)."""
     lines: list[str] = []
     for event in events:
         data = event.get("data") or {}
@@ -827,16 +911,25 @@ def forward_text(conn: sqlite3.Connection, job_id: str, events: Iterable[Mapping
     if not lines:
         return ""
     if job_id == HANDOFF_SCAN:
+        if channels:
+            to_user = (
+                f"经配置的人类渠道（{'、'.join(channels)}）input_relay 后"
+                "按该渠道的 skill 通知用户，不在主会话里重复提问。"
+            )
+        else:
+            to_user = (
+                "配置中没有会话之外的人类渠道：input_relay（main-session）后在主会话中告诉用户。"
+            )
         head = (
             "TaskSteward 例行项 handoff-scan：以下会话内问题超时无人回复，"
             "已转交给你（by: system）。"
-            "按 handle-input skill 处理：在授权内用 handoff_resolve 代答并告诉 worker，"
-            "或用 input_relay 问用户。"
+            "按 handle-input skill 处理：在授权内用 handoff_resolve 代答并告诉 worker；"
+            f"需要用户决定的，{to_user}"
         )
     else:
         head = (
             "TaskSteward 例行项 teams-replies：Teams 中有以下以等待中的任务 ID 开头的消息。"
-            "按 handle-input skill 判断是否回答了问题；是答复时用 input_resolve 登记"
+            "按 teams-chat skill（“登记回复”）判断是否回答了问题；是答复时用 input_resolve 登记"
             "（渠道 teams-chat，message_ref 为消息 ID），再告诉 worker。"
         )
     return "\n".join([head, *lines])

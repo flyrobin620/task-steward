@@ -809,6 +809,13 @@ def session_settings(run: Run, directory: Path) -> None:
         event: [{"hooks": [{"type": "command", "command": f'python -X utf8 "{capture}" {event}'}]}]
         for event in ("SessionStart", "UserPromptSubmit")
     }
+    # How the main session sent the Teams card: the format is checked from the call (T256).
+    hooks["PostToolUse"] = [
+        {
+            "matcher": CARD_TOOL,
+            "hooks": [{"type": "command", "command": f'python -X utf8 "{capture}" PostToolUse'}],
+        }
+    ]
     # The installed plugin is a cached copy; until it is updated, its hooks do not see the
     # scheduling tools this checkout guards. Run this checkout's guard for them.
     launcher = ROOT / "plugin" / "bin" / "tsw_launch.py"
@@ -1088,6 +1095,7 @@ def routine_verify(args: argparse.Namespace) -> int:
         routine_started(run, evs),
         routine_handoff(evs),
         teams_round_trip(evs),
+        teams_card(run, evs, args.card_multiline),
         routine_wakes(run, evs),
         check(
             "O",
@@ -1294,6 +1302,83 @@ def handoff_wake(run: Run, evs: list[dict[str, Any]], old: str, new: str) -> dic
             "worker_heard": heard and heard["sequence"],
         },
     )
+
+
+CARD_TOOL = "mcp__workiq__create_entity"
+_CARD_TAGS = re.compile(r"<[^>]+>")
+
+
+def card_calls(run: Run) -> list[dict[str, Any]]:
+    """The main session's calls that sent a Teams message (its PostToolUse payloads): what it
+    sent (``body``) and what came back (``response``, as text)."""
+    path = run.dir / "hook-payloads.jsonl"
+    if not path.is_file():
+        return []
+    home = os.path.normcase(os.path.realpath(run.home))
+    out: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        payload = record.get("payload")
+        if record.get("event") != "PostToolUse" or not isinstance(payload, dict):
+            continue
+        if payload.get("tool_name") != CARD_TOOL:
+            continue
+        cwd = str(payload.get("cwd") or "")
+        if not cwd or os.path.normcase(os.path.realpath(cwd)) != home:
+            continue
+        given = payload.get("tool_input")
+        body: Any = given.get("jsonBody") if isinstance(given, dict) else None
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except ValueError:
+                body = None
+        found = body.get("body") if isinstance(body, dict) else None
+        out.append(
+            {
+                "time": str(record.get("time") or ""),
+                "body": found if isinstance(found, dict) else {},
+                "response": json.dumps(payload.get("tool_response"), ensure_ascii=False),
+            }
+        )
+    return out
+
+
+def teams_card(run: Run, evs: list[dict[str, Any]], seen_multiline: str | None) -> dict[str, Any]:
+    """C (T256): the card of T002's question went out as rich text, from the main session's own
+    call (its PostToolUse payload): ``contentType`` html, paragraphs, the worker's link filled
+    in, and its text starting with the card's heading; the call created the message that
+    ``channel_sent`` registered. That Teams shows it on several lines is the operator's
+    observation (``--card-multiline``). Only facts are reported, never the card's text."""
+    sent = first(evs, "channel.message_sent", "T002")
+    message_id = str(sent["data"].get("message_id")) if sent else ""
+    request_id = str(sent["data"].get("request_id")) if sent else ""
+    calls = [c for c in card_calls(run) if message_id and message_id in c["response"]]
+    call = calls[-1] if calls else None
+    content = str((call or {}).get("body", {}).get("content") or "")
+    words = re.sub(r"\s+", " ", _CARD_TAGS.sub(" ", content)).strip()
+    content_type = str((call or {}).get("body", {}).get("contentType") or "")
+    paragraphs = content.count("<p>")
+    heading = bool(request_id) and words.startswith(f"[TaskSteward] T002 {request_id}")
+    link_filled = bool(content) and "{worker_link}" not in content and "<a href=" in content
+    facts = {
+        "registered": bool(sent),
+        "call_found": call is not None,
+        "content_type": content_type or None,
+        "paragraphs": paragraphs,
+        "heading": heading,
+        "link_filled": link_filled,
+        "card_multiline": seen_multiline or "未记录",
+    }
+    ok = (
+        call is not None
+        and content_type.lower() == "html"
+        and paragraphs >= 4
+        and heading
+        and link_filled
+        and seen_multiline == "yes"
+    )
+    return check("C", "富文本卡片：经 WorkIQ 以 html 发出，Teams 中分行显示（T002）", ok, facts)
 
 
 def main_prompts(run: Run) -> list[dict[str, Any]]:
@@ -1911,6 +1996,10 @@ def main(argv: list[str] | None = None) -> int:
         ("--blocked", "例行会话的定时任务或发消息是否出现权限确认或分类器拒绝"),
         # Kept for old command lines; check W reads the wakes from the hook payloads (T250).
         ("--woken-by-ticks", "例行会话每次定时运行结束时主会话是否被唤醒（只作记录）"),
+        (
+            "--card-multiline",
+            "Teams 中的问题卡片是否分行、分段显示（标题、任务、问题、回复方式各自成行）",
+        ),
     ):
         routine_ver.add_argument(flag, choices=("yes", "no"), help=f"操作者观察：{text}")
     routine_ver.set_defaults(handler=routine_verify)

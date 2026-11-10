@@ -32,7 +32,7 @@ DEFAULT_INSTRUCTIONS = ("AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.
 # Where the work starts when the repository names no base_ref (the first that resolves).
 BASE_CANDIDATES = ("{remote}/HEAD", "{remote}/main", "{remote}/master", "main", "master", "HEAD")
 # The data directory's skills for the main session only (tsw host render writes them).
-ORCHESTRATOR_SKILLS = ("orchestrate", "handle-input")
+ORCHESTRATOR_SKILLS = ("orchestrate", "handle-input", "teams-chat")
 GIT_TIMEOUT = 60
 
 

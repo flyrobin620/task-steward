@@ -362,8 +362,9 @@ def test_routine_e2e_teams_check_accepts_a_real_round_trip(
     request = asked["events"][0]["data"]["request_id"]
     h.clock.now = "2026-11-05T00:10:00Z"
     h.run("routine_run", routine, job_id="handoff-scan")
-    h.run("input_relay", task_id="T002", request_id=request, channel="teams-chat")
-    h.run("channel_sent", task_id="T002", request_id=request, chat_id="c", message_id="card")
+    relayed = h.run("input_relay", task_id="T002", request_id=request, channel="teams-chat")
+    card_html = relayed["events"][0]["data"]["card_html"]
+    h.run("channel_sent", task_id="T002", request_id=request, chat_id="c", message_id="card-1")
     reply = {
         "id": "m1",
         "createdDateTime": "2026-11-05T00:12:00Z",
@@ -399,6 +400,40 @@ def test_routine_e2e_teams_check_accepts_a_real_round_trip(
     ]
     result = live.teams_round_trip(evs)
     assert result["status"] == "passed", result
+    # Check C (T256): the card went out as rich text, read from the main session's own call.
+    run_dir = home.root.parent / "live-run"
+    run_dir.mkdir()
+    run = cast(live.Run, SimpleNamespace(dir=run_dir, home=home.root))
+
+    def sent(content_type: str, content: str, cwd: Path = home.root) -> dict[str, Any]:
+        body = {"body": {"contentType": content_type, "content": content}}
+        return {
+            "time": "2026-11-05T00:11:00Z",
+            "event": "PostToolUse",
+            "payload": {
+                "cwd": str(cwd),
+                "tool_name": live.CARD_TOOL,
+                "tool_input": {"parentUrl": "/me/chats/48:notes/messages", "jsonBody": body},
+                "tool_response": [{"type": "text", "text": '{"id": "card-1"}'}],
+            },
+        }
+
+    def card_check(*records: dict[str, Any], seen: str | None = "yes") -> dict[str, Any]:
+        lines = [json.dumps(r, ensure_ascii=False) for r in records]
+        text = "".join(f"{line}\n" for line in lines)
+        (run_dir / "hook-payloads.jsonl").write_text(text, encoding="utf-8")
+        return live.teams_card(run, evs, seen)
+
+    filled = card_html.replace("{worker_link}", "https://example.invalid/s?a=1&amp;b=2")
+    assert card_check(sent("html", filled))["status"] == "passed"
+    # The operator did not see it on several lines; or it went out as text, or unfilled; or
+    # another session (a worker) sent it.
+    assert card_check(sent("html", filled), seen="no")["status"] == "failed"
+    assert card_check(sent("html", filled), seen=None)["status"] == "failed"
+    assert card_check(sent("text", filled))["status"] == "failed"
+    assert card_check(sent("html", card_html))["evidence"]["link_filled"] is False
+    other = card_check(sent("html", filled, cwd=run_dir))
+    assert other["status"] == "failed" and other["evidence"]["call_found"] is False
 
 
 @pytest.mark.use_case("UC-ROUTINE-001")

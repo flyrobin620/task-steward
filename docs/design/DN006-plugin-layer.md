@@ -1,6 +1,6 @@
 # DN006 插件层：宿主集成、会话、人类渠道与数据存储
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步、交给用户时按配置的人类渠道，§8.7 Teams 卡片用富文本）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN008 校验原则](DN008-guardrails.md) · 实现：[CC006 Claude Code 插件](claude-code/CC006-plugins.md)
 
@@ -288,7 +288,11 @@ interactive 动作（`create`、`deliver_brief`、`send`、`stop`、`observe`、
 - **转达给用户**（`input_relay`）：渠道为主会话本身（`main-session`，例如在主会话中向用户提问）或已加载、支持 `request_response` 的其他人类渠道（如 Teams，§8.6）。记录 `input.relayed`。用户经该渠道的答复由主会话用 `input_resolve` 记录，来源是该渠道核实过的 `VerifiedSource`（主会话消息、Teams 回复等），满足 G-USER，经 T12 让 worker 继续。worker 会话中的原话只能由 worker 经 `user_answer` 登记，主会话不能用 `input_resolve` 代为记录 `in-session` 来源。
 - **继续等待**：什么都不做，问题保持待答。
 
-主会话被唤醒后按“处理转交问题”的 skill（宿主集成生成，Claude Code 见 CC006 §6.4）与 §8.2 判断：在授权内用 `handoff_resolve` 代答，并用消息告诉 worker 决定内容、让它继续；需要用户时用 `input_relay` 转达到主会话本身或人类渠道（Teams 见 §8.6、§8.7）。
+问题流程（用户 2026-11-10 决定，T256）分三步，由宿主集成生成的“处理问题”skill 写明（Claude Code 见 CC006 §6.4）：
+
+1. **超时转交并通知主会话**：例行表的 `handoff-scan` 把到期的问题转交（`input.handed_off`），并把问题与配置的人类渠道转给主会话。
+2. **主会话判断**：按 §8.2 判断。在授权内用 `handoff_resolve` 代答，并用消息告诉 worker 决定内容、让它继续；`reserved` 或超出授权的交给用户。
+3. **按配置的人类渠道通知用户**：渠道是 `input.channels` 中 `in-session` 以外的渠道（P3，须已加载），配置的是什么就用什么。主会话对每个渠道 `input_relay`，再按该渠道自己的 skill 发出、登记发送结果与回收答复（Teams 见 §8.6、§8.7）；通用的流程不写渠道的发送细节。配置了这样的渠道时，主会话不在自己的会话里重复提问，也不只是等待；只有配置中没有 `in-session` 以外的渠道时，才转达到主会话本身（`main-session`）。用户在 worker 会话中的回复始终有效。
 
 ### 8.1c 迟到的答复
 
@@ -399,7 +403,7 @@ T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与
 | 实现 | 能力 | 发送 | 回收 | 核实 |
 | --- | --- | --- | --- | --- |
 | `in-session` | request_response，push（不支持 notify） | 无需发送：worker 用 `ask_user` 记录后在自己的会话里提问（§8.1a） | 宿主集成记录用户消息原文（`input.session_message`，Claude Code 见 CC006 §4），worker 用 `user_answer` 引用消息编号登记 | 只核对问题仍待答、消息属于该 worker 会话的这个问题；注入的其他会话消息不记录（DN008 §9） |
-| `teams-chat` | request_response，poll，delegated（本版本不提供 notify） | 主会话 `input_relay` 后，按返回的卡片正文用宿主的 Teams 工具发到配置的 chat（默认用户本人的自聊），再用 `channel_sent` 登记，例行表随之加入或更新 Teams 例行项 | 例行项的脚本取出 chat 中最近的、用户发送的、以等待中任务 ID 开头的消息，转给主会话（§8.7） | 只核对问题仍待答、消息能对应到任务 ID 与问题；卡片以 `[TaskSteward]` 开头，不会被当作答复（DN008 §9） |
+| `teams-chat` | request_response，poll，delegated（本版本不提供 notify） | 主会话 `input_relay` 后，按渠道的 skill 把返回的富文本卡片用宿主的 Teams 工具发到配置的 chat（默认用户本人的自聊），再用 `channel_sent` 登记，例行表随之加入或更新 Teams 例行项 | 例行项的脚本取出 chat 中最近的、用户发送的、以等待中任务 ID 开头的消息，转给主会话（§8.7） | 只核对问题仍待答、消息能对应到任务 ID 与问题；卡片以 `[TaskSteward]` 开头，不会被当作答复（DN008 §9） |
 | `hub-portal` | request_response，notify（Portal 通知卡片），push，direct | tsw 把请求发布到 Hub 门户（问题卡片） | Portal 用户提交答复，经认证回调写回 tsw | Portal 的 owner 认证 + 请求 ID |
 | `email-draft` | notify_only | 在邮箱生成草稿（默认不发送，沿用邮件约定） | — | — |
 
@@ -413,7 +417,7 @@ T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与
 
 Teams 工具只有宿主中的模型能调用（delegated），回收因此是 poll，由例行表中的 Teams 例行项（§8.9.5）完成。主会话与例行会话都不运行时不回收，问题保持待答；不承诺离线回收。发送与读取用哪个工具由宿主集成决定，发送与读取用同一套工具（Claude Code 用 WorkIQ，见 CC006 §7）。
 
-1. **发送**：主会话 `input_relay`（`channel: teams-chat`）记录 `input.relayed`，返回卡片正文与目标 chat（`input.teams.chat`，默认用户本人的自聊）。卡片以 `[TaskSteward]` 开头，写明任务 ID、问题编号、问题全文、worker 会话链接，以及答复方式：“回复时以任务 ID 开头，例如 `T241 用方案 A`”。主会话发送后调用 `channel_sent`，登记 chat ID、卡片消息 ID 与发送者（用户本人在 Teams 中的 ID，取自发送结果）；tsw 把该任务 ID 加入这个 chat 的 Teams 例行项的输入列表：每个还有待答问题的 chat 一行（配置的 chat 改了之后，旧 chat 中的问题照样回收）。
+1. **发送**：主会话 `input_relay`（`channel: teams-chat`）记录 `input.relayed`，返回卡片正文与目标 chat（`input.teams.chat`，默认用户本人的自聊）。卡片以 `[TaskSteward]` 开头，写明任务 ID、问题编号、问题全文、worker 会话链接，以及答复方式：“回复时以任务 ID 开头，例如 `T241 用方案 A`”。卡片按问题内容以富文本发送（T256）：标题、任务、问题、回复方式与 worker 会话链接各自分行，问题保留自己的段落、列表、选项与代码片段；纯文本消息在 Teams 中不显示换行，整张卡片会挤成一行（Q-T253-1、Q-T255-1）。发送的工具与格式写在渠道的 skill 中（Claude Code 见 CC006 §7）。主会话发送后调用 `channel_sent`，登记 chat ID、卡片消息 ID 与发送者（用户本人在 Teams 中的 ID，取自发送结果）；tsw 把该任务 ID 加入这个 chat 的 Teams 例行项的输入列表：每个还有待答问题的 chat 一行（配置的 chat 改了之后，旧 chat 中的问题照样回收）。
 2. **回收**：例行项的脚本按 §8.9.5 取出 chat 中从最早一个待答问题的卡片发出起到现在的全部消息中（不限条数，逐页读取）、发送者是用户本人、正文以问题编号或列表中某个任务 ID 开头的消息，排除 tsw 自己发出的消息（按登记的出站消息 ID）与已经转给主会话的消息，对应到它回答的问题，转给主会话。脚本不判断内容。
 3. **登记**：主会话收到转来的消息后按 skill 判断它是否回答了问题。是答复时用 `input_resolve` 登记，来源为 `VerifiedSource`（渠道 `teams-chat`、Teams 消息 ID、消息原文、问题的决定对象），满足 G-USER，经 T12 让 worker 继续，并用消息把答复告诉 worker。不是答复（例如“稍后回复”）时不登记，问题保持待答。问题已答复、取消或过时后才到的消息，按 §8.1c 记为 `input.late_response`。
 4. **移出**：任务的问题不再待答（任何渠道答复、取消、过时）时，tsw 把它的任务 ID 从输入列表中移除；列表为空时这一行停用，下次有 Teams 转达时重新启用。

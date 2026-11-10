@@ -251,6 +251,14 @@ def test_teams_round_trip(home: Home) -> None:
     data = relayed["events"][0]["data"]
     assert data["card"].startswith(f"{routine_mod.CARD_PREFIX} T001 {request_id}")
     assert routine_mod.WORKER_LINK in data["card"] and data["chat"] == "self"
+    # What goes out is rich text (T256): each part in its own paragraph, the task's title
+    # escaped, and the worker's link both as the target and the text of a link.
+    rich = data["card_html"]
+    assert rich.startswith(f"<p><b>{routine_mod.CARD_PREFIX} T001 {request_id}</b></p>")
+    assert "<p>用方案 A 还是 B？</p>" in rich and "\n" not in rich
+    link = routine_mod.WORKER_LINK
+    assert f'<a href="{link}">{link}</a>' in rich
+    assert routine_mod.plain_text(rich).startswith(f"{routine_mod.CARD_PREFIX} T001 {request_id}")
     cache: dict[str, Any] = {}
     assert [j["job_id"] for j in board(h, routine, cache)["jobs"]] == ["handoff-scan"]
     sent = h.run(
@@ -281,7 +289,15 @@ def test_teams_round_trip(home: Home) -> None:
                 "id": "card-1",
                 "createdDateTime": "2026-11-05T00:10:30Z",
                 "from": {"user": {"id": "u1"}},
-                "body": {"content": data["card"]},
+                "body": {"contentType": "html", "content": rich},
+            },
+            {
+                # The same card sent again by hand (not registered): its text starts with the
+                # prefix, so it is still not a reply.
+                "id": "card-again",
+                "createdDateTime": "2026-11-05T00:11:00Z",
+                "from": {"user": {"id": "u1"}},
+                "body": {"contentType": "html", "content": rich},
             },
             {
                 "id": "r1",
@@ -361,6 +377,32 @@ def test_teams_round_trip(home: Home) -> None:
     assert run_job(h, routine, "teams-replies", chat_id="chat-1", fetched=[reply]) == ([], "")
     events, _ = run_job(h, routine, "teams-replies", chat_id="chat-2", fetched=[reply])
     assert [e["data"]["request_id"] for e in events] == [third]
+
+
+@pytest.mark.use_case("UC-ROUTINE-001")
+@pytest.mark.use_case("UC-ASK-001")
+@pytest.mark.parametrize(
+    ("config", "told"),
+    [
+        (TEAMS, "经配置的人类渠道（teams-chat）"),
+        ({}, "input_relay（main-session）"),
+        # input.channels picks the channels a question goes to among the loaded ones.
+        ({**TEAMS, "input": {"channels": ["in-session"]}}, "input_relay（main-session）"),
+    ],
+)
+def test_a_handed_off_question_names_the_channels_to_use(
+    home: Home, config: dict[str, Any], told: str
+) -> None:
+    # T256: the orchestrator tells the user through the configured human channels; it does not
+    # ask again in its own session unless no channel but the worker's session is configured.
+    h = Harness(home, config)
+    routine = start_routine(h)
+    asked(h)
+    server = Server(h.home, {SESSION_ENV: str(routine.session_id)}, home.root / "routine")
+    forward = server.call("routine_run", {"job_id": "handoff-scan"})["forward"]
+    assert forward["send"] is True and forward["session_id"] == "orch-1"
+    assert told in forward["message"] and "handle-input" in forward["message"]
+    assert ("不在主会话里重复提问" in forward["message"]) == ("teams-chat" in told)
 
 
 @pytest.mark.use_case("UC-CHANNEL-001")
