@@ -511,3 +511,35 @@ def test_routine_e2e_reads_the_orchestrator_wakes_from_the_hooks(tmp_path: Path)
     woken = live.routine_wakes(run, [*newer, detached(4, 2, "2026-11-09T10:10:00Z")])
     assert woken["status"] == "failed" and woken["evidence"]["generation"] == 2
     assert woken["evidence"]["notices_after_detach"] == ["2026-11-09T10:20:00Z"]
+
+
+@pytest.mark.use_case("UC-DISPATCH-002")
+def test_w_reads_the_submission_and_needs_every_mark(tmp_path: Path) -> None:
+    run = SimpleNamespace(id="live-20261110T000000Z-abc123", home=tmp_path / "home")
+    origin = tmp_path / "repo"
+    origin.mkdir()
+    git(origin, "init", "-q", "-b", "main")
+    git(origin, "commit", "-q", "--allow-empty", "-m", "base")
+    worktree = run.home / "work" / "T001" / "a1" / "live-repo"
+    git(origin, "worktree", "add", "-q", "-b", "tsw/t001-a1", str(worktree))
+    head = git(worktree, "rev-parse", "HEAD")
+    marks = live.probe_marks(cast(Any, run))
+    report = run.home / "runs" / "T001" / "a1" / "result.md"
+    report.parent.mkdir(parents=True)
+    started = ev(
+        1, "attempt.start_requested", "T001", attempt="a1", worktree={"path": str(worktree)}
+    )
+    # As the ledger records it: the submission is nested, the head may be abbreviated.
+    submitted = ev(
+        2,
+        "worker.submitted",
+        "T001",
+        "w1",
+        submission={"head": head[:7], "report": {"md_path": "runs/T001/a1/result.md"}},
+    )
+    report.write_text("\n".join(marks.values()) + "\n", encoding="utf-8")
+    passed = live.worktrees(cast(Any, run), [started, submitted], {"T001": submitted})
+    assert passed["status"] == "passed", passed
+    report.write_text(f"{marks['agents']}\n{marks['repo_skill']}\n", encoding="utf-8")
+    missing = live.worktrees(cast(Any, run), [started, submitted], {"T001": submitted})
+    assert missing["status"] == "failed"

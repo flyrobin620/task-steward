@@ -1355,19 +1355,22 @@ def worktrees(
         recorded = bool(made) and all(
             m.get("path") and Path(str(m["path"])).resolve() == expected.resolve() for m in made
         )
-        head = str((sub or {}).get("data", {}).get("head") or "")
+        submission = (
+            ((sub or {}).get("data") or {}).get("submission") or (sub or {}).get("data") or {}
+        )
+        head = str(submission.get("head") or "")
         worktree_head = git_out(expected, "rev-parse", "HEAD") if expected.is_dir() else ""
         report = ""
         if sub is not None:
-            path = run.home / str((sub["data"].get("report") or {}).get("md_path") or "")
+            path = run.home / str((submission.get("report") or {}).get("md_path") or "")
             report = path.read_text(encoding="utf-8") if path.is_file() else ""
         found = {name: mark in report for name, mark in marks.items()}
         details[task_id] = {
             "worktree": made,
-            "submitted_head_is_worktree_head": bool(head) and head == worktree_head,
+            "submitted_head_is_worktree_head": same_commit(head, worktree_head),
             "marks_in_report": found,
         }
-        ok = ok and recorded and bool(head) and head == worktree_head and all(found.values())
+        ok = ok and recorded and same_commit(head, worktree_head) and all(found.values())
     return check(
         "W",
         "仓库 worktree：在 tsw 创建的 worktree 中工作；报告带有只在仓库 AGENTS.md、仓库 skill 与"
