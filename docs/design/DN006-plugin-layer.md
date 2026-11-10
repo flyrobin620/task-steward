@@ -1,6 +1,6 @@
 # DN006 插件层：宿主集成、会话、人类渠道与数据存储
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步、交给用户时按配置的人类渠道，§8.7 Teams 卡片用富文本）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN008 校验原则](DN008-guardrails.md) · 实现：[CC006 Claude Code 插件](claude-code/CC006-plugins.md)
 
@@ -285,14 +285,14 @@ interactive 动作（`create`、`deliver_brief`、`send`、`stop`、`observe`、
 转交之后，主会话可以：
 
 - **在授权边界内代为决定**（`handoff_resolve`）：回答、追加评审轮次（受 `review.orchestrator_extension_limit` 限制）、认定意见不成立或批准延后。记录 `orchestrator.decision`（`DecisionRecord`，理由与依据按 §8.2）与 `input.resolved`（`source_kind = orchestrator`，没有用户来源），经 T12 让 worker 继续，并用消息告诉 worker 决定内容。主会话代答不是用户批准，不满足 G-USER。§8.2 的硬边界照旧：凭据与 MFA、用户验收与退回、`policies.reserved_for_user`、超出任务书与配置授权的事，主会话都不能代答；worker 标为 `reserved` 的问题，`handoff_resolve` 一律拒绝。
-- **转达给用户**（`input_relay`）：渠道为主会话本身（`main-session`，例如在主会话中向用户提问）或已加载、支持 `request_response` 的其他人类渠道（如 Teams，§8.6）。记录 `input.relayed`。用户经该渠道的答复由主会话用 `input_resolve` 记录，来源是该渠道核实过的 `VerifiedSource`（主会话消息、Teams 回复等），满足 G-USER，经 T12 让 worker 继续。worker 会话中的原话只能由 worker 经 `user_answer` 登记，主会话不能用 `input_resolve` 代为记录 `in-session` 来源。
+- **转达给用户**（`input_relay`）：渠道只能是 `plugins.human_channels` 加载、支持 `request_response` 的人类渠道（§8.6）：`in-session` 为主会话在自己的会话中直接问用户，`teams-chat` 等为渠道插件。没有加载 `in-session` 时，主会话不在自己的会话中转达（`input_relay` 拒绝）。记录 `input.relayed`。用户经该渠道的答复由主会话用 `input_resolve` 记录，来源是该渠道核实过的 `VerifiedSource`（主会话消息、Teams 回复等），满足 G-USER，经 T12 让 worker 继续。worker 会话中的原话只能由 worker 经 `user_answer` 登记，主会话不能用 `input_resolve` 代为记录 `in-session` 来源。
 - **继续等待**：什么都不做，问题保持待答。
 
 问题流程（用户 2026-11-10 决定，T256）分三步，由宿主集成生成的“处理问题”skill 写明（Claude Code 见 CC006 §6.4）：
 
 1. **超时转交并通知主会话**：例行表的 `handoff-scan` 把到期的问题转交（`input.handed_off`），并把问题与配置的人类渠道转给主会话。
 2. **主会话判断**：按 §8.2 判断。在授权内用 `handoff_resolve` 代答，并用消息告诉 worker 决定内容、让它继续；`reserved` 或超出授权的交给用户。
-3. **按配置的人类渠道通知用户**：渠道是 `input.channels` 中 `in-session` 以外的渠道（P3，须已加载），配置的是什么就用什么。主会话对每个渠道 `input_relay`，再按该渠道自己的 skill 发出、登记发送结果与回收答复（Teams 见 §8.6、§8.7）；通用的流程不写渠道的发送细节。配置了这样的渠道时，主会话不在自己的会话里重复提问，也不只是等待；只有配置中没有 `in-session` 以外的渠道时，才转达到主会话本身（`main-session`）。用户在 worker 会话中的回复始终有效。
+3. **按 `plugins.human_channels` 交给用户**（用户 2026-11-10 定义的层次）：配置的是什么就用什么，没有配置的方式不用。`in-session`：主会话在自己的会话中直接问用户；`teams-chat` 等渠道插件：主会话 `input_relay` 后按该渠道自己的 skill 发出、登记发送结果与回收答复（Teams 见 §8.6、§8.7），通用的流程不写渠道的细节。`input.channels` 可以在已加载的渠道中再选一部分，默认是全部。一个渠道也没有时问题留在 worker 会话。用户在 worker 会话中的回复始终有效。
 
 ### 8.1c 迟到的答复
 
@@ -400,9 +400,16 @@ T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与
 
 ### 8.6 渠道实现
 
+层次与命名（T256，用户 2026-11-10）：
+
+- worker 在自己的会话中提问与用户在那里的回复（§8.1a）是 worker 层的能力，不是 P3 渠道，不受 `plugins.human_channels` 控制；它只取决于会话适配器能否让用户直接对话（`user_direct_chat`）。
+- P3 人类渠道（`plugins.human_channels`）只决定主会话把转交来、应由用户决定的问题交给用户的方式：`in-session` 是主会话在自己的会话中直接问，`teams-chat` 是调用 Teams 渠道插件。
+- 账本中的渠道值记录答复来自哪个会话，沿用已有记录，不改名：`in-session` 指 worker 会话（`input.escalated`、`input.session_message`、`user_answer` 的 `VerifiedSource`），`main-session` 指主会话（`input.relayed` 的 `channel`、主会话登记的 `VerifiedSource`）。所以经 `in-session` 渠道的转达记为 `channel: main-session`，另记 `plugin: in-session`；`input_relay` 仍接受旧名 `main-session`，与 `in-session` 相同，同样只在 `in-session` 已加载时可用。
+
 | 实现 | 能力 | 发送 | 回收 | 核实 |
 | --- | --- | --- | --- | --- |
-| `in-session` | request_response，push（不支持 notify） | 无需发送：worker 用 `ask_user` 记录后在自己的会话里提问（§8.1a） | 宿主集成记录用户消息原文（`input.session_message`，Claude Code 见 CC006 §4），worker 用 `user_answer` 引用消息编号登记 | 只核对问题仍待答、消息属于该 worker 会话的这个问题；注入的其他会话消息不记录（DN008 §9） |
+| （worker 层，不是 P3 渠道） | — | 无需发送：worker 用 `ask_user` 记录后在自己的会话里提问（§8.1a） | 宿主集成记录用户消息原文（`input.session_message`，Claude Code 见 CC006 §4），worker 用 `user_answer` 引用消息编号登记 | 只核对问题仍待答、消息属于该 worker 会话的这个问题；注入的其他会话消息不记录（DN008 §9） |
+| `in-session` | request_response，push（不支持 notify） | 主会话 `input_relay`（`channel: in-session`）后在自己的会话中直接问用户 | 用户在主会话中答复，主会话用 `input_resolve` 记录（来源渠道 `main-session`） | 只核对问题仍待答、答复对应到问题编号；worker 会话中的原话不能由主会话记录 |
 | `teams-chat` | request_response，poll，delegated（本版本不提供 notify） | 主会话 `input_relay` 后，按渠道的 skill 把返回的富文本卡片用宿主的 Teams 工具发到配置的 chat（默认用户本人的自聊），再用 `channel_sent` 登记，例行表随之加入或更新 Teams 例行项 | 例行项的脚本取出 chat 中最近的、用户发送的、以等待中任务 ID 开头的消息，转给主会话（§8.7） | 只核对问题仍待答、消息能对应到任务 ID 与问题；卡片以 `[TaskSteward]` 开头，不会被当作答复（DN008 §9） |
 | `hub-portal` | request_response，notify（Portal 通知卡片），push，direct | tsw 把请求发布到 Hub 门户（问题卡片） | Portal 用户提交答复，经认证回调写回 tsw | Portal 的 owner 认证 + 请求 ID |
 | `email-draft` | notify_only | 在邮箱生成草稿（默认不发送，沿用邮件约定） | — | — |
@@ -695,7 +702,7 @@ worker 用 direct 的 remote-hub 会话，主会话可以在任何宿主：
 
 | 能力缺失 | 影响 | 设计中的处理 |
 | --- | --- | --- |
-| worker 会话无 `user_direct_chat` | 用户不能在 worker 会话直接回答 | `in-session` 渠道不可用；改由其他渠道投递，答复由主会话转达 |
+| worker 会话无 `user_direct_chat` | 用户不能在 worker 会话直接回答 | worker 层的会话内提问不可用；问题交主会话，按 `plugins.human_channels` 投递，答复由主会话登记 |
 | `wake=poll` 或 `none` | worker 提交后主会话不能被即时唤醒 | 主会话在每个用户 turn 和定时唤醒时读取 inbox；STATUS 页显示“待主会话处理” |
 | `dispatch_window=true` | 自动 turn 中不能在任务目录创建会话 | DN002 G-WINDOW 与预启动（§5.6）生效：在用户 turn 中预启动，之后任何 turn 都可投递任务书 |
 | P1 规则为 `advisory` | 写入范围等规则只是提示 | G-ACCEPT 增加范围核对；报告标注提示级 |

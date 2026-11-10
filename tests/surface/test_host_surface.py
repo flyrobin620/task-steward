@@ -288,8 +288,8 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert handling.startswith("---\nname: handle-input\ndescription: ")
     # The flow (T256): handed off, judged, then told through the configured human channels;
     # never asked again in the main session, and the channel's details are in its own skill.
-    assert "handoff_resolve" in handling and "input.channels" in handling
-    assert "不在主会话里重复提问" in handling and "该渠道的 skill" in handling
+    assert "handoff_resolve" in handling and "plugins.human_channels" in handling
+    assert "`in-session`" in handling and "与渠道同名的 skill" in handling
     assert "create_entity" not in handling and "contentType" not in handling
     channel = teams_chat.read_text(encoding="utf-8")
     assert channel.startswith("---\nname: teams-chat\ndescription: ")

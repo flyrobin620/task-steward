@@ -47,7 +47,7 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
 
 worker 先在自己的会话里直接问用户（`ask_user`），你看不到问题内容，也不用处理。只有两类事会出现在 `inbox`：
 
-- `input.handed_off` 与 `channel.reply_seen`：worker 会话中的问题超时（默认 10 分钟）无人回复，由例行会话转交给你；或经 Teams 转达的问题在 Teams 中有了以任务 ID 开头的回复。按 `handle-input` skill 处理：在授权边界内代为决定（`handoff_resolve`）；需要用户决定的，按配置的人类渠道（`input.channels` 中 `in-session` 以外的，如 `teams-chat`）`input_relay` 后按该渠道的 skill 通知用户，不在本会话重复提问；渠道转回的答复按渠道的 skill 登记（`input_resolve`）。worker 标了 `reserved` 的问题只能交给用户。决定后用消息告诉 worker。`attention` 的 `handoff_due` 列出已到期但还没转交的问题（例行会话不在时），运行 `sync` 转交。用户之后在 worker 会话里的回复仍然有效：问题未决时它直接生效，已决时记为迟到答复，以用户的话为准。
+- `input.handed_off` 与 `channel.reply_seen`：worker 会话中的问题超时（默认 10 分钟）无人回复，由例行会话转交给你；或经 Teams 转达的问题在 Teams 中有了以任务 ID 开头的回复。按 `handle-input` skill 处理：在授权边界内代为决定（`handoff_resolve`）；需要用户决定的，按 `plugins.human_channels` 交给用户（`in-session`：在本会话中直接问；`teams-chat`：按 `teams-chat` skill 发卡片；没有配置的方式不用）；渠道转回的答复按渠道的 skill 登记（`input_resolve`）。worker 标了 `reserved` 的问题只能交给用户。决定后用消息告诉 worker。`attention` 的 `handoff_due` 列出已到期但还没转交的问题（例行会话不在时），运行 `sync` 转交。用户之后在 worker 会话里的回复仍然有效：问题未决时它直接生效，已决时记为迟到答复，以用户的话为准。
 - `worker.question`：跨任务的事（独占资源冲突、依赖调整、改动其他任务的范围）。用 `judge` 处理：
 
 - 唯一的硬边界是不越过已有授权：凭据、用户验收与退回、配置 `policies.reserved_for_user` 中的决定、超出任务书的范围，都交给用户（`decision: escalate`）。

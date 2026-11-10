@@ -1,6 +1,6 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §6.4 问题流程 skill 与 §7 渠道 skill、富文本卡片）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -62,7 +62,7 @@
 
 ## 4. `in-session` 渠道
 
-worker 有待答问题时，`UserPromptSubmit` hook 把用户消息记为 `input.session_message`（DN006 §8.1a）。哪些消息记录、哪些作为注入消息跳过，见 [CC008 §4](CC008-guardrails.md) 的 CC-S2。
+worker 有待答问题时，`UserPromptSubmit` hook 把用户消息记为 `input.session_message`（DN006 §8.1a）。这是 worker 层的会话内提问，账本中记为渠道 `in-session`；它不受 `plugins.human_channels` 控制。配置中的 `in-session` 人类渠道是另一回事：主会话在自己的会话中直接问用户（DN006 §8.6 的层次与命名）。哪些消息记录、哪些作为注入消息跳过，见 [CC008 §4](CC008-guardrails.md) 的 CC-S2。
 
 ## 5. 委托操作示例
 
@@ -147,13 +147,13 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 
 `render_instructions` 在数据目录生成项目 skill `.claude/skills/handle-input/SKILL.md`（来源 `tsw/host/handle_input_skill.md`），写明 DN006 §8.1b 的三步（T256）：
 
-1. **超时转交并通知主会话**：例行会话的 `handoff-scan` 转交到期的问题，转来的消息列出问题、是否 `reserved`、worker 会话，以及配置的人类渠道（`input.channels` 中 `in-session` 以外、已加载的渠道；没有时写明转达到主会话本身）。
+1. **超时转交并通知主会话**：例行会话的 `handoff-scan` 转交到期的问题，转来的消息列出问题、是否 `reserved`、worker 会话，以及配置的人类渠道与各自的做法（`plugins.human_channels` 加载、`input.channels` 选中的渠道；一个也没有时写明问题留在 worker 会话）。
 2. **主会话判断**：读问题与任务书，按 DN006 §8.2 的授权边界与因素判断。能代答时 `handoff_resolve`，再用 `send_message` 把决定告诉 worker，让它继续；`reserved` 或超出授权的交给用户。
-3. **按配置的人类渠道通知用户**：对每个配置的渠道 `input_relay`，然后按与渠道同名的 skill 发出（`teams-chat` 见 §7）。配置了这样的渠道时不在主会话里重复提问、不只是等待；只有没有时才 `input_relay`（`main-session`）在主会话中告诉用户。发送失败时问题保持待答，告诉用户可以在 worker 会话里回答。
+3. **按 `plugins.human_channels` 交给用户**：配置的是什么就用什么，没有配置的方式不用。`in-session`：`input_relay`（`channel: in-session`）后在主会话中直接问，用户的答复用 `input_resolve` 登记（来源渠道 `main-session`）；`teams-chat`：`input_relay` 后按与渠道同名的 skill 发出（§7）。没有配置 `in-session` 时不在主会话里问用户（`input_relay` 也会拒绝），也不用“去 worker 会话回答”代替渠道。发送失败时问题保持待答，向用户说明，问题仍可在 worker 会话里回答。
 
 渠道转回的答复与渠道的故障（Teams 的回复登记与读取失败）按渠道的 skill 处理。通用的 skill 不写渠道的工具、路径、格式与 `channel_sent` 字段：新增渠道时只加它自己的 skill，问题流程不变。
 
-改动原因：Q-T255-1 超时转交后，主会话只在主会话里提示“去 worker 会话回答”，没有经 Teams 转达。原 skill 把“用户正在本会话对话时转达到 `main-session`”与“否则转 Teams”并列，主会话据此判断出了偏差（用户 2026-11-10）。
+改动原因：Q-T255-1 超时转交后，主会话只在主会话里提示“去 worker 会话回答”，没有经 Teams 转达。原 skill 把“用户正在本会话对话时转达到 `main-session`”与“否则转 Teams”并列，主会话据此判断出了偏差；`input_relay` 也总是允许 `main-session`，与配置无关（用户 2026-11-10）。现在只有配置的渠道可用，本机配置为只有 `teams-chat`。
 
 ### 6.5 待验证（T243、T250 live）
 

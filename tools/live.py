@@ -1574,6 +1574,16 @@ def teams_round_trip(evs: list[dict[str, Any]]) -> dict[str, Any]:
     for name, found in (("relayed", relayed), ("sent", sent), ("job_added", added)):
         if found is None:
             problems.append(f"没有 {name}")
+    # The run configures teams-chat only (T256): nothing goes to the orchestrator's session.
+    elsewhere = [
+        e["data"].get("channel")
+        for e in evs
+        if e["type"] == "input.relayed"
+        and e["task_id"] == "T002"
+        and e["data"].get("channel") != "teams-chat"
+    ]
+    if elsewhere:
+        problems.append(f"转达到了未配置的渠道：{elsewhere}")
     if not seen:
         problems.append("例行表没有取出 Teams 回复")
     if any(not str(e["data"].get("text", "")).upper().startswith("T002") for e in seen):

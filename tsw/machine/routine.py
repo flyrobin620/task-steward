@@ -911,15 +911,18 @@ def forward_text(
     if not lines:
         return ""
     if job_id == HANDOFF_SCAN:
+        ways = {
+            "in-session": "in-session：在主会话中直接问用户",
+            TEAMS_CHANNEL: "teams-chat：按 teams-chat skill 发卡片",
+        }
         if channels:
             to_user = (
-                f"经配置的人类渠道（{'、'.join(channels)}）input_relay 后"
-                "按该渠道的 skill 通知用户，不在主会话里重复提问。"
+                f"按配置的人类渠道（plugins.human_channels）逐个 input_relay 后通知用户——"
+                f"{'；'.join(ways.get(c, f'{c}：按 {c} skill') for c in channels)}；"
+                "没有配置的方式不用。"
             )
         else:
-            to_user = (
-                "配置中没有会话之外的人类渠道：input_relay（main-session）后在主会话中告诉用户。"
-            )
+            to_user = "配置中没有人类渠道：问题留在 worker 会话，用户在那里回答。"
         head = (
             "TaskSteward 例行项 handoff-scan：以下会话内问题超时无人回复，"
             "已转交给你（by: system）。"
@@ -1139,7 +1142,8 @@ def channel_sent(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             raise rejected("没有这个会话内问题", reason="request_not_found", request_id=request_id)
         if request["status"] != "pending":
             raise rejected("问题已答复", reason="request_not_pending", request_id=request_id)
-        if request["relayed_to"] != TEAMS_CHANNEL:
+        # A question may be relayed to several channels (DN006 §8.6); any order is fine.
+        if TEAMS_CHANNEL not in str(request["relayed_to"] or "").split(","):
             raise rejected(
                 "先用 input_relay（channel: teams-chat）转达，再发送卡片", reason="not_relayed"
             )

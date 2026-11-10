@@ -1,6 +1,6 @@
 # DN003 统一配置
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置；T243 增加 `roles.routine` 与 `routine`；T251 §3.4 仓库任务的 worktree 与 `instructions`）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置；T243 增加 `roles.routine` 与 `routine`；T251 §3.4 仓库任务的 worktree 与 `instructions`；T256 `plugins.human_channels` 的含义）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN004 worker 自评审](DN004-worker-self-review.md)
 
@@ -191,7 +191,7 @@
 | --- | --- | --- |
 | `plugins.host_integration` | `claude-code` | 宿主集成（DN006 §6）：生成流程说明、工具注册与规则执行配置 |
 | `plugins.sessions` | `claude-app`、`codex-app-server`、`codex-exec` | 加载的会话适配器；`roles.*.session` 只能引用其中的实现 |
-| `plugins.human_channels` | `in-session`、`teams-chat` | 可用的人类渠道 |
+| `plugins.human_channels` | `in-session`、`teams-chat` | 主会话把转交来、应由用户决定的问题交给用户的方式（DN006 §8.6）：`in-session` 在主会话中直接问，`teams-chat` 经 Teams 渠道插件；worker 在自己会话中的提问不受它控制 |
 | `plugins.storage.use` | `fs` | `fs` 或 `fs+git`（数据目录作为用户私有 Git 仓库） |
 | `input.triage` | `orchestrator_judgment` | `orchestrator_judgment`：主会话在授权边界内综合判断（DN006 §8.2）；`human_direct`：主会话不判断，一律交给人类 |
 | `input.in_session_timeout_minutes` | 10 | worker 在自己会话中提问后，用户这么久没有任何回复就转交主会话（DN006 §8.1b） |

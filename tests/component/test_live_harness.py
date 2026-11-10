@@ -351,7 +351,7 @@ def test_routine_e2e_teams_check_accepts_a_real_round_trip(
 ) -> None:
     """The routine-e2e Teams check reads the events the real tools write (review r2 F1)."""
     monkeypatch.setattr(lease, "this_machine", lambda: MACHINE)
-    h = Harness(home, {"plugins": {"human_channels": ["in-session", "teams-chat"]}})
+    h = Harness(home, {"plugins": {"human_channels": ["teams-chat"]}})
     out = h.run("routine_start", user_turn=True)
     h.run("routine_bind", generation=out["events"][0]["data"]["generation"], session_id="r")
     routine = Caller(role="routine", session_id="r", machine=MACHINE)

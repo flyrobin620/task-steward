@@ -379,30 +379,37 @@ def test_teams_round_trip(home: Home) -> None:
     assert [e["data"]["request_id"] for e in events] == [third]
 
 
+IN_MAIN = "in-session：在主会话中直接问用户"
+BY_TEAMS = "teams-chat：按 teams-chat skill 发卡片"
+
+
 @pytest.mark.use_case("UC-ROUTINE-001")
 @pytest.mark.use_case("UC-ASK-001")
 @pytest.mark.parametrize(
-    ("config", "told"),
+    ("config", "told", "not_told"),
     [
-        (TEAMS, "经配置的人类渠道（teams-chat）"),
-        ({}, "input_relay（main-session）"),
+        (TEAMS, [IN_MAIN, BY_TEAMS], []),
+        ({}, [IN_MAIN], [BY_TEAMS]),
+        ({"plugins": {"human_channels": ["teams-chat"]}}, [BY_TEAMS], [IN_MAIN]),
         # input.channels picks the channels a question goes to among the loaded ones.
-        ({**TEAMS, "input": {"channels": ["in-session"]}}, "input_relay（main-session）"),
+        ({**TEAMS, "input": {"channels": ["teams-chat"]}}, [BY_TEAMS], [IN_MAIN]),
+        ({"plugins": {"human_channels": []}}, ["配置中没有人类渠道"], [IN_MAIN, BY_TEAMS]),
     ],
 )
 def test_a_handed_off_question_names_the_channels_to_use(
-    home: Home, config: dict[str, Any], told: str
+    home: Home, config: dict[str, Any], told: list[str], not_told: list[str]
 ) -> None:
-    # T256: the orchestrator tells the user through the configured human channels; it does not
-    # ask again in its own session unless no channel but the worker's session is configured.
+    # T256: plugins.human_channels decides how the orchestrator passes a question for the user
+    # on: in-session asks in its own session, teams-chat goes through the channel's skill.
     h = Harness(home, config)
     routine = start_routine(h)
     asked(h)
     server = Server(h.home, {SESSION_ENV: str(routine.session_id)}, home.root / "routine")
     forward = server.call("routine_run", {"job_id": "handoff-scan"})["forward"]
     assert forward["send"] is True and forward["session_id"] == "orch-1"
-    assert told in forward["message"] and "handle-input" in forward["message"]
-    assert ("不在主会话里重复提问" in forward["message"]) == ("teams-chat" in told)
+    assert "handle-input" in forward["message"]
+    assert all(t in forward["message"] for t in told), forward["message"]
+    assert not any(t in forward["message"] for t in not_told), forward["message"]
 
 
 @pytest.mark.use_case("UC-CHANNEL-001")
