@@ -10,6 +10,7 @@ from tests.machine_harness import Harness
 from tsw import direct
 from tsw.errors import TswError
 from tsw.home import Home
+from tsw.host.status_app import history
 from tsw.machine.base import Caller
 
 mark = pytest.mark
@@ -128,3 +129,25 @@ def test_the_direct_operations_refuse_inside_a_host_session() -> None:
             direct.require_outside_session({marker: "x"}, "tsw task accept ")
         assert caught.value.details["reason"] == "host_session_cli"
     assert not direct.in_host_session({})
+
+
+@mark.use_case("UC-DIRECT-002")
+def test_the_status_app_reads_every_revision_from_the_ledger(h: Harness) -> None:
+    h.complete("T001")
+    perform(h, "reject", "T001", reason="缺少导出")
+    h.run(
+        "task_update",
+        task_id="T001",
+        goal="实现功能并导出",
+        acceptance=["功能可用", "可以导出"],
+        user_source=h.source("T001", 2, "change", text="加上导出"),
+    )
+    past = history(h.ledger.storage.read(since=0))["T001"]
+    assert [(r.revision, r.how) for r in past] == [(1, "登记"), (2, "用户退回"), (3, "需求变更")]
+    assert past[1].words == "缺少导出" and past[1].goal == past[0].goal
+    assert (past[2].goal, past[2].acceptance, past[2].words) == (
+        "实现功能并导出",
+        ("功能可用", "可以导出"),
+        "加上导出",
+    )
+    assert h.task("T001")["revision"] == 3

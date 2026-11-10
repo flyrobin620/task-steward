@@ -149,3 +149,21 @@ border-color:var(--line)}
 .act-result{font-size:12px;color:var(--muted)}
 .act-result[data-ok=true]{color:#16a34a}
 .act-result[data-ok=false]{color:#e11d48}
+/* Long texts scroll inside the card; the brief and its history fold at the foot of the card. */
+.note .clip{display:block;max-height:7.5em;overflow:auto;white-space:pre-wrap}
+.foot{margin-top:auto;display:grid;gap:4px}
+.foot .more{margin-top:0}
+.brief{font-size:13px}
+.brief>summary{cursor:pointer;color:var(--muted);font-size:12px}
+.brief .body{padding:6px 2px 0;display:grid;gap:6px}
+.brief h4{margin:0;font-size:12px;color:var(--muted);font-weight:600}
+.brief p,.brief ul{margin:0}.brief ul{padding-left:18px}
+.scroll{max-height:22em;overflow:auto}
+.rev{display:grid;gap:4px;padding:6px 0;border-top:1px dashed var(--line)}
+.rev:first-child{border-top:0;padding-top:0}
+.rev .words{color:var(--muted)}
+.reason{flex-basis:100%;display:grid;gap:6px;margin-top:4px}
+.reason label{display:grid;gap:4px;font-size:12px;color:var(--muted)}
+.reason textarea{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 8px;resize:vertical}
+.reason .act{justify-self:start}
+.act-reject-send{background:#ea580c;border-color:#ea580c;color:#fff}

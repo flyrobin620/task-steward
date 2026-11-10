@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from tsw.host.status import AppView, render
+from tsw.host.status import AppView, Revision, render
 from tsw.host.status_assets import APP_CSP, APP_SCRIPT, CSP, SCRIPT
 from tsw.projection import SCHEMA_SQL
 
@@ -200,3 +200,55 @@ def test_the_status_app_page_adds_the_direct_actions(conn: sqlite3.Connection) -
 
 def test_the_app_script_cannot_close_its_own_element() -> None:
     assert "</" not in APP_SCRIPT
+
+
+@mark.use_case("UC-HOST-003")
+def test_long_notes_scroll_and_the_brief_folds_at_the_foot(conn: sqlite3.Connection) -> None:
+    _task(
+        conn,
+        "T001",
+        "in_progress",
+        revision=3,
+        current_attempt="a1",
+        goal="做 STATUS 应用",
+        acceptance=json.dumps(["一键验收"]),
+    )
+    conn.execute(
+        "INSERT INTO attempts(task_id, attempt, phase, brief_path) "
+        "VALUES('T001', 'a1', 'live', 'runs/T001/a1/brief.md')"
+    )
+    conn.execute(
+        "INSERT INTO input_requests(request_id, task_id, kind, status, question, binding) "
+        "VALUES('Q-T001-1', 'T001', 'question', 'pending', ?, '{}')",
+        ("很长的问题。" * 200,),
+    )
+    card = _card(render(conn), "T001")
+    assert '：<span class="clip">很长的问题。' in card
+    brief = re.search(
+        r'<details class="brief"><summary>任务书 · revision 3</summary>.*?</details>', card
+    )
+    assert brief and "做 STATUS 应用" in brief.group(0) and "<li>一键验收</li>" in brief.group(0)
+    assert '<a href="../runs/T001/a1/brief.md">' in brief.group(0)
+    assert "历史任务书" not in card  # the offline page has the current revision only
+    assert card.index('<div class="foot">') > card.index('<dl class="facts">')
+
+
+@mark.use_case("UC-DIRECT-002")
+def test_the_status_app_lists_the_earlier_revisions(conn: sqlite3.Connection) -> None:
+    _task(conn, "T001", "in_progress", revision=3, goal="第三版")
+    history = {
+        "T001": [
+            Revision(1, "2026-11-10T01:00:00Z", "登记", "第一版", ("a",)),
+            Revision(2, "2026-11-10T02:00:00Z", "需求变更", "第二版", ("a", "b"), "加一个按钮"),
+            Revision(3, "2026-11-10T03:00:00Z", "用户退回", "第二版", ("a", "b"), "缺导出"),
+        ]
+    }
+    card = _card(render(conn, AppView(token="t", actions={}, history=history)), "T001")
+    past = re.search(
+        r'<details class="brief history"><summary>历史任务书（2）</summary>.*?</details>', card
+    )
+    assert past, card
+    text = past.group(0)
+    # Newest first; the current revision is the brief above, not history.
+    assert text.index("revision 2 · 需求变更") < text.index("revision 1 · 登记")
+    assert "加一个按钮" in text and "第一版" in text and "缺导出" not in text

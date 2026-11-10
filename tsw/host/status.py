@@ -118,15 +118,75 @@ ACTION_LABELS = {"accept": "验收", "reject": "退回", "cancel": "取消"}
 
 
 @dataclass(frozen=True)
+class Revision:
+    """One earlier revision of a task's requirement, from the ledger (the STATUS app only)."""
+
+    revision: int
+    time: str
+    how: str  # what made it: registration, a requirement change, a rejection
+    goal: str
+    acceptance: tuple[str, ...]
+    words: str = ""  # the user's words recorded with the change
+
+
+def _no_history() -> dict[str, list[Revision]]:
+    return {}
+
+
+@dataclass(frozen=True)
 class AppView:
-    """The STATUS app's additions: the request token and each task's direct actions.
+    """The STATUS app's additions: the request token, each task's direct actions and history.
 
     ``actions`` maps a task to the actions it offers and, when cancel is not offered for a
-    task that could otherwise be cancelled, the reason shown instead.
+    task that could otherwise be cancelled, the reason shown instead. ``history`` maps a task
+    to its earlier revisions, oldest first; the offline page has only the current one.
     """
 
     token: str
     actions: dict[str, tuple[tuple[str, ...], str | None]]
+    history: dict[str, list[Revision]] = field(default_factory=_no_history)
+
+
+def _requirement(goal: str, acceptance: list[Any] | tuple[str, ...]) -> str:
+    out = f'<h4>目标</h4><p class="pre">{_e(goal)}</p>' if goal else ""
+    if acceptance:
+        out += "<h4>验收</h4><ul>" + "".join(f"<li>{_e(a)}</li>" for a in acceptance) + "</ul>"
+    return out
+
+
+def _brief(
+    row: dict[str, Any], attempt: dict[str, Any] | None, history: list[Revision] | None
+) -> str:
+    """The task's brief at its current revision, and, in the app, the earlier revisions."""
+    acceptance: list[Any] = loads(row["acceptance"], []) or []
+    path = attempt.get("brief_path") if attempt else None
+    link = (
+        f'<p><a href="{_e(_href(str(path)))}">打开 worker 的任务书（brief.md）</a></p>'
+        if path and _href(str(path))
+        else ""
+    )
+    body = _requirement(str(row["goal"] or ""), acceptance) + link
+    if not body:
+        return ""
+    out = (
+        f'<details class="brief"><summary>任务书 · revision {_e(row["revision"])}</summary>'
+        f'<div class="body scroll">{body}</div></details>'
+    )
+    earlier = [r for r in history or [] if r.revision < int(row["revision"])]
+    if earlier:
+        sections = "".join(
+            f'<section class="rev"><h4>revision {r.revision} · {_e(r.how)} · '
+            f'<time datetime="{_e(r.time)}">{_e(r.time)}</time></h4>'
+            + (f'<p class="pre words">{_e(r.words)}</p>' if r.words else "")
+            + _requirement(r.goal, r.acceptance)
+            + "</section>"
+            for r in reversed(earlier)
+        )
+        out += (
+            f'<details class="brief history"><summary>历史任务书（{len(earlier)}）</summary>'
+            f'<div class="body scroll">{sections}</div></details>'
+        )
+    return out
 
 
 def _actions(task_id: str, revision: Any, app: AppView) -> str:
@@ -214,18 +274,16 @@ def _card(
     ]
     if deps:
         facts.append(("依赖", " ".join(f'<a href="#task-{_e(d)}">{_e(d)}</a>' for d in deps)))
+    # A long text (a question, a pause) scrolls inside its note, so the card keeps its height.
     notes = "".join(
-        f'<div class="note {cls}"><b>{_e(head)}</b>{"：" + _e(text) if text else ""}</div>'
+        f'<div class="note {cls}"><b>{_e(head)}</b>'
+        + (f'：<span class="clip">{_e(text)}</span>' if text else "")
+        + "</div>"
         for cls, head, text in card.notes
     )
+    brief = _brief(row, attempt, app.history.get(task_id, []) if app else None)
 
     body: list[str] = []
-    if row["goal"]:
-        body.append(f'<h4>目标</h4><p class="pre">{_e(row["goal"])}</p>')
-    acceptance: list[Any] = loads(row["acceptance"], []) or []
-    if acceptance:
-        items = "".join(f"<li>{_e(a)}</li>" for a in acceptance)
-        body.append(f"<h4>验收</h4><ul>{items}</ul>")
     if note:
         body.append(f'<h4>最近进展</h4><p class="pre">{_e(note)}</p>')
     times = [
@@ -268,7 +326,7 @@ def _card(
         + "</dl>"
         + (f'<div class="links">{"".join(links)}</div>' if links else "")
         + (_actions(task_id, row["revision"], app) if app else "")
-        + more
+        + (f'<div class="foot">{brief}{more}</div>' if brief or more else "")
         + "</article>"
     )
 

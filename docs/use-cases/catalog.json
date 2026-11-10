@@ -645,7 +645,7 @@
       "id": "UC-DIRECT-002",
       "title": "STATUS 应用：本机托管、直接读账本，一键验收、退回、取消（DN006 §8.10）",
       "actor": "用户",
-      "acceptance": "tsw status serve 只监听 127.0.0.1，每次启动生成令牌并输出带令牌的地址；带令牌的首次访问换成 HttpOnly、SameSite=Strict 的 cookie；没有 cookie、令牌错误或 Host 不是本机时拒绝；页面与 STATUS.html 相同并在卡片上加按钮（待验收：验收、退回；无活动 worker：取消；有活动 worker 时写明原因）；按钮请求须带请求头令牌与本页 Origin，按页面上的 revision 以渠道 status-app 记录并执行与 UC-DIRECT-001 相同的实现，结果以 JSON 返回并显示在卡片上；只读提供 runs/ 与 legacy/ 下的文件，其余路径 404；在宿主会话中拒绝启动；静态 STATUS.html 不含按钮与令牌",
+      "acceptance": "tsw status serve 只监听 127.0.0.1，每次启动生成令牌并输出带令牌的地址；带令牌的首次访问换成 HttpOnly、SameSite=Strict 的 cookie；没有 cookie、令牌错误或 Host 不是本机时拒绝；页面与 STATUS.html 相同并在卡片上加按钮（待验收：验收、退回；无活动 worker：取消；有活动 worker 时写明原因）；按钮请求须带请求头令牌与本页 Origin，按页面上的 revision 以渠道 status-app 记录并执行与 UC-DIRECT-001 相同的实现，结果以 JSON 返回并显示在卡片上；只读提供 runs/ 与 legacy/ 下的文件，其余路径 404；在宿主会话中拒绝启动；静态 STATUS.html 不含按钮与令牌；退回理由在卡片内的输入框填写并发送；卡片显示当前 revision 的任务书与 brief.md 链接，并从账本列出历史 revision（登记、需求变更附原话、退回附理由），.md 文件按纯文本提供",
       "surfaces": [
         "cli"
       ],
@@ -721,7 +721,7 @@
       "id": "UC-HOST-003",
       "title": "inbox、attention 与 STATUS 页",
       "actor": "主会话",
-      "acceptance": "可回传事件进入 inbox，持有租约的主会话确认后以账本事件记录且重建后保持；attention 只读列出待判断、待答复、需对账、需停止、stale、待启动、待核验、暂停；STATUS 页随每次提交重新生成，显示记录时间而非渲染时间",
+      "acceptance": "可回传事件进入 inbox，持有租约的主会话确认后以账本事件记录且重建后保持；attention 只读列出待判断、待答复、需对账、需停止、stale、待启动、待核验、暂停；STATUS 页随每次提交重新生成，显示记录时间而非渲染时间；卡片上过长的问题在卡片内滚动，当前 revision 的任务书可展开",
       "surfaces": [
         "mcp",
         "cli"

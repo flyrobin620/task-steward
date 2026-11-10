@@ -296,6 +296,11 @@ def test_the_status_app_rejects_and_cancels(h: Harness, app: App) -> None:
     status, out = app.act("T002", "cancel", revision=1)
     assert (status, out["event"]) == (200, "task.cancelled")
     assert (h.status("T001"), h.status("T002")) == ("intake", "cancelled")
+    # The rejected revision is now history on the card; the brief shows the current one.
+    page = app.request("GET", "/")[2].decode("utf-8")
+    card = re.search(r'<article [^>]*id="task-T001".*?</article>', page, re.S)
+    assert card and "任务书 · revision 2" in card.group(0)
+    assert "历史任务书（1）" in card.group(0) and "revision 1 · 登记" in card.group(0)
 
 
 @mark.use_case("UC-DIRECT-002")
@@ -308,6 +313,11 @@ def test_the_status_app_serves_linked_reports_and_nothing_else(h: Harness, app: 
     assert (status, body.decode("utf-8")) == (200, "<p>报告</p>")
     assert headers["Content-Type"].startswith("text/html")
     assert "script-src 'none'" in headers["Content-Security-Policy"]
+    brief = h.home.path("runs", "T009", "a1", "brief.md")
+    brief.write_text("# 任务书", encoding="utf-8")
+    status, headers, body = app.request("GET", "/runs/T009/a1/brief.md")
+    assert (status, headers["Content-Type"]) == (200, "text/plain; charset=utf-8")
+    assert body.decode("utf-8") == "# 任务书"
     for path in ("/tsw-home.json", "/config/task-steward.json", "/runs/../tsw-home.json"):
         assert app.request("GET", path)[0] == 404, path
     assert app.request("GET", "/runs/T009/a1/report.html", headers={"Cookie": ""})[0] == 403

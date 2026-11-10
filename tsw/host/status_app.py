@@ -21,7 +21,7 @@ import secrets
 import sys
 import threading
 import webbrowser
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,8 +31,9 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from tsw import direct
 from tsw.config import load_config
 from tsw.errors import TswError, rejected
+from tsw.events import Event
 from tsw.home import Home
-from tsw.host.status import AppView, render
+from tsw.host.status import AppView, Revision, render
 from tsw.ledger import Ledger
 from tsw.storage.fs import FsStorage
 
@@ -46,6 +47,42 @@ SERVED_CSP = (
     "default-src 'self'; script-src 'none'; object-src 'none'; "
     "style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'"
 )
+
+
+def _strings(value: Any) -> tuple[str, ...]:
+    items: list[Any] = value if isinstance(value, list) else []  # pyright: ignore[reportUnknownVariableType]
+    return tuple(str(item) for item in items)
+
+
+def history(events: Iterable[Event]) -> dict[str, list[Revision]]:
+    """Every revision of every task's requirement, oldest first, read from the ledger.
+
+    A revision starts with the registration, a requirement change (with the user's words) or a
+    rejection (T23: the requirement stays, the user's reason is recorded).
+    """
+    out: dict[str, list[Revision]] = {}
+    for event in events:
+        data: Mapping[str, Any] = event.data
+        task_id = event.task_id
+        if task_id is None:
+            continue
+        past = out.setdefault(task_id, [])
+        if event.type == "task.registered":
+            how, revision, words = "登记", 1, ""
+            goal, acceptance = str(data.get("goal") or ""), _strings(data.get("acceptance"))
+        elif event.type == "task.requirement_changed":
+            source: Mapping[str, Any] = data.get("user_source") or {}
+            how, revision = "需求变更", int(data["revision"])
+            words = str(source.get("text") or "")
+            goal, acceptance = str(data.get("goal") or ""), _strings(data.get("acceptance"))
+        elif event.type == "task.user_rejected" and past:
+            how, revision = "用户退回", int(data["revision"])
+            words = str(data.get("reason") or "")
+            goal, acceptance = past[-1].goal, past[-1].acceptance
+        else:
+            continue
+        past.append(Revision(revision, event.time, how, goal, acceptance, words))
+    return {task_id: past for task_id, past in out.items() if past}
 
 
 class StatusApp:
@@ -83,7 +120,8 @@ class StatusApp:
             for row in conn.execute("SELECT * FROM tasks"):
                 found = direct.availability(conn, row)
                 actions[str(row["task_id"])] = (found.actions, found.cancel_blocked)
-            return render(conn, AppView(token=self.token, actions=actions))
+            past = history(ledger.storage.read(since=0))
+            return render(conn, AppView(token=self.token, actions=actions, history=past))
 
     def act(self, task_id: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
         revision = body.get("revision")
@@ -219,7 +257,10 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             if not target.is_relative_to(root / parts[0]) or not target.is_file():
                 self._text(HTTPStatus.NOT_FOUND, "没有这个文件")
                 return
-            kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+            # Markdown (briefs, reports' sources) is shown as text rather than downloaded.
+            plain = target.suffix.lower() in (".md", ".txt", ".log")
+            kind = "text/plain" if plain else mimetypes.guess_type(target.name)[0]
+            kind = kind or "application/octet-stream"
             if kind.startswith("text/") or kind in ("application/json", "application/xml"):
                 kind += "; charset=utf-8"
             extra = {"Content-Security-Policy": SERVED_CSP}
