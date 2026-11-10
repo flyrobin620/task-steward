@@ -201,3 +201,16 @@ def test_workers_wake_the_session_that_holds_the_lease(h: Harness, tmp_path: Pat
     # The routine session's forwards follow the same holder.
     with Ledger(h.home, clock=h.clock, machine="m1").view() as conn:
         assert lease.orchestrator_session(conn) == "orch-2"
+
+
+@mark.use_case("UC-HOST-001")
+def test_no_wake_when_the_configuration_turns_worker_messages_off(
+    home: Home, tmp_path: Path
+) -> None:
+    """T254 review r1 F2: scheduling.wake.worker_message_parent=false sends nothing."""
+    h = Harness(home, {"scheduling": {"wake": {"worker_message_parent": False}}})
+    session, workdir = worker_task(h, tmp_path)
+    wake = server(h, session, workdir).call("question", {"text": "q"})["wake"]
+    assert wake["send"] is False and "worker_message_parent" in wake["note"]
+    report = guard(h, session, workdir, prompt="[report] 结论").run("UserPromptSubmit")
+    assert "不发送" in context_of(report)

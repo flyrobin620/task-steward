@@ -310,6 +310,12 @@ class Server:
         reported = [e for e in found if e.get("type") in wanted]
         if not reported:
             return None
+        if not config.get("scheduling.wake.worker_message_parent"):
+            return {
+                "send": False,
+                "note": "配置关闭了 worker 的唤醒消息（scheduling.wake.worker_message_parent）："
+                "回传已在账本中，主会话从 inbox 读取",
+            }
         with ledger.view() as conn:
             target = lease.orchestrator_session(conn)
         if target is None:

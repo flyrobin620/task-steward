@@ -683,6 +683,8 @@ class Guard:
 
     def _wake_hint(self) -> str:
         """Where a worker's message to the orchestrator goes: the lease holder (DN001 §6.3)."""
+        if self.config.valid and not self.config.get("scheduling.wake.worker_message_parent"):
+            return "配置关闭了 worker 的唤醒消息，不发送（记录已在账本中）。"
         try:
             with self.ledger.view() as conn:
                 target = lease.orchestrator_session(conn)

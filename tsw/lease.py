@@ -70,13 +70,26 @@ def require_lease(conn: sqlite3.Connection, session_id: str, machine: str, now: 
 
 
 def stood_down(conn: sqlite3.Connection, session_id: str | None) -> dict[str, Any] | None:
-    """How ``session_id`` gave the lease up, while it has not acquired it again on purpose."""
+    """How ``session_id`` gave the lease up, while it has not acquired it again on purpose.
+
+    Acquiring removes the record, but a runtime that predates the record (an MCP server still
+    running older code) acquires without removing it: a session that holds the lease from a later
+    event than its stand-down has taken it back, whatever the table still says."""
     if not session_id:
         return None
     row = conn.execute(
         "SELECT * FROM lease_stood_down WHERE session_id = ?", (session_id,)
     ).fetchone()
-    return None if row is None else {key: row[key] for key in row.keys()}  # noqa: SIM118
+    if row is None:
+        return None
+    held = lease_row(conn)
+    if (
+        held is not None
+        and held["holder_session"] == session_id
+        and int(held["source_seq"]) > int(row["source_seq"])
+    ):
+        return None
+    return {key: row[key] for key in row.keys()}  # noqa: SIM118
 
 
 def orchestrator_session(conn: sqlite3.Connection) -> str | None:
