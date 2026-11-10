@@ -275,7 +275,7 @@
       "id": "UC-LEASE-001",
       "title": "调度租约的领取、续期、释放与接管（G-LEASE）",
       "actor": "主会话 / 用户",
-      "acceptance": "租约空闲或在本机过期时可领取，持有者可续期；其他会话在有效期内只读；另一台机器的租约即使过期也不能静默领取；接管必须附用户确认来源并核对原持有者，跨机器还需 from_machine；G-LEASE 对非持有者、其他机器和过期租约拒绝；另一台机器持有未释放的租约时，除接管外的所有写命令与 rebuild 都以 lease_other_machine 拒绝，读命令照常",
+      "acceptance": "租约空闲或在本机过期时可领取，持有者可续期；其他会话在有效期内只读；另一台机器的租约即使过期也不能静默领取；持有者可主动释放（交接），释放或被接管的会话记为让出（controller.lease_stood_down），再次领取时清除；接管必须附用户确认来源并核对原持有者，跨机器还需 from_machine；G-LEASE 对非持有者、其他机器和过期租约拒绝；另一台机器持有未释放的租约时，除接管外的所有写命令与 rebuild 都以 lease_other_machine 拒绝，读命令照常",
       "surfaces": [
         "cli"
       ],
@@ -620,7 +620,7 @@
       "id": "UC-HOST-001",
       "title": "按会话解析角色的 MCP server",
       "actor": "主会话 / worker / 其他会话",
-      "acceptance": "stdio JSON-RPC：校验请求格式（-32600 / -32602），按支持的协议版本协商，声明 tools.listChanged 并在会话角色变化后通知；tools/list 只列出该角色可用的工具（未知会话与已撤销会话只有 whoami），tools/call 经同一注册表执行，错误以 isError 返回；worker 只能操作本任务与授权读取集合，会话目录与执行目录不一致时拒绝写工具；已绑定数据目录的会话不能用命令行声明角色；派发时执行目录在数据目录 work/ 下的（研究任务）由 MCP server 创建；在 starting 且未绑定会话的 attempt 执行目录中启动的会话，从第一次 tools/list 起就列出 worker 工具，绑定前除 whoami 外的调用以 not_bound 拒绝",
+      "acceptance": "stdio JSON-RPC：校验请求格式（-32600 / -32602），按支持的协议版本协商，声明 tools.listChanged 并在会话角色变化后通知；tools/list 只列出该角色可用的工具（未知会话与已撤销会话只有 whoami），tools/call 经同一注册表执行，错误以 isError 返回；worker 只能操作本任务与授权读取集合，会话目录与执行目录不一致时拒绝写工具；已绑定数据目录的会话不能用命令行声明角色；派发时执行目录在数据目录 work/ 下的（研究任务）由 MCP server 创建；在 starting 且未绑定会话的 attempt 执行目录中启动的会话，从第一次 tools/list 起就列出 worker 工具，绑定前除 whoami 外的调用以 not_bound 拒绝；主会话可用 lease_release 让出租约（之后 lease_status 的 stood_down 记录让出），另一个主会话随后 lease_acquire；whoami 给出当前持租主会话 orchestrator_session，worker 记录可回传事件的工具结果带 wake（发给持租主会话的消息，没有持租者时 send 为 false）",
       "surfaces": [
         "mcp"
       ],
@@ -630,7 +630,8 @@
         "mcp:task_read",
         "mcp:task_list",
         "mcp:lease_status",
-        "mcp:lease_acquire"
+        "mcp:lease_acquire",
+        "mcp:lease_release"
       ],
       "component": "host",
       "status": "active",
@@ -648,7 +649,7 @@
       "id": "UC-HOST-002",
       "title": "hooks 规则执行（SessionStart、PreToolUse、UserPromptSubmit、Stop）",
       "actor": "Claude Code 宿主",
-      "acceptance": "SessionStart 为主会话领取租约并注入 attention 摘要、为 worker 注入任务与可写路径；PreToolUse 拒绝写出可写路径（编辑工具与可识别的 shell 写入）、写入 tsw 管理的目录、未授权推送与 PR（识别带路径与 .exe 的程序名）、对可执行文件求哈希、未落账的 start_session、在会话里调用 tsw 写命令；worker 离开执行目录时只允许 cd 回去；已撤销会话不能写入；[report] 注入回传提示；Stop 在有未处理回传或评审未收尾时拦截一次，并记录 worker.turn_ended；钩子内部错误不影响会话；待绑定的会话在绑定前只能读，编辑、命令行与建会话都被拒绝",
+      "acceptance": "SessionStart 为主会话领取租约并注入 attention 摘要（让出过租约的会话不领取、只注入只读说明）、为 worker 注入任务与可写路径（唤醒发给当前持租主会话）；PreToolUse 拒绝写出可写路径（编辑工具与可识别的 shell 写入）、写入 tsw 管理的目录、未授权推送与 PR（识别带路径与 .exe 的程序名）、对可执行文件求哈希、未落账的 start_session、在会话里调用 tsw 写命令；worker 离开执行目录时只允许 cd 回去；已撤销会话不能写入；[report] 注入回传提示；Stop 在有未处理回传或评审未收尾时拦截一次，并记录 worker.turn_ended；钩子内部错误不影响会话；待绑定的会话在绑定前只能读，编辑、命令行与建会话都被拒绝",
       "surfaces": [
         "mcp",
         "cli"

@@ -11,7 +11,7 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
 
 ## 每次开始
 
-1. `whoami` 确认角色；`lease_status` 确认持有调度租约（SessionStart 已尝试领取；没有租约时只读运行，不派发、不验收）。
+1. `whoami` 确认角色；`lease_status` 确认持有调度租约（SessionStart 已尝试领取；没有租约时只读运行，不派发、不验收）。`lease_status` 的 `stood_down` 不为空时，本会话已让出租约（见“交接主会话”）：只读运行，不要自己领回。
 2. `inbox` 处理未读回传，处理完 `inbox_ack`；`attention` 查看待判断、待用户答复、需对账、需停止、stale、待启动、待预启动、待核验与暂停。
 3. 只处理用户要求的事。普通解释与维护不开始执行真实待办。
 
@@ -35,6 +35,13 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
 4. 不在用户 turn 时不能新建会话：任务保持就绪并在 STATUS 页显示“待启动”，下一个用户 turn 按第 1 步预启动。
 5. 例行会话（DN006 §8.9）：在用户第一次要求执行待办的那一轮，与预启动、派发一起启动它（`attention` 的 `routine` 为 `missing` 时，Stop hook 在用户 turn 结束前提醒一次）。做法：`routine_start`（`user_turn: true`），再 `mcp__ccd_session__start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为返回的 `cwd`、`use_worktree: false`、`name` 为事件中的 `session_name`，`model` / `effort` / `prompt` / `background` 取事件中的值，`permission_mode` 取事件中的 `host_permission_mode`（宿主的名称，例如 `acceptEdits`）；然后 `routine_bind`（`generation`、`session_id`）；事件中 `detach` 为 true 时，紧接着调用 `mcp__ccd_session_mgmt__detach_session(session_id)` 把它从本会话名下分离（否则它每结束一轮、包括没有转发内容的定时运行，都会唤醒本会话），成功后 `routine_detached`（`generation`）；最后用 `SendMessage` 告诉它“已绑定，调用 routine_board 开始”。分离之后它不在 linked 列表中，按会话 ID 联系它。`routine` 为 `attached` 时（分离没有完成或没有记录，例如本版本之前启动的例行会话），在任何一轮补做分离：已经分离或不是本会话启动的，也调用 `routine_detached` 并在 `note` 中写明。结果不明时按会话名对账，不再次创建。`routine` 为 `stale` 时（定时任务失效，例如 app 重启过），给例行会话发消息“运行 routine_board”，它会重新设定；会话不存在了就在下一个用户 turn 重新 `routine_start`。例行会话不作判断，它转来的消息按 `handle-input` skill 处理。
 6. 自己用宿主的定时工具（`CronCreate`、`ScheduleWakeup`）安排提醒时，提示以 `<scheduled-task>` 开头、`</scheduled-task>` 结束：否则它到达时会被当成用户本人的消息，hook 会拒绝。
+
+## 交接主会话
+
+- 用户要求换主会话（由另一个会话接手调度）时，在当前持有租约的会话中调用 `lease_release` 让出租约。之后本会话只读：不派发、不验收、不处理回传；会话开始时也不会自动领回。只有用户在本会话中明确要求本会话重新担任主会话时才调用 `lease_acquire`。
+- 接手的会话：会话开始时租约空闲会自动领取；会话已经打开时调用 `lease_acquire`。领取后先处理 `inbox` 与 `attention`：交接期间的回传都在 inbox 中。
+- 交接后，原主会话启动的 worker 与例行会话照常运行。它们唤醒主会话时发给当前持有租约的会话（tsw 在工具结果的 `wake` 与 `whoami` 的 `orchestrator_session` 中给出），你按会话 ID（attempt 的 `session_ref`）用 `mcp__ccd_session_mgmt__send_message` 给它们发消息；它们的 attempt 归你控制：可以给原主会话预启动的待命会话投递任务书（`attempt_deliver`）、续用或恢复原会话。app 不能更换父会话：它们仍挂在原主会话名下，只出现在原主会话的 `list_sessions {linked: true}` 中；归档原主会话会连带归档它们，它们都结束之前不要归档原主会话。
+- 原主会话已停止、不能让出（或租约在另一台机器上）时才用接管：用户在终端运行 `tsw lease takeover`，附用户确认原主会话已停止的来源；之后逐项处理原主会话启动的 worker（DN001 §6.4）。
 
 ## 回传与判断
 

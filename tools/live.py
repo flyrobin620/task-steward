@@ -5,6 +5,8 @@
     python tools/live.py host-e2e verify RUN_ID [--trust-prompted yes|no] [--blocked yes|no]
     python tools/live.py routine-e2e prepare | verify RUN_ID [...]  the routine session, Teams
                                                                   check the run's ledger
+    python tools/live.py handoff-e2e prepare | verify RUN_ID [--blocked yes|no]
+                                                    one orchestrator hands over to another
     python tools/live.py cleanup RUN_ID [--archived SESSION ...]   finish a run's cleanup
     python tools/live.py list                                       runs and their state
 
@@ -1110,6 +1112,190 @@ def routine_verify(args: argparse.Namespace) -> int:
     return 0 if write_results(run, "routine-e2e", checks, notes) else 1
 
 
+def handoff_prepare(args: argparse.Namespace) -> int:
+    return prepare("handoff-e2e", args)
+
+
+def handoff_verify(args: argparse.Namespace) -> int:
+    """One orchestrator hands the lease to another; the worker the first one started wakes the
+    second (DN001 §6.3–§6.4, T254)."""
+    run = Run.open(args.run_id)
+    evs = events(run)
+    marker = json.loads((run.home / "tsw-home.json").read_text(encoding="utf-8"))
+    orch = [
+        e for e in evs if e["actor"].get("role") == "orchestrator" and e["actor"].get("session_id")
+    ]
+    for sid in sorted({str(e["actor"]["session_id"]) for e in orch}):
+        run.bind_main(sid)
+    reconcile_sessions(run, evs)  # the worker, for cleanup
+    handed, old, new = lease_handoff(evs)
+    mains = {str(e["actor"]["session_id"]) for e in orch}
+    checks = [
+        check(
+            "H1",
+            "隔离：数据目录与产品仓库指向本运行，两个主会话都在其中操作",
+            Path(marker.get("product_repo", "")).resolve() == ROOT.resolve() and len(mains) >= 2,
+            f"product_repo=<repo>; 主会话 {len(mains)} 个，事件 {len(orch)} 条",
+        ),
+        handed,
+        handoff_wake(run, evs, old, new),
+        check(
+            "O",
+            "操作者观察：worker 与新主会话发消息时没有被拦",
+            args.blocked == "no",
+            {"blocked": args.blocked or "未记录", "evidence": "操作者在 app 中的观察"},
+        ),
+    ]
+    notes = [
+        hook_summary(run),
+        "让出后的会话在会话开始时不自动领回由 component 与 surface 测试覆盖（SessionStart 只在"
+        "会话恢复时运行，本场景不重启会话）",
+        "GitHub 不参与本场景",
+    ]
+    return 0 if write_results(run, "handoff-e2e", checks, notes) else 1
+
+
+def lease_handoff(evs: list[dict[str, Any]]) -> tuple[dict[str, Any], str, str]:
+    """L: the first orchestrator released the lease and stood down, another one took it without a
+    takeover, and the first did not take it back. Returns the check and both session IDs."""
+    title = "交接：A 让出租约，B 直接领取，A 没有再领取"
+    released = next((e for e in evs if e["type"] == "controller.lease_released"), None)
+    if released is None:
+        return check("L", title, False, "没有 controller.lease_released"), "", ""
+    old, seq = str(released["data"]["session_id"]), released["sequence"]
+    stood = next(
+        (
+            e
+            for e in evs
+            if e["type"] == "controller.lease_stood_down"
+            and e["data"].get("session_id") == old
+            and e["data"].get("via") == "release"
+            and e["sequence"] < seq
+        ),
+        None,
+    )
+    taken = next(
+        (
+            e
+            for e in evs
+            if e["type"] == "controller.lease_acquired"
+            and e["sequence"] > seq
+            and e["data"].get("session_id") != old
+        ),
+        None,
+    )
+    new = str(taken["data"]["session_id"]) if taken else ""
+    back = [
+        e["sequence"]
+        for e in evs
+        if e["type"] in ("controller.lease_acquired", "controller.lease_taken_over")
+        and e["sequence"] > seq
+        and e["data"].get("session_id") == old
+    ]
+    takeovers = seqs(evs, "controller.lease_taken_over")
+    ok = (
+        stood is not None
+        and taken is not None
+        and not taken["data"].get("renewed")
+        and not back
+        and not takeovers
+    )
+    evidence = {
+        "released": seq,
+        "stood_down": stood and stood["sequence"],
+        "acquired_by_other": taken and taken["sequence"],
+        "taken_back_by_old": back,
+        "takeovers": takeovers,
+    }
+    return check("L", title, ok, evidence), old, new
+
+
+def session_forwards(run: Run, session: str, sender: str, since: str) -> list[str]:
+    """When ``session``'s hooks saw a message from ``sender`` (``<cross-session-message>``) at or
+    after ``since``; times only, never the text."""
+    path = run.dir / "hook-payloads.jsonl"
+    if not session or not sender or not path.is_file():
+        return []
+    found: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        payload = record.get("payload")
+        if record.get("event") != "UserPromptSubmit" or not isinstance(payload, dict):
+            continue
+        if str(record.get("session") or "") != session or str(record.get("time")) < since:
+            continue
+        words = user_words(str(payload.get("prompt") or ""))
+        if words.startswith("<cross-session-message") and f'from="{sender}"' in words[:200]:
+            found.append(str(record["time"]))
+    return found
+
+
+def handoff_wake(run: Run, evs: list[dict[str, Any]], old: str, new: str) -> dict[str, Any]:
+    """K: after the handover the worker's question wakes the new orchestrator (its hooks saw the
+    worker's message), not the one that started the worker; the new one answers and the worker
+    hears it."""
+    title = "唤醒：交接后 worker 的消息到达 B 而不是 A；B 回答，worker 收到"
+    taken = next(
+        (
+            e
+            for e in evs
+            if e["type"] == "controller.lease_acquired" and e["data"].get("session_id") == new
+        ),
+        None,
+    )
+    if not new or taken is None:
+        return check("K", title, False, "没有新主会话领取租约")
+    question = next(
+        (e for e in evs if e["type"] == "worker.question" and e["sequence"] > taken["sequence"]),
+        None,
+    )
+    if question is None:
+        return check("K", title, False, "B 领取之后没有 worker.question")
+    worker = str(question["actor"].get("session_id") or "")
+    released = next(e for e in evs if e["type"] == "controller.lease_released")
+    to_new = session_forwards(run, new, worker, str(question["time"]))
+    to_old = session_forwards(run, old, worker, str(released["time"]))
+    decision = next(
+        (
+            e
+            for e in evs
+            if e["type"] == "orchestrator.decision"
+            and e["task_id"] == question["task_id"]
+            and e["sequence"] > question["sequence"]
+            and e["actor"].get("session_id") == new
+        ),
+        None,
+    )
+    heard = (
+        next(
+            (
+                e
+                for e in evs
+                if e["type"] == "worker.progress"
+                and e["task_id"] == question["task_id"]
+                and e["sequence"] > decision["sequence"]
+                and e["actor"].get("session_id") == worker
+            ),
+            None,
+        )
+        if decision
+        else None
+    )
+    ok = bool(to_new) and not to_old and decision is not None and heard is not None
+    return check(
+        "K",
+        title,
+        ok,
+        {
+            "question": question["sequence"],
+            "messages_to_new": to_new,
+            "messages_to_old_after_release": to_old,
+            "decision_by_new": decision and decision["sequence"],
+            "worker_heard": heard and heard["sequence"],
+        },
+    )
+
+
 def main_prompts(run: Run) -> list[dict[str, Any]]:
     """The prompts the main session received (its hook payloads, cwd = the run's data dir)."""
     path = run.dir / "hook-payloads.jsonl"
@@ -1728,6 +1914,17 @@ def main(argv: list[str] | None = None) -> int:
     ):
         routine_ver.add_argument(flag, choices=("yes", "no"), help=f"操作者观察：{text}")
     routine_ver.set_defaults(handler=routine_verify)
+    handoff = sub.add_parser("handoff-e2e", help="主会话交接与唤醒（需要用户在场）")
+    handoff_steps = handoff.add_subparsers(dest="step", required=True)
+    handoff_steps.add_parser("prepare").set_defaults(handler=handoff_prepare)
+    handoff_ver = handoff_steps.add_parser("verify")
+    handoff_ver.add_argument("run_id")
+    handoff_ver.add_argument(
+        "--blocked",
+        choices=("yes", "no"),
+        help="操作者观察：worker 或新主会话发消息时是否出现权限确认或分类器拒绝",
+    )
+    handoff_ver.set_defaults(handler=handoff_verify)
     clean = sub.add_parser("cleanup", help="记录已归档的会话并报告剩余对象")
     clean.add_argument("run_id")
     clean.add_argument("--archived", action="append", help="已归档并用 get_session 读回的会话 ID")

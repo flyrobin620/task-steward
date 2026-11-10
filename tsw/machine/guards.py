@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from tsw.config import EffectiveConfig, resolve_repository
 from tsw.errors import rejected
+from tsw.lease import stood_down
 from tsw.machine.model import (
     KINDS_ALLOWED,
     LIVE_PHASES,
@@ -468,12 +469,33 @@ def g_merge(
     return {}
 
 
-def controllable(attempt_row: Mapping[str, Any] | None, caller_session: str | None) -> bool:
+def controls(
+    conn: sqlite3.Connection | None, attempt_row: Mapping[str, Any], caller_session: str | None
+) -> bool:
+    """The caller controls the attempt's session: it started it, or the orchestrator that did
+    handed the lease over (released it, DN001 §6.4) and the caller, holding the lease now (every
+    orchestrator write needs it, G-LEASE), took over its sessions. A session whose lease was taken
+    over hands nothing on: its sessions are verified stopped and replaced (DN002 §5.5)."""
+    controller = attempt_row["controller"]
+    if controller is None or caller_session is None:
+        return False
+    if controller == caller_session:
+        return True
+    if conn is None:
+        return False
+    gave_up = stood_down(conn, str(controller))
+    return gave_up is not None and gave_up.get("via") == "release"
+
+
+def controllable(
+    attempt_row: Mapping[str, Any] | None,
+    caller_session: str | None,
+    conn: sqlite3.Connection | None = None,
+) -> bool:
     return (
         attempt_row is not None
         and attempt_row["phase"] in ("live", "stopped", "standby")
-        and attempt_row["controller"] is not None
-        and attempt_row["controller"] == caller_session
+        and controls(conn, attempt_row, caller_session)
     )
 
 

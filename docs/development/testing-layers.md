@@ -29,6 +29,7 @@ live 层级调用真实 app 与模型，有费用，并且需要用户在场（�
 | --- | --- |
 | P1 宿主集成（插件清单、hooks、MCP 注册、角色解析、worker 指令、生成的权限规则） | `host-e2e`：预启动、派发、worker 自评审、会话内提问、worker 合并、提交、编排者验收、取消与恢复 |
 | 例行会话与例行表、超时转交、`teams-chat` 渠道（DN006 §8.7、§8.9） | `routine-e2e`：例行会话的启动、分离与定时任务、超时转交与主会话代答、经 Teams 转达与答复登记；空跑不唤醒主会话由主会话的 hook 记录判定（检查 W） |
+| 调度租约的交接与唤醒目标（DN001 §6.3–§6.4：让出、领取、worker 与例行会话发给持租主会话） | `handoff-e2e`：主会话 A 派发 worker 后让出租约，B 领取；worker 的唤醒消息到达 B 而不是 A，B 按会话 ID 回复 worker |
 | P2 `claude-app` 适配器（会话创建、对账、投递、唤醒） | `host-e2e` |
 | P2 评审器适配器（`claude-headless`、`codex-app-server`）或评审协议（DN004） | `reviewer`：每种已实现的评审器在固定样例上各做一次全量评审与一次增量评审，核对只读（目标目录无写入）与输出 schema；未实现的评审器报告为“未验证” |
 | 发布前 | 全部场景 |
@@ -42,6 +43,7 @@ live 层级调用真实 app 与模型，有费用，并且需要用户在场（�
 | `reviewer` | `python tools/live.py reviewer` | 不需要；结束时自动清理线程 |
 | `host-e2e` | `python tools/live.py host-e2e prepare`，用户按运行目录中的 `OPERATOR.md` 在 app 中操作，再 `python tools/live.py host-e2e verify <runId>` | 需要：以运行的数据目录新建主会话（信任文件夹）、发出操作步骤中的消息、在 worker 会话中回答问题 |
 | `routine-e2e` | `python tools/live.py routine-e2e prepare`，按 `OPERATOR.md` 在 app 与 Teams 中操作，再 `python tools/live.py routine-e2e verify <runId>` | 需要：新建主会话、不在 worker 会话中回答、在 Teams 自聊中以任务 ID 开头回复 |
+| `handoff-e2e` | `python tools/live.py handoff-e2e prepare`，按 `OPERATOR.md` 在 app 中操作，再 `python tools/live.py handoff-e2e verify <runId>` | 需要：先后新建两个主会话、在 worker 会话中发一条消息 |
 | 收尾 | `python tools/live.py cleanup <runId> --archived <会话 ID>…`，`python tools/live.py discard <runId>` | 在 app 中归档本次运行的会话 |
 
 `verify` 逐项核对隔离账本中的事件（场景定义的 `checks`），把结果写进运行目录的 `result.json` 与可附在

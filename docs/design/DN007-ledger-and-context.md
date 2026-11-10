@@ -53,6 +53,7 @@ DN001 §8 只定义了事件格式和“JSONL 账本为唯一事实、SQLite 投
 | `outputs` / `pull_requests` | (task_id, output_id) | type、form、delivery、ref、verified_at、evidence | G-ACCEPT、目录 |
 | `resource_claims` | (resource, owner_task) | status、released_by | G-RES |
 | `slots` / `leases` | — | 占用名额的任务、调度租约持有者与机器 | G-SLOT、G-LEASE |
+| `lease_stood_down` | session_id | 让出租约的方式（release / takeover）与时间；同一会话再次领取时删除，持有比让出更晚的租约也视为已领回 | 会话开始时不自动领回（DN001 §6.4） |
 
 ### 3.2 写路径
 

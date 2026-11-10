@@ -22,7 +22,7 @@ sequenceDiagram
     W->>X: 增量评审（round 2，resume_thread）
     X-->>W: pass
     W->>C: review_decision(finalize) · submit(报告 md+html)
-    W->>O: send_message(session_id=parent)：事件 ID（主唤醒路径）
+    W->>O: send_message(session_id=持租主会话)：事件 ID（主唤醒路径）
     A-->>O: side-sessions-event（兜底：全部子会话空闲时）
     O->>C: inbox（按事件 ID 读取并 ack）
     O->>O: 逐项核验验收标准、评审证据、Git/PR 事实

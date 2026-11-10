@@ -1,10 +1,16 @@
 """The scheduling lease (DN001 §6.4, DN006 §9.6) and the G-LEASE guard (DN002 §4).
 
 One orchestrator session at a time holds the lease. It is acquired when free or expired on the
-same machine, renewed by its holder, released on purpose (for example before a cold copy) or
-taken over after the user confirms that the previous orchestrator has stopped. A lease recorded
-by another machine is never acquired silently, even after it expired: only a takeover with
-``from_machine`` and the user's confirmation moves it.
+same machine, renewed by its holder, released on purpose (handing over to another orchestrator,
+or before a cold copy) or taken over after the user confirms that the previous orchestrator has
+stopped. A lease recorded by another machine is never acquired silently, even after it expired:
+only a takeover with ``from_machine`` and the user's confirmation moves it.
+
+A session that gave the lease up, by releasing it or by being taken over, stands down
+(``controller.lease_stood_down``): it no longer takes the lease at session start, even when the
+lease is free or expired, until it acquires it on purpose (T254). Workers and the routine
+session wake whichever orchestrator holds the lease (:func:`orchestrator_session`), never the
+session that happened to start them.
 """
 
 from __future__ import annotations
@@ -61,6 +67,48 @@ def require_lease(conn: sqlite3.Connection, session_id: str, machine: str, now: 
         )
     if is_expired(lease, now):
         raise rejected("调度租约已过期，请重新领取", reason="lease_expired")
+
+
+def stood_down(conn: sqlite3.Connection, session_id: str | None) -> dict[str, Any] | None:
+    """How ``session_id`` gave the lease up, while it has not acquired it again on purpose.
+
+    Acquiring removes the record, but a runtime that predates the record (an MCP server still
+    running older code) acquires without removing it: a session that holds the lease from a later
+    event than its stand-down has taken it back, whatever the table still says."""
+    if not session_id:
+        return None
+    row = conn.execute(
+        "SELECT * FROM lease_stood_down WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    held = lease_row(conn)
+    if (
+        held is not None
+        and held["holder_session"] == session_id
+        and int(held["source_seq"]) > int(row["source_seq"])
+    ):
+        return None
+    return {key: row[key] for key in row.keys()}  # noqa: SIM118
+
+
+def orchestrator_session(conn: sqlite3.Connection) -> str | None:
+    """The orchestrator to wake: the session that holds or last held the scheduling lease.
+
+    A lease that expired while the orchestrator sat idle still names it, and waking it is the
+    point: it takes the lease again before it writes. A released lease names nobody; what was
+    reported stays in the ledger for the next orchestrator (DN001 §6.3, DN006 §8.9.3)."""
+    held = lease_row(conn)
+    if held is None or not held["holder_session"]:
+        return None
+    return str(held["holder_session"])
+
+
+def _stand_down(session_id: str, machine: str, via: str, **extra: Any) -> EventDraft:
+    return EventDraft(
+        type="controller.lease_stood_down",
+        data={"session_id": session_id, "machine": machine, "via": via, **extra},
+    )
 
 
 def _expires(now: str, minutes: int) -> str:
@@ -122,11 +170,13 @@ def release(session_id: str, *, machine: str, actor: Mapping[str, Any]) -> Comma
             raise rejected("没有可释放的调度租约", reason="lease_missing")
         if lease["holder_session"] != session_id or lease["machine"] != machine:
             raise rejected("只有租约持有者可以释放", reason="lease_held")
+        # The releasing session stands down first: the lease event stays the command's last.
         return [
+            _stand_down(session_id, machine, "release"),
             EventDraft(
                 type="controller.lease_released",
                 data={"session_id": session_id, "machine": machine},
-            )
+            ),
         ]
 
     return Command(
@@ -173,19 +223,21 @@ def takeover(
                 reason="lease_other_machine",
                 machine=lease["machine"],
             )
-        return [
-            EventDraft(
-                type="controller.lease_taken_over",
-                data={
-                    "session_id": session_id,
-                    "machine": machine,
-                    "expires_at": _expires(ctx.now, lease_minutes),
-                    "from_session": from_session,
-                    "from_machine": lease["machine"],
-                    "user_source": dict(user_source),
-                },
-            )
-        ]
+        taken = EventDraft(
+            type="controller.lease_taken_over",
+            data={
+                "session_id": session_id,
+                "machine": machine,
+                "expires_at": _expires(ctx.now, lease_minutes),
+                "from_session": from_session,
+                "from_machine": lease["machine"],
+                "user_source": dict(user_source),
+            },
+        )
+        if from_session == session_id:
+            return [taken]
+        # The session whose lease was taken over does not take it back when it wakes again.
+        return [_stand_down(from_session, str(lease["machine"]), "takeover", by=session_id), taken]
 
     return Command(
         actor=actor,
@@ -219,6 +271,8 @@ def refuse_foreign_machine(conn: sqlite3.Connection, machine: str) -> None:
 
 def _hold(conn: sqlite3.Connection, event: Event) -> None:
     data = event.data
+    # Acquiring on purpose (or being given the lease) ends a stand-down.
+    conn.execute("DELETE FROM lease_stood_down WHERE session_id = ?", (data["session_id"],))
     conn.execute(
         "INSERT INTO leases(name, holder_session, machine, acquired_at, expires_at, source_seq) "
         "VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET "
@@ -241,6 +295,17 @@ def reduce_released(conn: sqlite3.Connection, event: Event) -> None:
         "UPDATE leases SET holder_session = NULL, machine = NULL, expires_at = NULL, "
         "source_seq = ? WHERE name = ?",
         (event.sequence, LEASE_NAME),
+    )
+
+
+def reduce_stood_down(conn: sqlite3.Connection, event: Event) -> None:
+    data = event.data
+    conn.execute(
+        "INSERT INTO lease_stood_down(session_id, machine, via, stood_down_at, source_seq) "
+        "VALUES(?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET machine = excluded.machine, "
+        "via = excluded.via, stood_down_at = excluded.stood_down_at, "
+        "source_seq = excluded.source_seq",
+        (data["session_id"], data.get("machine"), data["via"], event.time, event.sequence),
     )
 
 

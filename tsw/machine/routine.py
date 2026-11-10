@@ -37,7 +37,8 @@ from tsw.config import EffectiveConfig
 from tsw.errors import rejected
 from tsw.events import EventDraft
 from tsw.home import Home
-from tsw.lease import format_time, lease_row, parse_time
+from tsw.lease import format_time, parse_time
+from tsw.lease import orchestrator_session as lease_orchestrator
 from tsw.machine.ask_user import handed_off_event, handoff_due
 from tsw.machine.base import ToolEnv, flag, integer, opt_text, text, tool
 from tsw.machine.model import row_dict, task
@@ -324,16 +325,10 @@ def board(
 
 
 def orchestrator_session(conn: sqlite3.Connection, now: str) -> str | None:
-    """Where forwarded results go: the session that holds or last held the scheduling lease.
-
-    A lease that expired while the orchestrator sat idle still names it, and waking it is the
-    point: it takes the lease again before it writes. A released lease names nobody; the
-    results stay in the ledger for the next orchestrator (DN006 §8.9.3)."""
+    """Where forwarded results go: the session that holds or last held the scheduling lease
+    (:func:`tsw.lease.orchestrator_session`, DN006 §8.9.3)."""
     del now  # an expired lease still names the orchestrator to wake
-    held = lease_row(conn)
-    if held is None or not held["holder_session"]:
-        return None
-    return str(held["holder_session"])
+    return lease_orchestrator(conn)
 
 
 # ---------------------------------------------------------------------- the Teams job
