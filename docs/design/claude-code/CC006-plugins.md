@@ -128,7 +128,7 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 | 例行表给出的内容 | 例行会话调用的工具 |
 | --- | --- |
 | 例行项没有 `fetch` | `routine_run`，参数为该行的 `run`（没有时为 `job_id`） |
-| 例行项的 `fetch` 为 `teams.read_chat` | `mcp__workiq__fetch`，`entityUrls` 为 `fetch.arguments` 给出的一个路径（`/me/chats/<chat>/messages?$top=10&$select=id,createdDateTime,from,body`），把返回值原样（只这一页）与该行的 `run`（`job_id` 与 `chat_id`）一起交给 `routine_run`。返回值形如 `{"results": [{"data": <这一页>, "statusCode": …}]}`，这一页的 `value` 是消息（新的在前），`@odata.nextLink` 是下一页的相对路径；脚本也仍接受 `mcp__teams__ListChatMessages` 的返回（JSON 后接一行 `CorrelationId: …`） |
+| 例行项的 `fetch` 为 `teams.read_chat` | `mcp__workiq__fetch`，`entityUrls` 为 `fetch.arguments` 给出的一个路径（`/me/chats/<chat>/messages?$top=10&$orderby=createdDateTime+desc&$select=id,createdDateTime,from,body`：按创建时间从新到旧，Graph 默认按最后修改时间排序，后来编辑过的旧消息会排在前面、让读取提前结束），把返回值原样（只这一页）与该行的 `run`（`job_id` 与 `chat_id`）一起交给 `routine_run`。返回值形如 `{"results": [{"data": <这一页>, "statusCode": …}]}`，这一页的 `value` 是消息（新的在前），`@odata.nextLink` 是下一页的相对路径；脚本也仍接受 `mcp__teams__ListChatMessages` 的返回（JSON 后接一行 `CorrelationId: …`） |
 | `routine_run` 返回 `next` | 按 `next.tool` 与 `next.arguments`（`entityUrls`：下一页的路径，原样）取下一页，再用 `next.run` 加上这一页调用 `routine_run`；直到不再返回 `next`。不合并页，不自行截断。`fetch.pages` 已弃用，只给本版本之前启动的例行会话用 |
 | `fetch` 的工具报错或返回错误 | 照样调用 `routine_run`，`fetched` 为工具返回的原文（行中的 `fetch.on_error` 也这样写）；连续失败的计数与通知由 tsw 完成（DN006 §8.9.5） |
 | `routine_run` 返回非空的 `forward` | `mcp__ccd_session_mgmt__send_message`，`session_id` 为 `forward` 中的主会话 ID，正文原样 |

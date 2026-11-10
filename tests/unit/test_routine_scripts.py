@@ -200,7 +200,10 @@ def test_a_workiq_fetch_result() -> None:
     # the path's result, its next page an ``@odata.nextLink`` path to fetch as it is.
     first = read_arguments("48:notes")
     assert first == {
-        "entityUrls": ["/me/chats/48:notes/messages?$top=10&$select=id,createdDateTime,from,body"]
+        "entityUrls": [
+            "/me/chats/48:notes/messages?$top=10&$orderby=createdDateTime+desc"
+            "&$select=id,createdDateTime,from,body"
+        ]
     }
     card = _msg(_teams_id("2026-11-05T00:10:00Z"), f"{CARD_PREFIX} T001 Q-T001-1<br>问题")
     reply = {

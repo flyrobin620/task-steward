@@ -270,7 +270,7 @@ def test_teams_round_trip(home: Home) -> None:
     assert teams["fetch"]["arguments"] == {
         "entityUrls": [
             f"/me/chats/chat-1/messages?$top={routine_mod.TEAMS_READ_TOP}"
-            "&$select=id,createdDateTime,from,body"
+            "&$orderby=createdDateTime+desc&$select=id,createdDateTime,from,body"
         ]
     }
     # The window starts just before the waiting question's card, however long ago that was.

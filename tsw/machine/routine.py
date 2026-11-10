@@ -419,8 +419,13 @@ ENVELOPES = ("messages", "value", "items", "data", "results")
 
 def read_arguments(chat_id: str) -> dict[str, Any]:
     """The arguments of the first fetch of a ``teams-replies`` row: the newest page of the chat
-    (``mcp__workiq__fetch``, CC006 §6.2)."""
-    path = f"/me/chats/{chat_id}/messages?$top={TEAMS_READ_TOP}&$select={TEAMS_READ_FIELDS}"
+    (``mcp__workiq__fetch``, CC006 §6.2). Ordered by creation, newest first, as paging needs:
+    Graph's default order is the last change, so an old message edited later would come first
+    and end the read early (review F1 of T253); the next links keep the order."""
+    path = (
+        f"/me/chats/{chat_id}/messages?$top={TEAMS_READ_TOP}"
+        f"&$orderby=createdDateTime+desc&$select={TEAMS_READ_FIELDS}"
+    )
     return {"entityUrls": [path]}
 
 
