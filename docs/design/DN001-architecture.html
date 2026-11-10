@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="8fca4a32cb59e84ae3ce5b51ca8efb230f61d817bb736d53f05820492a9575a6">
+<meta name="tsw-source-sha256" content="07e00659f287f55eb5bddf80570b4e5a2a59d034b0012766e87dcbd15041f4ae">
 <title>DN001 总体架构：TaskSteward 任务编排器（默认宿主 Claude Code）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -77,7 +77,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <ul><li>租约空闲或已过期时自动领取；让出过租约的会话除外（见下文“交接”）；</li><li>仍有效时只读运行，拒绝派发类工具；</li><li>用户确认原主会话已停止后，用 <code>controller_takeover</code> 接管，并逐项处理该主会话启动的子会话。</li><li>持有者可以续期（再次领取即续期）；冷迁移或静止复制前用 <code>controller.lease_released</code> 主动释放。租约记录机器标识：另一台机器的租约即使已过期也不会被静默领取，只能在用户确认原机器已停止后接管（DN006 §9.6）。</li></ul>
 <p><strong>交接</strong>：用户要求换主会话时，持有租约的主会话主动让出（MCP <code>lease_release</code>，命令行 <code>tsw lease release</code>），记录 <code>controller.lease_released</code> 与 <code>controller.lease_stood_down</code>；另一个主会话随后直接领取（会话开始时自动，或 <code>lease_acquire</code>），不需要用户确认来源。让出租约的会话<strong>不在会话开始时自动领回</strong>：即使租约空闲或已过期，它也只读运行，直到用户在该会话中要求它重新担任主会话、它显式 <code>lease_acquire</code>。否则，旧主会话被 worker 的通知或宿主的兜底唤醒重新开始时会抢回租约（2026-11-10 换主会话时即如此）。被接管的会话同样记为让出（<code>via: takeover</code>）。</p>
 <p>交接与接管的区别：交接由持有者主动让出，原主会话仍在、只是退为只读；接管用于持有者不能让出的情况（已停止、已关闭或在另一台机器上），要求用户确认原主会话已停止的来源。</p>
-<p>交接后，原主会话启动的 worker 与例行会话照常运行：它们按 tsw 给出的会话 ID 唤醒当前持租主会话（§6.3），新主会话也按会话 ID 给它们发消息（投递任务书、转达决定）。宿主不能更换已有会话的父会话（Claude Code 见 CC001 §4），它们在宿主中仍属于原主会话；原主会话在它们结束前不应归档（归档会连带它们）。</p>
+<p>交接后，原主会话启动的 worker 与例行会话照常运行：它们按 tsw 给出的会话 ID 唤醒当前持租主会话（§6.3），新主会话也按会话 ID 给它们发消息（投递任务书、转达决定）。它们的 attempt 随租约归当前持租主会话控制：投递给待命会话、续用与恢复原会话不再要求调用者就是启动会话的主会话，依据是原主会话以 <code>via: release</code> 记录的 <code>controller.lease_stood_down</code>（原主会话重新领取后控制权回到它）。宿主不能更换已有会话的父会话（Claude Code 见 CC001 §4），它们在宿主中仍属于原主会话；原主会话在它们结束前不应归档（归档会连带它们）。</p>
 <p><strong>接管后，子会话只受启动它的主会话控制。</strong> 接管意味着原主会话已停止：新主会话不向原主会话的子会话发消息，先核实其停止，再以新 attempt 接手同一执行目录（DN002 §5.5）。</p>
 <h3 id="65-用户直接与-worker-对话">6.5 用户直接与 worker 对话</h3>
 <p>用户在子会话里直接对话时，worker 默认原地答复：不回传主会话，不改 revision，不写 result 报告。只有用户消息带 <code>[report]</code> 时，worker 才：</p>

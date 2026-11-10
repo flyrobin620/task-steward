@@ -692,8 +692,9 @@ class Guard:
             target = None
         if target is None:
             return (
-                "现在没有主会话持有调度租约，不发送（记录已在账本中）；"
-                "稍后以 whoami 的 orchestrator_session 为准。"
+                "现在没有主会话持有调度租约（例如正在交接），不发送。progress_note 不进入主会话"
+                "的 inbox：在回复中告诉用户这次回传还没有送达主会话，等新主会话领取租约后"
+                "（whoami 的 orchestrator_session 不为 null）再发给它。"
             )
         return (
             f"session_id 为 {target}（当前持有调度租约的主会话，whoami 的 orchestrator_session；"

@@ -525,7 +525,7 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         elif previous["phase"] == "starting":
             raise rejected("会话创建结果未知，先按会话名对账", reason="reconcile_first")
         elif previous["phase"] in ("standby", "live", "stopped"):
-            if previous["controller"] != caller:
+            if not guards.controls(ctx.conn, previous, caller):
                 raise rejected(
                     "原会话由其他主会话启动，核实停止后记为 replaced 再派发",
                     reason="attempt_uncontrollable",
@@ -831,7 +831,7 @@ def attempt_deliver(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         if (
             current is None
             or current["phase"] != "standby"
-            or not guards.controllable(current, env.caller.session_id)
+            or not guards.controllable(current, env.caller.session_id, ctx.conn)
         ):
             raise rejected("没有由当前主会话控制的待命会话", reason="attempt_uncontrollable")
         _require_current_brief(row, current)
@@ -859,7 +859,7 @@ def attempt_continue(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         if (
             current is None
             or current["phase"] not in ("live", "stopped")
-            or not guards.controllable(current, env.caller.session_id)
+            or not guards.controllable(current, env.caller.session_id, ctx.conn)
         ):
             raise rejected("没有由当前主会话控制的原会话", reason="attempt_uncontrollable")
         read_set = sorted({*loads(current["read_set"], []), *extra_reads})
@@ -1038,7 +1038,7 @@ def task_resume(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         elif (
             current is not None
             and current["phase"] in ("live", "stopped")
-            and guards.controllable(current, env.caller.session_id)
+            and guards.controllable(current, env.caller.session_id, ctx.conn)
             and admissible()
         ):
             data.update(transition="T20", attempt=current["attempt"])

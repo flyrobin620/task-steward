@@ -321,6 +321,50 @@ def test_lost_session_returns_to_ready_and_redispatch_uses_a_new_attempt(h: Harn
 
 
 @mark.use_case("UC-DISPATCH-001")
+@mark.use_case("UC-LEASE-001")
+def test_a_handed_over_orchestrators_sessions_go_with_the_lease(h: Harness) -> None:
+    """T254 (PR review): after orch-1 releases the lease, orch-2 holding it controls the
+    sessions orch-1 started: it delivers to a standby session and continues a stopped one."""
+    h.register("T001")
+    h.plan("T001")
+    h.dispatch("T001")
+    h.register("T002")
+    h.plan("T002")
+    started = h.run("attempt_start", task_id="T002", purpose="prestart", user_turn=True)
+    data = started["events"][0]["data"]
+    h.run(
+        "attempt_reconcile",
+        task_id="T002",
+        attempt=data["attempt"],
+        generation=data["generation"],
+        outcome="created",
+        session_ref="w-T002-standby",
+    )
+    h.run(
+        "task_pause",
+        Caller("worker", "w-T001-1", MACHINE),
+        task_id="T001",
+        category="external",
+        owner="外部团队",
+        next_action="等待接口",
+        resume_condition="接口上线",
+        worker_stopped=True,
+    )
+    h.ledger.commit(lease.release("orch-1", machine=MACHINE, actor={"role": "orchestrator"}))
+    h.ledger.commit(
+        lease.acquire(
+            "orch-2", machine=MACHINE, lease_minutes=10_000, actor={"role": "orchestrator"}
+        )
+    )
+    orch2 = Caller("orchestrator", "orch-2", MACHINE)
+    h.run("task_dispatch", orch2, task_id="T002", workdir=str(data.get("workdir") or "w"))
+    h.run("attempt_deliver", orch2, task_id="T002")
+    assert h.status("T002") == "in_progress"
+    h.run("task_resume", orch2, task_id="T001", condition_met=True, note="接口已上线")
+    assert h.status("T001") == "in_progress"  # T20: the stopped session is continued
+
+
+@mark.use_case("UC-DISPATCH-001")
 def test_attempt_from_another_orchestrator_is_not_continued(h: Harness) -> None:
     h.register("T001")
     h.plan("T001")
