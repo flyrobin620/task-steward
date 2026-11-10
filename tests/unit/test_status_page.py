@@ -151,6 +151,10 @@ def test_the_page_is_offline_escaped_and_runs_only_its_own_script(
     # Controls that need the script stay hidden until it runs; plain is the default style.
     for control in ("tools", "refresh", "style", "theme"):
         assert re.search(rf'id="{control}"[^>]* hidden', page), control
+    # One switch to a single list, newest change first (the script sets group and sort).
+    assert re.search(r'<button[^>]*id="timeline"[^>]*>按时间顺序</button>', page)
+    assert 'id="timeline"' in page.split('id="tools"')[1].split("</section>")[0]
+    assert '"timeline"' in SCRIPT and 'state.sort = on ? "status" : "activity"' in SCRIPT
     assert "data-style" not in page.split("<body>")[1]
     # The page shows recorded times only, so rendering again changes nothing.
     assert render(conn) == page

@@ -721,7 +721,7 @@
       "id": "UC-HOST-003",
       "title": "inbox、attention 与 STATUS 页",
       "actor": "主会话",
-      "acceptance": "可回传事件进入 inbox，持有租约的主会话确认后以账本事件记录且重建后保持；attention 只读列出待判断、待答复、需对账、需停止、stale、待启动、待核验、暂停；STATUS 页随每次提交重新生成，显示记录时间而非渲染时间；卡片上过长的问题在卡片内滚动，当前 revision 的任务书可展开",
+      "acceptance": "可回传事件进入 inbox，持有租约的主会话确认后以账本事件记录且重建后保持；attention 只读列出待判断、待答复、需对账、需停止、stale、待启动、待核验、暂停；STATUS 页随每次提交重新生成，显示记录时间而非渲染时间；卡片上过长的问题在卡片内滚动，当前 revision 的任务书可展开；「按时间顺序」一键切换为不分组、按最近记录时间倒序",
       "surfaces": [
         "mcp",
         "cli"

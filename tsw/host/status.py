@@ -554,6 +554,7 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
 <option value="asking">待用户答复</option><option value="tostart">待启动</option>
 <option value="paused">暂停</option><option value="alert">需要处理的异常</option></select></label>
 <span class="sep"></span>
+<button type="button" class="ghost" id="timeline" aria-pressed="false" title="不分组，按最近一次修改时间倒序排列">按时间顺序</button>
 <label>排序 <select id="sort"><option value="status">状态优先</option><option value="activity">最近活动</option>
 <option value="stalest">最久未动</option><option value="newest">编号：新→旧</option>
 <option value="oldest">编号：旧→新</option><option value="repo">仓库</option></select></label>
