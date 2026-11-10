@@ -11,7 +11,7 @@
       "id": "UC-HOME-001",
       "title": "初始化与定位数据目录",
       "actor": "用户 / tsw CLI",
-      "acceptance": "数据目录按 DN001 §8.1 的布局创建，tsw-home.json 记录版本；重复初始化不改变内容；非空的其他目录被拒绝；版本不受支持时拒绝打开；声明 claim_sessions（tsw init --claim-sessions）的数据目录优先于 TSW_HOME，用于在其中工作的会话（最近的数据目录决定），插件启动器同样按它找到运行时",
+      "acceptance": "数据目录按 DN001 §8.1 的布局创建，tsw-home.json 记录版本；重复初始化不改变内容；非空的其他目录被拒绝；版本不受支持时拒绝打开；声明 claim_sessions（tsw init --claim-sessions）的数据目录优先于 TSW_HOME，用于在其中工作的会话（最近的数据目录决定），插件启动器同样按它找到运行时；tsw init --home <目录> --remember 把数据目录写入产品仓库的 .local/tsw-home，没有 TSW_HOME 的终端据此找到它（不带 --remember 不写仓库）；tsw home 给出定位依据（claim_sessions、TSW_HOME、.local/tsw-home、default 或 --home）与产品仓库",
       "surfaces": [
         "cli"
       ],
@@ -275,7 +275,7 @@
       "id": "UC-LEASE-001",
       "title": "调度租约的领取、续期、释放与接管（G-LEASE）",
       "actor": "主会话 / 用户",
-      "acceptance": "租约空闲或在本机过期时可领取，持有者可续期；其他会话在有效期内只读；另一台机器的租约即使过期也不能静默领取；持有者可主动释放（交接），释放或被接管的会话记为让出（controller.lease_stood_down），再次领取时清除；接管必须附用户确认来源并核对原持有者，跨机器还需 from_machine；G-LEASE 对非持有者、其他机器和过期租约拒绝；另一台机器持有未释放的租约时，除接管外的所有写命令与 rebuild 都以 lease_other_machine 拒绝，读命令照常",
+      "acceptance": "租约空闲或在本机过期时可领取，持有者可续期；其他会话在有效期内只读；另一台机器的租约即使过期也不能静默领取；持有者可主动释放（交接），释放或被接管的会话记为让出（controller.lease_stood_down），再次领取时清除；接管必须附用户确认来源并核对原持有者，跨机器还需 from_machine；G-LEASE 对非持有者、其他机器和过期租约拒绝；另一台机器持有未释放的租约时，除接管外的所有写命令与 rebuild 都以 lease_other_machine 拒绝，读命令照常；用户本人在终端运行 lease takeover 时可省略 --user-source，来源记为 user-cli，在宿主会话中省略则拒绝",
       "surfaces": [
         "cli"
       ],
@@ -617,6 +617,54 @@
       }
     },
     {
+      "id": "UC-DIRECT-001",
+      "title": "用户在终端直接验收、退回、取消任务（DN006 §8.10）",
+      "actor": "用户",
+      "acceptance": "tsw task accept / reject / cancel 以 user 调用者运行 user_accept / user_reject / task_cancel（T22、T23、T25），来源由 tsw 记录为渠道 user-cli（本机用户与机器、cli 消息引用、原话或命令行、任务 revision 与决定类别）；交互时先确认，非交互须 --yes；退回须有理由；revision 不一致时 G-USER 拒绝；在任何宿主会话中（Claude Code 的会话环境变量）拒绝；主会话不能以 user-cli / status-app 记录来源，user 调用者也不能用其他渠道或其他工具；有活动 worker 的任务不提供取消",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:task accept",
+        "cli:task reject",
+        "cli:task cancel"
+      ],
+      "component": "direct",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；会话中拒绝按环境变量判定，由 surface 以独立进程覆盖"
+      }
+    },
+    {
+      "id": "UC-DIRECT-002",
+      "title": "STATUS 应用：本机托管、直接读账本，一键验收、退回、取消（DN006 §8.10）",
+      "actor": "用户",
+      "acceptance": "tsw status serve 只监听 127.0.0.1，每次启动生成令牌并输出带令牌的地址；带令牌的首次访问换成 HttpOnly、SameSite=Strict 的 cookie；没有 cookie、令牌错误或 Host 不是本机时拒绝；页面与 STATUS.html 相同并在卡片上加按钮（待验收：验收、退回；无活动 worker：取消；有活动 worker 时写明原因）；按钮请求须带请求头令牌与本页 Origin，按页面上的 revision 以渠道 status-app 记录并执行与 UC-DIRECT-001 相同的实现，结果以 JSON 返回并显示在卡片上；只读提供 runs/ 与 legacy/ 下的文件，其余路径 404；在宿主会话中拒绝启动；静态 STATUS.html 不含按钮与令牌；退回理由在卡片内的输入框填写并发送；卡片显示当前 revision 的任务书与 brief.md 链接，并从账本列出历史 revision（登记、需求变更附原话、退回附理由），.md 文件按纯文本提供",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:status serve"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "surface"
+      ],
+      "omittedTiers": {
+        "component": "写入走 UC-DIRECT-001 的同一实现（component 已覆盖）；HTTP 服务经独立进程在 surface 覆盖",
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；浏览器中的点击由本机手工验证记录在 PR 中"
+      }
+    },
+    {
       "id": "UC-HOST-001",
       "title": "按会话解析角色的 MCP server",
       "actor": "主会话 / worker / 其他会话",
@@ -673,7 +721,7 @@
       "id": "UC-HOST-003",
       "title": "inbox、attention 与 STATUS 页",
       "actor": "主会话",
-      "acceptance": "可回传事件进入 inbox，持有租约的主会话确认后以账本事件记录且重建后保持；attention 只读列出待判断、待答复、需对账、需停止、stale、待启动、待核验、暂停；STATUS 页随每次提交重新生成，显示记录时间而非渲染时间",
+      "acceptance": "可回传事件进入 inbox，持有租约的主会话确认后以账本事件记录且重建后保持；attention 只读列出待判断、待答复、需对账、需停止、stale、待启动、待核验、暂停；STATUS 页随每次提交重新生成，显示记录时间而非渲染时间；卡片上过长的问题在卡片内滚动，当前 revision 的任务书可展开；「按时间顺序」一键切换为不分组、按最近记录时间倒序",
       "surfaces": [
         "mcp",
         "cli"

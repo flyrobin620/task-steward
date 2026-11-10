@@ -28,7 +28,12 @@ def test_init_and_home(initialized: Path) -> None:
     assert (code, again["created"]) == (0, False)
     code, info = run_json("home")
     assert code == 0
-    assert info == {"ok": True, "home": str(initialized), "initialized": True}
+    assert {k: info[k] for k in ("ok", "home", "initialized", "source")} == {
+        "ok": True,
+        "home": str(initialized),
+        "initialized": True,
+        "source": "TSW_HOME",
+    }
 
 
 @pytest.mark.use_case("UC-HOME-001")
@@ -229,9 +234,13 @@ def test_command_inventory_is_known() -> None:
             "restore",
             "resume-writes",
             "review run",
+            "status serve",
+            "task accept",
+            "task cancel",
             "task list",
             "task note",
             "task register",
+            "task reject",
             "task show",
             "tool list",
             "tool run",

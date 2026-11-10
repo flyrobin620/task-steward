@@ -41,7 +41,7 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
 - 用户要求换主会话（由另一个会话接手调度）时，在当前持有租约的会话中调用 `lease_release` 让出租约。之后本会话只读：不派发、不验收、不处理回传；会话开始时也不会自动领回。只有用户在本会话中明确要求本会话重新担任主会话时才调用 `lease_acquire`。
 - 接手的会话：会话开始时租约空闲会自动领取；会话已经打开时调用 `lease_acquire`。领取后先处理 `inbox` 与 `attention`：交接期间的回传都在 inbox 中。
 - 交接后，原主会话启动的 worker 与例行会话照常运行。它们唤醒主会话时发给当前持有租约的会话（tsw 在工具结果的 `wake` 与 `whoami` 的 `orchestrator_session` 中给出），你按会话 ID（attempt 的 `session_ref`）用 `mcp__ccd_session_mgmt__send_message` 给它们发消息；它们的 attempt 归你控制：可以给原主会话预启动的待命会话投递任务书（`attempt_deliver`）、续用或恢复原会话。app 不能更换父会话：它们仍挂在原主会话名下，只出现在原主会话的 `list_sessions {linked: true}` 中；归档原主会话会连带归档它们，它们都结束之前不要归档原主会话。
-- 原主会话已停止、不能让出（或租约在另一台机器上）时才用接管：用户在终端运行 `tsw lease takeover`，附用户确认原主会话已停止的来源；之后逐项处理原主会话启动的 worker（DN001 §6.4）。
+- 原主会话已停止、不能让出（或租约在另一台机器上）时才用接管：请用户在终端运行 `tsw lease takeover --session <本会话 ID> --from-session <原主会话 ID>`（租约在另一台机器上时再加 `--from-machine`；用户自己运行即为确认来源）；之后逐项处理原主会话启动的 worker（DN001 §6.4）。用户还没装 `tsw` 命令时，先请用户在产品仓库运行 `python -m pip install -e .` 与 `tsw init --home <数据目录> --remember`。
 
 ## 回传与判断
 
@@ -58,7 +58,7 @@ worker 先在自己的会话里直接问用户（`ask_user`），你看不到问
 - worker 提交后（`inbox` 中的 `worker.submitted`）核对报告、评审证据、Git 状态与产出：`output_link` 登记已核实的 PR 与产出；有剩余工作就 `feedback`（已合并的改动由 worker 另开 PR 修复）。
 - worker 已合并的任务（提交中有 `merge`，不论任务类型）：你不再合并，也不替 worker 等 CI。只核对 worker 附的证据：PR 确已合并、合并提交与提交 HEAD 对应、`merge.ci` 的运行链接指向合并提交且结论为通过（打开链接核对，不等待）、`merge.live` 的结果或原因。`task_accept` 的 `post_merge` 写明核对结论。证据不足或不符时用 `feedback` 交回 worker，由它补齐（需要修复时另开 PR）。没有合并的任务（`merge_skipped` 或仓库未授权）按仓库规则由你合并，必要时 `integrate`。
 - 全部满足时 `task_accept`：逐项列出验收要求的结论与证据。之后告诉用户任务完成、等待人工验收。
-- 用户明确验收或退回时 `user_accept` / `user_reject`，附用户原话与消息引用；不能以 worker 回执、自评或超时代替。
+- 用户明确验收或退回时 `user_accept` / `user_reject`，附用户原话与消息引用；不能以 worker 回执、自评或超时代替。用户也可以不经你，自己在终端运行 `tsw task accept` / `reject` / `cancel` 或在 STATUS 应用（`tsw status serve`）中点按钮：账本中会出现渠道为 `user-cli` / `status-app` 的 `task.user_accepted` 等事件，你不需要再登记；这两个渠道你不能使用。
 
 ## 配置与维护
 

@@ -157,6 +157,9 @@
       state.st = state.st.filter(v => v in statusLabels);
       state.kind = state.kind.filter(v => v in kindLabels);
     }
+    function timeline() {
+      return state.group === "none" && state.sort === "activity";
+    }
     function reset() {
       state = {...parse(""), sort: state.sort, group: state.group};
     }
@@ -179,6 +182,7 @@
       for (const b of tools.querySelectorAll("[data-st]")) b.setAttribute("aria-pressed", String(state.st.includes(b.dataset.st)));
       for (const b of tools.querySelectorAll("[data-kind]")) b.setAttribute("aria-pressed", String(state.kind.includes(b.dataset.kind)));
       $("mine").setAttribute("aria-pressed", String(state.flag === "user"));
+      $("timeline").setAttribute("aria-pressed", String(timeline()));
       if (q.value !== state.q) q.value = state.q;
       repo.value = state.repo;
       flag.value = state.flag; sort.value = state.sort; group.value = mode;
@@ -209,6 +213,12 @@
       if (b.dataset.st) state.st = toggle(state.st, b.dataset.st);
       else if (b.dataset.kind) state.kind = toggle(state.kind, b.dataset.kind);
       else if (b.id === "mine") state.flag = state.flag === "user" ? "" : "user";
+      else if (b.id === "timeline") {
+        // One switch between the grouped board and a single list, newest change first.
+        const on = timeline();
+        state.group = on ? "status" : "none";
+        state.sort = on ? "status" : "activity";
+      }
       else if (b.id === "clear") reset();
       else if (b.id === "open-all" || b.id === "close-all") {
         for (const d of board.querySelectorAll("details.group")) d.open = b.id === "open-all";
@@ -265,7 +275,9 @@
       refresh.setAttribute("aria-pressed", String(on));
       clearInterval(timer);
       if (on) timer = setInterval(() => {
-        const busy = document.activeElement === q || !(window.getSelection()?.isCollapsed ?? true);
+        // [data-hold-refresh] on the root: the STATUS app has an unsent reason or a request.
+        const busy = document.activeElement === q || !(window.getSelection()?.isCollapsed ?? true)
+          || document.querySelector("[data-hold-refresh]") !== null;
         if (busy || document.hidden) return;
         try { sessionStorage.setItem(PREFIX + "scroll", String(window.scrollY)); } catch (_) { /* ignore */ }
         location.reload();

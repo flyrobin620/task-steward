@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="b73fa56b675c3256b56b0501ee78822267ebf75599b8dceabbf84dbc9a08c5e6">
+<meta name="tsw-source-sha256" content="1db1b78fefd85a486f603f45401f9453972547a9361bcd4b3cab91e07577f9e0">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -42,7 +42,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 </head>
 <body>
 <div class="layout">
-<nav class="toc"><h2>目录</h2><a class="l2" href="#设计文档">设计文档</a><a class="l2" href="#参与开发">参与开发</a><a class="l2" href="#开始使用开发中">开始使用（开发中）</a><a class="l2" href="#仓库布局">仓库布局</a><a class="l2" href="#许可">许可</a></nav>
+<nav class="toc"><h2>目录</h2><a class="l2" href="#设计文档">设计文档</a><a class="l2" href="#参与开发">参与开发</a><a class="l2" href="#开始使用开发中">开始使用（开发中）</a><a class="l3" href="#安装-tsw-命令只需一次">安装 tsw 命令（只需一次）</a><a class="l3" href="#哪些命令在哪里运行">哪些命令在哪里运行</a><a class="l3" href="#需要你运行的命令">需要你运行的命令</a><a class="l2" href="#仓库布局">仓库布局</a><a class="l2" href="#许可">许可</a></nav>
 <main>
 <h1>TaskSteward（任务管家）</h1>
 <p>一个可插拔宿主的任务编排器，默认宿主是 <strong>Claude Code 桌面 app</strong>，也可以经插件层接入 Codex、GitHub Copilot 或自建的远程会话中枢。</p>
@@ -58,11 +58,32 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p>所有改动遵循 <a href="AGENTS.md">AGENTS.md</a>：开始前先读它，再按其中的表读对应的专题文档。</p>
 <table><thead><tr><th>文档</th><th>内容</th></tr></thead><tbody><tr><td><a href="docs/development/workflow.md">开发流程</a></td><td>从改代码到合并的每一步：门禁、证据、失败处理</td></tr><tr><td><a href="docs/development/testing-layers.md">测试层级</a></td><td>unit、component、surface、conformance、live 五个层级与 live 场景</td></tr><tr><td><a href="docs/development/test-environments.md">测试环境</a></td><td>临时数据目录、子进程环境隔离、live 运行清单与清理</td></tr><tr><td><a href="docs/development/use-cases.md">use-case 目录</a></td><td>use case 与状态迁移清单、测试标记、目录检查</td></tr><tr><td><a href="docs/development/ci.md">CI</a></td><td>GitHub Actions（Windows）、阶段与汇总检查 <code>Gate</code></td></tr><tr><td><a href="docs/development/review.md">评审与合并</a></td><td>独立评审、PR 模板、合并条件与需要用户确认的范围</td></tr><tr><td><a href="docs/development/code-quality.md">代码质量</a></td><td>警告即错误、只依赖标准库、开发依赖</td></tr><tr><td><a href="docs/development/compatibility.md">兼容性</a></td><td>账本、配置、插件接口等契约的版本规则</td></tr><tr><td><a href="docs/development/docs.md">文档</a></td><td>语言与格式、HTML 生成、设计文档、公开仓库卫生</td></tr><tr><td><a href="docs/development/release.md">发布</a></td><td>版本与发布（v1 开发期间不发布）</td></tr><tr><td><a href="docs/decisions/README.md">决定记录</a></td><td>已确认的决定</td></tr></tbody></table>
 <h2 id="开始使用开发中">开始使用（开发中）</h2>
-<p>需要 Python 3.10+ 与 git。运行时只依赖标准库，在仓库根目录即可运行：</p>
-<pre><code class="lang-text">python -m tsw init                 初始化数据目录（默认按 TSW_HOME 定位）
-python -m tsw task register --title &quot;示例&quot; --repo demo --kind code --goal &quot;…&quot; --acceptance &quot;…&quot;
-python -m tsw task list --json
-python -m tsw ledger audit</code></pre>
+<p>需要 Python 3.10+ 与 git。运行时只依赖标准库。</p>
+<h3 id="安装-tsw-命令只需一次">安装 <code>tsw</code> 命令（只需一次）</h3>
+<p>在本仓库根目录运行：</p>
+<pre><code class="lang-text">python -m pip install -e .
+tsw init --home &lt;数据目录&gt; --remember</code></pre>
+<p>第一行把 <code>tsw</code> 装进 Python 的 <code>Scripts</code> 目录（Windows 的 PowerShell、cmd 与 Git Bash 都能直接运行 <code>tsw</code>）。这是可编辑安装，运行的就是本仓库当前的代码，<code>git pull</code> 后不用重装；请保留 <code>-e</code>：<code>host render</code> 等宿主命令要用仓库中的 <code>plugin/</code>，它不在 Python 包里。第二行初始化（或打开已有的）数据目录，并把它记在本仓库的 <code>.local/tsw-home</code> 中，之后终端不需要设置 <code>TSW_HOME</code>。不想安装时，在仓库根目录用 <code>python -m tsw</code> 代替 <code>tsw</code>。</p>
+<h3 id="哪些命令在哪里运行">哪些命令在哪里运行</h3>
+<ul><li><strong>运行时</strong>（tsw 的代码）在本仓库：安装后 <code>tsw</code> 在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw，不需要这一步。</li><li><strong>数据目录</strong>（账本、任务书、报告）按顺序定位：当前目录所在的、声明了 <code>claim_sessions</code> 的数据目录（只用于 live 测试隔离）→ 环境变量 <code>TSW_HOME</code> → 本仓库的 <code>.local/tsw-home</code> → <code>~/.tsw</code>。<code>tsw home</code> 显示找到的目录和依据。</li><li><strong>当前目录</strong>只影响两件事：上面的 <code>claim_sessions</code>，以及 <code>tsw review run</code>（在 worker 的 worktree 中评审当前 HEAD）。其他命令在哪个目录运行都一样；<code>backup</code>、<code>restore</code> 的相对路径按当前目录解析。</li><li>这些命令由你在<strong>会话外的终端</strong>中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 STATUS 应用在任何会话中都会被拒绝，以免会话替你做决定（<a href="docs/design/DN006-plugin-layer.html">DN006 §8.10</a>）。</li></ul>
+<h3 id="需要你运行的命令">需要你运行的命令</h3>
+<pre><code class="lang-text">tsw home                                     显示数据目录与定位依据
+tsw init --home &lt;目录&gt; --remember            初始化数据目录并记为本仓库的数据目录
+tsw host install-hint                        显示 Claude Code 插件的安装步骤
+tsw host render                              更新主会话的 CLAUDE.md、skill 与插件副本（产品更新后）
+tsw status serve                             打开 STATUS 应用：浏览器中查看任务，一键验收、退回、取消
+tsw task accept T255 [--note &quot;看过报告&quot;]     验收待验收的任务（先显示任务并要求确认；--yes 跳过）
+tsw task reject T255 --reason &quot;缺少导出&quot;     退回待验收的任务
+tsw task cancel T255                         取消任务（有运行中的 worker 时须先由主会话停止）
+tsw lease show                               查看调度租约
+tsw lease takeover --session &lt;新主会话 ID&gt; --from-session &lt;原主会话 ID&gt;
+                                             原主会话已停止时接管租约（另一台机器上的加 --from-machine）
+tsw lease release --session &lt;主会话 ID&gt;       释放租约
+tsw backup &lt;空目录&gt;  /  tsw restore &lt;备份&gt;   在线备份 / 恢复到空的数据目录
+tsw quiesce  /  tsw resume-writes            静止数据目录（之后可直接复制）/ 解除
+tsw ledger audit  /  tsw ledger rebuild      审计账本 / 从账本重建投影
+tsw config show  /  tsw config validate      查看 / 校验统一配置</code></pre>
+<p><code>tsw status serve</code> 只监听本机，每次启动输出一个带一次性令牌的地址并在浏览器中打开；页面与数据目录中的 <code>views/STATUS.html</code> 相同，另有按钮，报告与 PR 链接照常可点。按 Ctrl+C 停止。<code>views/STATUS.html</code> 仍在每次提交后生成，可以离线打开，但没有按钮。</p>
 <p>开发者另需安装开发工具（<code>pip install -r requirements-dev.txt</code>），并用 <code>python tools/gate.py</code> 运行本地门禁。</p>
 <h2 id="仓库布局">仓库布局</h2>
 <pre><code class="lang-text">task-steward/

@@ -12,8 +12,10 @@ from typing import Any
 
 import pytest
 
-from tsw.host.status import render
-from tsw.host.status_assets import CSP, SCRIPT
+from tsw.events import Event
+from tsw.host.status import AppView, Revision, render
+from tsw.host.status_app import history
+from tsw.host.status_assets import APP_CSP, APP_SCRIPT, CSP, SCRIPT
 from tsw.projection import SCHEMA_SQL
 
 mark = pytest.mark
@@ -149,6 +151,10 @@ def test_the_page_is_offline_escaped_and_runs_only_its_own_script(
     # Controls that need the script stay hidden until it runs; plain is the default style.
     for control in ("tools", "refresh", "style", "theme"):
         assert re.search(rf'id="{control}"[^>]* hidden', page), control
+    # One switch to a single list, newest change first (the script sets group and sort).
+    assert re.search(r'<button[^>]*id="timeline"[^>]*>按时间顺序</button>', page)
+    assert 'id="timeline"' in page.split('id="tools"')[1].split("</section>")[0]
+    assert '"timeline"' in SCRIPT and 'state.sort = on ? "status" : "activity"' in SCRIPT
     assert "data-style" not in page.split("<body>")[1]
     # The page shows recorded times only, so rendering again changes nothing.
     assert render(conn) == page
@@ -163,3 +169,142 @@ def test_an_empty_board_says_so(conn: sqlite3.Connection) -> None:
     page = render(conn)
     assert "没有任务" in page
     assert "<article" not in page
+
+
+@mark.use_case("UC-DIRECT-002")
+def test_the_status_app_page_adds_the_direct_actions(conn: sqlite3.Connection) -> None:
+    _task(conn, "T001", "done", revision=2)
+    _task(conn, "T002", "in_progress")
+    _task(conn, "T003", "ready")
+    static = render(conn)
+    assert 'data-act="' not in static and "tsw-token" not in static
+    assert "tsw task accept T001" in _card(static, "T001")
+    app = AppView(
+        token="tok-1",
+        actions={
+            "T001": (("accept", "reject"), None),
+            "T002": ((), "worker 仍在运行：请在主会话中先停止 worker 再取消"),
+            "T003": (("cancel",), None),
+        },
+    )
+    page = render(conn, app)
+    first = _card(page, "T001")
+    assert '<div class="acts" data-task="T001" data-revision="2">' in first
+    assert 'data-act="accept"' in first and 'data-act="reject"' in first
+    assert 'data-act="' not in _card(page, "T002")
+    assert "先停止 worker" in _card(page, "T002")
+    assert 'data-act="cancel"' in _card(page, "T003")
+    assert '<meta name="tsw-token" content="tok-1">' in page
+    scripts = re.findall(r"<script>(.*?)</script>", page, re.S)
+    assert scripts == [SCRIPT, APP_SCRIPT]
+    digest = base64.b64encode(hashlib.sha256(APP_SCRIPT.encode("utf-8")).digest()).decode()
+    assert f"'sha256-{digest}'" in APP_CSP and "connect-src 'self'" in APP_CSP
+    assert f'content="{APP_CSP}"' in page.replace("&#x27;", "'")
+    # The offline page stays as it was: only the app talks to a server.
+    assert "connect-src" not in CSP
+
+
+def test_the_app_script_cannot_close_its_own_element() -> None:
+    assert "</" not in APP_SCRIPT
+
+
+def test_an_unsent_reason_holds_the_auto_refresh() -> None:
+    # The app marks the root (not a card, which the filters may detach); status.js looks for it.
+    assert "document.documentElement.dataset.holdRefresh" in APP_SCRIPT
+    assert 'document.querySelector("[data-hold-refresh]")' in SCRIPT
+
+
+@mark.use_case("UC-HOST-003")
+def test_long_notes_scroll_and_the_brief_folds_at_the_foot(conn: sqlite3.Connection) -> None:
+    _task(
+        conn,
+        "T001",
+        "in_progress",
+        revision=3,
+        current_attempt="a1",
+        goal="做 STATUS 应用",
+        acceptance=json.dumps(["一键验收"]),
+    )
+    conn.execute(
+        "INSERT INTO attempts(task_id, attempt, phase, brief_path) "
+        "VALUES('T001', 'a1', 'live', 'runs/T001/a1/brief.md')"
+    )
+    conn.execute(
+        "INSERT INTO input_requests(request_id, task_id, kind, status, question, binding) "
+        "VALUES('Q-T001-1', 'T001', 'question', 'pending', ?, '{}')",
+        ("很长的问题。" * 200,),
+    )
+    card = _card(render(conn), "T001")
+    assert '：<span class="clip">很长的问题。' in card
+    brief = re.search(
+        r'<details class="brief"><summary>任务书 · revision 3</summary>.*?</details>', card
+    )
+    assert brief and "做 STATUS 应用" in brief.group(0) and "<li>一键验收</li>" in brief.group(0)
+    assert '<a href="../runs/T001/a1/brief.md">' in brief.group(0)
+    assert "历史任务书" not in card  # the offline page has the current revision only
+    assert card.index('<div class="foot">') > card.index('<dl class="facts">')
+
+
+@mark.use_case("UC-DIRECT-002")
+def test_the_status_app_lists_the_earlier_revisions(conn: sqlite3.Connection) -> None:
+    _task(conn, "T001", "in_progress", revision=3, goal="第三版")
+    history = {
+        "T001": [
+            Revision(1, "2026-11-10T01:00:00Z", "登记", "第一版", ("a",)),
+            Revision(2, "2026-11-10T02:00:00Z", "需求变更", "第二版", ("a", "b"), "加一个按钮"),
+            Revision(3, "2026-11-10T03:00:00Z", "用户退回", "第二版", ("a", "b"), "缺导出"),
+        ]
+    }
+    card = _card(render(conn, AppView(token="t", actions={}, history=history)), "T001")
+    past = re.search(
+        r'<details class="brief history"><summary>历史任务书（2）</summary>.*?</details>', card
+    )
+    assert past, card
+    text = past.group(0)
+    # Newest first; the current revision is the brief above, not history.
+    assert text.index("revision 2 · 需求变更") < text.index("revision 1 · 登记")
+    assert "加一个按钮" in text and "第一版" in text and "缺导出" not in text
+
+
+def _event(seq: int, kind: str, task_id: str, rev: int, **data: Any) -> Event:
+    return Event(
+        schema=1,
+        sequence=seq,
+        time=f"2026-11-10T00:00:{seq:02d}Z",
+        type=kind,
+        actor={"role": "cli"},
+        prev="",
+        checksum="",
+        task_id=task_id,
+        revision=rev,
+        data=data,
+    )
+
+
+@mark.use_case("UC-DIRECT-002")
+def test_history_starts_at_an_import_and_follows_a_renumbered_task() -> None:
+    events = [
+        _event(1, "task.registered", "T001", 1, goal="本地任务", acceptance=["x"]),
+        _event(2, "task.user_rejected", "T001", 2, revision=2, reason="不对"),
+        _event(3, "task.renumbered", "T238", 2, **{"from": "T001", "to": "T238"}),
+        _event(4, "import.task_imported", "T001", 3, goal="导入的任务", acceptance=["y"]),
+        _event(
+            5,
+            "task.requirement_changed",
+            "T001",
+            4,
+            revision=4,
+            goal="导入后改过",
+            acceptance=["y", "z"],
+            user_source={"text": "再加 z"},
+        ),
+    ]
+    past = history(events)
+    assert [(r.revision, r.how, r.goal) for r in past["T238"]] == [
+        (1, "登记", "本地任务"),
+        (2, "用户退回", "本地任务"),
+    ]
+    assert [(r.revision, r.how, r.goal, r.words) for r in past["T001"]] == [
+        (3, "导入", "导入的任务", ""),
+        (4, "需求变更", "导入后改过", "再加 z"),
+    ]

@@ -14,8 +14,13 @@ dependencies = []
 [project.scripts]
 tsw = "tsw.cli:main"
 
-[tool.setuptools]
-packages = ["tsw", "tsw.storage"]
+# Every subpackage and the page and skill assets, so the runtime imports from any install. Host
+# integration also needs plugin/, which is outside the package: install from a checkout with -e.
+[tool.setuptools.packages.find]
+include = ["tsw*"]
+
+[tool.setuptools.package-data]
+tsw = ["host/*.md", "host/*.css", "host/*.js"]
 
 [tool.setuptools.dynamic]
 version = {attr = "tsw.__version__"}

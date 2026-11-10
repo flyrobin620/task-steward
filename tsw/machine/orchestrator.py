@@ -1425,7 +1425,7 @@ def task_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return _cmd(env, "task_accept", inp, build)
 
 
-@tool("user_accept", "orchestrator", sync_after=True, description="用户验收（T22，G-USER）")
+@tool("user_accept", "orchestrator", "user", sync_after=True, description="用户验收（T22，G-USER）")
 def user_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
     source_in = mapping(inp, "user_source")
@@ -1434,7 +1434,11 @@ def user_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         row = task(ctx.conn, task_id)
         require_status(row, "done")
         source = guards.g_user(
-            source_in, task_id=task_id, revision=int(row["revision"]), kind="accept"
+            source_in,
+            task_id=task_id,
+            revision=int(row["revision"]),
+            kind="accept",
+            role=env.caller.role,
         )
         if int(row["stale"]):
             raise rejected("任务有未解决的 stale 标记", reason="stale")
@@ -1463,7 +1467,13 @@ def user_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return _cmd(env, "user_accept", inp, build)
 
 
-@tool("user_reject", "orchestrator", sync_after=True, description="用户退回（T23，revision+1）")
+@tool(
+    "user_reject",
+    "orchestrator",
+    "user",
+    sync_after=True,
+    description="用户退回（T23，revision+1）",
+)
 def user_reject(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
     source_in = mapping(inp, "user_source")
@@ -1473,7 +1483,11 @@ def user_reject(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         row = task(ctx.conn, task_id)
         require_status(row, "done")
         source = guards.g_user(
-            source_in, task_id=task_id, revision=int(row["revision"]), kind="reject"
+            source_in,
+            task_id=task_id,
+            revision=int(row["revision"]),
+            kind="reject",
+            role=env.caller.role,
         )
         return [
             EventDraft(
@@ -1492,7 +1506,7 @@ def user_reject(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return _cmd(env, "user_reject", inp, build)
 
 
-@tool("task_cancel", "orchestrator", sync_after=True, description="用户取消（T25）")
+@tool("task_cancel", "orchestrator", "user", sync_after=True, description="用户取消（T25）")
 def task_cancel(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
     source_in = mapping(inp, "user_source")
@@ -1513,7 +1527,11 @@ def task_cancel(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         ):
             raise rejected("当前状态不能取消", reason="invalid_state", status=row["status"])
         source = guards.g_user(
-            source_in, task_id=task_id, revision=int(row["revision"]), kind="cancel"
+            source_in,
+            task_id=task_id,
+            revision=int(row["revision"]),
+            kind="cancel",
+            role=env.caller.role,
         )
         phases = {
             str(r["attempt"]): str(r["phase"])

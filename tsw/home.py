@@ -22,6 +22,8 @@ from tsw.events import utc_now
 
 HOME_VERSION = 1
 MARKER = "tsw-home.json"
+# Where the product repository records its data directory, relative to the repository.
+POINTER = ".local/tsw-home"
 LAYOUT = (
     "config",
     "config/prompts",
@@ -83,22 +85,41 @@ def resolve_home(
     repo_root: Path | None = None,
     cwd: Path | None = None,
 ) -> Path:
+    return locate_home(env, repo_root, cwd)[0]
+
+
+def locate_home(
+    env: Mapping[str, str] | None = None,
+    repo_root: Path | None = None,
+    cwd: Path | None = None,
+) -> tuple[Path, str]:
+    """The data directory and the rule that found it: ``claim_sessions``, ``TSW_HOME``,
+    ``.local/tsw-home`` or ``default``."""
     environ = os.environ if env is None else env
     # The session's directory: the host starts the MCP server and hooks in it (CC001 §5), the
     # same directory the MCP server resolves the session's identity with.
     claimed = claiming_home((cwd or Path.cwd()).resolve())
     if claimed is not None:
-        return claimed
+        return claimed, "claim_sessions"
     explicit = environ.get("TSW_HOME")
     if explicit:
-        return Path(explicit).expanduser()
+        return Path(explicit).expanduser(), "TSW_HOME"
     if repo_root is not None:
-        pointer = repo_root / ".local" / "tsw-home"
+        pointer = repo_root / POINTER
         if pointer.is_file():
             recorded = pointer.read_text(encoding="utf-8").strip()
             if recorded:
-                return Path(recorded).expanduser()
-    return Path("~/.tsw").expanduser()
+                return Path(recorded).expanduser(), POINTER
+    return Path("~/.tsw").expanduser(), "default"
+
+
+def remember_home(repo_root: Path, root: Path) -> Path:
+    """Record ``root`` as the product repository's data directory (``tsw init --remember``):
+    a terminal without ``TSW_HOME`` then finds it (DN006 §9.1)."""
+    pointer = repo_root / POINTER
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    pointer.write_text(f"{root.resolve()}\n", encoding="utf-8")
+    return pointer
 
 
 @dataclass(frozen=True)
