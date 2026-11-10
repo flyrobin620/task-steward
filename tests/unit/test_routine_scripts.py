@@ -10,11 +10,16 @@ import pytest
 
 from tsw.machine.routine import (
     CARD_PREFIX,
+    TEAMS_FETCH_ALERT_AFTER,
     cron_for,
+    failing_fetches,
+    fetch_failure,
     fetched_messages,
     id_time,
     next_page,
+    note_fetch,
     plain_text,
+    read_arguments,
     select_replies,
     starting_task,
 )
@@ -157,7 +162,7 @@ def test_a_tool_result_with_text_after_the_json() -> None:
     one = {"id": "1", "content": "T001 a"}
     text = json.dumps({"messages": [one], "nextLink": "p2"}) + "CorrelationId: abc, TimeStamp: x"
     assert fetched_messages(text) == [one]
-    assert next_page(text, chat_id="c", since=WINDOW) == {"chatId": "c", "nextLink": "p2"}
+    assert next_page(text, since=WINDOW) == {"entityUrls": ["p2"]}
 
 
 @pytest.mark.use_case("UC-CHANNEL-001")
@@ -170,27 +175,112 @@ def test_next_page_reads_the_whole_window_one_page_at_a_time() -> None:
 
     # Every message on the page is inside the window and there is more: read on.
     inside = page("2026-11-05T00:09:00Z", "2026-11-04T00:00:00Z")
-    assert next_page(inside, chat_id="c", since=WINDOW) == {"chatId": "c", "nextLink": "p-next"}
+    assert next_page(inside, since=WINDOW) == {"entityUrls": ["p-next"]}
     # The page reaches back past the window's start: done.
-    assert (
-        next_page(page("2026-11-05T00:09:00Z", "2026-11-03T23:59:59Z"), chat_id="c", since=WINDOW)
-        is None
-    )
+    assert next_page(page("2026-11-05T00:09:00Z", "2026-11-03T23:59:59Z"), since=WINDOW) is None
     # The last page of the chat: done.
-    assert next_page(page("2026-11-05T00:09:00Z", link=None), chat_id="c", since=WINDOW) is None
+    assert next_page(page("2026-11-05T00:09:00Z", link=None), since=WINDOW) is None
     # A page without dated messages tells nothing about the window: read on.
-    assert next_page(page(), chat_id="c", since=WINDOW) == {"chatId": "c", "nextLink": "p-next"}
+    assert next_page(page(), since=WINDOW) == {"entityUrls": ["p-next"]}
     # A list of pages from an older routine session: the last page decides.
     older = [inside, page("2026-11-03T00:00:00Z")]
-    assert next_page(older, chat_id="c", since=WINDOW) is None
-    assert next_page([page("2026-11-03T00:00:00Z"), inside], chat_id="c", since=WINDOW) == {
-        "chatId": "c",
-        "nextLink": "p-next",
+    assert next_page(older, since=WINDOW) is None
+    assert next_page([page("2026-11-03T00:00:00Z"), inside], since=WINDOW) == {
+        "entityUrls": ["p-next"]
     }
     # Plain messages and nothing at all name no next page.
-    assert next_page([_msg("1", "x")], chat_id="c", since=WINDOW) is None
-    assert next_page(None, chat_id="c", since=WINDOW) is None
-    assert next_page("not json", chat_id="c", since=WINDOW) is None
+    assert next_page([_msg("1", "x")], since=WINDOW) is None
+    assert next_page(None, since=WINDOW) is None
+    assert next_page("not json", since=WINDOW) is None
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_workiq_fetch_result() -> None:
+    # What mcp__workiq__fetch returns for one chat path (T253 live): the page is the ``data`` of
+    # the path's result, its next page an ``@odata.nextLink`` path to fetch as it is.
+    first = read_arguments("48:notes")
+    assert first == {
+        "entityUrls": [
+            "/me/chats/48:notes/messages?$top=10&$orderby=createdDateTime+desc"
+            "&$select=id,createdDateTime,from,body"
+        ]
+    }
+    card = _msg(_teams_id("2026-11-05T00:10:00Z"), f"{CARD_PREFIX} T001 Q-T001-1<br>问题")
+    reply = {
+        "id": _teams_id("2026-11-05T00:12:00Z"),
+        "createdDateTime": "2026-11-05T00:12:00Z",
+        "from": {"application": None, "user": {"id": "u1", "displayName": "U"}},
+        "body": {"contentType": "html", "content": "<p>T001 用 B</p>"},
+    }
+
+    def result(link: str | None, *messages: dict[str, Any]) -> dict[str, Any]:
+        data: dict[str, Any] = {"@odata.count": len(messages), "value": list(messages)}
+        if link:
+            data["@odata.nextLink"] = link
+        return {"note": "Results limited", "results": [{"data": data, "statusCode": 200}]}
+
+    link = "/me/chats/48:notes/messages?$top=10&$skiptoken=abc"
+    fetched = result(link, reply, card)
+    assert fetched_messages(fetched) == [reply, card]
+    assert fetched_messages(json.dumps(fetched, ensure_ascii=False)) == [reply, card]
+    assert next_page(fetched, since=WINDOW) == {"entityUrls": [link]}
+    # A link given in full is cut back to the path WorkIQ takes.
+    full = result("https://graph.microsoft.com/v1.0" + link, reply)
+    assert next_page(full, since=WINDOW) == {"entityUrls": [link]}
+    # The last page names no next one; a failed fetch holds no messages and no next page.
+    assert next_page(result(None, reply), since=WINDOW) is None
+    failed = {"results": [{"data": {"error": {"code": "x"}}, "statusCode": 404}]}
+    assert fetched_messages(failed) == [] and next_page(failed, since=WINDOW) is None
+    # Several pages as an older routine session collected them.
+    assert fetched_messages([fetched, result(None, card)]) == [reply, card, card]
+    requests = [_q("T001", 1, card["id"], "2026-11-05T00:10:00Z")]
+    found = select_replies(fetched, requests=requests, sender_id="u1", since=WINDOW, exclude=set())
+    assert [(m["message_id"], m["text"]) for m in found] == [(reply["id"], "T001 用 B")]
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_fetch_failure_tells_a_failed_read_from_a_page() -> None:
+    page = {"results": [{"data": {"value": [], "@odata.count": 0}, "statusCode": 200}]}
+    assert fetch_failure(page) is None
+    assert fetch_failure(json.dumps(page)) is None
+    assert fetch_failure({"messages": []}) is None
+    assert fetch_failure([page, {"value": []}]) is None
+    assert fetch_failure(json.dumps({"messages": []}) + "CorrelationId: abc") is None
+    # What failed tools gave: an error text, a WorkIQ status, a Graph error object.
+    assert fetch_failure("Session not found") == "Session not found"
+    long_text = "  Error:\n HTTP 429 " + "x" * 500
+    assert fetch_failure(long_text) == ("Error: HTTP 429 " + "x" * 500)[:200]
+    assert fetch_failure(None) == "没有取数结果"
+    assert fetch_failure("") == "取数结果为空"
+    assert fetch_failure(7) == "取数结果不是 JSON 对象或数组"
+    throttled = {
+        "results": [
+            {"data": {"error": {"code": "TooManyRequests", "message": "slow"}}, "statusCode": 429}
+        ]
+    }
+    assert fetch_failure(throttled) == "HTTP 429（TooManyRequests：slow）"
+    assert fetch_failure({"results": [{"data": None, "statusCode": 503}]}) == "HTTP 503"
+    assert fetch_failure({"error": {"message": "denied"}}) == "错误（denied）"
+    assert fetch_failure([page, throttled]) == "HTTP 429（TooManyRequests：slow）"
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_note_fetch_counts_failures_in_a_row_per_chat() -> None:
+    kept: dict[str, Any] = {"generation": 1}
+    alerts = [note_fetch(kept, "c", "HTTP 429", f"t{i}") for i in range(TEAMS_FETCH_ALERT_AFTER)]
+    assert alerts[:-1] == [None] * (TEAMS_FETCH_ALERT_AFTER - 1)
+    assert alerts[-1] == {
+        "count": TEAMS_FETCH_ALERT_AFTER,
+        "first": "t0",
+        "last": f"t{TEAMS_FETCH_ALERT_AFTER - 1}",
+        "reason": "HTTP 429",
+    }
+    assert note_fetch(kept, "c", "HTTP 429", "later") is None  # told once per run of failures
+    assert note_fetch(kept, "other", "x", "t") is None  # counted per chat
+    assert [f["chat_id"] for f in failing_fetches(kept)] == ["c"]
+    assert note_fetch(kept, "c", None, "ok") is None
+    assert failing_fetches(kept) == [] and "c" not in kept["fetch_failures"]
+    assert failing_fetches({}) == [] and failing_fetches({"fetch_failures": []}) == []
 
 
 def _teams_id(at: str) -> str:

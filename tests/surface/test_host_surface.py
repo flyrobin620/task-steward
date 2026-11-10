@@ -238,7 +238,11 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert [Path(p) for p in out["written"]] == [home / "CLAUDE.md", skill, handle_input, settings]
     # The test's Claude configuration directory has no plugin installed.
     assert out["plugin"]["installed"] == [] and "note" in out["plugin"]
-    assert "handoff_resolve" in handle_input.read_text(encoding="utf-8")
+    handling = handle_input.read_text(encoding="utf-8")
+    assert "handoff_resolve" in handling
+    # Teams cards go out with WorkIQ: the self chat's path, where channel_sent's fields come from.
+    assert "mcp__workiq__create_entity" in handling and "/me/chats/48:notes/messages" in handling
+    assert "from.user.id" in handling and "mcp__teams__SendMessageToSelf" not in handling
     # The actions tsw guards itself are allowed; what the user had there is kept (DN006 §6.3).
     written = json.loads(settings.read_text(encoding="utf-8"))
     assert written["env"] == {"X": "1"}
@@ -264,6 +268,8 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
         "TaskSteward Routine",
     ]
     assert "--admin" in rules[1]
+    # The routine session reads Teams with WorkIQ (T253).
+    assert "mcp__workiq__fetch" in rules[2] and "ListChatMessages" not in rules[2]
 
 
 def launch(

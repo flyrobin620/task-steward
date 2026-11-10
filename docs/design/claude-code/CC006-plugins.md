@@ -128,8 +128,9 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 | 例行表给出的内容 | 例行会话调用的工具 |
 | --- | --- |
 | 例行项没有 `fetch` | `routine_run`，参数为该行的 `run`（没有时为 `job_id`） |
-| 例行项的 `fetch` 为 `teams.read_chat` | `mcp__teams__ListChatMessages`（`chatId`，`top`），把返回值原样（只这一页）与该行的 `run`（`job_id` 与 `chat_id`）一起交给 `routine_run`。返回值是 JSON 后接一行 `CorrelationId: …`，脚本只读开头的 JSON |
-| `routine_run` 返回 `next` | 按 `next.tool` 与 `next.arguments`（`chatId`、`nextLink`）取下一页，再用 `next.run` 加上这一页调用 `routine_run`；直到不再返回 `next`。不合并页，不自行截断。`fetch.pages` 已弃用，只给本版本之前启动的例行会话用 |
+| 例行项的 `fetch` 为 `teams.read_chat` | `mcp__workiq__fetch`，`entityUrls` 为 `fetch.arguments` 给出的一个路径（`/me/chats/<chat>/messages?$top=10&$orderby=createdDateTime+desc&$select=id,createdDateTime,from,body`：按创建时间从新到旧，Graph 默认按最后修改时间排序，后来编辑过的旧消息会排在前面、让读取提前结束），把返回值原样（只这一页）与该行的 `run`（`job_id` 与 `chat_id`）一起交给 `routine_run`。返回值形如 `{"results": [{"data": <这一页>, "statusCode": …}]}`，这一页的 `value` 是消息（新的在前），`@odata.nextLink` 是下一页的相对路径；脚本也仍接受 `mcp__teams__ListChatMessages` 的返回（JSON 后接一行 `CorrelationId: …`） |
+| `routine_run` 返回 `next` | 按 `next.tool` 与 `next.arguments`（`entityUrls`：下一页的路径，原样）取下一页，再用 `next.run` 加上这一页调用 `routine_run`；直到不再返回 `next`。不合并页，不自行截断。`fetch.pages` 已弃用，只给本版本之前启动的例行会话用 |
+| `fetch` 的工具报错或返回错误 | 照样调用 `routine_run`，`fetched` 为工具返回的原文（行中的 `fetch.on_error` 也这样写）；连续失败的计数与通知由 tsw 完成（DN006 §8.9.5） |
 | `routine_run` 返回非空的 `forward` | `mcp__ccd_session_mgmt__send_message`，`session_id` 为 `forward` 中的主会话 ID，正文原样 |
 | 维护动作 `arm` | 有旧任务引用时先 `CronDelete`；再 `CronCreate`（`recurring: true`，`durable: false`，`cron` 与 `prompt` 原样）；然后 `routine_armed` 登记返回的任务引用 |
 | 维护动作 `clear_context` | 本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`：app 在这一轮结束、会话空闲后清空 |
@@ -150,6 +151,7 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 2. 能代答时 `handoff_resolve`，再用 `send_message` 把决定告诉 worker，让它继续；
 3. 需要用户时 `input_relay`：用户正在主会话中时转达到 `main-session`；否则按配置的渠道（如 `teams-chat`，§7）发出；
 4. Teams 中转来的消息：判断它是否回答了问题，是答复时 `input_resolve`（来源为渠道 `teams-chat` 与消息 ID），再告诉 worker；不是答复时不登记。
+5. Teams 读取连续失败的通知（或 `attention` 中的 `fetch_failing`）：主会话自己用 WorkIQ 读一次同一个 chat，区分是 chat 读不到还是例行会话的工具或权限有问题；后者让例行会话重试并告诉用户要做的事（例如更新 auto 模式规则），前者告诉用户回复暂时收不回来，可以在 worker 会话里直接回答。
 
 ### 6.5 待验证（T243、T250 live）
 
@@ -158,17 +160,17 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 | R1 | 由定时任务触发的一轮结束时，app 不用 `side-sessions-event` 唤醒主会话（只在子会话的第一轮或主会话发起的一轮结束时唤醒） | **不成立**（T250）：T243 live 自己的 hook 记录显示例行会话每轮结束（包括空跑）都唤醒主会话，当时的检查 O 只取操作者观察而漏判。已改为启动后 `detach_session`（§6.1），live 检查改为从 hook 记录判定（R5） |
 | R2 | `clear_session("self")` 之后，会话内的定时任务仍然有效 | 清空后定时任务失效，按恢复规则（DN006 §8.9.6）由主会话发消息让例行会话重新设定；或把 `context_reset_hours` 设得很大，只依赖宿主的自动压缩 |
 | R3 | 例行会话能按会话 ID 给主会话发消息 | 改用 `SendMessage`（`to` 为 `local_…` 会话 ID） |
-| R4 | `SendMessageToSelf` 返回消息 ID、chat ID 与发送者 ID；`ListChatMessages` 能读回用户在自聊中的消息与发送者 | 发送者取自读回的卡片消息 |
+| R4 | `SendMessageToSelf` 返回消息 ID、chat ID 与发送者 ID；`ListChatMessages` 能读回用户在自聊中的消息与发送者 | 发送者取自读回的卡片消息。T253 起改用 WorkIQ（§7）：`create_entity` 返回创建的消息（`id`、`chatId`、`from.user.id`），`fetch` 读回自聊中的消息与发送者（T253 主会话实测） |
 | R5 | 分离后例行会话空跑结束时主会话不再收到 side-sessions-event；例行会话的转发仍以 `<cross-session-message` 送达主会话，没有确认卡片（T250 live routine-e2e 的检查 W，从主会话的 hook 记录判定） | 转发改用 `SendMessage`（`to` 为主会话 ID）；仍需确认时把放行写进 auto 规则 |
 
 ## 7. `teams-chat` 渠道
 
-DN006 §8.6–§8.7 在 Claude Code 上的做法。Teams 工具（`mcp__teams__*`）由用户安装，主会话与例行会话都能调用；tsw 进程不能调用，所以发送与取数都由会话执行。
+DN006 §8.6–§8.7 在 Claude Code 上的做法。发送与读取都用 WorkIQ MCP（`mcp__workiq__*`，由用户连接，主会话与例行会话都能调用）；tsw 进程不能调用，所以发送与取数都由会话执行。不用 Teams MCP（`mcp__teams__*`）：T253 时它在主会话中一律返回“Session not found”，同一会话里 WorkIQ 正常；发送与读取用同一套工具，例行会话的 auto 模式规则也只需放行一个读取工具。
 
 | 步骤 | 谁 | 工具 |
 | --- | --- | --- |
-| 发送问题卡片 | 主会话 | `input_relay`（`channel: teams-chat`）返回卡片正文与目标 chat；主会话用 `get_session` 取 worker 会话的 `link` 填入卡片；目标为 `self` 时调用 `mcp__teams__SendMessageToSelf`，否则 `mcp__teams__SendMessageToChat`；再用 `channel_sent` 登记返回的 chat ID、消息 ID 与发送者 |
-| 取出答复 | 例行会话 | Teams 例行项：`mcp__teams__ListChatMessages` 取数，`routine_run` 运行脚本，结果转给主会话 |
+| 发送问题卡片 | 主会话 | `input_relay`（`channel: teams-chat`）返回卡片正文与目标 chat；主会话用 `get_session` 取 worker 会话的 `link` 填入卡片；调用 `mcp__workiq__create_entity`，`parentUrl` 在目标为 `self` 时为 `/me/chats/48:notes/messages`（用户本人的自聊），否则为 `/me/chats/<chat>/messages`，`jsonBody` 为 `{"body": {"contentType": "text", "content": <卡片>}}`；再用 `channel_sent` 登记返回的消息：`chat_id` 取 `chatId`（没有时取路径中的 chat），`message_id` 取 `id`，`sender_id` 取 `from.user.id` |
+| 取出答复 | 例行会话 | Teams 例行项：`mcp__workiq__fetch` 逐页取数（§6.2），`routine_run` 运行脚本，结果转给主会话 |
 | 登记答复、告诉 worker | 主会话 | `input_resolve`、`send_message`（§6.4 第 4 步） |
 
 消息正文是 HTML，脚本去掉标签与首尾空白后再看是否以任务 ID 开头。

@@ -65,12 +65,24 @@ START_BACKGROUND = (
 )
 RECENT_RUNS = 24  # run times kept in cache/routine.json (DN006 §8.9.3)
 # Host tools for the data a job fetches before its script runs, by host integration (CC006 §6).
+# Teams chats are read with WorkIQ (T253): the Teams MCP tools answered "Session not found" in the
+# orchestrator while WorkIQ worked, and WorkIQ is the tool the cards are sent with.
 FETCH_TOOLS: dict[str, dict[str, str]] = {
-    "claude-code": {"teams.read_chat": "mcp__teams__ListChatMessages"},
+    "claude-code": {"teams.read_chat": "mcp__workiq__fetch"},
 }
 # One page of a chat at a time: a page has to fit in one host tool result (a self chat holds
 # long notes; 50 messages did not fit in the T243 live run). Paging reads the rest (DN006 §8.9.5).
 TEAMS_READ_TOP = 10
+# The message fields the script reads; WorkIQ returns whole messages otherwise.
+TEAMS_READ_FIELDS = "id,createdDateTime,from,body"
+# Consecutive failed reads of a chat before the orchestrator is told (T253): a failure or two
+# passes on its own (throttling), a chat that stays unreadable leaves its questions unanswered and
+# only the detached routine session would know (54 runs of HTTP 429 in the T253 report).
+TEAMS_FETCH_ALERT_AFTER = 3
+# How much of a failed tool's text is kept as the reason.
+FETCH_REASON_CHARS = 200
+# WorkIQ paths are relative to Microsoft Graph: a next link given in full is cut back to its path.
+_GRAPH_ROOT = re.compile(r"^https://graph\.microsoft\.com/(?:v1\.0|beta)(?=/)", re.IGNORECASE)
 # The read window starts this long before the earliest waiting card: the clocks of tsw and Teams
 # differ, and tsw records a card after Teams created it.
 TEAMS_WINDOW_MARGIN = timedelta(minutes=5)
@@ -287,13 +299,18 @@ def board(
                     "chat_id": teams["chat_id"],
                     "since": since,
                     "tool": FETCH_TOOLS.get(host, {}).get("teams.read_chat"),
-                    "arguments": {"chatId": teams["chat_id"], "top": TEAMS_READ_TOP},
+                    "arguments": read_arguments(teams["chat_id"]),
                     # Newest first, one page at a time: pass each page to routine_run on its own;
                     # while routine_run returns ``next``, fetch with its arguments and run again.
                     "paging": "next",
                     # Deprecated (T243 a2): how routine sessions started before ``next`` collected
                     # every page into one list. Kept for them; routine_run still takes a list.
-                    "pages": {"next": "nextLink", "argument": "nextLink", "until": since},
+                    # Named after the WorkIQ result since T253.
+                    "pages": {"next": "@odata.nextLink", "argument": "entityUrls", "until": since},
+                    # A failed fetch is passed on too: tsw counts the failures (T253).
+                    "on_error": (
+                        "工具报错或返回错误时，照样调用 routine_run，fetched 为工具返回的原文"
+                    ),
                 },
             }
         )
@@ -400,6 +417,18 @@ def plain_text(body: str) -> str:
 ENVELOPES = ("messages", "value", "items", "data", "results")
 
 
+def read_arguments(chat_id: str) -> dict[str, Any]:
+    """The arguments of the first fetch of a ``teams-replies`` row: the newest page of the chat
+    (``mcp__workiq__fetch``, CC006 §6.2). Ordered by creation, newest first, as paging needs:
+    Graph's default order is the last change, so an old message edited later would come first
+    and end the read early (review F1 of T253); the next links keep the order."""
+    path = (
+        f"/me/chats/{chat_id}/messages?$top={TEAMS_READ_TOP}"
+        f"&$orderby=createdDateTime+desc&$select={TEAMS_READ_FIELDS}"
+    )
+    return {"entityUrls": [path]}
+
+
 def fetched_messages(fetched: Any) -> list[dict[str, Any]]:
     """The messages in what the host's chat tool returned, whatever envelope it used: one
     result, or a list of pages (each a result), or a plain list of messages."""
@@ -424,15 +453,27 @@ def fetched_messages(fetched: Any) -> list[dict[str, Any]]:
 
 
 def _decoded(fetched: Any) -> Any:
-    """A tool result given as text: the JSON value it starts with. The Teams tools append a line
-    such as ``CorrelationId: ...`` after the JSON."""
-    if not isinstance(fetched, str):
-        return fetched
-    try:
-        value, _ = json.JSONDecoder().raw_decode(fetched.lstrip())
-    except ValueError:
-        return None
-    return value
+    """A tool result as the page (or pages) it holds.
+
+    Given as text, it is the JSON value the text starts with (the Teams tools appended a line
+    such as ``CorrelationId: ...`` after the JSON). A WorkIQ ``fetch`` result wraps each path's
+    page as ``{"results": [{"data": <page>, "statusCode": ...}]}``: the page is that ``data``
+    (a list of them when several paths were fetched)."""
+    if isinstance(fetched, str):
+        try:
+            fetched, _ = json.JSONDecoder().raw_decode(fetched.lstrip())
+        except ValueError:
+            return None
+    if isinstance(fetched, Mapping):
+        results = fetched.get("results")
+        if (
+            isinstance(results, list)
+            and results
+            and all(isinstance(r, Mapping) and "statusCode" in r and "data" in r for r in results)
+        ):
+            pages = [r["data"] for r in results]
+            return pages[0] if len(pages) == 1 else pages
+    return fetched
 
 
 NEXT_KEYS = ("nextLink", "@odata.nextLink")
@@ -456,7 +497,7 @@ def _is_page(item: Any) -> bool:
     )
 
 
-def next_page(fetched: Any, *, chat_id: str, since: str) -> dict[str, Any] | None:
+def next_page(fetched: Any, *, since: str) -> dict[str, Any] | None:
     """The arguments of the next fetch of a ``teams-replies`` row, or None (DN006 §8.9.5).
 
     Pages come newest first. Another page is needed while the page given names a next one and
@@ -473,7 +514,105 @@ def next_page(fetched: Any, *, chat_id: str, since: str) -> dict[str, Any] | Non
     times = [t for t in (_created(m) for m in fetched_messages(last)) if t is not None]
     if times and min(times) < parse_time(since):
         return None
-    return {"chatId": chat_id, "nextLink": link}
+    return {"entityUrls": [_GRAPH_ROOT.sub("", link)]}
+
+
+def fetch_failure(fetched: Any) -> str | None:
+    """Why the fetch a ``teams-replies`` run was given failed, or None when it holds a page.
+
+    A host tool that failed gives its error text (``Session not found``, an HTTP 429 message); a
+    WorkIQ result gives each path's HTTP status; a Graph page in error is an ``error`` object."""
+    if fetched is None:
+        return "没有取数结果"
+    raw = fetched
+    if isinstance(fetched, str):
+        try:
+            raw, _ = json.JSONDecoder().raw_decode(fetched.lstrip())
+        except ValueError:
+            return _SPACES.sub(" ", fetched).strip()[:FETCH_REASON_CHARS] or "取数结果为空"
+    if isinstance(raw, list):
+        return next((r for r in (fetch_failure(item) for item in raw) if r is not None), None)
+    if not isinstance(raw, Mapping):
+        return "取数结果不是 JSON 对象或数组"
+    results = raw.get("results")
+    if isinstance(results, list):
+        for result in results:
+            if not isinstance(result, Mapping):
+                continue
+            code = result.get("statusCode")
+            if isinstance(code, int) and code >= 400:
+                return f"HTTP {code}" + _error_text(result.get("data"))
+    page = _decoded(raw)
+    for item in page if isinstance(page, list) else [page]:
+        if isinstance(item, Mapping) and item.get("error"):
+            return ("错误" + _error_text(item)).strip()
+    return None
+
+
+def _error_text(data: Any) -> str:
+    error = data.get("error") if isinstance(data, Mapping) else None
+    if isinstance(error, Mapping):
+        words = "：".join(str(error[k]) for k in ("code", "message") if error.get(k))
+    else:
+        words = str(error or "")
+    words = _SPACES.sub(" ", words).strip()
+    return f"（{words[:FETCH_REASON_CHARS]}）" if words else ""
+
+
+def note_fetch(
+    kept: dict[str, Any], chat_id: str, failure: str | None, now: str
+) -> dict[str, Any] | None:
+    """Count a ``teams-replies`` fetch in the routine cache: a failure adds to the chat's run of
+    failures, a page ends it. Returns the run when it has just reached
+    ``TEAMS_FETCH_ALERT_AFTER`` (the orchestrator is told once per run of failures)."""
+    failures = kept.get("fetch_failures")
+    failures = dict(failures) if isinstance(failures, Mapping) else {}
+    if failure is None:
+        failures.pop(chat_id, None)
+        kept["fetch_failures"] = failures
+        return None
+    entry = failures.get(chat_id)
+    entry = dict(entry) if isinstance(entry, Mapping) else {"count": 0, "first": now}
+    entry.update(count=int(entry.get("count") or 0) + 1, last=now, reason=failure)
+    failures[chat_id] = entry
+    kept["fetch_failures"] = failures
+    return entry if entry["count"] == TEAMS_FETCH_ALERT_AFTER else None
+
+
+def failing_fetches(cache: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The chats whose reads have failed ``TEAMS_FETCH_ALERT_AFTER`` times or more in a row, for
+    ``attention`` (the forwarded message may not have reached anyone)."""
+    failures = cache.get("fetch_failures")
+    if not isinstance(failures, Mapping):
+        return []
+    return [
+        {
+            "state": "fetch_failing",
+            "job_id": TEAMS_REPLIES,
+            "chat_id": chat_id,
+            "count": entry.get("count"),
+            "since": entry.get("first"),
+            "reason": entry.get("reason"),
+        }
+        for chat_id, entry in sorted(failures.items())
+        if isinstance(entry, Mapping) and int(entry.get("count") or 0) >= TEAMS_FETCH_ALERT_AFTER
+    ]
+
+
+def fetch_alert_text(conn: sqlite3.Connection, chat_id: str, entry: Mapping[str, Any]) -> str:
+    """The message to the orchestrator when a chat could not be read several times in a row."""
+    job = next((j for j in teams_jobs(conn) if j["chat_id"] == chat_id), None)
+    waiting = [
+        f"{r['task_id']} {r['request_id']}"
+        for r in (job["requests"] if job else [])
+        if r["status"] == "pending"
+    ]
+    return (
+        f"TaskSteward 例行项 teams-replies：读取 Teams chat {chat_id} 已连续 {entry['count']} 次"
+        f"失败（自 {entry['first']}，最近一次：{entry['reason']}），这个 chat 中等待中的 Teams "
+        f"问题（{'、'.join(waiting) or '无'}）的回复收不回来。按 handle-input skill 处理"
+        "（“Teams 读取失败”）。恢复之前不再重复通知。"
+    )
 
 
 def _sender(message: Mapping[str, Any]) -> str | None:
@@ -649,7 +788,7 @@ def run_next(
     job = next((j for j in teams_jobs(conn) if j["chat_id"] == chat_id), None)
     if job is None:
         return None
-    arguments = next_page(inp.get("fetched"), chat_id=chat_id, since=job["since"])
+    arguments = next_page(inp.get("fetched"), since=job["since"])
     if arguments is None:
         return None
     return {

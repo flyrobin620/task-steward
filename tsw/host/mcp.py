@@ -269,6 +269,10 @@ class Server:
         if name == "routine_run":
             job_id = str(args.get("job_id") or "")
             out["forward"] = self._forward(job_id, out, ledger)
+            if job_id == routine_mod.TEAMS_REPLIES:
+                alert = self._note_fetch(args, ledger)
+                if alert is not None and not out["forward"].get("send"):
+                    out["forward"] = alert
             with ledger.view() as conn:
                 following = routine_mod.run_next(
                     conn, job_id, args, str(config.get("plugins.host_integration"))
@@ -276,6 +280,28 @@ class Server:
             if following is not None:
                 out["next"] = following
         return out
+
+    def _note_fetch(self, args: Mapping[str, Any], ledger: Ledger) -> dict[str, Any] | None:
+        """Count a failed or good Teams read in the routine cache; the forward that tells the
+        orchestrator once a chat could not be read several times in a row (T253)."""
+        chat_id = str(args.get("chat_id") or "")
+        failure = routine_mod.fetch_failure(args.get("fetched"))
+        kept = routine_mod.load_cache(self.home)
+        now = utc_now()
+        entry = routine_mod.note_fetch(kept, chat_id, failure, now)
+        try:
+            self.home.cache_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write(self.home.cache_dir / "routine.json", json.dumps(kept).encode("utf-8"))
+        except OSError:  # a lost count only delays the message
+            pass
+        if entry is None:
+            return None
+        with ledger.view() as conn:
+            message = routine_mod.fetch_alert_text(conn, chat_id, entry)
+            target = routine_mod.orchestrator_session(conn, now)
+        if target is None:
+            return {"send": False, "note": "主会话不在线：attention 的 routine 中列出了读取失败"}
+        return {"send": True, "session_id": target, "message": message}
 
     def _forward(self, job_id: str, out: Mapping[str, Any], ledger: Ledger) -> dict[str, Any]:
         """What the routine session passes on to the orchestrator, word for word."""
