@@ -208,6 +208,7 @@ REDUCERS: dict[str, Reducer] = {
     "controller.lease_acquired": lease.reduce_acquired,
     "controller.lease_released": lease.reduce_released,
     "controller.lease_taken_over": lease.reduce_taken_over,
+    "controller.lease_stood_down": lease.reduce_stood_down,
     **MACHINE_REDUCERS,
     "orchestrator.inbox_acked": reduce_acked,
     confedit.CHANGE_EVENT: confedit.reduce_changed,

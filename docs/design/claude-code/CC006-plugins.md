@@ -17,7 +17,7 @@
 | 主会话与 worker 的指令、skill、工具注册 | `CLAUDE.md`、`.claude-plugin`、skills、`.mcp.json` | P1 |
 | 写入范围、危险命令拦截、结束前检查 | Claude Code hooks | P1 |
 | 创建、续用、停止、观察 worker 会话 | `start_session`、`SendMessage`、`list_sessions`、`get_session`、`stop_session` | P2 |
-| 唤醒主会话 | worker→父会话 `send_message(session_id="parent")`、side-sessions-event | P2（唤醒能力） |
+| 唤醒主会话 | worker→当前持租主会话 `send_message(session_id=<wake.session_id>)`、side-sessions-event | P2（唤醒能力） |
 | 派发窗口与预启动（G-WINDOW、attempt `standby`） | 只有用户本人的 turn 能在任务目录创建会话；任何 turn 都能给已有会话发消息 | P2（能力声明） |
 | 权限模式名称 | `default` / `acceptEdits` / `auto` / `bypassPermissions` | P2（映射表） |
 | 评审器 | Codex App Server 一次性线程 | P2 的 oneshot 能力 + `roles.reviewer.session` |
@@ -58,7 +58,7 @@
 | stop | `stop_session` |
 | observe | `get_session` |
 | find | `list_sessions {linked:true}` 按名称 |
-| 唤醒主会话 | push：worker `mcp__ccd_session_mgmt__send_message(session_id="parent")`；兜底 side-sessions-event |
+| 唤醒主会话 | push：worker `mcp__ccd_session_mgmt__send_message`，`session_id` 为 tsw 给出的当前持租主会话（DN001 §6.3）；兜底 side-sessions-event（只到原主会话） |
 
 ## 4. `in-session` 渠道
 

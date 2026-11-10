@@ -268,6 +268,16 @@ CREATE TABLE IF NOT EXISTS leases(
     expires_at TEXT,
     source_seq INTEGER NOT NULL
 );
+-- Sessions that gave the scheduling lease up and do not take it back at session start
+-- (DN001 §6.4, T254). Only controller.lease_stood_down adds rows, so a projection made before it
+-- stays valid.
+CREATE TABLE IF NOT EXISTS lease_stood_down(
+    session_id TEXT PRIMARY KEY,
+    machine TEXT,
+    via TEXT NOT NULL,
+    stood_down_at TEXT NOT NULL,
+    source_seq INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS inbox_acks(
     sequence INTEGER PRIMARY KEY
 );

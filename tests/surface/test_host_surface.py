@@ -203,6 +203,45 @@ def test_the_users_turn_is_reminded_to_prestart(home: Path) -> None:
     assert cwd.is_dir() and cwd.parts[-3:] == ("work", "T001", "a1")
 
 
+@pytest.mark.use_case("UC-HOST-001")
+@pytest.mark.use_case("UC-HOST-002")
+@pytest.mark.use_case("UC-LEASE-001")
+def test_one_orchestrator_hands_the_lease_to_another(home: Path) -> None:
+    """DN001 §6.4 (T254): release, take at the next session start, never taken back silently."""
+    replies = mcp(
+        home,
+        home,
+        "orch-a",
+        INIT,
+        NOTE,
+        LIST,
+        call(2, "lease_acquire"),
+        call(3, "lease_release"),
+        call(4, "lease_status"),
+        call(5, "whoami"),
+    )
+    by_id = {r["id"]: r for r in replies}
+    assert "lease_release" in {t["name"] for t in by_id[1]["result"]["tools"]}
+    assert payload(by_id[3])["released"] is True
+    status = payload(by_id[4])
+    assert status["lease"] is None and status["stood_down"]["via"] == "release"
+    assert payload(by_id[5])["orchestrator_session"] is None
+    old = hook(home, "orch-a", "SessionStart")
+    assert old is not None
+    assert "让出调度租约" in old["hookSpecificOutput"]["additionalContext"]
+    assert run_json("lease", "show")[1]["lease"] is None  # not taken back
+    new = hook(home, "orch-b", "SessionStart")
+    assert new is not None
+    assert "已持有调度租约" in new["hookSpecificOutput"]["additionalContext"]
+    code, shown = run_json("lease", "show")
+    assert (code, shown["lease"]["holder_session"]) == (0, "orch-b")
+    replies = mcp(home, home, "orch-a", INIT, NOTE, call(1, "whoami"), call(2, "lease_release"))
+    by_id = {r["id"]: r for r in replies}
+    assert payload(by_id[1])["orchestrator_session"] == "orch-b"
+    assert by_id[2]["result"]["isError"] is True
+    assert payload(by_id[2])["details"]["reason"] == "lease_held"
+
+
 @pytest.mark.use_case("UC-HOST-004")
 def test_plugin_package_and_generated_files(home: Path) -> None:
     manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))

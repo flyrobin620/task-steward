@@ -87,7 +87,17 @@ HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
         "例行表中这次要执行的例行项与维护动作（DN006 §8.9.3）：逐行执行，原样转发结果",
         EMPTY,
     ),
-    "lease_acquire": (("orchestrator",), "领取或续期调度租约（本会话）", EMPTY),
+    "lease_acquire": (
+        ("orchestrator",),
+        "领取或续期调度租约（本会话）；让出过租约的会话只在用户要求时调用",
+        EMPTY,
+    ),
+    "lease_release": (
+        ("orchestrator",),
+        "让出本会话持有的调度租约（用户要求换主会话时）：另一个主会话随后可直接领取，"
+        "本会话之后只读运行，会话开始时不再自动领回（DN001 §6.4）",
+        EMPTY,
+    ),
     "config_show": (
         ("orchestrator",),
         "有效配置、每个值的来源、校验问题，以及配置文件的 sha256"
@@ -217,7 +227,10 @@ class Server:
         if name not in names:
             raise rejected("当前角色不能使用该工具", reason="role_denied", role=who.role, tool=name)
         if name == "whoami":
-            return who.to_dict()
+            with Ledger(self.home, machine=self.machine).view() as conn:
+                # Where a worker or the routine session sends its wake-up message (DN001 §6.3).
+                target = lease.orchestrator_session(conn)
+            return {**who.to_dict(), "orchestrator_session": target}
         if who.pending and who.pending_role == "routine":
             raise rejected(
                 "例行会话还没有绑定：等主会话完成绑定（routine_bind）后再调用",
@@ -259,6 +272,10 @@ class Server:
         # Configuration tools must be able to repair an invalid configuration (DN003 §7.1).
         usable = config if name in CONFIG_TOOLS else config.require_valid()
         out = run_tool(ledger, usable, caller, name, dict(args))
+        if who.role == "worker":
+            wake = self._wake(out, ledger, usable)
+            if wake is not None:
+                out["wake"] = wake
         if name == "task_dispatch":
             self._prepare_workdir(args)
         if name == "attempt_start":
@@ -280,6 +297,35 @@ class Server:
             if following is not None:
                 out["next"] = following
         return out
+
+    @staticmethod
+    def _wake(
+        out: Mapping[str, Any], ledger: Ledger, config: EffectiveConfig
+    ) -> dict[str, Any] | None:
+        """The message that wakes the orchestrator after a worker recorded a reportable event:
+        sent to whichever session holds the scheduling lease, not to the session that started
+        the worker, which may have handed over since (DN001 §6.3, T254)."""
+        found = [*(out.get("events") or []), *((out.get("sync") or {}).get("events") or [])]
+        wanted = inbox_mod.reportable(config)
+        reported = [e for e in found if e.get("type") in wanted]
+        if not reported:
+            return None
+        with ledger.view() as conn:
+            target = lease.orchestrator_session(conn)
+        if target is None:
+            return {
+                "send": False,
+                "note": "没有主会话持有调度租约：回传已在账本中，下一个主会话领取租约后处理",
+            }
+        items = "、".join(
+            f"{e.get('task_id') or ''} {e['type']}（事件 {e['sequence']}）".strip()
+            for e in reported
+        )
+        return {
+            "send": True,
+            "session_id": target,
+            "message": f"TaskSteward 回传：{items}。调用 inbox 处理。",
+        }
 
     def _note_fetch(self, args: Mapping[str, Any], ledger: Ledger) -> dict[str, Any] | None:
         """Count a failed or good Teams read in the routine cache; the forward that tells the
@@ -385,6 +431,21 @@ class Server:
                 actor={"role": "orchestrator", "session_id": who.session_id},
             )
             return {"expires_at": ledger.commit(command).events[-1].data["expires_at"]}
+        if name == "lease_release":
+            ledger.commit(
+                lease.release(
+                    str(who.session_id),
+                    machine=self.machine,
+                    actor={"role": "orchestrator", "session_id": who.session_id},
+                )
+            )
+            return {
+                "released": True,
+                "stood_down": True,
+                "next": "另一个主会话现在可以领取（会话开始时自动，或 lease_acquire）；本会话"
+                "只读运行，不再派发、验收或处理回传。用户要求本会话重新担任主会话时调用 "
+                "lease_acquire。",
+            }
         maintenance = Maintenance(self.home, ledger, who.session_id, self.machine)
         if name == "home_backup":
             return maintenance.backup(str(args.get("dest") or ""))
@@ -452,15 +513,18 @@ class Server:
                 return inbox_mod.attention(
                     conn, ledger.storage, config, routine_mod.load_cache(self.home)
                 )
+            # Whether this session gave the lease up and should not take it back by itself.
+            stood_down = lease.stood_down(conn, who.session_id)
             row = row_dict(conn.execute("SELECT * FROM leases WHERE name = 'scheduler'").fetchone())
             if row is None or row["holder_session"] is None:
-                return {"lease": None}
+                return {"lease": None, "stood_down": stood_down}
             return {
                 "lease": {
                     **row,
                     "expired": lease.is_expired(row, utc_now()),
                     "mine": row["holder_session"] == who.session_id,
-                }
+                },
+                "stood_down": stood_down,
             }
 
     @staticmethod

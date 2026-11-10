@@ -39,7 +39,7 @@
 
 1. **创建会话的时机**：只有在用户本人消息所在的 turn 中，主会话才能用 `start_session` 在任意受信任目录创建会话。由其他会话的消息触发的 turn 中完全不能创建；紧跟用户 turn 的 `side-sessions-event` 唤醒 turn 中只能在本项目创建、不能指定目录。提案卡片同样不能指定目录。因此 worker 会话（必须在任务 worktree 中）只能在用户 turn 中创建。
 2. **投递不受限**：任何 turn（包括自动唤醒与消息触发的 turn）都可以给已存在的子会话发消息，消息到达后子会话立即开始执行。
-3. **唤醒**：子会话用 `mcp__ccd_session_mgmt__send_message(session_id="parent")` 给父会话发消息（`SendMessage(to="parent")` 不可用），父会话忙时排队，空闲后作为新 turn 送达。只有当主会话启动的子会话**全部**不在工作、且主会话空闲时，app 才用 `side-sessions-event` 唤醒主会话，并只引用子会话最新回复的前 400 字。
+3. **唤醒**：子会话用 `mcp__ccd_session_mgmt__send_message` 给主会话发消息（`SendMessage(to="parent")` 不可用），对方忙时排队，空闲后作为新 turn 送达。`session_id` 可以是 `"parent"`，也可以是任何会话的 ID，与父子关系无关（分离后的例行会话即如此，CC006 §6.1）。app 不能更换已有会话的父会话，主会话交接（DN001 §6.4）后 `"parent"` 仍指向原主会话，所以 worker 发给 tsw 给出的当前持租主会话（工具结果的 `wake.session_id`、`whoami` 的 `orchestrator_session`），不发给 `"parent"`。只有当主会话启动的子会话**全部**不在工作、且主会话空闲时，app 才用 `side-sessions-event` 唤醒主会话，并只引用子会话最新回复的前 400 字。
 4. 连续多次被自动唤醒而用户没有发消息后，后续通知会等到用户的下一个 turn（上限尚未实测）。
 5. 新目录需要用户确认信任（§3）；子会话的权限模式不能高于主会话。
 
@@ -56,7 +56,7 @@ tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC �
 
 | hook | 角色 | 行为 |
 | --- | --- | --- |
-| SessionStart | 全部 | 按会话 ID 与目录识别角色；主会话尝试领取租约，并注入未读 inbox 数与 attention 摘要；worker 注入任务 ID、brief 路径和评审规则（待命会话还提示可以先读任务书、等派发后再开始，任务书更新时重读）；待绑定会话提示等待绑定，绑定后 `phase` 为 `standby` 时只读任务书、等派发，为 `live` 时开始 |
+| SessionStart | 全部 | 按会话 ID 与目录识别角色；主会话尝试领取租约（让出过租约的会话不领取，只注入只读说明，DN001 §6.4），并注入未读 inbox 数与 attention 摘要；worker 注入任务 ID、brief 路径和评审规则（待命会话还提示可以先读任务书、等派发后再开始，任务书更新时重读）；待绑定会话提示等待绑定，绑定后 `phase` 为 `standby` 时只读任务书、等派发，为 `live` 时开始 |
 | PreToolUse | 已登记会话 | block list 护栏，见 [CC008 §3](CC008-guardrails.md) |
 | UserPromptSubmit | worker | 检测 `[report]`，注入回传协议提示；worker 有未获用户答复的会话内问题时，把用户消息原文记为 `input.session_message` 并告诉 worker 消息编号（注入的其他会话消息不记，DN006 §8.1a） |
 | SessionStart | routine | 注入例行会话的指令：调用 `routine_board`，逐行执行例行项并原样转发结果，不作判断，不做其他事（CC006 §6） |
@@ -75,7 +75,7 @@ hooks 是防错护栏，不是安全边界（DN008）；skill 和 CLAUDE.md 只�
 | A1 | `start_session` 可用 `cwd` 打开 tsw 创建的目录（`use_worktree:false`），model / effort / permission_mode 生效 | 成立。新目录须先由用户确认信任，确认只能在用户看着主会话时弹出 | 预启动在用户 turn 中进行（§3、§4） |
 | A2 | 自动 turn 中不能创建会话，提案卡片可由用户点击启动 | 成立且更严格：消息触发的 turn 完全不能创建；唤醒 turn 只能在本项目创建；提案卡片不能指定目录。任何 turn 都能给已有会话发消息 | 预启动 + 后投递；取消 worker 的提案路径（§4、DN002 §5.6） |
 | A3 | MCP server 在子会话中以子会话 cwd 启动 | 成立，且环境里有 app 会话 ID | 角色按会话 ID 解析（§5） |
-| A4 | 子会话能给父会话发消息，主会话忙时排队 | 成立，须用 `mcp__ccd_session_mgmt__send_message(session_id="parent")` | worker 指令固定该工具（§4） |
+| A4 | 子会话能给父会话发消息，主会话忙时排队 | 成立，须用 `mcp__ccd_session_mgmt__send_message(session_id="parent")` | worker 指令固定该工具（§4）；T254 起按会话 ID 发给当前持租主会话 |
 | A5 | hooks 在子会话中生效，可拿到会话 ID 与 cwd | 成立 | 防错护栏与角色识别用 hooks（§6） |
 | A6 | Codex App Server 一次性线程可用 `gpt-6-astra` / `medium` / read-only | 成立（设计评审中多次使用） | 默认评审器（[CX004](../codex/CX004-reviewer.md)） |
 | A7 | `archive_session` 不删除 `use_worktree:false` 会话的目录 | 成立 | 归档会话不影响执行目录与证据 |

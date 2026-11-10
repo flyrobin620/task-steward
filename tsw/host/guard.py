@@ -477,7 +477,8 @@ class Guard:
                 "next.run 加上这一页调用 routine_run，直到不再返回 next（不管多少页，一页一次，"
                 "不要合并、不要自行截断）。有 clear_context 时最后调用 "
                 'mcp__ccd_session_mgmt__clear_session(session_id="self")。'
-                "不作任何判断，不改文件、不运行命令、不建会话；遇到问题发消息告诉主会话。",
+                "不作任何判断，不改文件、不运行命令、不建会话；遇到问题发消息告诉主会话"
+                "（routine_board 的 orchestrator_session：当前持有调度租约的主会话）。",
             )
         if who.role == "worker":
             roots = "、".join(str(p) for p in who.writable_roots)
@@ -501,10 +502,30 @@ class Guard:
                 "在本会话直接问用户（Claude app 中再用 wrap_up 的 ask 写问题、actions 给每个选项"
                 "一个按钮并设 blocked: true；用户点按钮等于在本会话发出按钮文字），"
                 "用户回复后用 user_answer 登记；跨任务的事（资源冲突、依赖、"
-                "其他任务的范围）才用 question 交主会话，并用 "
-                'mcp__ccd_session_mgmt__send_message(session_id="parent") 唤醒主会话。',
+                "其他任务的范围）才用 question 交主会话。"
+                "唤醒主会话：tsw 工具结果带 wake 且 send 为 true 时，用 "
+                "mcp__ccd_session_mgmt__send_message 把 wake.message 原样发给 wake.session_id"
+                '（当前持有调度租约的主会话，可能不是启动你的会话；不要发给 "parent"）；'
+                "send 为 false 时不发送（回传已在账本中）。没有 wake 时（例如 [report]）发给 "
+                "whoami 的 orchestrator_session，为 null 时不发送。",
             )
         lines = [f"你是 TaskSteward 主会话（数据目录 {self.home.root}）。"]
+        with self.ledger.view() as conn:
+            stood = lease.stood_down(conn, who.session_id)
+            holder = lease.orchestrator_session(conn)
+        if stood is not None:
+            # A session that gave the lease up does not take it back by itself (DN001 §6.4).
+            via = "被接管" if stood.get("via") == "takeover" else "让出"
+            now_held = f"现在由 {holder} 持有" if holder else "现在没有主会话持有"
+            lines.append(
+                f"本会话已于 {stood.get('stood_down_at')} {via}调度租约（{now_held}），只读运行："
+                "不派发、不验收、不处理回传，也不自动领回。只有用户在本会话中要求本会话重新担任"
+                "主会话时才调用 lease_acquire。"
+            )
+            stale = session_hint(self.env)
+            if stale:
+                lines.append(stale)
+            return context("SessionStart", "".join(lines))
         try:
             # Taken even with an invalid configuration: config_change needs the lease to repair
             # it (DN003 §7.1).
@@ -655,9 +676,27 @@ class Guard:
         if "[report]" in prompt:
             notes.append(
                 "用户要求回传（[report]）：先用 progress_note 记录用户决定、已做动作与影响范围，"
-                '再用 mcp__ccd_session_mgmt__send_message(session_id="parent") 通知主会话。'
+                "再用 mcp__ccd_session_mgmt__send_message 通知主会话："
+                f"{self._wake_hint()}"
             )
         return context("UserPromptSubmit", "".join(notes)) if notes else None
+
+    def _wake_hint(self) -> str:
+        """Where a worker's message to the orchestrator goes: the lease holder (DN001 §6.3)."""
+        try:
+            with self.ledger.view() as conn:
+                target = lease.orchestrator_session(conn)
+        except Exception:  # a hint never blocks the user's message
+            target = None
+        if target is None:
+            return (
+                "现在没有主会话持有调度租约，不发送（记录已在账本中）；"
+                "稍后以 whoami 的 orchestrator_session 为准。"
+            )
+        return (
+            f"session_id 为 {target}（当前持有调度租约的主会话，whoami 的 orchestrator_session；"
+            '不要发给 "parent"）。'
+        )
 
     def _record_answer(self, who: Identity, prompt: str) -> dict[str, Any] | None:
         """Record the user's words while the worker's question is open (DN006 §8.2)."""
@@ -711,11 +750,11 @@ class Guard:
                     else []
                 )
             state = routine[0]["state"] if routine else None
-            if pending:
+            if pending and may_dispatch:
                 reasons.append(
                     f"还有 {len(pending)} 条未处理的回传，先调用 inbox 处理并 inbox_ack。"
                 )
-            if due:
+            if due and may_dispatch:
                 reasons.append(
                     f"有 {len(due)} 个 worker 会话中的问题已超时无人回复："
                     "运行 sync 转交，再按 inbox 处理。"
@@ -805,7 +844,10 @@ class Guard:
         return user
 
     def _may_dispatch(self, conn: sqlite3.Connection, who: Identity) -> bool:
-        """No other session holds a valid scheduling lease (G-LEASE would refuse a prestart)."""
+        """No other session holds a valid scheduling lease (G-LEASE would refuse a prestart),
+        and this session has not given the lease up (it does not take it back by itself)."""
+        if lease.stood_down(conn, who.session_id) is not None:
+            return False
         held = lease.lease_row(conn)
         if held is None or lease.is_expired(held, utc_now()):
             return True

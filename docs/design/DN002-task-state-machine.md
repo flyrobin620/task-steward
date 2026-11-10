@@ -293,7 +293,7 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 | attempt | `attempt.start_requested` `attempt.reconciling` `attempt.not_created` `attempt.prestarted` `attempt.brief_delivered` `attempt.late_session` `attempt.bound` `attempt.continued` `attempt.stopped` `attempt.lost` `attempt.replaced` `attempt.closed` `attempt.dispatch_abandoned` |
 | worker | `worker.progress` `worker.question` `worker.submitted` `worker.self_check_failed` `worker.turn_ended` |
 | 评审 | `review.started` `review.failed` `review.unavailable` `review.completed` `review.triaged` `review.decision` `review.budget_exhausted` `review.budget_extended` `review.defer_requested` `review.defer_approved` `review.finding_overruled` |
-| 主控 / 输入 | `orchestrator.feedback` `orchestrator.decision` `input.requested` `input.escalated` `input.resolved` `input.late_response` `input.session_message`（worker 会话中的用户消息，hook 记录） `input.handed_off` `input.relayed`（DN006 §8.1） `orchestrator.inbox_acked` `controller.lease_acquired` `controller.lease_released` `controller.lease_taken_over` |
+| 主控 / 输入 | `orchestrator.feedback` `orchestrator.decision` `input.requested` `input.escalated` `input.resolved` `input.late_response` `input.session_message`（worker 会话中的用户消息，hook 记录） `input.handed_off` `input.relayed`（DN006 §8.1） `orchestrator.inbox_acked` `controller.lease_acquired` `controller.lease_released` `controller.lease_taken_over` `controller.lease_stood_down`（让出或被接管的会话不在会话开始时自动领回，DN001 §6.4） |
 | 上下文 / 偏好（DN007） | `task.summary_recorded` `context.read` `user.preference_recorded` `user.preference_candidate` `user.preference_confirmed` |
 | 集成 / 产出 | `integration.started` `integration.conflict` `integration.completed` `integration.withdrawn` `output.registered` `pr.registered` |
 | 导入 | `import.started` `import.task_imported` `import.completed` `task.renumbered`（导入前给编号冲突的已结束本地任务改号，DN005 §4.4） |
@@ -324,7 +324,7 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 | worker 子会话被归档或删除 | `observe` 结果为不存在或已归档 | T15，再派发时新建 attempt 接手同一执行目录 |
 | 评审器不可用 | 评审调用失败 | E02 重试；超限记录 `review.unavailable` 交主会话判断，不能跳过评审 |
 | 评审预算用完 | 本周期轮次达到预算仍有阻断项 | `review.budget_exhausted` 交主会话判断（§3.3a） |
-| 主会话重启或更换 | 新会话启动 | 读取账本与 inbox 游标；租约过期后可领取，未过期须 `controller_takeover`，并逐项处理受影响的 attempt |
+| 主会话重启或更换 | 新会话启动 | 读取账本与 inbox 游标；原主会话能让出时由它让出（交接，DN001 §6.4），新会话直接领取，原主会话的 worker 照常运行、唤醒新主会话；租约过期后可领取；未过期且原主会话不能让出时须 `controller_takeover`，并逐项处理受影响的 attempt |
 | 需求变更 | `task.requirement_changed` | 按 §5.1 |
 | 上游退回或取消 | `dependency.invalidated` | 按 §5.2 |
 | 恢复时名额已满 | G-SLOT 不满足 | 保持 `paused` 并标记 `resume_ready`，或 T21 进入 `ready` 排队 |

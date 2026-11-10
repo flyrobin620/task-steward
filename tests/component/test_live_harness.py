@@ -210,7 +210,7 @@ def test_scrub_removes_machine_paths(tmp_path: Path) -> None:
 
 
 def test_scenario_definitions_are_complete() -> None:
-    for name in ("host-e2e", "reviewer"):
+    for name in ("host-e2e", "reviewer", "routine-e2e", "handoff-e2e"):
         spec = live.scenario(name)
         assert spec["id"] == name
         assert spec["useCases"] and spec["checks"]
@@ -543,3 +543,68 @@ def test_w_reads_the_submission_and_needs_every_mark(tmp_path: Path) -> None:
     report.write_text(f"{marks['agents']}\n{marks['repo_skill']}\n", encoding="utf-8")
     missing = live.worktrees(cast(Any, run), [started, submitted], {"T001": submitted})
     assert missing["status"] == "failed"
+
+
+@pytest.mark.use_case("UC-HOST-001")
+def test_handoff_e2e_checks_the_handover_and_where_the_wake_went(tmp_path: Path) -> None:
+    """Checks L and K (T254): A releases, B takes the lease, the worker's message reaches B."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    run = cast(live.Run, SimpleNamespace(dir=run_dir, home=run_dir / "home"))
+
+    def at(minute: int) -> str:
+        return f"2026-11-10T10:{minute:02d}:00Z"
+
+    def orch(seq: int, type_: str, session: str, minute: int, **data: Any) -> dict[str, Any]:
+        e = ev(seq, type_, "", **data)
+        return {**e, "actor": {"role": "orchestrator", "session_id": session}, "time": at(minute)}
+
+    def worker(seq: int, type_: str, minute: int) -> dict[str, Any]:
+        return {**ev(seq, type_, "T001", "w1"), "time": at(minute)}
+
+    def message(session: str, sender: str, minute: int) -> str:
+        prompt = (
+            f'<cross-session-message from="{sender}" from-name="t001">x</cross-session-message>'
+        )
+        payload = {"cwd": str(run.home), "prompt": prompt}
+        record = {"event": "UserPromptSubmit", "time": at(minute), "session": session}
+        return json.dumps({**record, "payload": payload})
+
+    evs = [
+        orch(1, "controller.lease_acquired", "A", 0, session_id="A", renewed=False),
+        orch(2, "controller.lease_stood_down", "A", 1, session_id="A", via="release"),
+        orch(3, "controller.lease_released", "A", 1, session_id="A"),
+        orch(4, "controller.lease_acquired", "B", 2, session_id="B", renewed=False),
+        worker(5, "worker.question", 3),
+        {**orch(6, "orchestrator.decision", "B", 4), "task_id": "T001"},
+        worker(7, "worker.progress", 5),
+    ]
+    payloads = run_dir / "hook-payloads.jsonl"
+    payloads.write_text(
+        "\n".join([message("A", "w1", 0), message("B", "w1", 3)]) + "\n", encoding="utf-8"
+    )
+    handed, old, new = live.lease_handoff(evs)
+    assert handed["status"] == "passed", handed
+    assert (old, new) == ("A", "B")
+    woken = live.handoff_wake(run, evs, old, new)
+    assert woken["status"] == "passed", woken
+    assert woken["evidence"]["messages_to_new"] == [at(3)]
+    # The worker's message reaching the session that gave the lease up fails K.
+    payloads.write_text(
+        "\n".join([message("A", "w1", 3), message("B", "w1", 3)]) + "\n", encoding="utf-8"
+    )
+    assert live.handoff_wake(run, evs, old, new)["status"] == "failed"
+    # So does a question asked before B held the lease, or no answer from B.
+    early = [*evs[:4], {**evs[4], "sequence": 0}, *evs[5:]]
+    assert (
+        live.handoff_wake(run, sorted(early, key=lambda e: e["sequence"]), old, new)["status"]
+        == "failed"
+    )
+    assert live.handoff_wake(run, [*evs[:5], evs[6]], old, new)["status"] == "failed"
+    # A taking the lease back, a takeover instead of a release, or no stand-down fail L.
+    back = orch(8, "controller.lease_acquired", "A", 6, session_id="A", renewed=False)
+    assert live.lease_handoff([*evs, back])[0]["status"] == "failed"
+    taken = orch(8, "controller.lease_taken_over", "B", 6, session_id="B", from_session="A")
+    assert live.lease_handoff([*evs, taken])[0]["status"] == "failed"
+    assert live.lease_handoff([evs[0], *evs[2:]])[0]["status"] == "failed"
+    assert live.lease_handoff(evs[:1])[0]["status"] == "failed"
