@@ -19,6 +19,7 @@ from tsw.machine.routine import (
     next_page,
     note_fetch,
     plain_text,
+    question_html,
     read_arguments,
     select_replies,
     starting_task,
@@ -46,6 +47,42 @@ def test_plain_text_and_prefix() -> None:
     assert starting_task("T2431 用 A", ["T243", "T2431"]) == "T2431"
     assert starting_task("关于 T243：用 A", ["T243"]) is None
     assert starting_task(f"{CARD_PREFIX} T243 Q-T243-1", ["T243"]) is None
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_question_html_follows_the_questions_layout() -> None:
+    question = (
+        "报告标题用哪一个？\n"
+        "背景：评审说 <标题> 太长 & 不清楚。\n"
+        "\n"
+        "A. 方案 A：保持原样\n"
+        "B) 方案 B：缩短\n"
+        "\n"
+        "- 影响 README\n"
+        "* 影响设计文档\n"
+        "\n"
+        "```\n"
+        "title = 'x < y'\n"
+        "  indented\n"
+        "```\n"
+        "e.g. 不是选项；1.5 秒也不是。"
+    )
+    assert question_html(question) == (
+        "<p>报告标题用哪一个？<br>背景：评审说 &lt;标题&gt; 太长 &amp; 不清楚。</p>"
+        "<p>A. 方案 A：保持原样<br>B) 方案 B：缩短</p>"
+        "<ul><li>影响 README</li><li>影响设计文档</li></ul>"
+        "<codeblock><code>title = &#x27;x &lt; y&#x27;\n  indented</code></codeblock>"
+        "<p>e.g. 不是选项；1.5 秒也不是。</p>"
+    )
+    # Chinese numbering, Windows line ends and an unclosed fence.
+    assert question_html("1、红色\r\n2、蓝色\r\n```\nx") == (
+        "<p>1、红色<br>2、蓝色</p><codeblock><code>x</code></codeblock>"
+    )
+    assert question_html("  ") == "<p></p>"
+    # A rich-text card still reads as [TaskSteward] …, never as a reply.
+    words = plain_text("<p><b>[TaskSteward] T243 Q-T243-1</b></p>" + question_html(question))
+    assert words.startswith(f"{CARD_PREFIX} T243 Q-T243-1 报告标题用哪一个？")
+    assert starting_task(words, ["T243", "Q-T243-1"]) is None
 
 
 def _msg(mid: str, body: str, *, sender: str = "u1", at: str = "2026-11-05T00:05:00Z") -> dict:

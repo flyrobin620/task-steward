@@ -561,19 +561,43 @@ def handoff_resolve(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return _cmd(env, "handoff_resolve", inp, build)
 
 
-def relay_channels(config: EffectiveConfig) -> list[str]:
-    """Where the orchestrator may pass a handed-off question on to the user: its own session, or
-    any loaded human channel that collects answers (DN006 §8.6)."""
+# The orchestrator's own session as a relay target: what input.relayed and the user's source
+# record for the ``in-session`` human channel, and the name input_relay accepted before T256.
+MAIN_SESSION = "main-session"
+
+
+def _loaded_channels(config: EffectiveConfig) -> list[str]:
     from tsw.plugins.catalog import CHANNELS  # noqa: PLC0415  (catalog imports config)
 
     loaded = [c for c in config.get("plugins.human_channels") or [] if c in CHANNELS]
-    return ["main-session", *(c for c in loaded if c != CHANNEL and CHANNELS[c].request_response)]
+    return [c for c in loaded if CHANNELS[c].request_response]
+
+
+def relay_channels(config: EffectiveConfig) -> list[str]:
+    """Where the orchestrator may pass a handed-off question on to the user (DN006 §8.6): the
+    human channels ``plugins.human_channels`` loads, nothing else. ``in-session`` is the
+    orchestrator asking in its own session, also accepted under its old name ``main-session``;
+    with only ``teams-chat`` loaded the orchestrator's session is not a way to the user. The
+    worker asking in its own session is not a human channel and needs none of them."""
+    loaded = _loaded_channels(config)
+    return [*loaded, *([MAIN_SESSION] if CHANNEL in loaded else [])]
+
+
+def user_channels(config: EffectiveConfig) -> list[str]:
+    """The human channels a handed-off question for the user goes to (DN006 §8.1b): the loaded
+    ones in ``input.channels`` (by default every loaded one). Empty when none is loaded: the
+    question then stays with the worker's session."""
+    loaded = _loaded_channels(config)
+    return [c for c in config.get("input.channels") or [] if c in loaded]
 
 
 @tool(
     "input_relay",
     "orchestrator",
-    description="把转交的会话内问题转达给用户（主会话或其他人类渠道）；答复用 input_resolve 记录",
+    description=(
+        "把转交的会话内问题转达给用户：只用 plugins.human_channels 加载的人类渠道"
+        "（in-session 为在主会话中直接问，teams-chat 等按渠道的 skill）；答复用 input_resolve 记录"
+    ),
 )
 def input_relay(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
@@ -584,17 +608,31 @@ def input_relay(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         request = _handed_off(ctx, task_id, request_id)
         allowed = relay_channels(env.config)
         if channel not in allowed:
-            raise rejected("不能转达到这个渠道", reason="invalid_channel", allowed=allowed)
+            raise rejected(
+                "不能转达到这个渠道：转达只用 plugins.human_channels 加载的人类渠道",
+                reason="invalid_channel",
+                allowed=allowed,
+            )
+        # The record keeps naming where the answer will come from (DN006 §8.6): the
+        # orchestrator's session is main-session, as in every earlier input.relayed; the human
+        # channel used is ``plugin``.
+        in_main = channel in (CHANNEL, MAIN_SESSION)
         data: dict[str, Any] = {
             "request_id": request["request_id"],
-            "channel": channel,
+            "channel": MAIN_SESSION if in_main else channel,
+            "plugin": CHANNEL if in_main else channel,
             "note": opt_text(inp, "note"),
         }
         if channel == "teams-chat":
             # The card the orchestrator sends next, then registers with channel_sent (DN006 §8.7).
-            from tsw.machine.routine import card  # noqa: PLC0415  (routine imports this module)
+            # card_html is what goes out (Teams shows a text message on one line, CC006 §7).
+            from tsw.machine.routine import card, card_html  # noqa: PLC0415  (imports this module)
 
-            data |= {"card": card(ctx.conn, request), "chat": env.config.get("input.teams.chat")}
+            data |= {
+                "card": card(ctx.conn, request),
+                "card_html": card_html(ctx.conn, request),
+                "chat": env.config.get("input.teams.chat"),
+            }
         return [EventDraft(type="input.relayed", task_id=task_id, data=data)]
 
     return _cmd(env, "input_relay", inp, build)

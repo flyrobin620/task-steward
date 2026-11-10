@@ -30,6 +30,7 @@ from tsw.host.identity import Identity, resolve, within
 from tsw.host.maintenance import Maintenance
 from tsw.ledger import Ledger
 from tsw.machine import routine as routine_mod
+from tsw.machine.ask_user import user_channels
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.config_tools import CONFIG_TOOLS
 from tsw.machine.model import loads, row_dict, task
@@ -285,7 +286,7 @@ class Server:
             out["cwd"] = os.path.realpath(self.home.root / routine_mod.WORKDIR)
         if name == "routine_run":
             job_id = str(args.get("job_id") or "")
-            out["forward"] = self._forward(job_id, out, ledger)
+            out["forward"] = self._forward(job_id, out, ledger, usable)
             if job_id == routine_mod.TEAMS_REPLIES:
                 alert = self._note_fetch(args, ledger)
                 if alert is not None and not out["forward"].get("send"):
@@ -355,10 +356,14 @@ class Server:
             return {"send": False, "note": "主会话不在线：attention 的 routine 中列出了读取失败"}
         return {"send": True, "session_id": target, "message": message}
 
-    def _forward(self, job_id: str, out: Mapping[str, Any], ledger: Ledger) -> dict[str, Any]:
-        """What the routine session passes on to the orchestrator, word for word."""
+    def _forward(
+        self, job_id: str, out: Mapping[str, Any], ledger: Ledger, config: EffectiveConfig
+    ) -> dict[str, Any]:
+        """What the routine session passes on to the orchestrator, word for word: a handed-off
+        question names the human channels the user is told through (DN006 §8.1b)."""
+        channels = user_channels(config)
         with ledger.view() as conn:
-            message = routine_mod.forward_text(conn, job_id, out.get("events") or [])
+            message = routine_mod.forward_text(conn, job_id, out.get("events") or [], channels)
             target = routine_mod.orchestrator_session(conn, utc_now())
         if not message:
             return {"send": False}

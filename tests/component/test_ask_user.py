@@ -291,6 +291,75 @@ def test_a_reserved_question_can_only_be_relayed_to_the_user(home: Home) -> None
     assert "等待用户" not in status
 
 
+def refusal(call: Callable[[], Any]) -> dict[str, Any]:
+    with pytest.raises(TswError) as exc:
+        call()
+    return dict(exc.value.details)
+
+
+@pytest.mark.use_case("UC-ASK-001")
+@pytest.mark.transition("T11")
+@pytest.mark.transition("T12")
+def test_human_channels_decide_how_the_orchestrator_asks_not_the_worker(home: Home) -> None:
+    # T256: with only teams-chat configured, the worker still asks and is answered in its own
+    # session; the orchestrator can pass a handed-off question on through Teams only.
+    h = Harness(home, {"plugins": {"human_channels": ["teams-chat"]}})
+    w = started(h)
+    first = ask(h, w)
+    assert say(h, w, "用 A") is not None
+    answered = h.run(
+        "user_answer", w, task_id="T001", request_id=first, message_id="M-T001-1", answer="A"
+    )
+    assert answered["events"][0]["data"]["source"]["channel"] == "in-session"
+    second = ask(h, w, reserved=True)
+    h.clock.now = "2026-11-05T00:11:00Z"
+    h.run("input_handoff", w, task_id="T001", request_id=second)
+    for channel in ("in-session", "main-session"):
+        refused = refusal(
+            lambda channel=channel: h.run(
+                "input_relay", task_id="T001", request_id=second, channel=channel
+            )
+        )
+        assert refused["reason"] == "invalid_channel" and refused["allowed"] == ["teams-chat"]
+    relayed = h.run("input_relay", task_id="T001", request_id=second, channel="teams-chat")
+    data = relayed["events"][0]["data"]
+    assert (data["channel"], data["plugin"]) == ("teams-chat", "teams-chat")
+
+
+@pytest.mark.use_case("UC-ASK-001")
+def test_in_session_relays_to_the_orchestrators_own_session(home: Home) -> None:
+    # T256: the in-session human channel is the orchestrator asking in its own session; the
+    # record keeps calling that session main-session (as before), and the old name still works.
+    # With both channels configured the question goes to each, in any order.
+    h = Harness(home, {"plugins": {"human_channels": ["in-session", "teams-chat"]}})
+    w = started(h)
+    request_id = ask(h, w, reserved=True)
+    h.clock.now = "2026-11-05T00:11:00Z"
+    h.run("input_handoff", w, task_id="T001", request_id=request_id)
+    # Teams first, then the orchestrator's own session: the card can still be registered after.
+    h.run("input_relay", task_id="T001", request_id=request_id, channel="teams-chat")
+    out = h.run("input_relay", task_id="T001", request_id=request_id, channel="in-session")
+    data = out["events"][0]["data"]
+    assert (data["channel"], data["plugin"]) == ("main-session", "in-session")
+    again = h.run("input_relay", task_id="T001", request_id=request_id, channel="main-session")
+    assert again["events"][0]["data"]["plugin"] == "in-session"
+    sent = h.run("channel_sent", task_id="T001", request_id=request_id, chat_id="c", message_id="m")
+    assert sent["events"][0]["type"] == "channel.message_sent"
+    # The answer the user gives in the orchestrator's session is registered from there.
+    words = {
+        "channel": "main-session",
+        "principal": "owner",
+        "message_ref": "orch-1:m-1",
+        "text": "用 B",
+        "request_id": request_id,
+        "target": ["T001", 1, "answer"],
+    }
+    resolved = h.run(
+        "input_resolve", task_id="T001", request_id=request_id, answer="B", user_source=words
+    )
+    assert resolved["events"][0]["data"]["transition"] == "T12"
+
+
 def test_review_escalations_are_asked_in_the_session_too(home: Home) -> None:
     h = Harness(home, {"review": {"max_rounds": 1}})
     w = started(h)

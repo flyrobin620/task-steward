@@ -3,12 +3,13 @@
 The plugin in ``plugin/`` carries what every session needs wherever it runs: the MCP
 registration and the hooks. It is enabled at user scope, so it carries no orchestrator skill.
 This module generates the orchestrator's instructions into the data directory: ``CLAUDE.md`` and
-the project skills ``.claude/skills/orchestrate/SKILL.md`` and ``handle-input`` (questions handed
-over by the routine session, CC006 §6.4). Sessions whose directory is under the data directory
-and not in a git repository (the routine session, a worker without a repository worktree) also
-discover them; a worker in a repository worktree does not (CC006 §8). It also generates the
-permission rules for the actions tsw guards itself (CC008 §6): ``.claude/settings.json`` in
-the data directory for the orchestrator. A worker's execution directory gets no settings file:
+the project skills ``.claude/skills/orchestrate/SKILL.md``, ``handle-input`` (questions handed
+over by the routine session, CC006 §6.4) and the human channels' skills (``teams-chat``, CC006
+§7). Sessions whose directory is under the data directory and not in a git repository (the
+routine session, a worker without a repository worktree) also discover them; a worker in a
+repository worktree does not (CC006 §8). It also generates the permission rules for the actions
+tsw guards itself (CC008 §6): ``.claude/settings.json`` in the data directory for the
+orchestrator. A worker's execution directory gets no settings file:
 a folder that brings its own permission rules asks for trust again even under a trusted data
 directory, so a worker relies on the user's auto-mode rules instead (decision 0003). It
 explains how to install the plugin and never changes global settings by itself.
@@ -30,6 +31,9 @@ ORCHESTRATE_SKILL = Path(__file__).resolve().parent / "orchestrate_skill.md"
 SKILL_PATH = Path(".claude") / "skills" / "orchestrate" / "SKILL.md"
 HANDLE_INPUT_SKILL = Path(__file__).resolve().parent / "handle_input_skill.md"
 HANDLE_INPUT_PATH = Path(".claude") / "skills" / "handle-input" / "SKILL.md"
+# The human channels' own skills (P3, CC006 §7): how the main session sends through a channel
+# and registers what comes back. handle-input names the channel; its skill has the details.
+CHANNEL_SKILLS = {"teams-chat": Path(__file__).resolve().parent / "teams_chat_skill.md"}
 SETTINGS_PATH = Path(".claude") / "settings.json"
 WORKER_SETTINGS_PATH = Path(".claude") / "settings.local.json"
 # The plugin ``task-steward`` registers the MCP server ``tsw`` (plugin/.mcp.json).
@@ -79,9 +83,14 @@ def render_instructions(home: Home) -> list[Path]:
     atomic_write(skill, ORCHESTRATE_SKILL.read_bytes())
     handle_input = home.root / HANDLE_INPUT_PATH
     atomic_write(handle_input, HANDLE_INPUT_SKILL.read_bytes())
+    channels: list[Path] = []
+    for name, source in CHANNEL_SKILLS.items():
+        channel = home.root / ".claude" / "skills" / name / "SKILL.md"
+        atomic_write(channel, source.read_bytes())
+        channels.append(channel)
     settings = home.root / SETTINGS_PATH
     allow_actions(settings, ORCHESTRATOR_ALLOW)
-    return [claude_md, skill, handle_input, settings]
+    return [claude_md, skill, handle_input, *channels, settings]
 
 
 def clear_worker_settings(workdir: Path) -> bool:
@@ -211,8 +220,9 @@ def install_hint(home: Home) -> str:
             f"3. 设置环境变量 TSW_HOME={home.root}（或在仓库的 .local/tsw-home 中写入该路径），",
             "   让 worktree 中的 worker 会话也能找到数据目录。",
             "4. 运行 tsw host render，在数据目录生成主会话的 CLAUDE.md 与项目 skill",
-            "   .claude/skills/orchestrate/、handle-input/（产品更新后重新运行）。",
-            "   需要经 Teams 问你时，在配置 plugins.human_channels 中加入 teams-chat。",
+            "   .claude/skills/orchestrate/、handle-input/、teams-chat/（产品更新后重新运行）。",
+            "   worker 会话中的提问不受配置影响；超时转交后需要你决定的问题怎样交给你，由配置",
+            "   plugins.human_channels 决定：in-session 在主会话中直接问，teams-chat 经 Teams。",
             f"5. 在数据目录 {home.root} 中打开一个会话作为主会话。",
             "插件只提供 tsw MCP server 与 hooks，在任何目录的会话里都生效。数据目录的",
             "项目 skill 由数据目录及其下不在 git 仓库中的会话加载；仓库任务的 worker 在仓库",
