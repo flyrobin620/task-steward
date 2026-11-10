@@ -336,18 +336,28 @@ def test_in_session_relays_to_the_orchestrators_own_session(home: Home) -> None:
     request_id = ask(h, w, reserved=True)
     h.clock.now = "2026-11-05T00:11:00Z"
     h.run("input_handoff", w, task_id="T001", request_id=request_id)
+    # Teams first, then the orchestrator's own session: the card can still be registered after.
+    h.run("input_relay", task_id="T001", request_id=request_id, channel="teams-chat")
     out = h.run("input_relay", task_id="T001", request_id=request_id, channel="in-session")
     data = out["events"][0]["data"]
     assert (data["channel"], data["plugin"]) == ("main-session", "in-session")
     again = h.run("input_relay", task_id="T001", request_id=request_id, channel="main-session")
     assert again["events"][0]["data"]["plugin"] == "in-session"
-    h.run("input_relay", task_id="T001", request_id=request_id, channel="teams-chat")
-    relayed = h.query("SELECT relayed_to FROM in_session_requests WHERE request_id = ?", request_id)
-    assert relayed == [{"relayed_to": "main-session,teams-chat"}]
     sent = h.run("channel_sent", task_id="T001", request_id=request_id, chat_id="c", message_id="m")
     assert sent["events"][0]["type"] == "channel.message_sent"
-    status = home.path("views/STATUS.html").read_text(encoding="utf-8")
-    assert "转达到 main-session、teams-chat" in status
+    # The answer the user gives in the orchestrator's session is registered from there.
+    words = {
+        "channel": "main-session",
+        "principal": "owner",
+        "message_ref": "orch-1:m-1",
+        "text": "用 B",
+        "request_id": request_id,
+        "target": ["T001", 1, "answer"],
+    }
+    resolved = h.run(
+        "input_resolve", task_id="T001", request_id=request_id, answer="B", user_source=words
+    )
+    assert resolved["events"][0]["data"]["transition"] == "T12"
 
 
 def test_review_escalations_are_asked_in_the_session_too(home: Home) -> None:

@@ -1117,6 +1117,16 @@ def routine_run(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return _cmd(env, "routine_run", inp, build)
 
 
+def _relayed_to_teams(events: Iterable[Any], request_id: str) -> bool:
+    """Whether the question was ever relayed to Teams (``input.relayed``), whatever came after."""
+    return any(
+        e.type == "input.relayed"
+        and e.data.get("request_id") == request_id
+        and e.data.get("channel") == TEAMS_CHANNEL
+        for e in events
+    )
+
+
 @tool(
     "channel_sent",
     "orchestrator",
@@ -1142,8 +1152,11 @@ def channel_sent(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             raise rejected("没有这个会话内问题", reason="request_not_found", request_id=request_id)
         if request["status"] != "pending":
             raise rejected("问题已答复", reason="request_not_pending", request_id=request_id)
-        # A question may be relayed to several channels (DN006 §8.6); any order is fine.
-        if TEAMS_CHANNEL not in str(request["relayed_to"] or "").split(","):
+        # A question may be relayed to several channels in any order (DN006 §8.6, T256), and
+        # relayed_to keeps only the last: the ledger says whether it ever went to Teams.
+        if request["relayed_to"] != TEAMS_CHANNEL and not _relayed_to_teams(
+            ctx.storage.read(since=0), request_id
+        ):
             raise rejected(
                 "先用 input_relay（channel: teams-chat）转达，再发送卡片", reason="not_relayed"
             )

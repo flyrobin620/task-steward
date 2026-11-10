@@ -121,7 +121,7 @@ def _outputs(conn: sqlite3.Connection) -> dict[str, list[Output]]:
 
 def _ask_note(ask: dict[str, Any]) -> str:
     if ask["relayed_to"]:
-        return f"已转交主会话，并转达到 {'、'.join(str(ask['relayed_to']).split(','))}"
+        return f"已转交主会话，并转达到 {ask['relayed_to']}"
     if ask["handed_off_at"]:
         return f"已于 {ask['handed_off_at']} 转交主会话"
     if ask["responded_at"]:

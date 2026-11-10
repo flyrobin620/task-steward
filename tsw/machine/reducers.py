@@ -301,18 +301,9 @@ def input_handed_off(conn: sqlite3.Connection, event: Event) -> None:
 
 
 def input_relayed(conn: sqlite3.Connection, event: Event) -> None:
-    """``relayed_to`` lists every channel the question went to, comma-separated, in order: a
-    question goes to each configured human channel (DN006 §8.6, T256)."""
-    found = conn.execute(
-        "SELECT relayed_to FROM in_session_requests WHERE request_id = ?",
-        (event.data["request_id"],),
-    ).fetchone()
-    channels = [c for c in str((found and found[0]) or "").split(",") if c]
-    if event.data["channel"] not in channels:
-        channels.append(str(event.data["channel"]))
     conn.execute(
         "UPDATE in_session_requests SET relayed_to = ? WHERE request_id = ?",
-        (",".join(channels), event.data["request_id"]),
+        (event.data["channel"], event.data["request_id"]),
     )
     _touch(conn, event, business=False)
 
