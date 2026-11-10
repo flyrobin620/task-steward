@@ -411,7 +411,7 @@ T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与
 
 ### 8.7 Teams 答复的回收与登记
 
-Teams 工具只有宿主中的模型能调用（delegated），回收因此是 poll，由例行表中的 Teams 例行项（§8.9.5）完成。主会话与例行会话都不运行时不回收，问题保持待答；不承诺离线回收。
+Teams 工具只有宿主中的模型能调用（delegated），回收因此是 poll，由例行表中的 Teams 例行项（§8.9.5）完成。主会话与例行会话都不运行时不回收，问题保持待答；不承诺离线回收。发送与读取用哪个工具由宿主集成决定，发送与读取用同一套工具（Claude Code 用 WorkIQ，见 CC006 §7）。
 
 1. **发送**：主会话 `input_relay`（`channel: teams-chat`）记录 `input.relayed`，返回卡片正文与目标 chat（`input.teams.chat`，默认用户本人的自聊）。卡片以 `[TaskSteward]` 开头，写明任务 ID、问题编号、问题全文、worker 会话链接，以及答复方式：“回复时以任务 ID 开头，例如 `T241 用方案 A`”。主会话发送后调用 `channel_sent`，登记 chat ID、卡片消息 ID 与发送者（用户本人在 Teams 中的 ID，取自发送结果）；tsw 把该任务 ID 加入这个 chat 的 Teams 例行项的输入列表：每个还有待答问题的 chat 一行（配置的 chat 改了之后，旧 chat 中的问题照样回收）。
 2. **回收**：例行项的脚本按 §8.9.5 取出 chat 中从最早一个待答问题的卡片发出起到现在的全部消息中（不限条数，逐页读取）、发送者是用户本人、正文以问题编号或列表中某个任务 ID 开头的消息，排除 tsw 自己发出的消息（按登记的出站消息 ID）与已经转给主会话的消息，对应到它回答的问题，转给主会话。脚本不判断内容。
@@ -495,6 +495,7 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | 脚本 | 从这一页的消息中选出：发送者是用户本人（消息带发送者时）、在读取窗口内、不是 tsw 发出的、此前没有转过、去掉格式后的正文以问题编号或列表中某个任务 ID 开头（后接空白或标点）的消息，并对应到它回答的问题：以问题编号开头的就是那个问题；以任务 ID 开头的是该任务在这条消息之前发出卡片的最近一个 Teams 问题（更早问题的回复不会算到之后才问的问题上；卡片的发出时间取 Teams 消息 ID 所表示的创建时间，卡片不在同一页时也能比较）；对应不到的不转出。对每条记录 `channel.reply_seen`（消息 ID、任务 ID、问题编号、问题是否仍待答、原文），之后不再转出 |
 | 结果 | 选出的消息（任务 ID、问题编号、消息 ID、时间、原文） |
 | 转发 | `if_any`：“Teams 中有以下答复，按 skill 判断并登记：…” |
+| 取数失败 | 工具报错或返回错误（例如限流）时，执行者照样调用 `routine_run`，`fetched` 为工具返回的原文；脚本不选出任何消息。tsw 在例行会话的缓存中按 chat 记连续失败的次数，取到一页即清零；连续 3 次时这次 `routine_run` 的 `forward` 告诉主会话一次（chat、次数、开始时间、最近一次的原因、这个 chat 中等待中的问题），恢复之前不再重复；`attention` 的 `routine` 中同时列出 `fetch_failing`，直到读取恢复（转发没有送达时主会话也能看到）。计数不进账本，丢失只会推迟通知（用户 2026-11-10，T253） |
 
 一行处理所有在同一个 chat 中等待的 Teams 问题：同时有几个问题在等时，输入列表中就有几个任务 ID。每个任务同一时间最多一个待答的会话内问题；问题已不再待答时转出的消息标明“迟到”，由主会话按 §8.1c 记为迟到答复。
 
@@ -515,7 +516,7 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 
 #### 8.9.7 启动与参数
 
-例行会话在用户第一次要求执行待办的那一轮由主会话启动：`routine_start` 记录 `routine.start_requested`（代次、会话名 `routine-g<K>`、执行目录 `routine/`）并返回创建会话的参数，主会话用会话适配器创建会话后用 `routine_bind` 记录 `routine.bound`；结果未知时按会话名对账（§4.1）。适配器声明 `detach` 时（`routine_start` 返回 `detach: true`），主会话随即把会话从自己名下分离，再用 `routine_detached` 记录 `routine.detached`；分离之后例行会话不再随主会话归档，转发仍按会话 ID 发给调度租约的持有者，主会话也仍按会话 ID 给它发消息，按会话名对账只在分离之前进行。会话 ID 等于当前代次的例行会话时角色为例行会话，旧代次的为已撤销（DN001 §7.1）。`attention` 的 `routine` 给出状态：`missing`、`starting`、`attached`、`unarmed`、`ok`、`stale`（`attached` 先于后两者报告）。
+例行会话在用户第一次要求执行待办的那一轮由主会话启动：`routine_start` 记录 `routine.start_requested`（代次、会话名 `routine-g<K>`、执行目录 `routine/`）并返回创建会话的参数，主会话用会话适配器创建会话后用 `routine_bind` 记录 `routine.bound`；结果未知时按会话名对账（§4.1）。适配器声明 `detach` 时（`routine_start` 返回 `detach: true`），主会话随即把会话从自己名下分离，再用 `routine_detached` 记录 `routine.detached`；分离之后例行会话不再随主会话归档，转发仍按会话 ID 发给调度租约的持有者，主会话也仍按会话 ID 给它发消息，按会话名对账只在分离之前进行。会话 ID 等于当前代次的例行会话时角色为例行会话，旧代次的为已撤销（DN001 §7.1）。`attention` 的 `routine` 给出状态：`missing`、`starting`、`attached`、`unarmed`、`ok`、`stale`（`attached` 先于后两者报告；`ok` 不列出），其后是每个连续读取失败的 Teams chat 一项 `fetch_failing`（§8.9.5）。
 
 参数见 DN003 §3.1b：`roles.routine`（会话适配器、模型，默认 `claude-sonnet-5-5`、effort `low`、权限模式）与 `routine`（`enabled`、`interval_minutes` 默认 10、`renew_after_days`、`context_reset_hours`、`stale_after_intervals`；`teams_lookback_hours` 已弃用）。承载例行会话的会话适配器须为 `interactive`，并声明 `timer`（会话内的定时唤醒）。
 

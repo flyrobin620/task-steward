@@ -17,7 +17,8 @@ from tsw.errors import TswError
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
 from tsw.host.guard import START_SESSION, Guard
-from tsw.host.identity import resolve
+from tsw.host.identity import SESSION_ENV, resolve
+from tsw.host.mcp import Server
 from tsw.machine import routine as routine_mod
 from tsw.machine.base import Caller
 
@@ -265,8 +266,13 @@ def test_teams_round_trip(home: Home) -> None:
     teams = jobs[1]
     assert teams["job_id"] == "teams-replies" and teams["input"]["tasks"] == ["T001"]
     assert teams["run"] == {"job_id": "teams-replies", "chat_id": "chat-1"}
-    assert teams["fetch"]["tool"] == "mcp__teams__ListChatMessages"
-    assert teams["fetch"]["arguments"] == {"chatId": "chat-1", "top": routine_mod.TEAMS_READ_TOP}
+    assert teams["fetch"]["tool"] == "mcp__workiq__fetch"
+    assert teams["fetch"]["arguments"] == {
+        "entityUrls": [
+            f"/me/chats/chat-1/messages?$top={routine_mod.TEAMS_READ_TOP}"
+            "&$select=id,createdDateTime,from,body"
+        ]
+    }
     # The window starts just before the waiting question's card, however long ago that was.
     assert teams["fetch"]["since"] == "2026-11-05T00:05:00Z"
     fetched = {
@@ -301,8 +307,8 @@ def test_teams_round_trip(home: Home) -> None:
             conn, "teams-replies", {**run, "fetched": {**fetched, "nextLink": "p2"}}, "claude-code"
         )
         assert follow == {
-            "tool": "mcp__teams__ListChatMessages",
-            "arguments": {"chatId": "chat-1", "nextLink": "p2"},
+            "tool": "mcp__workiq__fetch",
+            "arguments": {"entityUrls": ["p2"]},
             "run": run,
         }
         older = {
@@ -357,6 +363,64 @@ def test_teams_round_trip(home: Home) -> None:
     assert [e["data"]["request_id"] for e in events] == [third]
 
 
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_chat_that_cannot_be_read_is_reported_once(home: Home) -> None:
+    # T253: 54 runs of HTTP 429 stayed in the detached routine session; after a few failed reads
+    # in a row tsw tells the orchestrator, once, and lists it in attention until a read works.
+    h = Harness(home, TEAMS)
+    routine = start_routine(h)
+    _, request_id = asked(h)
+    h.clock.now = "2026-11-05T00:10:00Z"
+    run_job(h, routine, "handoff-scan")
+    h.run("input_relay", task_id="T001", request_id=request_id, channel="teams-chat")
+    h.run(
+        "channel_sent",
+        task_id="T001",
+        request_id=request_id,
+        chat_id="48:notes",
+        message_id="1794241478651",
+        sender_id="u1",
+    )
+    server = Server(h.home, {SESSION_ENV: str(routine.session_id)}, home.root / "routine")
+    board_out = server.call("routine_board", {})
+    teams = next(j for j in board_out["jobs"] if j["job_id"] == "teams-replies")
+    assert teams["fetch"]["tool"] == "mcp__workiq__fetch" and teams["fetch"]["on_error"]
+    run = teams["run"]
+    throttled = "Error: HTTP 429 Too Many Requests"
+    after = routine_mod.TEAMS_FETCH_ALERT_AFTER
+    forwards = [
+        server.call("routine_run", {**run, "fetched": throttled})["forward"]
+        for _ in range(after + 1)
+    ]
+    assert [f["send"] for f in forwards] == [False] * (after - 1) + [True, False]
+    alert = forwards[after - 1]
+    assert alert["session_id"] == "orch-1"
+    assert "48:notes" in alert["message"] and "HTTP 429" in alert["message"]
+    assert f"T001 {request_id}" in alert["message"]
+    cache = routine_mod.load_cache(h.home)
+    failing = [a for a in attention(h, cache) if a["state"] == "fetch_failing"]
+    assert failing == [
+        {
+            "state": "fetch_failing",
+            "job_id": "teams-replies",
+            "chat_id": "48:notes",
+            "count": after + 1,
+            "since": failing[0]["since"],
+            "reason": throttled,
+        }
+    ]
+    # A WorkIQ result in error counts the same; a page ends the run of failures.
+    error = {"results": [{"data": {"error": {"code": "TooMany"}}, "statusCode": 429}]}
+    assert server.call("routine_run", {**run, "fetched": error})["forward"] == {"send": False}
+    page = {"results": [{"data": {"value": []}, "statusCode": 200}]}
+    assert server.call("routine_run", {**run, "fetched": page})["forward"] == {"send": False}
+    cache = routine_mod.load_cache(h.home)
+    assert [a for a in attention(h, cache) if a["state"] == "fetch_failing"] == []
+    # After it, failures count from one again.
+    again = server.call("routine_run", {**run, "fetched": throttled})
+    assert again["forward"] == {"send": False}
+
+
 @pytest.mark.use_case("UC-ROUTINE-001")
 def test_hooks_for_the_routine_session(home: Home) -> None:
     h = Harness(home)
@@ -385,7 +449,7 @@ def test_hooks_for_the_routine_session(home: Home) -> None:
         tool_input={"prompt": routine_mod.SCHEDULED_PROMPT},
     )
     assert tagged is None
-    assert hook(h, "r1", "PreToolUse", cwd, tool_name="mcp__teams__ListChatMessages") is None
+    assert hook(h, "r1", "PreToolUse", cwd, tool_name="mcp__workiq__fetch") is None
     # A routine turn ends with nothing in the ledger and nothing to remind; before the first
     # board read there is no cache to add to.
     assert hook(h, "r1", "Stop", cwd) is None

@@ -62,7 +62,7 @@
   ],
   "prerequisites": [
     "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则，包括“TaskSteward Routine”。",
-    "已在 Claude Code 中安装 Teams MCP（mcp__teams__*），主会话与例行会话都能调用 SendMessageToSelf 与 ListChatMessages。",
+    "已在 Claude Code 中连接 WorkIQ MCP（mcp__workiq__*），主会话能用 create_entity 往 Teams 自聊发消息，例行会话能用 fetch 读取自聊消息；用户设置中的“TaskSteward Routine”是本版本 install-hint 给出的文本（读取工具为 mcp__workiq__fetch）。",
     "这次运行会向你的 Teams 自聊发一张问题卡片；运行结束后可以自行删除。"
   ]
 }

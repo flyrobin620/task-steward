@@ -496,7 +496,7 @@
       "id": "UC-CHANNEL-001",
       "title": "经 Teams 转达问题，例行表取出以任务 ID 开头的回复交主会话登记（DN006 §8.7）",
       "actor": "主会话 / 例行会话 / 用户",
-      "acceptance": "input_relay（channel: teams-chat）记录 input.relayed 并给出以 [TaskSteward] 开头的卡片与目标 chat；主会话发送后 channel_sent 记录 channel.message_sent，例行表随之有 teams-replies（routine.job_added / job_updated）；routine_board 只在有经 Teams 转达、仍待答的问题时列出它，带取数参数；routine_run 每次处理取到的一页消息（读取窗口从最早一个待答问题的卡片起到现在，不限条数；这一页还没读到窗口起点且有下一页时返回 next，例行会话按它取下一页再运行），从中选出用户发送、在读取窗口内、不是 tsw 发出（按出站消息 ID）、未转过、以问题编号或等待中任务 ID 开头的消息，对应到它回答的问题（以任务 ID 开头的不会算到之后才问的问题上），记为 channel.reply_seen（可回传）并返回发给主会话的原文；主会话不在线、租约已过期时仍转给最后持有租约的主会话；主会话用 input_resolve 以 teams-chat 来源登记，经 T12 让 worker 继续；问题不再待答时自动移出列表",
+      "acceptance": "input_relay（channel: teams-chat）记录 input.relayed 并给出以 [TaskSteward] 开头的卡片与目标 chat；主会话发送后 channel_sent 记录 channel.message_sent，例行表随之有 teams-replies（routine.job_added / job_updated）；routine_board 只在有经 Teams 转达、仍待答的问题时列出它，带取数参数；routine_run 每次处理取到的一页消息（读取窗口从最早一个待答问题的卡片起到现在，不限条数；这一页还没读到窗口起点且有下一页时返回 next，例行会话按它取下一页再运行），从中选出用户发送、在读取窗口内、不是 tsw 发出（按出站消息 ID）、未转过、以问题编号或等待中任务 ID 开头的消息，对应到它回答的问题（以任务 ID 开头的不会算到之后才问的问题上），记为 channel.reply_seen（可回传）并返回发给主会话的原文；主会话不在线、租约已过期时仍转给最后持有租约的主会话；主会话用 input_resolve 以 teams-chat 来源登记，经 T12 让 worker 继续；问题不再待答时自动移出列表；取数失败时例行会话照样调用 routine_run（fetched 为错误原文），同一 chat 连续 3 次读取失败时 forward 告诉主会话一次，attention 的 routine 列出 fetch_failing 直到读取恢复",
       "surfaces": [
         "mcp"
       ],
