@@ -275,7 +275,7 @@
       refresh.setAttribute("aria-pressed", String(on));
       clearInterval(timer);
       if (on) timer = setInterval(() => {
-        // [data-hold-refresh]: something on the page (the STATUS app's reason box) is unsent.
+        // [data-hold-refresh] on the root: the STATUS app has an unsent reason or a request.
         const busy = document.activeElement === q || !(window.getSelection()?.isCollapsed ?? true)
           || document.querySelector("[data-hold-refresh]") !== null;
         if (busy || document.hidden) return;

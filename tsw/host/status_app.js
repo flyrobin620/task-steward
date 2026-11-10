@@ -2,11 +2,29 @@
 (() => {
   "use strict";
   const LABELS = {accept: "验收", reject: "退回", cancel: "取消"};
+  // Cards with an unsent reason or a request in flight. They are tracked here rather than found
+  // in the page: the filters (status.js) take cards out of the document.
+  const pending = new Set();
+  const sending = new WeakSet();
+
+  /* While anything is unsent, the root carries data-hold-refresh and status.js skips reloads. */
+  function hold() {
+    for (const box of pending) {
+      const text = box.querySelector(".reason textarea");
+      if (!sending.has(box) && !(text && text.value.trim())) pending.delete(box);
+    }
+    if (pending.size) document.documentElement.dataset.holdRefresh = "";
+    else delete document.documentElement.dataset.holdRefresh;
+  }
 
   function start() {
     const meta = document.querySelector('meta[name="tsw-token"]');
     if (!meta) return;
     const token = meta.content;
+    document.addEventListener("input", event => {
+      const box = event.target instanceof Element ? event.target.closest(".acts") : null;
+      if (box && event.target.matches(".reason textarea")) { pending.add(box); hold(); }
+    });
     // Delegated: the filters (status.js) take cards out of the page and put them back later.
     document.addEventListener("click", event => {
       const target = event.target instanceof Element ? event.target : null;
@@ -52,12 +70,8 @@
       box.appendChild(form);
     }
     form.hidden = open === undefined ? !form.hidden : !open;
-    // An open reason box holds the page's auto-refresh (status.js), so a draft is not lost.
-    if (form.hidden) delete box.dataset.holdRefresh;
-    else {
-      box.dataset.holdRefresh = "";
-      form.querySelector("textarea").focus();
-    }
+    // Folding the box keeps its draft (and the hold on auto-refresh) until it is sent or cleared.
+    if (!form.hidden) form.querySelector("textarea").focus();
   }
 
   function sendReason(box, token) {
@@ -80,7 +94,9 @@
     const {task, revision} = info(box);
     const buttons = box.querySelectorAll("button");
     for (const b of buttons) b.disabled = true;
-    box.dataset.holdRefresh = "";
+    sending.add(box);
+    pending.add(box);
+    hold();
     show(box, null, "正在提交…");
     try {
       const response = await fetch(`/api/tasks/${encodeURIComponent(task)}/${action}`, {
@@ -100,8 +116,8 @@
       show(box, false, `请求失败：${error}`);
     }
     for (const b of buttons) b.disabled = false;
-    const form = box.querySelector(".reason");
-    if (!form || form.hidden) delete box.dataset.holdRefresh;
+    sending.delete(box);
+    hold();
   }
 
   function show(box, ok, text) {

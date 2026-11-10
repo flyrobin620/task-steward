@@ -208,6 +208,12 @@ def test_the_app_script_cannot_close_its_own_element() -> None:
     assert "</" not in APP_SCRIPT
 
 
+def test_an_unsent_reason_holds_the_auto_refresh() -> None:
+    # The app marks the root (not a card, which the filters may detach); status.js looks for it.
+    assert "document.documentElement.dataset.holdRefresh" in APP_SCRIPT
+    assert 'document.querySelector("[data-hold-refresh]")' in SCRIPT
+
+
 @mark.use_case("UC-HOST-003")
 def test_long_notes_scroll_and_the_brief_folds_at_the_foot(conn: sqlite3.Connection) -> None:
     _task(
