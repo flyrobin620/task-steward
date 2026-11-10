@@ -310,7 +310,11 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         ["task_id", "request_id", "channel"],
         task_id=S,
         request_id=S,
-        channel={**S, "description": "main-session 或已加载的其他人类渠道（如 teams-chat）"},
+        channel={
+            **S,
+            "description": "plugins.human_channels 加载的人类渠道：in-session（在主会话中直接问；"
+            "旧名 main-session）或 teams-chat 等",
+        },
         note=S,
     ),
     "routine_start": schema(
