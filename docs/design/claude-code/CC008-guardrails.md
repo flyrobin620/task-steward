@@ -1,6 +1,6 @@
 # CC008 Claude Code 上的护栏
 
-- 状态：设计草案（T242 r2；T243 增加例行会话的规则）
+- 状态：设计草案（T242 r2；T243 增加例行会话的规则；T251 Worker Merge 规则覆盖仓库 worktree）
 - 日期：2026-11-08
 - 实现：[DN008 校验原则](../DN008-guardrails.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC006 Claude Code 插件](CC006-plugins.md)
@@ -157,7 +157,7 @@ Claude Code 对复合命令（`;`、`&&`、管道）逐段核对允许规则，�
 worker 能写自己的执行目录，所以 CC-B2 拦下编辑类工具对执行目录与数据目录中 `.claude/settings*.json` 的修改：遇到权限拒绝时不自行添加允许规则，而是告诉用户；在执行目录中写规则还会让下一次在该目录打开会话时要求信任，数据目录中的文件会被 tsw 重新生成覆盖。允许规则只放行动作本身；动作的授权仍由账本、配置与用户来源决定，主会话代答也仍然不是用户批准（DN006 §8.1b）。
 
 - 其余一切动作仍由 Claude Code 的权限模式与分类器判断：tsw 不放宽它不检查的动作。
-- tsw 不在任何执行目录中写规则，worker 的放行只来自用户设置。已知缺口：“TaskSteward Worker Merge”只描述执行目录为数据目录下 `work/<任务>/<attempt>` 的 worker（规则文本不随本次修改，用户已安装的规则继续有效）；执行目录在数据目录之外（如仓库 worktree）的 worker 合并时可能被分类器拦下，这类目录也仍需用户在第一次使用时确认信任。需要时由用户在用户设置中为该目录补一条规则，或把执行目录放在 `work/` 之下。
+- tsw 不在任何执行目录中写规则，worker 的放行只来自用户设置。“TaskSteward Worker Merge”描述会话目录为数据目录下 `work/<任务>/<attempt>`，或其中由 tsw 创建的仓库 worktree 的 worker（T251 起规则文本加入后者，[CC006 §8](CC006-plugins.md)；用户设置中的旧规则需按 `tsw host install-hint` 更新这一条）。执行目录在数据目录之外的 worker 合并时可能被分类器拦下，这类目录也仍需用户在第一次使用时确认信任；需要时由用户在用户设置中为该目录补一条规则，或把执行目录放在 `work/` 之下。
 
 ## 7. 对其他文档与代码的影响
 

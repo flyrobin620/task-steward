@@ -1,6 +1,6 @@
 # DN002 任务状态机
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T251 §5.6 开始时为仓库任务创建 worktree）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN006 插件层](DN006-plugin-layer.md)
 
@@ -258,7 +258,7 @@
 
 | 情况 | 处理 | attempt 阶段 |
 | --- | --- | --- |
-| 开始 | 准备执行目录（worktree 基于当前基线；目录不存在时 `attempt_start` 创建空目录，创建失败则拒绝，不记录事件）；按当前 revision 生成任务书 `runs/<任务>/<attempt>/brief.md`（授权读取集合为任务本身与依赖），路径与 revision 记在 attempt 上；记录 `attempt.start_requested`（创建代次 +1）；以**待命说明**创建会话（只介绍角色、工具与回传协议，要求等待任务书） | `planned` → `starting` |
+| 开始 | 准备执行目录（目录不存在时 `attempt_start` 创建空目录；仓库配置了本机检出时，在其中创建基于当前基线的仓库 worktree，作为会话目录，见 CC006 §8；创建失败则拒绝，不记录事件）；按当前 revision 生成任务书 `runs/<任务>/<attempt>/brief.md`（授权读取集合为任务本身与依赖），路径与 revision 记在 attempt 上；记录 `attempt.start_requested`（创建代次 +1）；以**待命说明**创建会话（只介绍角色、工具与回传协议，要求等待任务书） | `planned` → `starting` |
 | 创建成功 | 记录 `attempt.prestarted` | `starting` → `standby` |
 | 确认未创建 | 记录 `attempt.not_created`，当前代次失效（§5.4）；释放预启动额度；下一次用户 turn 可以重试 | `starting` → `planned` |
 | 结果未知 | 按当前代次的会话名对账，绝不再次创建；对账前该任务不能派发，也不能再次预启动 | 保持 `starting` |

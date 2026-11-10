@@ -358,10 +358,14 @@ class Server:
         # attempt_start has created the directory (wherever it is).
         if within(workdir, self.home.root / "work") and workdir.is_dir():
             clear_worker_settings(workdir)
-        if workdir.is_dir():
+        # A repository task's session is created in the worktree attempt_start made inside the
+        # execution directory, so the host loads the repository's own configuration (CC006 §8).
+        worktree = events[0]["data"].get("worktree") or {}
+        session_dir = Path(str(worktree["path"])) if worktree.get("path") else workdir
+        if session_dir.is_dir():
             # The app refuses a cwd spelled differently from the folder on disk (``A1`` for
             # ``a1``): hand back the real spelling for start_session.
-            out["cwd"] = os.path.realpath(workdir)
+            out["cwd"] = os.path.realpath(session_dir)
 
     def _host_tool(
         self,

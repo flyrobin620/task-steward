@@ -4,13 +4,14 @@ The plugin in ``plugin/`` carries what every session needs wherever it runs: the
 registration and the hooks. It is enabled at user scope, so it carries no orchestrator skill.
 This module generates the orchestrator's instructions into the data directory: ``CLAUDE.md`` and
 the project skills ``.claude/skills/orchestrate/SKILL.md`` and ``handle-input`` (questions handed
-over by the routine session, CC006 §6.4), which only a session opened in the data directory
-discovers. It also generates the permission rules for the actions tsw guards
-itself (CC008 §6): ``.claude/settings.json`` in the data directory for the orchestrator. A
-worker's execution directory gets no settings file: a folder that brings its own permission
-rules asks for trust again even under a trusted data directory, so a worker relies on the
-user's auto-mode rules instead (decision 0003). It explains how to install the plugin and never
-changes global settings by itself.
+over by the routine session, CC006 §6.4). Sessions whose directory is under the data directory
+and not in a git repository (the routine session, a worker without a repository worktree) also
+discover them; a worker in a repository worktree does not (CC006 §8). It also generates the
+permission rules for the actions tsw guards itself (CC008 §6): ``.claude/settings.json`` in
+the data directory for the orchestrator. A worker's execution directory gets no settings file:
+a folder that brings its own permission rules asks for trust again even under a trusted data
+directory, so a worker relies on the user's auto-mode rules instead (decision 0003). It
+explains how to install the plugin and never changes global settings by itself.
 """
 
 from __future__ import annotations
@@ -150,7 +151,8 @@ def allow_actions(path: Path, rules: Iterable[str]) -> None:
 # tsw cannot generate it next to the permission rules: the install hint shows it to the user.
 AUTO_MODE_WORKER_MERGE = (
     "TaskSteward Worker Merge: In a TaskSteward worker session (its working directory is "
-    "work/<task>/<attempt> under a TaskSteward data directory and tsw's whoami reports role "
+    "work/<task>/<attempt> under a TaskSteward data directory, or the repository worktree tsw "
+    "created inside it, and tsw's whoami reports role "
     "worker), running `gh pr merge <number> -R <host>/<owner>/<name> --squash` as a command of "
     "its own for the task's own pull request, after the task's self-review was finalized, is "
     "authorized by the user's standing decision that workers merge their own pull requests "
@@ -212,8 +214,11 @@ def install_hint(home: Home) -> str:
             "   .claude/skills/orchestrate/、handle-input/（产品更新后重新运行）。",
             "   需要经 Teams 问你时，在配置 plugins.human_channels 中加入 teams-chat。",
             f"5. 在数据目录 {home.root} 中打开一个会话作为主会话。",
-            "插件只提供 tsw MCP server 与 hooks，在任何目录的会话里都生效；orchestrate skill",
-            "是数据目录的项目 skill，只有在数据目录打开的会话会加载。tsw 不修改任何全局设置。",
+            "插件只提供 tsw MCP server 与 hooks，在任何目录的会话里都生效。数据目录的",
+            "项目 skill 由数据目录及其下不在 git 仓库中的会话加载；仓库任务的 worker 在仓库",
+            "worktree 中工作，宿主加载仓库自己的配置，任务书列出数据目录的 skill 供它直接读取。",
+            "数据目录的项目插件（.claude/settings.json 的 enabledPlugins）只对主会话生效：",
+            "要给所有会话用的插件装在用户范围。tsw 不修改任何全局设置。",
             "6. auto 权限模式下，Claude Code 的分类器会把主会话派发 worker、worker 自行合并 PR、",
             "   例行会话的定时任务与转发当作未经授权。worker 与例行会话的目录不带权限规则",
             "   （带规则的目录会再次要求信任），它们的放行都来自这里。由你在用户设置",

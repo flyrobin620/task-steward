@@ -1,6 +1,6 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -28,7 +28,7 @@
 
 ## 2. 宿主集成 `claude-code`
 
-`claude-code` 的插件按用户级启用，任何目录的会话（主会话、`~/tsw-worktrees` 或 `work/<任务>/<attempt>` 中的 worker、无关会话）都会加载它，所以插件只携带每个会话都需要的 MCP 注册与 hooks。主会话的流程说明不放进插件：`render_instructions` 把 `CLAUDE.md` 和 `orchestrate` skill 写进数据目录，后者是 Claude Code 的项目 skill（`<cwd>/.claude/skills/`），只有以数据目录为工作目录的会话会发现它。Claude Code 也从上级目录加载 `CLAUDE.md` 与项目 skill，执行目录在数据目录之下（`work/<任务>/<attempt>`）的 worker 同样会看到二者，所以二者都写明：`whoami` 的角色不是 orchestrator 时忽略。skill 的来源在产品代码中（`tsw/host/orchestrate_skill.md`），产品更新后重新运行 `tsw host render`。
+`claude-code` 的插件按用户级启用，任何目录的会话（主会话、`work/<任务>/<attempt>` 或其中仓库 worktree 中的 worker、无关会话）都会加载它，所以插件只携带每个会话都需要的 MCP 注册与 hooks。主会话的流程说明不放进插件：`render_instructions` 把 `CLAUDE.md` 和 `orchestrate` skill 写进数据目录，后者是 Claude Code 的项目 skill（`<cwd>/.claude/skills/`）。Claude Code 也从上级目录加载 `CLAUDE.md` 与项目 skill（skill 的查找在 git 仓库根停下，§8），执行目录在数据目录之下的例行会话与 worker 同样会看到二者（仓库 worktree 中的 worker 只看到 `CLAUDE.md`），所以二者都写明：`whoami` 的角色不是 orchestrator 时忽略。skill 的来源在产品代码中（`tsw/host/orchestrate_skill.md`），产品更新后重新运行 `tsw host render`。
 
 插件由 Claude Code 复制到插件缓存运行，缓存里没有 `tsw` 运行时。启动器按顺序查找：`TSW_REPO` 环境变量、插件所在的产品仓库（源码树或原地使用的本地市场）、`tsw init` 写入数据目录标记文件的 `product_repo`；都找不到时 MCP server 报错退出，hooks 静默放行。
 
@@ -52,7 +52,7 @@
 
 | 动作 | `claude-app` |
 | --- | --- |
-| create | `start_session`（fresh、cwd、use_worktree=false；预启动时 prompt 为待命说明） |
+| create | `start_session`（fresh、cwd 为 `attempt_start` 返回的执行目录或其中的仓库 worktree（§8）、use_worktree=false；预启动时 prompt 为待命说明） |
 | deliver_brief | `SendMessage`（任何 turn 都可以；直接启动时由 `start_session` 的短指令 prompt 指向任务书路径，两阶段合一；正文不放进 prompt，见 [CC008 §6](CC008-guardrails.md)） |
 | send | `SendMessage` |
 | stop | `stop_session` |
@@ -81,7 +81,7 @@ worker 有待答问题时，`UserPromptSubmit` hook 把用户消息记为 `input
     "params": {
       "initiation": "user_asked",
       "context": "fresh",
-      "cwd": "~/tsw-worktrees/example-app/T241-a1",
+      "cwd": "<数据目录>/work/T241/a1/example-app",
       "use_worktree": false,
       "name": "t241-a1-g1",
       "model": "claude-opus-5-5",
@@ -174,3 +174,52 @@ DN006 §8.6–§8.7 在 Claude Code 上的做法。发送与读取都用 WorkIQ 
 | 登记答复、告诉 worker | 主会话 | `input_resolve`、`send_message`（§6.4 第 4 步） |
 
 消息正文是 HTML，脚本去掉标签与首尾空白后再看是否以任务 ID 开头。
+
+## 8. 会话能用到的 skill、MCP 与插件；仓库任务的 worktree
+
+T251 依据实测与官方文档（[skills](https://code.claude.com/docs/en/skills)、[memory](https://code.claude.com/docs/en/memory)、[permissions](https://code.claude.com/docs/en/permissions)、[plugins/loading](https://code.claude.com/docs/en/plugins/loading)）确定，用户 2026-11-09 确认。分发（把 skill、MCP、插件放到哪里）由各仓库的 owner 与用户（对数据目录）自己维护，tsw 不做。
+
+### 8.1 宿主的发现规则
+
+| 来源 | 规则 |
+| --- | --- |
+| 项目 skill（`.claude/skills/`） | 从会话目录逐级向上查找，到 git 仓库根（链接 worktree 为 worktree 根）为止；不在 git 仓库中时一直向上。会话目录之下的子目录中的 skill 在第一次读写其中文件时加载 |
+| `CLAUDE.md`、`.claude/rules/` | 从会话目录逐级向上加载，不受 git 仓库根限制；子目录中的在读写其中文件时加载 |
+| `AGENTS.md` | 由内置插件 `cc-plugin-agents-md` 读取；默认只在会话目录及上级都没有 `CLAUDE.md` 时读。数据目录有 `CLAUDE.md`，所以它之下的会话都不会自动读仓库的 `AGENTS.md`（仓库 `CLAUDE.md` 用 `@AGENTS.md` 引用时除外） |
+| `.mcp.json` | 从会话目录与上级目录发现（实测，不受 git 仓库根限制）；使用前按路径记录批准 |
+| 项目设置（`.claude/settings.json`：`enabledPlugins`、hooks、权限规则等） | 只读会话目录本身，没有上级回退 |
+| 用户范围的 skill、MCP、插件 | 所有会话 |
+
+信任：不在 git 仓库中的目录，信任覆盖其子目录，但不覆盖嵌在其中的 git 仓库；worktree 的信任按其主检出计算。用户实测：在数据目录下 task-steward 的 worktree 中新开会话，没有弹出信任确认（主检出已信任）。主检出从未信任过的仓库，第一次可能弹出，由用户确认一次（或先在 app 中打开该仓库）。
+
+### 8.2 各会话能用到什么
+
+| 来源 | 主会话（数据目录） | 例行会话、没有 worktree 的 worker（执行目录） | 仓库任务的 worker（会话目录 = worktree） |
+| --- | --- | --- | --- |
+| 用户范围的 skill、MCP、插件（含 task-steward） | 可用 | 可用 | 可用 |
+| 数据目录的 skill | 可用 | 可用 | 宿主不加载；任务书列出名称、说明与路径，worker 直接读 SKILL.md |
+| 数据目录的 `CLAUDE.md`、`.mcp.json` | 可用 | 可用 | 可用 |
+| 数据目录的项目插件 | 可用 | 不可用 | 不可用 |
+| 仓库的 skill、`.mcp.json`、项目插件、hooks 与设置、`CLAUDE.md` | — | — | 可用（按仓库自己的配置） |
+| 仓库的 `AGENTS.md` 等指令文件 | — | — | 宿主不自动读；任务书要求读并遵守（§8.3） |
+
+要给所有会话用的插件装在用户范围；数据目录的项目插件只对主会话生效。
+
+### 8.3 tsw 的做法
+
+- **worktree**：任务的仓库在配置中有本机 git 检出（`repositories.<id>.path`）时，`attempt_start`（预启动或派发）在执行目录下创建 `<执行目录>/<仓库 id>` 的 git worktree：分支按 `worktrees.branch_pattern`，基线为 `base_ref`，未配置时取远端默认分支（`<remote>/HEAD`、`<remote>/main` 等第一个存在的）。创建前 `git fetch` 一次（失败不阻止创建，事件记录 `fetched`）。
+  - worktree 在记录事件之前创建：路径上已有别的内容（`worktree_conflict`）或 git 失败（`worktree_unavailable`）时拒绝，不记录事件。同一 attempt 的后续代次沿用已有的 worktree；已有同名分支时用它。
+  - `attempt.start_requested` 的 `worktree` 字段记录路径、分支、基线、是否新建与是否 fetch 成功。执行目录（`workdir`）仍是 `<执行目录>`，报告草稿与可写范围不变。
+  - MCP 返回的 `cwd` 是 worktree，主会话用它创建 worker 会话。
+  - 没有可用检出（未配置 `path`、目录不存在、不是 git 仓库）时不建 worktree，会话在执行目录中启动，任务书写明原因。
+- **任务书的“仓库与 worktree”一节**（仓库已配置时生成）：
+  - 会话目录与分支（或没有 worktree 的原因），不要另建 worktree 或 clone；报告写在执行目录。
+  - 仓库指令文件：`repositories.<id>.instructions`（相对仓库根的路径列表），未配置时默认 `AGENTS.md`、`CLAUDE.md`、`.github/copilot-instructions.md`；worker 开始前完整阅读并遵守，改动子目录前也读该子目录中的同名文件，报告写明读了哪些。各仓库的列表由主会话经 `config_change` 维护。
+  - 有 worktree 时列出数据目录的 skill（`orchestrate`、`handle-input` 只用于主会话，不列）。
+- **评审**：`review_run` 在 worktree 中评审，按其中的提交确定范围。
+- 数据目录的 `CLAUDE.md` 不变，不为 `AGENTS.md` 原生加载改写它（用户决定）。
+- `worktrees.root` 在 `claude-code` 宿主中不使用（字段保留）；`worktrees.work_dir` 仍是执行目录的默认位置。
+
+### 8.4 Codex（记录，未实现）
+
+TaskSteward 目前只把 Codex 用作评审器。Codex 从项目根（默认以 `.git` 为标记）到会话目录读取 `AGENTS.md`，`.agents/skills` 的查找也在这个范围内；MCP 只来自 `config.toml`（用户级或受信任项目的 `.codex/config.toml`），不读 `.mcp.json`。以后实现 Codex worker 时，会话目录同样应是仓库 worktree；数据目录的 skill 与 `AGENTS.md` 在 worktree 中同样读不到，需要由任务书列出。

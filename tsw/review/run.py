@@ -37,6 +37,7 @@ from tsw.machine.runner import run_tool
 from tsw.machine.worker import CATEGORIES, VERDICTS, validate_result
 from tsw.review.codex import ReviewRun, extract_json, resolve_executable, run_review
 from tsw.storage.fs import FsStorage
+from tsw.workspace import plan
 
 Reviewer = Callable[..., ReviewRun]
 # Session adapters that can review (DN006 §7.4) and are implemented in this version.
@@ -159,6 +160,11 @@ def _run_locked(
             )
     assert row is not None and attempt is not None
     workdir = Path(str(attempt["workdir"] or ctx.home.root / "work" / task_id / attempt_id))
+    # A repository task is reviewed in the worktree tsw made inside its execution directory
+    # (CC006 §8), where its commits are.
+    ws = plan(ctx.home, ctx.config, row, attempt_id, str(attempt["workdir"] or workdir))
+    if ws is not None and ws.worktree is not None and ws.worktree.is_dir():
+        workdir = ws.worktree
     is_git = git(workdir, "rev-parse", "--is-inside-work-tree") == "true"
     if retry is not None:
         round_no = int(retry["round"])

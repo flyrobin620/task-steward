@@ -41,6 +41,7 @@ from tsw.machine.model import (
     task,
 )
 from tsw.tasks import TaskSpec, register, render_spec, validate_spec
+from tsw.workspace import brief_section, ensure, home_skills, plan
 
 
 def _cmd(env: ToolEnv, op: str, inp: Mapping[str, Any], build: Any) -> Command:
@@ -352,7 +353,7 @@ def task_update(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             read_set = _read_set(ctx.conn, task_id) if unwritten else loads(current["read_set"], [])
             workdir = str(current["workdir"] or f"work/{task_id}/{attempt_id}")
             updated = {**row, "revision": revision, "goal": goal, "acceptance": dumps(acceptance)}
-            body = _brief(ctx.conn, updated, attempt_id, workdir, read_set, env.config)
+            body = _brief(ctx, updated, attempt_id, workdir, read_set, env.config)
             ctx.storage.put_artifact(path, body.encode("utf-8"))
             data["brief"] = {
                 "attempt": current["attempt"],
@@ -463,7 +464,7 @@ def _delivery_line(config: EffectiveConfig, row: Mapping[str, Any]) -> str:
 
 
 def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
-    conn: sqlite3.Connection,
+    ctx: CommitContext,
     row: Mapping[str, Any],
     attempt_id: str,
     workdir: str,
@@ -471,14 +472,19 @@ def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
     config: EffectiveConfig,
 ) -> str:
     acceptance = "\n".join(f"- {item}" for item in loads(row["acceptance"], []))
+    ws = plan(ctx.home, config, row, attempt_id, workdir)
+    repository = (
+        brief_section(ws, home_skills(ctx.home) if ws.worktree else [], workdir) if ws else ""
+    )
     return (
         f"# 任务书 {row['task_id']} {attempt_id}\n\n"
         f"- 标题：{row['title']}\n- 仓库：{row['repo']}\n- revision：{row['revision']}\n"
         f"- 执行目录：{workdir}\n- 授权读取集合：{', '.join(read_set)}\n"
         + _delivery_line(config, row)
         + "\n"
-        f"## 目标\n\n{row['goal']}\n\n## 验收\n\n{acceptance}\n"
-    ) + resume_package(conn, str(row["task_id"]))
+        + repository
+        + f"## 目标\n\n{row['goal']}\n\n## 验收\n\n{acceptance}\n"
+    ) + resume_package(ctx.conn, str(row["task_id"]))
 
 
 def _brief_path(task_id: str, attempt_id: str) -> str:
@@ -541,7 +547,7 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         brief_path = _brief_path(task_id, attempt_id)
         ctx.storage.put_artifact(
             brief_path,
-            _brief(ctx.conn, row, attempt_id, workdir, read_set, env.config).encode("utf-8"),
+            _brief(ctx, row, attempt_id, workdir, read_set, env.config).encode("utf-8"),
         )
         return [
             EventDraft(
@@ -656,6 +662,11 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         # The host creates the session in this directory and fails when it does not exist.
         recorded = current["workdir"] if purpose == "dispatch" and current is not None else None
         _ensure_dir(ctx.home, str(recorded or workdir))
+        # A repository task works in a worktree of the repository inside that directory: the
+        # session is created there (CC006 §8). It is made before anything is recorded; a
+        # failure refuses the start like a directory that cannot be created.
+        ws = plan(ctx.home, env.config, row, attempt_id, str(recorded or workdir))
+        made = ensure(ws) if ws is not None and ws.worktree is not None else None
         generation = (int(previous["generation"]) if previous else 0) + 1
         data: dict[str, Any] = {
             "attempt": attempt_id,
@@ -664,6 +675,7 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             "purpose": purpose,
             "controller": env.caller.session_id,
             "adapter": str(env.config.get("roles.worker.session")),
+            **({"worktree": made} if made is not None else {}),
         }
         if purpose == "prestart":
             # The brief is written now, at the current revision, so what was decided for the
@@ -673,7 +685,7 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             brief_path = _brief_path(task_id, attempt_id)
             ctx.storage.put_artifact(
                 brief_path,
-                _brief(ctx.conn, row, attempt_id, workdir, read_set, env.config).encode("utf-8"),
+                _brief(ctx, row, attempt_id, workdir, read_set, env.config).encode("utf-8"),
             )
             data |= {
                 "workdir": workdir,
