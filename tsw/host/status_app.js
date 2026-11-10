@@ -7,11 +7,12 @@
     const meta = document.querySelector('meta[name="tsw-token"]');
     if (!meta) return;
     const token = meta.content;
-    for (const box of document.querySelectorAll(".acts")) {
-      for (const button of box.querySelectorAll("button[data-act]")) {
-        button.addEventListener("click", () => act(box, button, token));
-      }
-    }
+    // Delegated: the filters (status.js) take cards out of the page and put them back later.
+    document.addEventListener("click", event => {
+      const button = event.target instanceof Element ? event.target.closest("button[data-act]") : null;
+      const box = button ? button.closest(".acts") : null;
+      if (box && !button.disabled) act(box, button, token);
+    });
   }
 
   async function act(box, button, token) {
