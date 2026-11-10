@@ -70,7 +70,7 @@ python -m pip install -e .
 tsw init --home <数据目录> --remember
 ```
 
-第一行把 `tsw` 装进 Python 的 `Scripts` 目录（Windows 的 PowerShell、cmd 与 Git Bash 都能直接运行 `tsw`）。这是可编辑安装，运行的就是本仓库当前的代码，`git pull` 后不用重装。第二行初始化（或打开已有的）数据目录，并把它记在本仓库的 `.local/tsw-home` 中，之后终端不需要设置 `TSW_HOME`。不想安装时，在仓库根目录用 `python -m tsw` 代替 `tsw`。
+第一行把 `tsw` 装进 Python 的 `Scripts` 目录（Windows 的 PowerShell、cmd 与 Git Bash 都能直接运行 `tsw`）。这是可编辑安装，运行的就是本仓库当前的代码，`git pull` 后不用重装；请保留 `-e`：`host render` 等宿主命令要用仓库中的 `plugin/`，它不在 Python 包里。第二行初始化（或打开已有的）数据目录，并把它记在本仓库的 `.local/tsw-home` 中，之后终端不需要设置 `TSW_HOME`。不想安装时，在仓库根目录用 `python -m tsw` 代替 `tsw`。
 
 ### 哪些命令在哪里运行
 

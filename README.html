@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="f200ec116aa76047ee83371d008490ac65fd641f43223aad9e5360fe18e35b7f">
+<meta name="tsw-source-sha256" content="1db1b78fefd85a486f603f45401f9453972547a9361bcd4b3cab91e07577f9e0">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -63,7 +63,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p>在本仓库根目录运行：</p>
 <pre><code class="lang-text">python -m pip install -e .
 tsw init --home &lt;数据目录&gt; --remember</code></pre>
-<p>第一行把 <code>tsw</code> 装进 Python 的 <code>Scripts</code> 目录（Windows 的 PowerShell、cmd 与 Git Bash 都能直接运行 <code>tsw</code>）。这是可编辑安装，运行的就是本仓库当前的代码，<code>git pull</code> 后不用重装。第二行初始化（或打开已有的）数据目录，并把它记在本仓库的 <code>.local/tsw-home</code> 中，之后终端不需要设置 <code>TSW_HOME</code>。不想安装时，在仓库根目录用 <code>python -m tsw</code> 代替 <code>tsw</code>。</p>
+<p>第一行把 <code>tsw</code> 装进 Python 的 <code>Scripts</code> 目录（Windows 的 PowerShell、cmd 与 Git Bash 都能直接运行 <code>tsw</code>）。这是可编辑安装，运行的就是本仓库当前的代码，<code>git pull</code> 后不用重装；请保留 <code>-e</code>：<code>host render</code> 等宿主命令要用仓库中的 <code>plugin/</code>，它不在 Python 包里。第二行初始化（或打开已有的）数据目录，并把它记在本仓库的 <code>.local/tsw-home</code> 中，之后终端不需要设置 <code>TSW_HOME</code>。不想安装时，在仓库根目录用 <code>python -m tsw</code> 代替 <code>tsw</code>。</p>
 <h3 id="哪些命令在哪里运行">哪些命令在哪里运行</h3>
 <ul><li><strong>运行时</strong>（tsw 的代码）在本仓库：安装后 <code>tsw</code> 在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw，不需要这一步。</li><li><strong>数据目录</strong>（账本、任务书、报告）按顺序定位：当前目录所在的、声明了 <code>claim_sessions</code> 的数据目录（只用于 live 测试隔离）→ 环境变量 <code>TSW_HOME</code> → 本仓库的 <code>.local/tsw-home</code> → <code>~/.tsw</code>。<code>tsw home</code> 显示找到的目录和依据。</li><li><strong>当前目录</strong>只影响两件事：上面的 <code>claim_sessions</code>，以及 <code>tsw review run</code>（在 worker 的 worktree 中评审当前 HEAD）。其他命令在哪个目录运行都一样；<code>backup</code>、<code>restore</code> 的相对路径按当前目录解析。</li><li>这些命令由你在<strong>会话外的终端</strong>中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 STATUS 应用在任何会话中都会被拒绝，以免会话替你做决定（<a href="docs/design/DN006-plugin-layer.html">DN006 §8.10</a>）。</li></ul>
 <h3 id="需要你运行的命令">需要你运行的命令</h3>

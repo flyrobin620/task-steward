@@ -14,7 +14,8 @@ dependencies = []
 [project.scripts]
 tsw = "tsw.cli:main"
 
-# Every subpackage and the page and skill assets: a non-editable install runs the same code.
+# Every subpackage and the page and skill assets, so the runtime imports from any install. Host
+# integration also needs plugin/, which is outside the package: install from a checkout with -e.
 [tool.setuptools.packages.find]
 include = ["tsw*"]
 

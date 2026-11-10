@@ -242,6 +242,9 @@ def test_the_status_app_admits_only_its_token_and_accepts_with_one_click(
     assert (status, headers["Location"]) == (303, "/")
     cookie = headers["Set-Cookie"]
     assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
+    assert cookie.startswith(f"tsw_status_{app.port}=")  # per port: another serve keeps its own
+    app.cookie = f"tsw_status_{app.port + 1}={app.token}"
+    assert app.request("GET", "/")[0] == 403
     app.cookie = cookie.split(";")[0]
     assert app.request("GET", "/", headers={"Host": f"evil.example:{app.port}"})[0] == 403
     status, _, page = app.request("GET", "/")
@@ -288,7 +291,7 @@ def test_the_status_app_rejects_and_cancels(h: Harness, app: App) -> None:
     h.complete("T001")
     h.register("T002")
     handed_back(h)
-    app.cookie = f"tsw_status={app.token}"
+    app.cookie = f"tsw_status_{app.port}={app.token}"
     status, out = app.act("T001", "reject", revision=1)
     assert (status, out["reason"]) == (409, "invalid_input")
     status, out = app.act("T001", "reject", revision=1, reason="缺少导出")
@@ -305,7 +308,7 @@ def test_the_status_app_rejects_and_cancels(h: Harness, app: App) -> None:
 
 @mark.use_case("UC-DIRECT-002")
 def test_the_status_app_serves_linked_reports_and_nothing_else(h: Harness, app: App) -> None:
-    app.cookie = f"tsw_status={app.token}"
+    app.cookie = f"tsw_status_{app.port}={app.token}"
     report = h.home.path("runs", "T009", "a1", "report.html")
     report.parent.mkdir(parents=True)
     report.write_text("<p>报告</p>", encoding="utf-8")

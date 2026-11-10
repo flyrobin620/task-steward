@@ -37,6 +37,7 @@ from tsw.host.status import AppView, Revision, render
 from tsw.ledger import Ledger
 from tsw.storage.fs import FsStorage
 
+# The cookie is named per port: browsers share cookies across the ports of one host.
 COOKIE = "tsw_status"
 TOKEN_HEADER = "X-TSW-Token"
 # Files a page may link to (``tsw.host.status._href``), served read-only.
@@ -183,7 +184,7 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 cookie.load(self.headers.get("Cookie") or "")
             except CookieError:  # a malformed cookie header is just not admitted
                 return False
-            morsel = cookie.get(COOKIE)
+            morsel = cookie.get(f"{COOKIE}_{app.port}")
             return morsel is not None and hmac.compare_digest(morsel.value, app.token)
 
         # ------------------------------------------------------------ responses
@@ -227,7 +228,7 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 if not hmac.compare_digest(given, app.token):
                     self._text(HTTPStatus.FORBIDDEN, "令牌无效：请打开 tsw status serve 输出的地址")
                     return
-                cookie = f"{COOKIE}={app.token}; HttpOnly; SameSite=Strict; Path=/"
+                cookie = f"{COOKIE}_{app.port}={app.token}; HttpOnly; SameSite=Strict; Path=/"
                 self._send(
                     HTTPStatus.SEE_OTHER,
                     b"",

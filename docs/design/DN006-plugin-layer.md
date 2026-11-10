@@ -576,7 +576,7 @@ STATUS 应用：
 
 运行时与数据目录分别定位（用户 2026-11-10 要求写清）：
 
-- **运行时（tsw 代码）在产品 repo 中**。用户在终端使用时，在产品 repo 中运行一次 `python -m pip install -e .`，之后在任何目录都可以直接运行 `tsw`（Windows 的 PowerShell、cmd 与 Git Bash 运行的都是 Python `Scripts` 目录中的 `tsw.exe`）；可编辑安装运行的就是这个 repo 当前的代码，`git pull` 后不需要重装。不安装时在产品 repo 根目录运行 `python -m tsw`。插件中的启动器 `tsw_launch.py` 只给宿主用（MCP server 与 hooks），它按 `TSW_REPO`、插件所在的 repo、数据目录中 `tsw init` 记录的 `product_repo`、已安装的包依次定位运行时。
+- **运行时（tsw 代码）在产品 repo 中**。用户在终端使用时，在产品 repo 中运行一次 `python -m pip install -e .`，之后在任何目录都可以直接运行 `tsw`（Windows 的 PowerShell、cmd 与 Git Bash 运行的都是 Python `Scripts` 目录中的 `tsw.exe`）；可编辑安装运行的就是这个 repo 当前的代码，`git pull` 后不需要重装。只支持可编辑安装：`host render`、`host install-hint` 与插件副本的核对要用 repo 中的 `plugin/`，它不在 Python 包里。不安装时在产品 repo 根目录运行 `python -m tsw`。插件中的启动器 `tsw_launch.py` 只给宿主用（MCP server 与 hooks），它按 `TSW_REPO`、插件所在的 repo、数据目录中 `tsw init` 记录的 `product_repo`、已安装的包依次定位运行时。
 - **数据目录按上面的顺序定位**。宿主的会话从用户设置得到 `TSW_HOME`，用户的终端通常没有。在终端运行一次 `tsw init --home <数据目录> --remember`，把它写入产品 repo 的 `.local/tsw-home`，之后终端中的命令都能找到它，不必设置 `TSW_HOME`。`tsw home` 显示找到的数据目录与依据（`claim_sessions`、`TSW_HOME`、`.local/tsw-home` 或默认）。
 - **只有两处看当前目录**：当前目录位于声明了 `claim_sessions` 的数据目录中时用该数据目录（live 等隔离场景）；`tsw review run` 在 worker 的执行目录（git worktree）中运行，评审该处的 HEAD。其他命令都不要求在数据目录或产品 repo 中运行；`backup`、`restore` 的相对路径按当前目录解析。
 
