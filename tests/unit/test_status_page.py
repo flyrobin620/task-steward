@@ -12,7 +12,9 @@ from typing import Any
 
 import pytest
 
+from tsw.events import Event
 from tsw.host.status import AppView, Revision, render
+from tsw.host.status_app import history
 from tsw.host.status_assets import APP_CSP, APP_SCRIPT, CSP, SCRIPT
 from tsw.projection import SCHEMA_SQL
 
@@ -252,3 +254,47 @@ def test_the_status_app_lists_the_earlier_revisions(conn: sqlite3.Connection) ->
     # Newest first; the current revision is the brief above, not history.
     assert text.index("revision 2 · 需求变更") < text.index("revision 1 · 登记")
     assert "加一个按钮" in text and "第一版" in text and "缺导出" not in text
+
+
+def _event(seq: int, kind: str, task_id: str, rev: int, **data: Any) -> Event:
+    return Event(
+        schema=1,
+        sequence=seq,
+        time=f"2026-11-10T00:00:{seq:02d}Z",
+        type=kind,
+        actor={"role": "cli"},
+        prev="",
+        checksum="",
+        task_id=task_id,
+        revision=rev,
+        data=data,
+    )
+
+
+@mark.use_case("UC-DIRECT-002")
+def test_history_starts_at_an_import_and_follows_a_renumbered_task() -> None:
+    events = [
+        _event(1, "task.registered", "T001", 1, goal="本地任务", acceptance=["x"]),
+        _event(2, "task.user_rejected", "T001", 2, revision=2, reason="不对"),
+        _event(3, "task.renumbered", "T238", 2, **{"from": "T001", "to": "T238"}),
+        _event(4, "import.task_imported", "T001", 3, goal="导入的任务", acceptance=["y"]),
+        _event(
+            5,
+            "task.requirement_changed",
+            "T001",
+            4,
+            revision=4,
+            goal="导入后改过",
+            acceptance=["y", "z"],
+            user_source={"text": "再加 z"},
+        ),
+    ]
+    past = history(events)
+    assert [(r.revision, r.how, r.goal) for r in past["T238"]] == [
+        (1, "登记", "本地任务"),
+        (2, "用户退回", "本地任务"),
+    ]
+    assert [(r.revision, r.how, r.goal, r.words) for r in past["T001"]] == [
+        (3, "导入", "导入的任务", ""),
+        (4, "需求变更", "导入后改过", "再加 z"),
+    ]

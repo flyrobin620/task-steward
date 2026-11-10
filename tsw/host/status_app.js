@@ -52,7 +52,12 @@
       box.appendChild(form);
     }
     form.hidden = open === undefined ? !form.hidden : !open;
-    if (!form.hidden) form.querySelector("textarea").focus();
+    // An open reason box holds the page's auto-refresh (status.js), so a draft is not lost.
+    if (form.hidden) delete box.dataset.holdRefresh;
+    else {
+      box.dataset.holdRefresh = "";
+      form.querySelector("textarea").focus();
+    }
   }
 
   function sendReason(box, token) {
@@ -75,6 +80,7 @@
     const {task, revision} = info(box);
     const buttons = box.querySelectorAll("button");
     for (const b of buttons) b.disabled = true;
+    box.dataset.holdRefresh = "";
     show(box, null, "正在提交…");
     try {
       const response = await fetch(`/api/tasks/${encodeURIComponent(task)}/${action}`, {
@@ -94,6 +100,8 @@
       show(box, false, `请求失败：${error}`);
     }
     for (const b of buttons) b.disabled = false;
+    const form = box.querySelector(".reason");
+    if (!form || form.hidden) delete box.dataset.holdRefresh;
   }
 
   function show(box, ok, text) {

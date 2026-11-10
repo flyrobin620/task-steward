@@ -265,7 +265,9 @@
       refresh.setAttribute("aria-pressed", String(on));
       clearInterval(timer);
       if (on) timer = setInterval(() => {
-        const busy = document.activeElement === q || !(window.getSelection()?.isCollapsed ?? true);
+        // [data-hold-refresh]: something on the page (the STATUS app's reason box) is unsent.
+        const busy = document.activeElement === q || !(window.getSelection()?.isCollapsed ?? true)
+          || document.querySelector("[data-hold-refresh]") !== null;
         if (busy || document.hidden) return;
         try { sessionStorage.setItem(PREFIX + "scroll", String(window.scrollY)); } catch (_) { /* ignore */ }
         location.reload();

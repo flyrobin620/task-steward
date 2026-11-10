@@ -57,8 +57,10 @@ def _strings(value: Any) -> tuple[str, ...]:
 def history(events: Iterable[Event]) -> dict[str, list[Revision]]:
     """Every revision of every task's requirement, oldest first, read from the ledger.
 
-    A revision starts with the registration, a requirement change (with the user's words) or a
-    rejection (T23: the requirement stays, the user's reason is recorded).
+    A revision starts with the registration or an import (DN005: the imported revision is where
+    the history here begins), a requirement change (with the user's words) or a rejection (T23:
+    the requirement stays, the user's reason is recorded). A renumbered task (``task.renumbered``)
+    takes its history to the new number; the old number starts afresh if it is used again.
     """
     out: dict[str, list[Revision]] = {}
     for event in events:
@@ -66,9 +68,14 @@ def history(events: Iterable[Event]) -> dict[str, list[Revision]]:
         task_id = event.task_id
         if task_id is None:
             continue
+        if event.type == "task.renumbered":
+            out[str(data["to"])] = out.pop(str(data["from"]), [])
+            continue
         past = out.setdefault(task_id, [])
-        if event.type == "task.registered":
-            how, revision, words = "登记", 1, ""
+        if event.type in ("task.registered", "import.task_imported"):
+            past.clear()  # a new task under this number, or an import replacing the snapshot
+            how = "登记" if event.type == "task.registered" else "导入"
+            revision, words = event.revision or 1, ""
             goal, acceptance = str(data.get("goal") or ""), _strings(data.get("acceptance"))
         elif event.type == "task.requirement_changed":
             source: Mapping[str, Any] = data.get("user_source") or {}
