@@ -7,6 +7,7 @@ path and SHA-256.
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from collections.abc import Mapping, Sequence
@@ -128,32 +129,43 @@ def write_index(ctx: CommitContext) -> None:
     ctx.storage.put_artifact("todo/TODO.md", render_index(ctx.conn).encode("utf-8"))
 
 
+def registration(
+    ctx: CommitContext, spec: TaskSpec, extra: Mapping[str, Any] | None = None
+) -> EventDraft:
+    """The ``task.registered`` event of T01; writes the task specification ``todo/<id>.md``.
+
+    ``extra`` adds fields to the event (``follow_up_of`` for a task made from follow-ups,
+    DN002 §5.7).
+    """
+    validate_spec(spec)
+    task_id = spec.task_id or next_task_id(ctx.conn)
+    taken = ctx.conn.execute("SELECT 1 FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+    if taken is not None:
+        raise rejected("任务 ID 已被使用", reason="task_exists", task_id=task_id)
+    spec_path = f"todo/{task_id}.md"
+    spec_sha = ctx.storage.put_artifact(spec_path, render_spec(task_id, spec).encode("utf-8"))
+    return EventDraft(
+        type="task.registered",
+        task_id=task_id,
+        revision=1,
+        data={
+            "title": spec.title,
+            "repo": spec.repo,
+            "kind": spec.kind,
+            "goal": spec.goal,
+            "acceptance": [item for item in spec.acceptance if item.strip()],
+            "spec_path": spec_path,
+            "spec_sha256": spec_sha,
+            **(extra or {}),
+        },
+    )
+
+
 def register(spec: TaskSpec, *, actor: Mapping[str, Any], command_id: str | None = None) -> Command:
     validate_spec(spec)
 
     def build(ctx: CommitContext) -> list[EventDraft]:
-        task_id = spec.task_id or next_task_id(ctx.conn)
-        taken = ctx.conn.execute("SELECT 1 FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
-        if taken is not None:
-            raise rejected("任务 ID 已被使用", reason="task_exists", task_id=task_id)
-        spec_path = f"todo/{task_id}.md"
-        spec_sha = ctx.storage.put_artifact(spec_path, render_spec(task_id, spec).encode("utf-8"))
-        return [
-            EventDraft(
-                type="task.registered",
-                task_id=task_id,
-                revision=1,
-                data={
-                    "title": spec.title,
-                    "repo": spec.repo,
-                    "kind": spec.kind,
-                    "goal": spec.goal,
-                    "acceptance": [item for item in spec.acceptance if item.strip()],
-                    "spec_path": spec_path,
-                    "spec_sha256": spec_sha,
-                },
-            )
-        ]
+        return [registration(ctx, spec)]
 
     return Command(
         actor=actor,
@@ -218,7 +230,58 @@ def task_row(conn: sqlite3.Connection, task_id: str) -> dict[str, Any]:
             (task_id,),
         )
     ]
+    out["follow_ups"] = follow_ups_of(conn, task_id)
+    out["follow_up_of"] = follow_up_of(conn, task_id)
     return out
+
+
+def _json(value: Any, default: Any) -> Any:
+    return json.loads(value) if value else default
+
+
+def follow_up(row: Mapping[str, Any]) -> dict[str, Any]:
+    """One follow-up as the tools and pages show it (DN002 §5.7)."""
+    return {
+        "follow_up_id": row["follow_up_id"],
+        "task_id": row["task_id"],
+        "revision": row["revision"],
+        "kind": row["kind"],
+        "severity": row["severity"],
+        "title": row["title"],
+        "detail": row["detail"],
+        "status": row["status"],
+        "recorded_at": row["recorded_at"],
+        "recorded_seq": row["recorded_seq"],
+        "recorded_by": _json(row["recorded_by"], {}),
+        "source": _json(row["source"], None),
+        "recheck_after": row["recheck_after"],
+        "converted_to": row["converted_to"],
+        "resolution": _json(row["resolution"], None),
+        "updated_at": row["updated_at"],
+    }
+
+
+def follow_ups_of(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
+    """The task's follow-ups, oldest first."""
+    return [
+        follow_up(r)
+        for r in conn.execute(
+            "SELECT * FROM follow_ups WHERE task_id = ? ORDER BY recorded_seq, follow_up_id",
+            (task_id,),
+        )
+    ]
+
+
+def follow_up_of(conn: sqlite3.Connection, task_id: str) -> list[dict[str, Any]]:
+    """The follow-ups the task was made from or took in."""
+    return [
+        {"task_id": r["task_id"], "follow_up_id": r["follow_up_id"], "title": r["title"]}
+        for r in conn.execute(
+            "SELECT task_id, follow_up_id, title FROM follow_ups WHERE converted_to = ? "
+            "ORDER BY task_id, recorded_seq, follow_up_id",
+            (task_id,),
+        )
+    ]
 
 
 def list_tasks(conn: sqlite3.Connection) -> list[dict[str, Any]]:

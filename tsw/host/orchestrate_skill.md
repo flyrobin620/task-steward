@@ -58,8 +58,17 @@ worker 先在自己的会话里直接问用户（`ask_user`），你看不到问
 
 - worker 提交后（`inbox` 中的 `worker.submitted`）核对报告、评审证据、Git 状态与产出：`output_link` 登记已核实的 PR 与产出；有剩余工作就 `feedback`（已合并的改动由 worker 另开 PR 修复）。
 - worker 已合并的任务（提交中有 `merge`，不论任务类型）：你不再合并，也不替 worker 等 CI。只核对 worker 附的证据：PR 确已合并、合并提交与提交 HEAD 对应、`merge.ci` 的运行链接指向合并提交且结论为通过（打开链接核对，不等待）、`merge.live` 的结果或原因。`task_accept` 的 `post_merge` 写明核对结论。证据不足或不符时用 `feedback` 交回 worker，由它补齐（需要修复时另开 PR）。没有合并的任务（`merge_skipped` 或仓库未授权）按仓库规则由你合并，必要时 `integrate`。
-- 全部满足时 `task_accept`：逐项列出验收要求的结论与证据。之后告诉用户任务完成、等待人工验收。
+- 全部满足时 `task_accept`：逐项列出验收要求的结论与证据。之后告诉用户任务完成、等待人工验收，同时列出任务 `open` 的 follow-up（`task_read` 的 `follow_ups`：编号、类别、严重度、标题），问用户哪些转成任务、哪些驳回、哪些暂不处理。
 - 用户明确验收或退回时 `user_accept` / `user_reject`，附用户原话与消息引用；不能以 worker 回执、自评或超时代替。用户也可以不经你，自己在终端运行 `tsw task accept` / `reject` / `cancel` 或在 STATUS 应用（`tsw status serve`）中点按钮：账本中会出现渠道为 `user-cli` / `status-app` 的 `task.user_accepted` 等事件，你不需要再登记；这两个渠道你不能使用。
+
+## follow-up（DN002 §5.7）
+
+- 任务的 follow-up 是本任务不做、之后可能要做的事：worker 执行中与提交前记录（报告中的“后续建议”“已知缺口”都应有对应的 `F-…` 编号），你在任何未归档的状态都可以记录（`follow_up_record`），例如用户验收时说“这个记成 follow-up”：附用户在本会话中的原话（`user_source`，`target` 为 `[任务, revision, "follow_up"]`），或引用 hook 为该任务记录的消息编号（`message_ids`）。核验提交时用 `task_read` 看 `follow_ups`，缺了报告里列出的后续事项就 `feedback` 让 worker 补记。
+- 用户决定后处理：
+  - 转为任务：`follow_up_convert`，`follow_up_ids` 列出一条或多条（可以来自不同任务）。新任务给 `task`（可以只给 `repo`、`kind` 或干脆为空对象：标题、目标与验收由 follow-up 生成，多条时须给标题），新任务照常 `intake`，再按用户意见 `task_plan`；并入已登记、尚未完成的任务给 `into_task`（只建关联，需要改目标与验收时另用 `task_update`）。不要再手工把清单抄进新任务。
+  - 驳回：`follow_up_dismiss`，理由写明去向；用户决定的附原话。
+  - 暂不处理：`follow_up_update` 设 `recheck_after`（复查日期）并附用户原话；到期前不在 `attention` 中出现。
+- `attention` 的 `follow_ups` 列出未决定或已到复查日期的条目；用户问起时把它们交给用户决定，不要自行转为任务或驳回。有 `open` follow-up 的任务不会归档。
 
 ## 配置与维护
 

@@ -29,6 +29,15 @@ FINDINGS: dict[str, Any] = {
     "type": "array",
     "items": {"type": "object", "properties": {"round": INT, "finding": S}},
 }
+FOLLOW_UP_KIND: dict[str, Any] = {
+    "enum": ["remaining", "out_of_scope", "idea"],
+    "description": "remaining 本任务未完成或延后的部分（默认）；out_of_scope 范围外发现；idea 建议",
+}
+SEVERITY: dict[str, Any] = {"enum": ["high", "medium", "low"]}
+FOLLOW_UP_SOURCE: dict[str, Any] = {
+    **SOURCE,
+    "description": '（主会话）用户在主会话中的原话；target 为 [来源任务, revision, "follow_up"]',
+}
 COMMON: dict[str, Any] = {
     "command_id": {**S, "description": "幂等键：同一 ID 重复调用返回原结果"},
     "expected_version": {**INT, "description": "乐观锁：任务版本不一致时拒绝"},
@@ -303,6 +312,76 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         goal={**S, "description": "新的完整目标"},
         acceptance={**STRS, "description": "新的完整验收条目"},
         summary={**S, "description": "worker 对变更的概括（不作为用户来源）"},
+    ),
+    "follow_up_record": schema(
+        ["task_id", "items"],
+        task_id=S,
+        items={
+            "type": "array",
+            "description": "一条或多条 follow-up：本任务不做、之后可能要做的事",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {**S, "description": "一行标题"},
+                    "detail": {
+                        **S,
+                        "description": "说明：背景、已知信息、建议做法、外部反馈的位置；"
+                        "写到不读原报告也能接手",
+                    },
+                    "kind": {**FOLLOW_UP_KIND},
+                    "severity": {**SEVERITY, "description": "范围外发现（尤其安全问题）必须给出"},
+                },
+                "required": ["title", "detail"],
+            },
+        },
+        message_ids={
+            **STRS,
+            "description": "出于用户原话时：hook 为该任务记录的用户消息编号（M-…）",
+        },
+        user_source=FOLLOW_UP_SOURCE,
+    ),
+    "follow_up_update": schema(
+        ["follow_up_id", "reason"],
+        task_id=S,
+        follow_up_id={**S, "description": "F-<任务>-<n>，只能改 open 的"},
+        title=S,
+        detail=S,
+        kind=FOLLOW_UP_KIND,
+        severity=SEVERITY,
+        recheck_after={
+            **S,
+            "description": "（主会话）用户决定暂不处理时的复查日期 YYYY-MM-DD；须附用户来源",
+        },
+        reason={**S, "description": "修改理由"},
+        message_ids={**STRS, "description": "hook 为该任务记录的用户消息编号（M-…）"},
+        user_source=FOLLOW_UP_SOURCE,
+    ),
+    "follow_up_convert": schema(
+        ["follow_up_ids"],
+        follow_up_ids={**STRS, "description": "要转为任务的 open follow-up（可以来自不同任务）"},
+        task={
+            "type": "object",
+            "description": "登记新任务（与 into_task 二选一）；"
+            "省略的字段由 follow-up 与来源任务生成",
+            "properties": {
+                "task_id": S,
+                "title": {**S, "description": "多条 follow-up 时必填；一条时默认取它的标题"},
+                "repo": {**S, "description": "默认取来源任务的仓库"},
+                "kind": {"enum": ["research", "design", "code"]},
+                "goal": {**S, "description": "默认列出每条 follow-up 的编号、标题与说明"},
+                "acceptance": {**STRS, "description": "默认每条 follow-up 一项"},
+            },
+        },
+        into_task={**S, "description": "并入已登记、尚未完成的任务（与 task 二选一）"},
+        message_ids={**STRS, "description": "hook 为来源任务记录的用户消息编号（M-…）"},
+        user_source=FOLLOW_UP_SOURCE,
+    ),
+    "follow_up_dismiss": schema(
+        ["follow_up_ids", "reason"],
+        follow_up_ids=STRS,
+        reason={**S, "description": "理由，写明去向（例如“已并入 T270 revision 2”）"},
+        message_ids={**STRS, "description": "hook 为来源任务记录的用户消息编号（M-…）"},
+        user_source=FOLLOW_UP_SOURCE,
     ),
     "handoff_resolve": schema(
         ["task_id", "request_id", "decision", "answer", "rationale", "basis", "confidence"],

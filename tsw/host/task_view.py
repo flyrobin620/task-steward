@@ -2,7 +2,8 @@
 
 A read-only page with more than a card holds: the requirement and its revisions, every attempt
 with its session, the submission and the review rounds, the outputs, dependencies and resources,
-the questions and judgments, the progress notes and the task's ledger events. Its links are
+the questions and judgments, the follow-ups (DN002 §5.7), the progress notes and the task's
+ledger events. Its links are
 relative (``../`` back to the board, ``<task>`` to a dependency, ``../runs/...`` to a report), so
 the page keeps working under a path prefix (DN006 §8.10). It shares the board's head: the same
 Content-Security-Policy, token and scripts, so the accept, reject and cancel buttons behave as on
@@ -27,6 +28,7 @@ from tsw.host.status import (
     brief_html,
     card_notes,
     escape,
+    follow_up_anchor,
     link_for,
     page_head,
     pending_asks,
@@ -35,7 +37,7 @@ from tsw.host.status import (
 )
 from tsw.machine.guards import invalidated
 from tsw.machine.model import loads
-from tsw.tasks import KINDS, STATUS_LABELS
+from tsw.tasks import KINDS, STATUS_LABELS, follow_up_of, follow_ups_of
 
 # The newest events shown on the timeline; older ones stay in the ledger.
 TIMELINE_LIMIT = 200
@@ -44,6 +46,9 @@ FOOTER = (
     "本页由 STATUS 应用（tsw status serve）按账本实时生成；按钮直接写入账本，记为你本人的操作。"
 )
 REQUEST_STATUS = {"pending": "待答", "resolved": "已答", "superseded": "已取代"}
+FOLLOW_UP_STATUS = {"open": "待处理", "converted": "已转为任务", "dismissed": "已驳回"}
+FOLLOW_UP_KINDS = {"remaining": "未完成", "out_of_scope": "范围外发现", "idea": "建议"}
+SEVERITY = {"high": "高", "medium": "中", "low": "低"}
 
 
 @dataclass(frozen=True)
@@ -372,6 +377,77 @@ def _relations(conn: sqlite3.Connection, row: Mapping[str, Any]) -> str:
     )
 
 
+def _follow_up_source(item: Mapping[str, Any]) -> str:
+    by = _mapping(item["recorded_by"])
+    who = "worker" if by.get("role") == "worker" else "主会话"
+    if by.get("attempt"):
+        who += f" {by['attempt']}"
+    parts = [f"revision {escape(item['revision'])} · {escape(who)}", _time(item["recorded_at"])]
+    source = _mapping(item["source"])
+    if source:
+        parts.append(
+            f"用户原话（{escape(source.get('message_ref') or source.get('channel') or '')}）："
+            f'<span class="clip">{escape(source.get("text") or "")}</span>'
+        )
+    return "<br>".join(parts)
+
+
+def _follow_up_state(item: Mapping[str, Any]) -> str:
+    status = str(item["status"])
+    out = escape(FOLLOW_UP_STATUS.get(status, status))
+    resolution = _mapping(item["resolution"])
+    if status == "converted" and item["converted_to"]:
+        mode = "并入" if resolution.get("mode") == "existing" else "转为"
+        out += f"<br>{mode} {_task_link(str(item['converted_to']))}"
+    if resolution.get("reason"):
+        out += f"<br>理由：{escape(resolution['reason'])}"
+    if status == "open" and item["recheck_after"]:
+        out += f"<br>暂不处理，复查日期 {escape(item['recheck_after'])}"
+    if resolution.get("at"):
+        out += f"<br>{_time(resolution['at'])}"
+    return out
+
+
+def _follow_ups(conn: sqlite3.Connection, task_id: str) -> tuple[str, int, int]:
+    """The task's follow-ups, open ones first, and the follow-ups it was made from (DN002 §5.7)."""
+    found = follow_ups_of(conn, task_id)
+    found.sort(key=lambda f: (f["status"] != "open", f["recorded_seq"]))
+    rows = "".join(
+        f'<tr id="{escape(follow_up_anchor(str(f["follow_up_id"])))}" '
+        f'data-status="{escape(f["status"])}">'
+        f"<td>{escape(f['follow_up_id'])}</td>"
+        f"<td>{escape(FOLLOW_UP_KINDS.get(str(f['kind']), f['kind']))}"
+        + (
+            f"<br>严重度 {escape(SEVERITY.get(str(f['severity']), f['severity']))}"
+            if f["severity"]
+            else ""
+        )
+        + f"</td><td><b>{escape(f['title'])}</b>"
+        f'<p class="pre">{escape(f["detail"])}</p></td>'
+        f"<td>{_follow_up_source(f)}</td><td>{_follow_up_state(f)}</td></tr>"
+        for f in found
+    )
+    heads = "".join(f"<th>{h}</th>" for h in ("编号", "类别", "事项", "来源", "状态与去向"))
+    table = (
+        '<div class="tbl"><table><thead><tr>'
+        f"{heads}</tr></thead><tbody>{rows}</tbody></table></div>"
+        if found
+        else '<p class="none">无</p>'
+    )
+    made = follow_up_of(conn, task_id)
+    origin = ""
+    if made:
+        links = "".join(
+            f'<li><a href="{escape(quote(str(m["task_id"]), safe=""))}#'
+            f'{escape(follow_up_anchor(str(m["follow_up_id"])))}">{escape(m["follow_up_id"])}</a>'
+            f" {escape(m['title'])}</li>"
+            for m in made
+        )
+        origin = f"<h3>本任务来自</h3><ul>{links}</ul>"
+    pending = sum(1 for f in found if f["status"] == "open")
+    return origin + table, len(found), pending
+
+
 def _answer(resolution: str | None) -> str:
     """The answer and where it came from: a verified source, or the system it was imported from."""
     found = _mapping(loads(resolution, None))
@@ -544,6 +620,7 @@ def render_task(
     outputs, n_outputs = _outputs(conn, task_id)
     questions, n_questions, n_pending = _questions(conn, task_id)
     progress, n_notes = _notes(conn, task_id, times)
+    follow_ups, n_follow_ups, n_open = _follow_ups(conn, task_id)
     sub = f" <small>· {escape(row['substate'])}</small>" if row["substate"] else ""
     session = session_link(task_id, current)
     sections = [
@@ -564,6 +641,12 @@ def render_task(
             "问题与判断" + (f"（待答 {n_pending}）" if n_pending else ""),
             questions,
             n_questions,
+        ),
+        _section(
+            "follow-ups",
+            "follow-up" + (f"（待处理 {n_open}）" if n_open else ""),
+            follow_ups,
+            n_follow_ups,
         ),
         _section("pause", "暂停", _pause(row)),
         _section("notes", "进展记录", progress, n_notes),
