@@ -49,6 +49,21 @@ def messages(h: Harness) -> list[dict[str, Any]]:
     return h.query("SELECT message_id, request_id, text FROM session_messages ORDER BY sequence")
 
 
+def unlinked(h: Harness, worker: Caller, prompt: str) -> bool:
+    """The user's message is recorded, but for no question: since T262 every message the user
+    types in a live worker's session is recorded (the source of a requirement change, DN002
+    §5.1a); only the latest unanswered question collects answers."""
+    hint = say(h, worker, prompt)
+    last = messages(h)[-1]
+    note = str((hint or {}).get("hookSpecificOutput", {}).get("additionalContext", ""))
+    return (
+        last["text"] == prompt
+        and last["request_id"] == ""
+        and "requirement_change" in note
+        and "（问题" not in note
+    )
+
+
 def reportable(h: Harness) -> list[str]:
     with h.ledger.view() as conn:
         return [e["type"] for e in inbox_mod.inbox(conn, h.ledger.storage, h.config)]
@@ -136,7 +151,7 @@ def test_the_user_answers_in_the_worker_session(home: Home) -> None:
     assert resolved["data"]["source"]["channel"] == "in-session"
     assert resolved["data"]["source"]["text"] == "用方案 B，[report]"
     assert h.status("T001") == "in_progress"
-    assert say(h, w, "谢谢") is None  # answered by the user: nothing more recorded
+    assert unlinked(h, w, "谢谢")  # answered by the user: no longer an answer
     assert reportable(h) == []
 
 
@@ -188,7 +203,7 @@ def test_no_reply_hands_the_question_to_the_orchestrator(home: Home) -> None:
     assert late["type"] == "input.late_response"
     assert late["data"]["supersedes"]["source_kind"] == "orchestrator"
     assert h.status("T001") == "in_progress"
-    assert say(h, w, "就这样") is None  # answered by the user now: nothing more to record
+    assert unlinked(h, w, "就这样")  # answered by the user now: no longer an answer
 
 
 def test_a_late_answer_in_the_session_is_recorded_and_prevails(home: Home) -> None:
@@ -441,7 +456,7 @@ def test_only_the_latest_question_of_the_session_collects_messages(home: Home) -
         "user_answer", w, task_id="T001", request_id=second, message_id="M-T001-1", answer="logs/"
     )
     # The first question was answered by the orchestrator, but a newer one replaced it.
-    assert say(h, w, "顺便说一下") is None
+    assert unlinked(h, w, "顺便说一下")
     # In-session words never come through the orchestrator, whatever the request's state.
     words = {
         "channel": "in-session",
@@ -472,7 +487,7 @@ def test_a_requirement_change_closes_the_question_to_messages(home: Home) -> Non
         acceptance=["功能可用"],
         user_source=h.source("T001", 1, "change"),
     )
-    assert say(h, w, "用 B") is None
+    assert unlinked(h, w, "用 B")
 
 
 def test_the_orchestrator_stop_hook_hands_off_due_questions(home: Home) -> None:

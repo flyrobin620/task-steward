@@ -11,9 +11,9 @@ from typing import Any
 
 from tsw.commands import Command, CommitContext
 from tsw.config import SEVERITIES
-from tsw.errors import rejected
+from tsw.errors import TswError, rejected
 from tsw.events import EventDraft
-from tsw.machine import guards
+from tsw.machine import guards, orchestrator
 from tsw.machine.base import (
     ToolEnv,
     flag,
@@ -21,11 +21,19 @@ from tsw.machine.base import (
     items,
     mapping,
     opt_text,
+    strings,
     task_and_attempt,
     text,
     tool,
 )
-from tsw.machine.model import last_round_number, require_substate, review_cycle, task
+from tsw.machine.model import (
+    last_round_number,
+    loads,
+    require_status,
+    require_substate,
+    review_cycle,
+    task,
+)
 
 CATEGORIES = (
     "correctness",
@@ -564,3 +572,80 @@ def submit(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         ]
 
     return _cmd(env, "submit", inp, build)
+
+
+# The task is the user's no more to change through the worker (DN002 §5.1a).
+CLOSED = ("accepted", "cancelled", "archived")
+
+
+@tool(
+    "requirement_change",
+    "worker",
+    sync_after=True,
+    description=(
+        "登记用户在本会话中提出的需求变更（revision+1；E07 / T17 / T28，必要时 T23）："
+        "引用 hook 记录的用户消息编号，任务未经用户验收前都可以（DN002 §5.1a）"
+    ),
+)
+def requirement_change(inp: Mapping[str, Any], env: ToolEnv) -> Command:
+    task_id = text(inp, "task_id")
+    message_ids = strings(items(inp, "message_ids"), "message_ids")
+    goal = text(inp, "goal")
+    acceptance = strings(items(inp, "acceptance"), "acceptance")
+    summary = opt_text(inp, "summary")
+
+    def build(ctx: CommitContext) -> list[EventDraft]:
+        row, current = task_and_attempt(ctx.conn, env, task_id)
+        status = str(row["status"])
+        if status in CLOSED:
+            raise rejected(
+                "任务已验收、取消或归档，不接受修改：请用户经主会话新建关联任务",
+                reason="invalid_state",
+                status=status,
+            )
+        if status == "waiting_user":
+            raise rejected(
+                "有待答的问题：先用 user_answer 登记答复（可以引用同一条消息），再登记需求变更",
+                reason="answer_first",
+            )
+        require_status(row, "in_progress", "verifying", "done")
+        revision = int(row["revision"])
+        source = guards.g_change(
+            ctx.conn,
+            lambda sequence: ctx.storage.read(since=sequence - 1),
+            task_id=task_id,
+            revision=revision,
+            session_ref=env.caller.session_id,
+            message_ids=message_ids,
+        )
+        extra: dict[str, Any] = {"by": "worker", "attempt": current["attempt"]}
+        if summary:
+            extra["summary"] = summary
+        transition = {"verifying": "T17", "done": "T28"}.get(status)
+        if status == "done":
+            # T28 takes the task's exclusive resources again and needs its dependencies; when
+            # either fails, the change is still recorded and the task goes back to intake (T23).
+            resources = loads(row["resources"], [])
+            try:
+                guards.g_res(ctx.conn, task_id, resources)
+                guards.g_dep(ctx.conn, task_id)
+            except TswError as exc:
+                transition = "T23"
+                extra["fallback"] = {"reason": exc.details.get("reason"), "message": exc.message}
+            else:
+                extra["resources"] = resources
+        return [
+            orchestrator.requirement_change_event(
+                ctx,
+                env.config,
+                row,
+                goal=goal,
+                acceptance=acceptance,
+                source=source,
+                transition=transition,
+                extra=extra,
+                tell_session=False,
+            )
+        ]
+
+    return _cmd(env, "requirement_change", inp, build)

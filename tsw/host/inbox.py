@@ -22,6 +22,15 @@ def reportable(config: EffectiveConfig) -> set[str]:
     return set(config.get("scheduling.wake.reportable_events") or [])
 
 
+def is_reportable(event: Event, kinds: set[str]) -> bool:
+    """A reportable event for the orchestrator's inbox. A requirement change is news only when a
+    worker recorded it from the user's words in its session (DN002 §5.1a); the orchestrator's
+    own ``task_update`` does not come back to it."""
+    if event.type not in kinds:
+        return False
+    return event.type != "task.requirement_changed" or event.actor.get("role") == "worker"
+
+
 def acked(conn: sqlite3.Connection) -> set[int]:
     return {int(r["sequence"]) for r in conn.execute("SELECT sequence FROM inbox_acks")}
 
@@ -34,7 +43,7 @@ def inbox(
     done = acked(conn)
     out: list[dict[str, Any]] = []
     for event in storage.read(since=0):
-        if event.type in kinds and event.sequence not in done:
+        if is_reportable(event, kinds) and event.sequence not in done:
             out.append(_summary(event))
             if len(out) >= limit:
                 break
@@ -72,7 +81,7 @@ def ack(
         found = {
             e.sequence: e for e in ctx.storage.read(since=min(wanted) - 1) if e.sequence in wanted
         }
-        missing = sorted(s for s in wanted if s not in found or found[s].type not in kinds)
+        missing = sorted(s for s in wanted if s not in found or not is_reportable(found[s], kinds))
         if missing:
             raise rejected("只能确认可回传的事件", reason="not_reportable", sequences=missing)
         fresh = sorted(wanted - acked(ctx.conn))

@@ -155,7 +155,9 @@ def run_tool(
     if name == "sync":
         out["needs_stop"] = report.get("needs_stop", [])
     elif spec.sync_after and not result.duplicate:
-        out["sync"] = run_tool(ledger, config, caller, "sync", {})
+        # A worker's change runs the system rules as the system (DN002 §5.1a).
+        runs_sync = caller if caller.role in SYNC.roles else Caller("system", None, caller.machine)
+        out["sync"] = run_tool(ledger, config, runs_sync, "sync", {})
     return out
 
 

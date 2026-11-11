@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="e9442396f900c6db24002ac9e18ccb59eb02ae8cc4794de55c05e3ae41e9f29d">
+<meta name="tsw-source-sha256" content="ea1491b69f87d9aba8ef02f0244129c48d08e739981aeb84ca1f935032cf1c60">
 <title>DN003 统一配置</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -131,7 +131,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
     &quot;max_workers&quot;: 5,
     &quot;lease_minutes&quot;: 120,
     &quot;prestart&quot;: {&quot;enabled&quot;: true, &quot;max_standby&quot;: 10},
-    &quot;wake&quot;: {&quot;worker_message_parent&quot;: true, &quot;reportable_events&quot;: [&quot;worker.submitted&quot;, &quot;worker.question&quot;, &quot;input.handed_off&quot;, &quot;channel.reply_seen&quot;, &quot;task.paused&quot;, &quot;report_back&quot;]}
+    &quot;wake&quot;: {&quot;worker_message_parent&quot;: true, &quot;reportable_events&quot;: [&quot;worker.submitted&quot;, &quot;worker.question&quot;, &quot;input.handed_off&quot;, &quot;channel.reply_seen&quot;, &quot;task.paused&quot;, &quot;report_back&quot;, &quot;task.requirement_changed&quot;]}
   },
   &quot;sessions&quot;: {
     &quot;name_pattern&quot;: &quot;{task_id_lower}-{attempt}-g{generation}&quot;,
@@ -212,7 +212,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <h3 id="32b-ledger-与-context">3.2b <code>ledger</code> 与 <code>context</code></h3>
 <table><thead><tr><th>字段</th><th>默认</th><th>说明</th></tr></thead><tbody><tr><td><code>ledger.segment_max_mb</code></td><td>16</td><td>活动分段达到该大小时封存为 <code>.jsonl.gz</code></td></tr><tr><td><code>ledger.checkpoint_every</code></td><td>64</td><td>每多少个事件写一次 L1 检查点（DN007 §3.4）</td></tr><tr><td><code>context.catalog_page_size</code></td><td>8</td><td><code>context_catalog</code> 每页卡片数</td></tr><tr><td><code>context.max_chars</code></td><td>20000</td><td>单次 <code>context_read</code> 返回的最大字符数，超出分页</td></tr><tr><td><code>context.fts_tokenizer</code></td><td><code>trigram</code></td><td>全文索引分词器；中文依赖 trigram（DN007 §5.2）</td></tr><tr><td><code>context.short_query_fallback</code></td><td><code>like_cards_only</code></td><td>少于 3 个字符的查询词在卡片与别名上做子串匹配</td></tr><tr><td><code>context.require_read_reason</code></td><td><code>true</code></td><td><code>context_read</code> 是否必须写理由</td></tr></tbody></table>
 <h3 id="33-scheduling-与-sessions">3.3 <code>scheduling</code> 与 <code>sessions</code></h3>
-<ul><li><code>max_workers</code>：活动任务上限（DN002 G-SLOT）。实际并发取它与平台可用额度的较小值。</li><li><code>prestart.enabled</code> / <code>prestart.max_standby</code>：是否在用户 turn 中为已规划任务预启动 worker 会话，以及同时待命的会话上限（DN002 §5.6）。关闭预启动时，自动 turn 中变为可派发的任务都要等用户下一次发消息才能创建会话。</li><li><code>wake.worker_message_parent</code>：reportable 事件发生时，worker 是否同时用宿主的会话消息工具唤醒主会话（DN001 §6.3；Claude Code 见 CC001 §4）。键名沿用 parent，目标是当前持有调度租约的主会话，不是启动 worker 的会话。</li><li><code>sessions.archive_on_accept</code>：验收后是否归档子会话。默认 <code>false</code>，保留以便用户回看；归档时须有工具回执。</li></ul>
+<ul><li><code>max_workers</code>：活动任务上限（DN002 G-SLOT）。实际并发取它与平台可用额度的较小值。</li><li><code>prestart.enabled</code> / <code>prestart.max_standby</code>：是否在用户 turn 中为已规划任务预启动 worker 会话，以及同时待命的会话上限（DN002 §5.6）。关闭预启动时，自动 turn 中变为可派发的任务都要等用户下一次发消息才能创建会话。</li><li><code>wake.worker_message_parent</code>：reportable 事件发生时，worker 是否同时用宿主的会话消息工具唤醒主会话（DN001 §6.3；Claude Code 见 CC001 §4）。键名沿用 parent，目标是当前持有调度租约的主会话，不是启动 worker 的会话。</li><li><code>wake.reportable_events</code>：进入主会话 inbox、并让 worker 唤醒主会话的事件类型。<code>task.requirement_changed</code>（T262 起默认包含）只有 worker 登记的（DN002 §5.1a）才进入 inbox，主会话自己用 <code>task_update</code> 记录的不进入。</li><li><code>sessions.archive_on_accept</code>：验收后是否归档子会话。默认 <code>false</code>，保留以便用户回看；归档时须有工具回执。</li></ul>
 <h3 id="34-repositories-与-accounts">3.4 <code>repositories</code> 与 <code>accounts</code></h3>
 <p>结构沿用 orchestrator-agent 的 <code>config/repositories.json</code> 与 <code>config/accounts.json</code>，合并为两个小节（账号只记录名称与认证目录引用，凭据本身不进数据目录），并新增 <code>aliases</code>（原 <code>repositories.md</code> 中的缩写表）。导入时自动转换（DN005 §4.4）。<code>delivery.push</code> / <code>create_pr</code> / <code>merge</code> 是该仓库的默认交付授权，具体任务仍以用户当次指令为准。<code>merge</code>（默认关闭）为 <code>true</code> 时，该仓库的任务（不看任务类型）由 worker 在门禁、评审与意见都解决后自行合并 PR，等主分支上合并提交的 CI 通过后再提交（DN002 §3.5）；此时必须写明 <code>repository</code>（<code>owner/name</code>），hooks 据此只放行合并本仓库的 PR。三者都是权限类键（§7.2）。</p>
 <p><code>path</code>（本机 git 检出）、<code>remote</code>、<code>base_ref</code>、<code>instructions</code> 决定仓库任务的 worktree 与任务书中的仓库说明（<a href="claude-code/CC006-plugins.html">CC006 §8</a>）：<code>attempt_start</code> 在执行目录下创建 <code>&lt;执行目录&gt;/&lt;仓库 id&gt;</code> 的 worktree（分支按 <code>worktrees.branch_pattern</code>，基线为 <code>base_ref</code>，未配置时取远端默认分支），worker 会话以它为会话目录；没有可用检出时不建 worktree。<code>instructions</code> 是相对仓库根的指令文件列表（如 <code>AGENTS.md</code>、<code>CLAUDE.md</code>、<code>.github/copilot-instructions.md</code>），该仓库的每份任务书都要求 worker 完整阅读并遵守；未配置时默认这三个文件，存在哪个读哪个。<code>worktrees.root</code> 在 <code>claude-code</code> 宿主中不使用（worktree 在执行目录下，字段保留）；<code>worktree_files</code> 尚未实现。</p>

@@ -132,13 +132,28 @@ def is_automated(prompt: str) -> bool:
     return not words or words.startswith(AUTOMATED_PREFIXES)
 
 
+# A task the user already accepted, cancelled or archived: nothing the worker could do with the
+# user's words any more, so the hook does not record them.
+CLOSED = ("accepted", "cancelled", "archived")
+
+
 def session_message(
     conn: sqlite3.Connection, task_id: str, session_ref: str, prompt: str
 ) -> EventDraft | None:
-    """What the ``UserPromptSubmit`` hook records: the user's message in the worker's session
-    about its latest question, while that question has no answer from the user in this session
-    yet. That includes a question the orchestrator or another channel already answered: the
-    user's own reply there is a late answer that prevails (DN006 §8.5)."""
+    """What the ``UserPromptSubmit`` hook records: every message the user types in the worker's
+    session while the task is still open (not accepted, cancelled or archived). Injected messages
+    (another session, an app event, a scheduled task) are never recorded (DN006 §8.1a).
+
+    A message belongs to the session's latest question while that question has no answer from
+    the user in this session yet; that includes a question the orchestrator or another channel
+    already answered: the user's own reply there is a late answer that prevails (DN006 §8.1c).
+    Any other message is recorded without a question: the worker may cite it as the source of a
+    requirement change (``requirement_change``, DN002 §5.1a).
+    """
+    row = task(conn, task_id)
+    if row["status"] in CLOSED or is_automated(prompt):
+        return None
+    revision = int(row["revision"])
     # Only the session's latest question counts: once it is answered here, or a newer question
     # replaced it, older questions never collect messages again.
     request = row_dict(
@@ -150,26 +165,22 @@ def session_message(
             (task_id, session_ref),
         ).fetchone()
     )
-    if (
-        request is None
-        or request["answered_in_session"]
-        or request["status"] not in ("pending", "resolved")
-        or loads(request["binding"], {}).get("revision") != int(task(conn, task_id)["revision"])
-        or is_automated(prompt)
-    ):
-        return None
-    prompt = user_words(prompt)
+    answers = (
+        request is not None
+        and not request["answered_in_session"]
+        and request["status"] in ("pending", "resolved")
+        and loads(request["binding"], {}).get("revision") == revision
+    )
     message_id = next_item_id(conn, "session_messages", "message_id", "M", task_id)
-    row = task(conn, task_id)
     return EventDraft(
         type="input.session_message",
         task_id=task_id,
-        revision=int(row["revision"]),
+        revision=revision,
         data={
             "message_id": message_id,
-            "request_id": request["request_id"],
+            "request_id": request["request_id"] if answers and request else None,
             "session_ref": session_ref,
-            "text": prompt,
+            "text": user_words(prompt),
         },
     )
 

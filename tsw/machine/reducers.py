@@ -159,10 +159,15 @@ def requirement_changed(conn: sqlite3.Connection, event: Event) -> None:
         stale=0,
     )
     status = _status(conn, task_id)
-    if tid == "T17" or (tid is None and status == "in_progress"):
-        _new_cycle(conn, task_id)  # E07 inside in_progress; T17 from verifying
+    if tid in ("T17", "T28") or (tid is None and status == "in_progress"):
+        # E07 inside in_progress; T17 from verifying; T28 from done (DN002 §5.1a)
+        _new_cycle(conn, task_id)
     if tid == "T23":
         _set(conn, task_id, submission=None, done_at=None, substate=None)
+    if tid == "T28":
+        # The orchestrator's acceptance no longer stands; the work takes its resources again.
+        _set(conn, task_id, done_at=None)
+        _claim(conn, task_id, list(data.get("resources") or []))
     if "brief" in data:
         brief = data["brief"]
         _attempt(
@@ -270,25 +275,29 @@ def _answered_in_session(conn: sqlite3.Connection, event: Event) -> None:
 
 
 def input_session_message(conn: sqlite3.Connection, event: Event) -> None:
-    """The user wrote in the worker's session while a question was open (DN006 §8.2)."""
+    """The user wrote in the worker's session (DN006 §8.1a): about its open question, or, since
+    T262, about anything (no question: the source of a requirement change, DN002 §5.1a)."""
     data = event.data
+    request_id = data.get("request_id")
     conn.execute(
         "INSERT INTO session_messages(message_id, task_id, request_id, session_ref, text, "
         "sequence) VALUES(?, ?, ?, ?, ?, ?)",
         (
             data["message_id"],
             _tid(event),
-            data["request_id"],
+            # The column predates messages without a question; '' keeps old projections valid.
+            request_id or "",
             data["session_ref"],
             data["text"],
             event.sequence,
         ),
     )
-    conn.execute(
-        "UPDATE in_session_requests SET responded_at = COALESCE(responded_at, ?) "
-        "WHERE request_id = ?",
-        (event.time, data["request_id"]),
-    )
+    if request_id:
+        conn.execute(
+            "UPDATE in_session_requests SET responded_at = COALESCE(responded_at, ?) "
+            "WHERE request_id = ?",
+            (event.time, request_id),
+        )
     _touch(conn, event, business=False)
 
 

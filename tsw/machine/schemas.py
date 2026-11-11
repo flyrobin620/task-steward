@@ -293,6 +293,17 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         overrule_findings=FINDINGS,
     ),
     "input_handoff": schema(["task_id", "request_id"], task_id=S, request_id=S),
+    "requirement_change": schema(
+        ["task_id", "message_ids", "goal", "acceptance"],
+        task_id=S,
+        message_ids={
+            **STRS,
+            "description": "hook 记录的、用户在本会话中输入的消息编号（M-…），至少一个",
+        },
+        goal={**S, "description": "新的完整目标"},
+        acceptance={**STRS, "description": "新的完整验收条目"},
+        summary={**S, "description": "worker 对变更的概括（不作为用户来源）"},
+    ),
     "handoff_resolve": schema(
         ["task_id", "request_id", "decision", "answer", "rationale", "basis", "confidence"],
         task_id=S,

@@ -485,6 +485,30 @@
       }
     },
     {
+      "id": "UC-CHANGE-001",
+      "title": "worker 凭用户在本会话中的话登记需求变更并重新提交（DN002 §5.1a，T28）",
+      "actor": "用户 / worker / 主会话",
+      "acceptance": "UserPromptSubmit hook 记录用户在 live worker 会话中输入的每条消息（不限于有待答问题时；注入消息与已验收、取消、归档的任务不记），没有待答问题时消息不对应问题；requirement_change 只接受引用本任务、本会话、当前 revision 下记录的消息（G-CHANGE），来源取记录的原文；in_progress 经 E07、verifying 经 T17、done 经 T28 回到执行并开启新周期（旧技术验收失效、重新占用资源），T28 的 G-RES 或 G-DEP 不满足时改经 T23 回到 intake；waiting_user 要求先登记答复；accepted、cancelled、archived 拒绝；revision+1、任务书按新 revision 重写；登记后以系统身份运行 sync 传播依赖；worker 登记的 task.requirement_changed 进入主会话 inbox 并唤醒持租主会话，主会话自己的 task_update 不进入；之后 worker 在同一 attempt 内评审、提交，主会话按新 revision 验收",
+      "surfaces": [
+        "mcp",
+        "hook"
+      ],
+      "claims": [
+        "tool:requirement_change"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
       "id": "UC-ROUTINE-001",
       "title": "例行会话按例行表运行脚本，把超时的会话内问题转给主会话（DN006 §8.9）",
       "actor": "主会话 / 例行会话 / tsw",

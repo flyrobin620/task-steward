@@ -298,6 +298,85 @@ def input_resolve(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return _cmd(env, "input_resolve", inp, build)
 
 
+def requirement_change_event(
+    ctx: CommitContext,
+    config: EffectiveConfig,
+    row: Mapping[str, Any],
+    *,
+    goal: str,
+    acceptance: list[str],
+    source: Mapping[str, Any],
+    transition: str | None,
+    extra: Mapping[str, Any] | None = None,
+    tell_session: bool = True,
+) -> EventDraft:
+    """``task.requirement_changed`` at revision+1 (DN002 §5.1): the task card and the brief of
+    the task's current session are rewritten in the same event. Used by the orchestrator's
+    ``task_update`` and by the worker's ``requirement_change`` (§5.1a)."""
+    task_id = str(row["task_id"])
+    revision = int(row["revision"]) + 1
+    spec = TaskSpec(
+        title=str(row["title"]),
+        repo=str(row["repo"]),
+        kind=str(row["kind"]),
+        goal=goal,
+        acceptance=acceptance,
+        task_id=task_id,
+    )
+    validate_spec(spec)
+    body = render_spec(task_id, spec) + f"\n（revision {revision}）\n"
+    spec_sha = ctx.storage.put_artifact(str(row["spec_path"]), body.encode("utf-8"))
+    data: dict[str, Any] = {
+        "revision": revision,
+        "goal": goal,
+        "acceptance": acceptance,
+        "spec_sha256": spec_sha,
+        "user_source": dict(source),
+        **(extra or {}),
+    }
+    current = current_attempt(ctx.conn, task_id)
+    # A session prestarted before briefs were written at prestart has none yet: it gets one.
+    unwritten = (
+        current is not None
+        and not current["brief_path"]
+        and current["purpose"] == "prestart"
+        and current["phase"] in ("starting", "standby")
+    )
+    if current is not None and (
+        unwritten or (current["brief_path"] and current["phase"] not in ("replaced", "closed"))
+    ):
+        # DN002 §5.1: the brief of the task's session (prestarted, being dispatched or at
+        # work) is brought to the new revision; the orchestrator tells a session that has
+        # one, and dispatch rewrites it again from the latest revision.
+        attempt_id = str(current["attempt"])
+        path = str(current["brief_path"] or _brief_path(task_id, attempt_id))
+        read_set = _read_set(ctx.conn, task_id) if unwritten else loads(current["read_set"], [])
+        workdir = str(current["workdir"] or f"work/{task_id}/{attempt_id}")
+        updated = {**row, "revision": revision, "goal": goal, "acceptance": dumps(acceptance)}
+        brief = _brief(ctx, updated, attempt_id, workdir, read_set, config)
+        ctx.storage.put_artifact(path, brief.encode("utf-8"))
+        data["brief"] = {
+            "attempt": current["attempt"],
+            "revision": revision,
+            "path": path,
+            **({"read_set": read_set} if unwritten else {}),
+            # The session the orchestrator tells about the new brief, if it has one; a worker
+            # recording the change itself is that session (§5.1a).
+            **(
+                {"session_ref": current["session_ref"]}
+                if tell_session
+                and current["session_ref"]
+                and current["phase"] in ("standby", "live", "stopped")
+                else {}
+            ),
+        }
+    if transition:
+        data["transition"] = transition
+    return EventDraft(
+        type="task.requirement_changed", task_id=task_id, revision=revision, data=data
+    )
+
+
 @tool("task_update", "orchestrator", sync_after=True, description="用户修改需求（revision+1）")
 def task_update(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
@@ -314,64 +393,16 @@ def task_update(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         source = guards.g_user(
             source_in, task_id=task_id, revision=int(row["revision"]), kind="change"
         )
-        revision = int(row["revision"]) + 1
-        spec = TaskSpec(
-            title=str(row["title"]),
-            repo=str(row["repo"]),
-            kind=str(row["kind"]),
-            goal=goal,
-            acceptance=acceptance,
-            task_id=task_id,
-        )
-        validate_spec(spec)
-        body = render_spec(task_id, spec) + f"\n（revision {revision}）\n"
-        spec_sha = ctx.storage.put_artifact(str(row["spec_path"]), body.encode("utf-8"))
         transition = {"verifying": "T17", "done": "T23"}.get(str(row["status"]))
-        data: dict[str, Any] = {
-            "revision": revision,
-            "goal": goal,
-            "acceptance": acceptance,
-            "spec_sha256": spec_sha,
-            "user_source": source,
-        }
-        current = current_attempt(ctx.conn, task_id)
-        # A session prestarted before briefs were written at prestart has none yet: it gets one.
-        unwritten = (
-            current is not None
-            and not current["brief_path"]
-            and current["purpose"] == "prestart"
-            and current["phase"] in ("starting", "standby")
-        )
-        if current is not None and (
-            unwritten or (current["brief_path"] and current["phase"] not in ("replaced", "closed"))
-        ):
-            # DN002 §5.1: the brief of the task's session (prestarted, being dispatched or at
-            # work) is brought to the new revision; the orchestrator tells a session that has
-            # one, and dispatch rewrites it again from the latest revision.
-            attempt_id = str(current["attempt"])
-            path = str(current["brief_path"] or _brief_path(task_id, attempt_id))
-            read_set = _read_set(ctx.conn, task_id) if unwritten else loads(current["read_set"], [])
-            workdir = str(current["workdir"] or f"work/{task_id}/{attempt_id}")
-            updated = {**row, "revision": revision, "goal": goal, "acceptance": dumps(acceptance)}
-            body = _brief(ctx, updated, attempt_id, workdir, read_set, env.config)
-            ctx.storage.put_artifact(path, body.encode("utf-8"))
-            data["brief"] = {
-                "attempt": current["attempt"],
-                "revision": revision,
-                "path": path,
-                **({"read_set": read_set} if unwritten else {}),
-                # The session the orchestrator tells about the new brief, if it has one.
-                **(
-                    {"session_ref": current["session_ref"]}
-                    if current["session_ref"] and current["phase"] in ("standby", "live", "stopped")
-                    else {}
-                ),
-            }
-        if transition:
-            data["transition"] = transition
         return [
-            EventDraft(
-                type="task.requirement_changed", task_id=task_id, revision=revision, data=data
+            requirement_change_event(
+                ctx,
+                env.config,
+                row,
+                goal=goal,
+                acceptance=acceptance,
+                source=source,
+                transition=transition,
             )
         ]
 
