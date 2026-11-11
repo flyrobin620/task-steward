@@ -9,7 +9,7 @@ from collections.abc import Iterator
 import pytest
 
 from tsw.events import Event
-from tsw.host.status import _href  # pyright: ignore[reportPrivateUsage]
+from tsw.host.status import link_for
 from tsw.importer.renumber import reduce
 from tsw.machine.model import next_item_id
 from tsw.projection import SCHEMA_SQL
@@ -129,8 +129,8 @@ def test_new_item_ids_skip_ids_a_renumbered_task_kept(conn: sqlite3.Connection) 
 
 
 def test_status_links_to_local_results_are_percent_encoded() -> None:
-    assert _href("runs/T004/a1/report#1.html") == "../runs/T004/a1/report%231.html"
-    assert _href("legacy://orchestrator-agent/runs/T1/a 1/x?.md") == (
+    assert link_for("runs/T004/a1/report#1.html") == "../runs/T004/a1/report%231.html"
+    assert link_for("legacy://orchestrator-agent/runs/T1/a 1/x?.md") == (
         "../legacy/orchestrator-agent/runs/T1/a%201/x%3F.md"
     )
-    assert _href("https://github.com/o/r/pull/7") == "https://github.com/o/r/pull/7"
+    assert link_for("https://github.com/o/r/pull/7") == "https://github.com/o/r/pull/7"

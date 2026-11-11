@@ -7,7 +7,9 @@ status, with the user's pending items called out on the card. The inlined script
 it the page still shows every card.
 
 The STATUS app (:mod:`tsw.host.status_app`, DN006 §8.10) renders the same page with an
-:class:`AppView`: every card then offers the user's direct actions as buttons.
+:class:`AppView`: every card then offers the user's direct actions as buttons and links to the
+task's own view (:mod:`tsw.host.task_view`). A card with a session links to it in its host, with
+the ``data-tsw-*`` attributes pages that embed this one rely on (DN006 §8.10).
 """
 
 from __future__ import annotations
@@ -65,11 +67,14 @@ OUTPUT_TYPES = {
 }
 
 
-def _e(value: Any) -> str:
+def escape(value: Any) -> str:
     return html.escape("" if value is None else str(value))
 
 
-def _href(ref: str) -> str | None:
+_e = escape
+
+
+def link_for(ref: str) -> str | None:
     """A link for an output reference, relative to ``views/``; None when it is not a location."""
     if ref.startswith(("https://", "http://")):
         return ref
@@ -80,7 +85,45 @@ def _href(ref: str) -> str | None:
     return None
 
 
-def _hue(repo: str) -> int:
+# The address of a session in its host, by the attempt's session adapter (DN006 §8.10). An attempt
+# with no adapter recorded (imported, or recorded before adapters were) is a ``claude-app`` one.
+SESSION_URLS = {"claude-app": "claude://claude.ai/epitaxy/{ref}"}
+DEFAULT_ADAPTER = "claude-app"
+
+
+def session_href(adapter: str | None, session_ref: str) -> str | None:
+    """The host's address of a session, or None when its adapter has none (CC006 §3)."""
+    template = SESSION_URLS.get(adapter or DEFAULT_ADAPTER)
+    return template.format(ref=quote(session_ref, safe="")) if template else None
+
+
+def session_link(task_id: str, attempt: dict[str, Any] | None) -> str:
+    """A link to the attempt's session with the attributes embedders rely on (DN006 §8.10).
+
+    ``data-tsw-session``, ``data-tsw-task``, ``data-tsw-attempt`` and ``data-tsw-adapter`` are a
+    contract with pages that embed this one: they only grow, never change.
+    """
+    ref = attempt.get("session_ref") if attempt else None
+    if not attempt or not ref:
+        return ""
+    adapter = str(attempt.get("adapter") or DEFAULT_ADAPTER)
+    label = attempt.get("session_name") or ref
+    attrs = (
+        f'class="session" data-tsw-session="{_e(ref)}" data-tsw-task="{_e(task_id)}" '
+        f'data-tsw-attempt="{_e(attempt["attempt"])}" data-tsw-adapter="{_e(adapter)}"'
+    )
+    href = session_href(adapter, str(ref))
+    if href is None:
+        return f"<span {attrs}>{_e(label)}</span>"
+    return f'<a {attrs} href="{_e(href)}" title="在宿主中打开会话 {_e(ref)}">{_e(label)}</a>'
+
+
+def task_href(task_id: str) -> str:
+    """The task view's address relative to the board (the STATUS app only, DN006 §8.10)."""
+    return "tasks/" + quote(task_id, safe="")
+
+
+def repo_hue(repo: str) -> int:
     digest = hashlib.sha256(repo.encode("utf-8")).digest()
     return REPO_HUES[digest[0] % len(REPO_HUES)]
 
@@ -93,7 +136,7 @@ class Output:
     delivery: str | None
 
     def html(self, cls: str) -> str:
-        href = _href(self.ref)
+        href = link_for(self.ref)
         link = f'<a href="{_e(href)}">{_e(self.label)}</a>' if href else _e(self.label)
         extra = f"<small>{_e(self.delivery)}</small>" if self.delivery else ""
         return f'<span class="out {cls}">{link}{extra}</span>'
@@ -154,15 +197,15 @@ def _requirement(goal: str, acceptance: list[Any] | tuple[str, ...]) -> str:
     return out
 
 
-def _brief(
+def brief_html(
     row: dict[str, Any], attempt: dict[str, Any] | None, history: list[Revision] | None
 ) -> str:
     """The task's brief at its current revision, and, in the app, the earlier revisions."""
     acceptance: list[Any] = loads(row["acceptance"], []) or []
     path = attempt.get("brief_path") if attempt else None
     link = (
-        f'<p><a href="{_e(_href(str(path)))}">打开 worker 的任务书（brief.md）</a></p>'
-        if path and _href(str(path))
+        f'<p><a href="{_e(link_for(str(path)))}">打开 worker 的任务书（brief.md）</a></p>'
+        if path and link_for(str(path))
         else ""
     )
     body = _requirement(str(row["goal"] or ""), acceptance) + link
@@ -189,7 +232,7 @@ def _brief(
     return out
 
 
-def _actions(task_id: str, revision: Any, app: AppView) -> str:
+def actions_html(task_id: str, revision: Any, app: AppView) -> str:
     offered, blocked = app.actions.get(task_id, ((), None))
     if not offered and not blocked:
         return ""
@@ -205,7 +248,7 @@ def _actions(task_id: str, revision: Any, app: AppView) -> str:
     )
 
 
-def _outputs(conn: sqlite3.Connection) -> dict[str, list[Output]]:
+def outputs_by_task(conn: sqlite3.Connection) -> dict[str, list[Output]]:
     """PR links and registered outputs per task, PRs first."""
     out: dict[str, list[Output]] = {}
     for r in conn.execute(
@@ -262,8 +305,10 @@ def _card(
 
     sub = f" <small>· {_e(row['substate'])}</small>" if row["substate"] else ""
     flag = '<span class="flag">待用户处理</span>' if "user" in card.flags else ""
-    session = attempt.get("session_name") if attempt else None
-    run = " · ".join(_e(v) for v in (row["current_attempt"], phase, session) if v)
+    run = " · ".join(_e(v) for v in (row["current_attempt"], phase) if v)
+    link = session_link(task_id, attempt)
+    if link:
+        run = f"{run} · {link}" if run else link
     facts = [
         ("attempt", run or "—"),
         ("revision", _e(row["revision"])),
@@ -281,7 +326,7 @@ def _card(
         + "</div>"
         for cls, head, text in card.notes
     )
-    brief = _brief(row, attempt, app.history.get(task_id, []) if app else None)
+    brief = brief_html(row, attempt, app.history.get(task_id, []) if app else None)
 
     body: list[str] = []
     if note:
@@ -317,15 +362,17 @@ def _card(
         f'<div class="top"><a class="tid" href="#task-{_e(task_id)}">{_e(task_id)}</a>'
         f'<span class="badge">{_e(STATUS_LABELS.get(status, status))}{sub}</span>'
         f'<span class="chip kind">{_e(KINDS.get(kind, kind))}</span>'
-        f'<span class="chip repo" style="--h:{_hue(str(row["repo"]))}">{_e(row["repo"])}</span>'
-        f"{flag}</div>"
+        f'<span class="chip repo" style="--h:{repo_hue(str(row["repo"]))}">{_e(row["repo"])}</span>'
+        f"{flag}"
+        + (f'<a class="detail" href="{_e(task_href(task_id))}">详情</a>' if app else "")
+        + "</div>"
         f"<h3>{_e(row['title'])}</h3>"
         + (f'<div class="notes">{notes}</div>' if notes else "")
         + '<dl class="facts">'
         + "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in facts)
         + "</dl>"
         + (f'<div class="links">{"".join(links)}</div>' if links else "")
-        + (_actions(task_id, row["revision"], app) if app else "")
+        + (actions_html(task_id, row["revision"], app) if app else "")
         + (f'<div class="foot">{brief}{more}</div>' if brief or more else "")
         + "</article>"
     )
@@ -339,9 +386,103 @@ def _colors() -> str:
     return "\n".join(rules)
 
 
+def card_notes(
+    row: dict[str, Any],
+    attempt: dict[str, Any] | None,
+    ask: dict[str, Any] | None,
+    invalid: bool,
+    app: AppView | None,
+) -> Card:
+    """What the card calls out for the task (a question, an acceptance, a pause, an alert)."""
+    card = Card(row)
+    phase = attempt["phase"] if attempt else None
+    if row["status"] == "ready" and phase in (None, "planned", "replaced", "closed"):
+        card.notes.append(("start", "待启动", ""))
+        card.flags.add("tostart")
+    if ask is not None:
+        # The page is for the user: the question itself is shown so it can be answered.
+        card.notes.append(
+            (
+                "ask",
+                f"等待用户（{ask['request_id']}，{_ask_note(ask)}）",
+                str(ask["question"]),
+            )
+        )
+        card.flags |= {"asking", "user"}
+    if row["status"] == "waiting_user":
+        card.flags.add("user")
+    if row["status"] == "done":
+        card.notes.append(
+            (
+                "accept",
+                "待用户验收",
+                "查看报告与产出后，在本页点「验收」或「退回」"
+                if app
+                else f"查看报告与产出后验收：在终端运行 tsw task accept {row['task_id']}，"
+                "或在 tsw status serve 打开的页面中点「验收」；也可以在主会话中验收",
+            )
+        )
+        card.flags.add("user")
+    pause = loads(row["pause"], None)
+    if pause:
+        owner = str(pause.get("owner") or "")
+        card.notes.append(
+            (
+                "pause",
+                f"暂停（{pause.get('category')}）负责人 {owner}",
+                f"{pause.get('next_action')}；恢复条件：{pause.get('resume_condition')}",
+            )
+        )
+        card.flags.add("paused")
+        if owner == "用户":
+            card.flags.add("user")
+    if row["stale"]:
+        card.notes.append(("stale", "stale：上游已变化", ""))
+        card.flags.add("alert")
+    if invalid and row["status"] in OCCUPYING:
+        card.notes.append(("invalid", "依赖失效，需停止 worker", ""))
+        card.flags.add("alert")
+    return card
+
+
+def pending_asks(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    """Each task's pending question with its in-session state (the last by number)."""
+    return {
+        str(r["task_id"]): dict(r)
+        for r in conn.execute(
+            "SELECT r.task_id, r.request_id, r.question, s.handoff_after, s.handed_off_at, "
+            "s.relayed_to, s.responded_at FROM input_requests r "
+            "LEFT JOIN in_session_requests s ON s.request_id = r.request_id "
+            "WHERE r.status = 'pending' ORDER BY r.request_id"
+        )
+    }
+
+
+def page_head(title: str, app: AppView | None) -> str:
+    """The page's ``<head>``: its policy, styles and scripts, and in the app the request token.
+
+    The board and the task view share it, so both keep the same Content-Security-Policy.
+    """
+    if app:
+        policy = (
+            f'<meta http-equiv="Content-Security-Policy" content="{_e(APP_CSP)}">\n'
+            f'<meta name="tsw-token" content="{_e(app.token)}">'
+        )
+        app_script = f"<script>{APP_SCRIPT}</script>"
+    else:
+        policy = f'<meta http-equiv="Content-Security-Policy" content="{_e(CSP)}">'
+        app_script = ""
+    return (
+        '<head><meta charset="utf-8"><meta name="viewport" '
+        'content="width=device-width, initial-scale=1">\n'
+        f"{policy}\n<title>{_e(title)}</title>\n<style>{CSS}{_colors()}</style>\n"
+        f"<script>{SCRIPT}</script>{app_script}</head>"
+    )
+
+
 def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
     tasks = [dict(r) for r in conn.execute("SELECT * FROM tasks ORDER BY registered_seq")]
-    outputs = _outputs(conn)
+    outputs = outputs_by_task(conn)
     meta = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM meta")}
     lease = conn.execute("SELECT * FROM leases WHERE name = 'scheduler'").fetchone()
     attempts = {
@@ -358,15 +499,7 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
         )
     }
     invalid = invalidated(conn)
-    asking = {
-        str(r["task_id"]): dict(r)
-        for r in conn.execute(
-            "SELECT r.task_id, r.request_id, r.question, s.handoff_after, s.handed_off_at, "
-            "s.relayed_to, s.responded_at FROM input_requests r "
-            "LEFT JOIN in_session_requests s ON s.request_id = r.request_id "
-            "WHERE r.status = 'pending' ORDER BY r.request_id"
-        )
-    }
+    asking = pending_asks(conn)
     counts: dict[str, int] = {}
     for row in tasks:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
@@ -378,59 +511,16 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
             t["registered_seq"],
         ),
     )
-    cards: list[Card] = []
-    for row in shown:
-        card = Card(row)
-        attempt = attempts.get((row["task_id"], row["current_attempt"]))
-        phase = attempt["phase"] if attempt else None
-        if row["status"] == "ready" and phase in (None, "planned", "replaced", "closed"):
-            card.notes.append(("start", "待启动", ""))
-            card.flags.add("tostart")
-        ask = asking.get(row["task_id"])
-        if ask is not None:
-            # The page is for the user: the question itself is shown so it can be answered.
-            card.notes.append(
-                (
-                    "ask",
-                    f"等待用户（{ask['request_id']}，{_ask_note(ask)}）",
-                    str(ask["question"]),
-                )
-            )
-            card.flags |= {"asking", "user"}
-        if row["status"] == "waiting_user":
-            card.flags.add("user")
-        if row["status"] == "done":
-            card.notes.append(
-                (
-                    "accept",
-                    "待用户验收",
-                    "查看报告与产出后，在本页点「验收」或「退回」"
-                    if app
-                    else f"查看报告与产出后验收：在终端运行 tsw task accept {row['task_id']}，"
-                    "或在 tsw status serve 打开的页面中点「验收」；也可以在主会话中验收",
-                )
-            )
-            card.flags.add("user")
-        pause = loads(row["pause"], None)
-        if pause:
-            owner = str(pause.get("owner") or "")
-            card.notes.append(
-                (
-                    "pause",
-                    f"暂停（{pause.get('category')}）负责人 {owner}",
-                    f"{pause.get('next_action')}；恢复条件：{pause.get('resume_condition')}",
-                )
-            )
-            card.flags.add("paused")
-            if owner == "用户":
-                card.flags.add("user")
-        if row["stale"]:
-            card.notes.append(("stale", "stale：上游已变化", ""))
-            card.flags.add("alert")
-        if row["task_id"] in invalid and row["status"] in OCCUPYING:
-            card.notes.append(("invalid", "依赖失效，需停止 worker", ""))
-            card.flags.add("alert")
-        cards.append(card)
+    cards = [
+        card_notes(
+            row,
+            attempts.get((row["task_id"], row["current_attempt"])),
+            asking.get(row["task_id"]),
+            row["task_id"] in invalid,
+            app,
+        )
+        for row in shown
+    ]
     to_start = sum(1 for c in cards if "tostart" in c.flags)
 
     judgments = conn.execute(
@@ -513,29 +603,18 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
     last = max((t["last_activity"] for t in tasks), default="—")
     order = " ".join(ORDER + tuple(s for s in present if s not in ORDER))
     if app:
-        head = (
-            f'<meta http-equiv="Content-Security-Policy" content="{_e(APP_CSP)}">\n'
-            f'<meta name="tsw-token" content="{_e(app.token)}">'
-        )
-        app_script = f"<script>{APP_SCRIPT}</script>"
         footer = (
             "本页由 STATUS 应用（tsw status serve）按账本实时生成；"
             "按钮直接写入账本，记为你本人的操作"
         )
     else:
-        head = f'<meta http-equiv="Content-Security-Policy" content="{_e(CSP)}">'
-        app_script = ""
         footer = (
             "本页由 tsw 根据账本生成，请勿手工编辑；"
             "验收、退回、取消可运行 tsw status serve 在页面上操作"
         )
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-{head}
-<title>TaskSteward 状态</title>
-<style>{CSS}{_colors()}</style>
-<script>{SCRIPT}</script>{app_script}</head>
+{page_head("TaskSteward 状态", app)}
 <body><main>
 <header class="hero"><div><div class="eyebrow">TASKSTEWARD · STATUS</div><h1>TaskSteward 状态</h1></div>
 <p class="meta">账本序号 {_e(meta.get("projected_seq", "0"))} · 最近记录 {_e(last)} · {

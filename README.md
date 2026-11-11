@@ -100,7 +100,7 @@ tsw ledger audit  /  tsw ledger rebuild      审计账本 / 从账本重建投�
 tsw config show  /  tsw config validate      查看 / 校验统一配置
 ```
 
-`tsw status serve` 只监听本机，每次启动输出一个带一次性令牌的地址并在浏览器中打开；页面与数据目录中的 `views/STATUS.html` 相同，另有按钮，报告与 PR 链接照常可点。按 Ctrl+C 停止。`views/STATUS.html` 仍在每次提交后生成，可以离线打开，但没有按钮。
+`tsw status serve` 只监听本机，每次启动输出一个带一次性令牌的地址并在浏览器中打开；页面与数据目录中的 `views/STATUS.html` 相同，另有按钮，报告与 PR 链接照常可点。每张卡片的「详情」打开该任务的单任务视图（`/tasks/<任务>`），列出需求与历史 revision、每个 attempt 与它的会话、提交与评审轮次、产出、依赖、问题和时间线；有会话的 attempt 带会话链接，点击在 Claude 桌面 app 中打开该会话。按 Ctrl+C 停止。`views/STATUS.html` 仍在每次提交后生成，可以离线打开，但没有按钮。
 
 开发者另需安装开发工具（`pip install -r requirements-dev.txt`），并用 `python tools/gate.py` 运行本地门禁。
 

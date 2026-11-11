@@ -10,7 +10,7 @@ from tests.machine_harness import Harness
 from tsw import direct
 from tsw.errors import TswError
 from tsw.home import Home
-from tsw.host.status_app import history
+from tsw.host.status_app import StatusApp, history
 from tsw.machine.base import Caller
 
 mark = pytest.mark
@@ -151,3 +151,33 @@ def test_the_status_app_reads_every_revision_from_the_ledger(h: Harness) -> None
         "加上导出",
     )
     assert h.task("T001")["revision"] == 3
+
+
+@mark.use_case("UC-DIRECT-003")
+def test_the_task_view_reads_the_ledger_of_a_real_flow(h: Harness) -> None:
+    worker = h.complete("T001", deps=None)
+    h.register("T002")
+    h.plan("T002", ["T001"])
+    perform(h, "reject", "T001", reason="缺少导出")
+    app = StatusApp(h.home, token="tok-c")
+    found, page = app.task_page("T001")
+    assert found
+    assert '<main class="task-view" data-tsw-task="T001">' in page
+    # The worker's session from attempt_reconcile, linked with the embedder's attributes.
+    assert (
+        f'data-tsw-session="{worker.session_id}" data-tsw-task="T001" data-tsw-attempt="a1" '
+        'data-tsw-adapter="claude-app"'
+    ) in page
+    assert f'href="claude://claude.ai/epitaxy/{worker.session_id}"' in page
+    # Every revision, the rejection with the user's words, and the dependent task.
+    assert "用户退回" in page and "缺少导出" in page
+    assert '<a href="T002">T002</a>' in page
+    # The review rounds and the PR registered on acceptance; the ledger's events newest first.
+    assert "codex-app-server" in page and 'href="https://example.com/pr/1"' in page
+    timeline = page.split('id="timeline"')[1]
+    assert timeline.index("task.user_rejected") < timeline.index("worker.submitted")
+    assert timeline.index("worker.submitted") < timeline.index("task.registered")
+    # Rejected: the task is back in intake, so nothing to accept; the board links the view.
+    assert 'data-act="accept"' not in page
+    assert '<a class="detail" href="tasks/T001">详情</a>' in app.page()
+    assert app.task_page("T999")[0] is False
