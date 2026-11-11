@@ -1,4 +1,4 @@
-/* TaskSteward STATUS app: the user's direct actions (DN006 §8.10). Talks only to its own server. */
+/* TaskSteward Dashboard app: the user's direct actions (DN006 §8.10). Talks only to its own server. */
 (() => {
   "use strict";
   const LABELS = {accept: "验收", reject: "退回", cancel: "取消"};

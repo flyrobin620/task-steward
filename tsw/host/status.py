@@ -1,12 +1,14 @@
-"""The STATUS page (``views/STATUS.html``), generated from the projection after every commit.
+"""The Dashboard page (``views/STATUS.html``), generated from the projection after every commit.
 
 The page shows the recorded times of the ledger, never the time it was rendered, so generating
 it again does not change any business time. It is one offline file: a card per task, grouped by
 status, with the user's pending items called out on the card. The inlined script
-(:mod:`tsw.host.status_assets`) adds filtering, search, sorting, regrouping and folding; without
-it the page still shows every card.
+(:mod:`tsw.host.status_assets`) adds filtering, search, sorting, regrouping, folding and the task
+flow view (:mod:`tsw.host.flow`); without it the page still shows every card.
 
-The STATUS app (:mod:`tsw.host.status_app`, DN006 §8.10) renders the same page with an
+The page is called TaskSteward Dashboard (DN006 §8.10, T273); the command, the file and the
+configuration key keep their ``status`` names. The Dashboard app (:mod:`tsw.host.status_app`)
+renders the same page with an
 :class:`AppView`: every card then offers the user's direct actions as buttons and links to the
 task's own view (:mod:`tsw.host.task_view`). A card with a session links to it in its host, with
 the ``data-tsw-*`` attributes pages that embed this one rely on (DN006 §8.10).
@@ -22,6 +24,7 @@ from typing import Any
 from urllib.parse import quote
 
 from tsw.commands import CommitContext
+from tsw.host.flow import FlowTask, render_flow
 from tsw.host.status_assets import (
     APP_CSP,
     APP_SCRIPT,
@@ -50,6 +53,8 @@ ORDER = (
     "accepted",
     "cancelled",
 )
+# The name the user sees (DN006 §8.10, T273).
+TITLE = "TaskSteward Dashboard"
 # Groups folded until the user opens them: finished work stays out of the way.
 FOLDED = ("accepted", "cancelled")
 PR_TYPES = ("pr", "pull_request")
@@ -467,7 +472,7 @@ def card_notes(
                 "查看报告与产出后，在本页点「验收」或「退回」"
                 if app
                 else f"查看报告与产出后验收：在终端运行 tsw task accept {row['task_id']}，"
-                "或在 tsw status serve 打开的页面中点「验收」；也可以在主会话中验收",
+                "或在 Dashboard 应用（tsw status serve）中点「验收」；也可以在主会话中验收",
             )
         )
         card.flags.add("user")
@@ -491,6 +496,72 @@ def card_notes(
         card.notes.append(("invalid", "依赖失效，需停止 worker", ""))
         card.flags.add("alert")
     return card
+
+
+# Attention tiles: (label, colour, filter on click: statuses, flag).
+ATTENTION = (
+    ("占用名额", "#2563eb", ",".join(s for s in ORDER if s in OCCUPYING), ""),
+    ("待启动", "#0d9488", "", "tostart"),
+    ("待判断", "#7c3aed", "", ""),
+    ("待用户答复", "#e11d48", "", "asking"),
+    ("待处理 follow-up", "#0891b2", "", "followups"),
+)
+
+
+def _tile(label: str, n: int, color: str, *, st: str = "", flag: str = "", extra: str = "") -> str:
+    inner = f"<b>{n}</b><span>{_e(label)}</span>"
+    if not (st or flag or extra):
+        return f'<div class="tile" style="--c:{color}">{inner}</div>'
+    title = "在任务流中查看已归档任务" if extra else "只看这些任务"
+    return (
+        f'<button type="button" class="tile" style="--c:{color}" data-tile-st="{_e(st)}" '
+        f'data-tile-flag="{_e(flag)}"{extra} title="{title}">{inner}</button>'
+    )
+
+
+def tiles(
+    *,
+    occupying: int,
+    to_start: int,
+    judgments: int,
+    pending: int,
+    follow_ups: int,
+    statuses: list[tuple[str, int]],
+    archived: int,
+) -> str:
+    """The count tiles: what needs attention, then each status on the board (DN006 §8.10).
+
+    A tile whose count is zero is not shown. The status tiles are the statuses actually on the
+    board, with the counts of the bar and the picks below; the last one counts the archived
+    tasks and opens them in the task flow.
+    """
+    attention = [
+        _tile(label, n, color, st=st, flag=flag)
+        for (label, color, st, flag), n in zip(
+            ATTENTION, (occupying, to_start, judgments, pending, follow_ups), strict=True
+        )
+        if n
+    ]
+    states = [
+        _tile(STATUS_LABELS.get(s, s), n, STATUS_COLORS.get(s, "#64748b"), st=s)
+        for s, n in statuses
+        if n
+    ]
+    if archived:
+        states.append(
+            _tile(
+                STATUS_LABELS["archived"],
+                archived,
+                STATUS_COLORS["archived"],
+                extra=' data-tile-archived="1"',
+            )
+        )
+    out = ""
+    if attention:
+        out += f'<div class="tile-group" aria-label="关注">{"".join(attention)}</div>'
+    if states:
+        out += f'<div class="tile-group states" aria-label="状态">{"".join(states)}</div>'
+    return out
 
 
 def pending_asks(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
@@ -593,47 +664,42 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
         "SELECT COUNT(*) AS n FROM input_requests WHERE status = 'pending'"
     ).fetchone()["n"]
     archived = counts.get("archived", 0)
-    # (label, value, colour, filter on click: statuses, flag)
-    tiles: list[tuple[str, int, str, str, str]] = [
-        ("占用名额", occupying, "#2563eb", ",".join(s for s in ORDER if s in OCCUPYING), ""),
-        ("待启动", to_start, "#0d9488", "", "tostart"),
-        ("待判断", judgments, "#7c3aed", "", ""),
-        ("待用户答复", pending, "#e11d48", "", "asking"),
-        ("待用户验收", counts.get("done", 0), "#ea580c", "done", ""),
-        ("待处理 follow-up", sum(c.follow_ups for c in cards), "#0891b2", "", "followups"),
-        ("已归档", archived, "#64748b", "", ""),
-    ]
-    tile_html: list[str] = []
-    for label, n, color, st, flag in tiles:
-        inner = f"<b>{n}</b><span>{_e(label)}</span>"
-        if st or flag:
-            tile_html.append(
-                f'<button type="button" class="tile" style="--c:{color}" data-tile-st="{st}" '
-                f'data-tile-flag="{flag}" title="只看这些任务">{inner}</button>'
-            )
-        else:
-            tile_html.append(f'<div class="tile" style="--c:{color}">{inner}</div>')
-    present = [s for s in ORDER if counts.get(s)] + [
+    # The statuses on the board, in board order: the tiles, the bar, the picks and the groups
+    # all come from this one count (DN006 §8.10, T273).
+    present = [s for s in ORDER if counts.get(s)] + sorted(
         s for s in counts if s not in ORDER and s != "archived"
-    ]
+    )
+    tiles_html = tiles(
+        occupying=occupying,
+        to_start=to_start,
+        judgments=judgments,
+        pending=pending,
+        follow_ups=sum(c.follow_ups for c in cards),
+        statuses=[(s, counts[s]) for s in present],
+        archived=archived,
+    )
     dist = "".join(
         f'<i class="st-{_e(s)}" style="flex:{counts[s]}" '
         f'title="{_e(STATUS_LABELS.get(s, s))} {counts[s]}"></i>'
         for s in present
     )
+    # Every status and kind has a pick, so a choice survives a reload while nothing has it;
+    # the empty ones stay hidden unless chosen (DN006 §8.10, T273).
+    pick_statuses = list(ORDER) + [s for s in present if s not in ORDER]
     status_picks = "".join(
         f'<button type="button" class="pick st-{_e(s)}" data-st="{_e(s)}" '
-        f'data-label="{_e(STATUS_LABELS.get(s, s))}" aria-pressed="false">'
-        f"{_e(STATUS_LABELS.get(s, s))}<small>{counts[s]}</small></button>"
-        for s in present
+        f'data-label="{_e(STATUS_LABELS.get(s, s))}" data-n="{counts.get(s, 0)}" '
+        f'aria-pressed="false"{"" if counts.get(s) else " hidden"}>'
+        f"{_e(STATUS_LABELS.get(s, s))}<small>{counts.get(s, 0)}</small></button>"
+        for s in pick_statuses
     )
-    kinds_present = [k for k in KINDS if any(c.row["kind"] == k for c in cards)] + sorted(
-        {str(c.row["kind"]) for c in cards} - set(KINDS)
-    )
+    kinds_present = list(KINDS) + sorted({str(c.row["kind"]) for c in cards} - set(KINDS))
+    kind_count = {k: sum(1 for c in cards if c.row["kind"] == k) for k in kinds_present}
     kind_picks = "".join(
         f'<button type="button" class="pick k-{_e(k)}" data-kind="{_e(k)}" '
-        f'data-label="{_e(KINDS.get(k, k))}" aria-pressed="false">{_e(KINDS.get(k, k))}'
-        f"<small>{sum(1 for c in cards if c.row['kind'] == k)}</small></button>"
+        f'data-label="{_e(KINDS.get(k, k))}" data-n="{kind_count[k]}" aria-pressed="false"'
+        f"{'' if kind_count[k] else ' hidden'}>{_e(KINDS.get(k, k))}"
+        f"<small>{kind_count[k]}</small></button>"
         for k in kinds_present
     )
     repos = sorted({str(c.row["repo"]) for c in cards})
@@ -661,6 +727,26 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
             f'<span class="n">{len(members)}</span></summary><div class="grid">{body}</div></details>'
         )
 
+    flow = render_flow(
+        [
+            FlowTask(
+                str(t["task_id"]),
+                str(t["title"]),
+                str(t["repo"]),
+                str(t["kind"]),
+                str(t["status"]),
+                int(t["registered_seq"]),
+                str(t["last_activity"]),
+            )
+            for t in tasks
+        ],
+        deps,
+        {new: [src for src, _ in found] for new, found in sources.items()},
+        flags={str(c.row["task_id"]): " ".join(sorted(c.flags)) for c in cards},
+        app=app is not None,
+        on_board=on_board,
+        repo_hue=repo_hue,
+    )
     lease_text = (
         f"调度租约：{_e(lease['holder_session'])}（{_e(lease['machine'])}，到期 {_e(lease['expires_at'])}）"
         if lease is not None and lease["holder_session"]
@@ -670,7 +756,7 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
     order = " ".join(ORDER + tuple(s for s in present if s not in ORDER))
     if app:
         footer = (
-            "本页由 STATUS 应用（tsw status serve）按账本实时生成；"
+            "本页由 Dashboard 应用（tsw status serve）按账本实时生成；"
             "按钮直接写入账本，记为你本人的操作"
         )
     else:
@@ -680,16 +766,16 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
         )
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
-{page_head("TaskSteward 状态", app)}
+{page_head(TITLE, app)}
 <body><main>
-<header class="hero"><div><div class="eyebrow">TASKSTEWARD · STATUS</div><h1>TaskSteward 状态</h1></div>
+<header class="hero"><div><div class="eyebrow">TASKSTEWARD · DASHBOARD</div><h1>{TITLE}</h1></div>
 <p class="meta">账本序号 {_e(meta.get("projected_seq", "0"))} · 最近记录 {_e(last)} · {
         lease_text
     }</p>
 <button type="button" class="ghost" id="refresh" hidden aria-pressed="false" title="每 30 秒重新载入本页">自动刷新</button>
 <button type="button" class="ghost" id="style" hidden title="朴素或鲜艳">风格：朴素</button>
 <button type="button" class="ghost" id="theme" hidden>主题：跟随系统</button></header>
-<section class="tiles">{"".join(tile_html)}</section>
+<section class="tiles">{tiles_html}</section>
 <div class="dist" aria-hidden="true">{dist}</div>
 <section class="tools" id="tools" role="search" aria-label="筛选任务" hidden>
 <div class="row"><input id="q" type="search" placeholder="搜索编号、标题、仓库、问题、产出…（按 / 聚焦）" aria-label="搜索">
@@ -700,25 +786,28 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
 <option value="paused">暂停</option><option value="alert">需要处理的异常</option>
 <option value="followups">有待处理的 follow-up</option></select></label>
 <span class="sep"></span>
-<button type="button" class="ghost" id="timeline" aria-pressed="false" title="不分组，按最近一次修改时间倒序排列">按时间顺序</button>
-<label>排序 <select id="sort"><option value="status">状态优先</option><option value="activity">最近活动</option>
+<span class="views" role="group" aria-label="视图"><button type="button" class="ghost" id="view-status" aria-pressed="false" title="按状态分组">按状态</button><button type="button" class="ghost" id="timeline" aria-pressed="false" title="不分组，按最近一次修改时间倒序排列">按时间顺序</button><button type="button" class="ghost" id="view-flow" aria-pressed="false" title="按依赖关系画出任务的拓扑图">任务流</button></span>
+<label class="board-only">排序 <select id="sort"><option value="status">状态优先</option><option value="activity">最近活动</option>
 <option value="stalest">最久未动</option><option value="newest">编号：新→旧</option>
 <option value="oldest">编号：旧→新</option><option value="repo">仓库</option></select></label>
-<label>分组 <select id="group"><option value="status">按状态</option><option value="repo">按仓库</option>
+<label class="board-only">分组 <select id="group"><option value="status">按状态</option><option value="repo">按仓库</option>
 <option value="kind">按类型</option><option value="none">不分组</option></select></label></div>
 <div class="row"><span class="lbl">状态</span>{status_picks}<span class="lbl">类型</span>{
         kind_picks
     }
 <span class="sep"></span><span class="count" id="count" role="status" aria-live="polite"></span>
-<button type="button" class="ghost" id="open-all">展开分组</button>
-<button type="button" class="ghost" id="close-all">折叠分组</button>
-<button type="button" class="ghost" id="cards-open">展开详情</button>
-<button type="button" class="ghost" id="cards-close">收起详情</button>
+<button type="button" class="ghost board-only" id="open-all">展开分组</button>
+<button type="button" class="ghost board-only" id="close-all">折叠分组</button>
+<button type="button" class="ghost board-only" id="cards-open">展开详情</button>
+<button type="button" class="ghost board-only" id="cards-close">收起详情</button>
 <button type="button" class="ghost" id="clear">清除筛选</button></div></section>
 <div id="board" data-order="{_e(order)}" data-kinds="{_e(" ".join(KINDS))}">{"".join(groups)}</div>
+{flow}
 <p class="empty" id="empty" hidden>没有符合筛选条件的任务。<button type="button" class="ghost" id="clear-empty">清除筛选</button></p>
 {"" if cards else '<p class="empty">没有任务</p>'}
-<footer class="meta">{footer}；已归档任务不在此列出（{archived} 个）。</footer>
+<footer class="meta">{footer}；看板不列出已归档任务（{
+        archived
+    } 个），可在任务流中勾选「含已归档」查看。</footer>
 </main></body>
 </html>
 """

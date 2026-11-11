@@ -1,4 +1,4 @@
-"""The STATUS app's view of one task: ``/tasks/<task>`` (DN006 §8.10).
+"""The Dashboard app's view of one task: ``/tasks/<task>`` (DN006 §8.10).
 
 A read-only page with more than a card holds: the requirement and its revisions, every attempt
 with its session, the submission and the review rounds, the outputs, dependencies and resources,
@@ -22,6 +22,7 @@ from tsw.events import Event
 from tsw.host.status import (
     OUTPUT_TYPES,
     PR_TYPES,
+    TITLE,
     AppView,
     Revision,
     actions_html,
@@ -43,7 +44,7 @@ from tsw.tasks import KINDS, STATUS_LABELS, follow_up_of, follow_ups_of
 TIMELINE_LIMIT = 200
 NOTES_LIMIT = 50
 FOOTER = (
-    "本页由 STATUS 应用（tsw status serve）按账本实时生成；按钮直接写入账本，记为你本人的操作。"
+    "本页由 Dashboard 应用（tsw status serve）按账本实时生成；按钮直接写入账本，记为你本人的操作。"
 )
 REQUEST_STATUS = {"pending": "待答", "resolved": "已答", "superseded": "已取代"}
 FOLLOW_UP_STATUS = {"open": "待处理", "converted": "已转为任务", "dismissed": "已驳回"}
@@ -658,7 +659,7 @@ def render_task(
     )
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
-{page_head(f"{task_id} · TaskSteward", app)}
+{page_head(f"{task_id} · {TITLE}", app)}
 <body><main class="task-view" data-tsw-task="{escape(task_id)}">
 <nav class="crumbs"><a class="back" href="{escape(back)}">← 返回看板</a></nav>
 <header class="{classes}"><div class="top"><span class="tid">{escape(task_id)}</span>
@@ -681,7 +682,7 @@ def not_found(task_id: str, app: AppView) -> str:
     """The page for a task the projection does not have, with the way back to the board."""
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
-{page_head("没有这个任务 · TaskSteward", app)}
+{page_head(f"没有这个任务 · {TITLE}", app)}
 <body><main class="task-view">
 <nav class="crumbs"><a class="back" href="../">← 返回看板</a></nav>
 <p class="empty">没有任务 {escape(task_id)}。</p>

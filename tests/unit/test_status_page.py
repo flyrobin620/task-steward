@@ -73,13 +73,14 @@ def test_every_task_but_the_archived_has_a_card_in_its_status_group(
         assert attribute in card
     assert "执行中" in card and "研究" in card and "2026-11-01T08:00:00Z" in card
     assert 'id="task-T003"' not in page
-    assert "已归档任务不在此列出（1 个）" in page
+    assert "看板不列出已归档任务（1 个）" in page
     # Finished work is folded until opened; active groups are open.
     assert '<details class="group st-in_progress" open>' in page
     assert '<details class="group st-accepted">' in page
-    # Only statuses on the board are offered as filters.
-    assert 'data-st="in_progress"' in page and 'data-st="accepted"' in page
-    assert 'data-st="paused"' not in page
+    # Only statuses on the board are shown as filters; the others wait hidden (T273).
+    assert re.search(r'data-st="in_progress"[^>]*data-n="1" aria-pressed="false">', page)
+    assert re.search(r'data-st="accepted"[^>]*data-n="1" aria-pressed="false">', page)
+    assert re.search(r'data-st="paused"[^>]*data-n="0" aria-pressed="false" hidden>', page)
 
 
 @mark.use_case("UC-HOST-003")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from collections.abc import Iterator
@@ -561,6 +562,31 @@ def test_status_page_follows_every_commit(h: Harness) -> None:
     h.run("task_cancel", task_id="T002", user_source=h.source("T002", 1, "cancel"))
     page = (h.home.root / "views" / "STATUS.html").read_text(encoding="utf-8")
     assert "已取消" in page
+
+
+@mark.use_case("UC-DIRECT-004")
+def test_the_dashboard_draws_planned_dependencies_after_each_commit(h: Harness) -> None:
+    h.register("T001")
+    h.register("T002")
+    h.plan("T001")
+    h.plan("T002", ["T001"])
+    page = (h.home.root / "views" / "STATUS.html").read_text(encoding="utf-8")
+    assert "<title>TaskSteward Dashboard</title>" in page
+    node = re.search(r'<a class="fnode[^"]*" data-id="T002"[^>]*>', page)
+    assert node and 'data-deps="T001"' in node.group(0)
+    gc = {
+        tid: int(m.group(1))
+        for tid in ("T001", "T002")
+        if (m := re.search(rf'data-id="{tid}"[^>]*style="--agc:\d+;--agr:\d+;--gc:(\d+)', page))
+    }
+    assert gc["T002"] < gc["T001"]  # the dependency is to the right
+    tiles = page.split('<section class="tiles">')[1].split("</section>")[0]
+    assert "<b>0</b>" not in tiles
+    # Cancelling the dependency changes its node and its tile on the next commit.
+    h.run("task_cancel", task_id="T001", user_source=h.source("T001", 1, "cancel"))
+    page = (h.home.root / "views" / "STATUS.html").read_text(encoding="utf-8")
+    assert re.search(r'class="fnode st-cancelled[^"]*" data-id="T001"', page)
+    assert re.search(r'data-tile-st="cancelled"[^>]*><b>1</b><span>已取消</span>', page)
 
 
 @mark.use_case("UC-HOST-001")

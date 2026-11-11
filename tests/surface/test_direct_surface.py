@@ -1,4 +1,4 @@
-"""The user's terminal commands and the STATUS app as separate processes (DN006 §8.10, §9.1)."""
+"""The user's terminal commands and the Dashboard app as separate processes (DN006 §8.10, §9.1)."""
 
 from __future__ import annotations
 
@@ -88,6 +88,7 @@ def test_the_users_commands_refuse_inside_any_host_session(h: Harness, marker: s
         ("task", "reject", "T001", "--yes", "--reason", "x"),
         ("task", "cancel", "T001", "--yes"),
         ("status", "serve", "--no-open"),
+        ("dashboard", "--no-open"),
         ("lease", "takeover", "--session", "s2", "--from-session", "orch-1"),
     ):
         code, err = run_json(*args, env=env)
@@ -205,8 +206,17 @@ class App:
 
 @pytest.fixture
 def app(h: Harness) -> Iterator[App]:
+    yield from _serve("status", "serve")
+
+
+@pytest.fixture
+def dashboard(h: Harness) -> Iterator[App]:
+    yield from _serve("dashboard")
+
+
+def _serve(*command: str) -> Iterator[App]:
     proc = subprocess.Popen(
-        [sys.executable, "-m", "tsw", "status", "serve", "--no-open"],
+        [sys.executable, "-m", "tsw", *command, "--no-open"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -216,6 +226,7 @@ def app(h: Harness) -> Iterator[App]:
     try:
         assert proc.stdout is not None
         line = proc.stdout.readline()
+        assert line.startswith("TaskSteward Dashboard："), line
         found = re.search(r"http://127\.0\.0\.1:\d+/\?token=[\w-]+", line)
         assert found, (line, proc.stderr.read() if proc.poll() is not None and proc.stderr else "")
         yield App(proc, found.group(0))
@@ -361,3 +372,24 @@ def test_the_status_app_serves_a_task_view_behind_the_same_admission(h: Harness,
     assert status == 404 and '<a class="back" href="../">' in body.decode("utf-8")
     for path in ("/tasks/", "/tasks", "/tasks/T001/x"):
         assert app.request("GET", path)[0] == 404, path
+
+
+@mark.use_case("UC-DIRECT-004")
+def test_tsw_dashboard_serves_the_dashboard_with_its_task_flow(h: Harness, dashboard: App) -> None:
+    h.complete("T001")
+    h.register("T002")
+    h.plan("T002", ["T001"])
+    handed_back(h)
+    dashboard.cookie = f"tsw_status_{dashboard.port}={dashboard.token}"
+    status, _, body = dashboard.request("GET", "/")
+    page = body.decode("utf-8")
+    assert status == 200 and "<title>TaskSteward Dashboard</title>" in page
+    assert f'<meta name="tsw-token" content="{dashboard.token}">' in page
+    # Every node opens its task view, relative to the board; the dependency is drawn.
+    node = re.search(r'<a class="fnode[^"]*" data-id="T002"[^>]*>', page)
+    assert node and 'href="tasks/T002"' in node.group(0) and 'data-deps="T001"' in node.group(0)
+    assert re.search(r'data-tile-st="done"[^>]*><b>1</b>', page)
+    assert dashboard.request("GET", "/tasks/T002")[0] == 200
+    # The same command: the same buttons, recorded on the same channel.
+    status, out = dashboard.act("T001", "accept", revision=1)
+    assert (status, out["event"]) == (200, "task.user_accepted")
