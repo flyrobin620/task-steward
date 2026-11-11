@@ -713,3 +713,12 @@ def test_change_e2e_checks_pass_on_a_real_change_and_fail_without_it(
         for e in ledger_events()
     ]
     assert ids(relayed)["X"] == "failed"
+    # Revision 2 delivered by another attempt (a2) is not the same attempt continuing.
+    elsewhere = [
+        {**e, "attempt": "a2"}
+        if e["type"] in ("worker.submitted", "review.started", "review.decision")
+        and e["sequence"] > changed["events"][0]["sequence"]
+        else e
+        for e in ledger_events()
+    ]
+    assert ids(elsewhere)["R"] == "failed"

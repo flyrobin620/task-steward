@@ -1315,7 +1315,14 @@ def requirement_change_checks(
     finalize = first(later, "review.decision", task, decision="finalize")
     second_submit = last(later, "worker.submitted", task)
     second_accept = last(later, "task.accepted", task)
-    attempts = {e.get("attempt") for e in later if e["type"] == "worker.submitted"}
+    # The same attempt delivered both revisions: the change, the review that finalized it and
+    # every later submission belong to the attempt of the first submission.
+    original = (first_submit or {}).get("attempt")
+    attempts = {
+        e.get("attempt") or e["data"].get("attempt")
+        for e in later
+        if e["type"] in ("worker.submitted", "review.started", "review.decision")
+    } | {data.get("attempt")}
     checks.append(
         check(
             "R",
@@ -1324,8 +1331,10 @@ def requirement_change_checks(
             and revision_of(second_submit) == 2
             and second_accept is not None
             and second_accept.get("revision") == 2
-            and len(attempts) == 1,
+            and original is not None
+            and attempts == {original},
             {
+                "original_attempt": original,
                 "finalize": finalize and finalize["sequence"],
                 "submitted": second_submit and second_submit["sequence"],
                 "accepted": second_accept and second_accept["sequence"],
