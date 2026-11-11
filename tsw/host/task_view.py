@@ -14,7 +14,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 from tsw.events import Event
@@ -81,6 +81,11 @@ def timeline(events: Iterable[Event]) -> dict[str, list[Step]]:
     return out
 
 
+def _mapping(value: Any) -> dict[str, Any]:
+    """A JSON object read from the projection, or an empty one when the value is anything else."""
+    return cast("dict[str, Any]", value) if isinstance(value, dict) else {}
+
+
 def _attempt_key(attempt: str) -> tuple[int, str]:
     digits = attempt[1:]
     return (int(digits) if digits.isdigit() else 0, attempt)
@@ -130,6 +135,14 @@ def _task_link(task_id: str) -> str:
     return f'<a href="{escape(quote(task_id, safe=""))}">{escape(task_id)}</a>'
 
 
+def _legacy_ref(imported: Mapping[str, Any], ref: str) -> str:
+    """Where an imported task's report is now (DN005 §4.2 step 6): read-only history was copied
+    under ``legacy/<system>/``; a resumable task's ``runs/`` were copied as they were."""
+    if not imported["resumable"] and ref.startswith("runs/"):
+        return f"legacy://{imported['source']}/{ref}"
+    return ref
+
+
 def _overview(row: Mapping[str, Any], imported: Mapping[str, Any] | None) -> str:
     status = str(row["status"])
     items = [
@@ -149,9 +162,14 @@ def _overview(row: Mapping[str, Any], imported: Mapping[str, Any] | None) -> str
     ]
     if imported:
         items.append(("导入自", escape(f"{imported['source']}（原状态 {imported['old_status']}）")))
-        legacy = str(imported["legacy"] or "")
-        if legacy:
-            items.append(("旧系统成果", _link(legacy)))
+        legacy = _mapping(loads(imported["legacy"], None))
+        for key, label in (
+            ("worker_report", "旧系统交付报告"),
+            ("review_report", "旧系统验收结论"),
+        ):
+            ref = legacy.get(key)
+            if isinstance(ref, str) and ref:
+                items.append((label, _link(_legacy_ref(imported, ref))))
     return _facts(items)
 
 
@@ -337,16 +355,20 @@ def _relations(conn: sqlite3.Connection, row: Mapping[str, Any]) -> str:
 
 
 def _answer(resolution: str | None) -> str:
-    found: dict[str, Any] = loads(resolution, None) or {}
+    """The answer and where it came from: a verified source, or the system it was imported from."""
+    found = _mapping(loads(resolution, None))
     if not found:
         return "—"
-    source: dict[str, Any] = found.get("source") or {}
     parts = [escape(found.get("answer") or "")]
-    words = source.get("text")
-    if words:
-        parts.append(
-            f"<small>{escape(source.get('channel') or '')} · 原话：{escape(words)}</small>"
-        )
+    source = found.get("source")
+    if isinstance(source, dict):
+        verified = _mapping(source)
+        words = verified.get("text")
+        if words:
+            channel = escape(verified.get("channel") or "")
+            parts.append(f"<small>{channel} · 原话：{escape(words)}</small>")
+    elif source:
+        parts.append(f"<small>来自 {escape(source)}</small>")
     return '<span class="clip">' + "<br>".join(p for p in parts if p) + "</span>"
 
 
