@@ -5,7 +5,7 @@
     "differences": []
   },
   "files": 8,
-  "total_edges": 211,
+  "total_edges": 212,
   "results": [
     {
       "file": "architecture.svg",
@@ -97,8 +97,8 @@
       "file": "task-state-machine.svg",
       "xml": "PASS",
       "nodes": 16,
-      "edges": 50,
-      "unique_transition_ids": 34,
+      "edges": 51,
+      "unique_transition_ids": 35,
       "visible_labels": "PASS",
       "ids_and_portability": "PASS",
       "viewBox": "0 0 1200 3170",
@@ -110,9 +110,9 @@
   "dn002_consistency": {
     "status": "PASS",
     "file": "../DN002-task-state-machine.md",
-    "transition_ids": 34,
-    "exact_ids": 34,
-    "canonical_edges": 48,
+    "transition_ids": 35,
+    "exact_ids": 35,
+    "canonical_edges": 49,
     "notes": [
       "只校验 §3.2 T、§3.3 E；全部对应 task-state-machine.mmd。§3.4 导入映射不在状态图中。"
     ],

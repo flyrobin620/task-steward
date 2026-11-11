@@ -95,6 +95,7 @@ TRANSITIONS: dict[str, Transition] = {
         _t("T25", " ".join(sorted(CANCELLABLE)), "cancelled"),
         _t("T26", "cancelled", "archived"),
         _t("T27", "paused", "verifying"),
+        _t("T28", "done", "in_progress"),
     )
 }
 

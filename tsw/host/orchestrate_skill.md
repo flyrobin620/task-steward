@@ -19,7 +19,7 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
 
 - 新任务：`task_register`（仓库、类型、目标、验收）。目标、范围或验收有疑问时 `intake_question`，用户答复后 `input_resolve`（附用户原话的 `user_source`，`request_id` 指向该问题）。
 - 规划：`task_plan`（依赖、独占资源、理由）。依赖未满足的任务进入等待依赖；上游完成后 `sync` 会让它就绪。
-- 用户实质修改需求：`task_update`（附用户来源）。
+- 用户实质修改需求：`task_update`（附用户来源）。用户在 worker 会话里直接给 worker 追加或修改要求时，不用你转录：只要任务还没被用户验收（不是 `accepted`、`cancelled`、`archived`），worker 会引用 hook 记录的用户原话自己登记（`requirement_change`，revision+1，DN002 §5.1a），在同一 attempt 内继续评审并重新提交。
 - 任务书是任务唯一可靠的记录，会话上下文随时可能丢失。之后的决定或其他任务的结论（例如另一个任务定下的设计、文档结构、接口约定）影响到已登记、尚未完成的任务时，立即用 `task_update` 写回该任务的目标与验收，附用户来源；用户还没有就这个任务表态时，先问用户，不要只记在本会话里等派发时再补。
 - `task_update` 的结果带 `brief` 时，任务书已按新 revision 重新生成；其中有 `session_ref`（待命或执行中的会话）时，用消息告诉该会话：任务书已更新到 revision N（路径 `brief.path`），请重新读取。
 
@@ -45,9 +45,10 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
 
 ## 回传与判断
 
-worker 先在自己的会话里直接问用户（`ask_user`），你看不到问题内容，也不用处理。只有两类事会出现在 `inbox`：
+worker 先在自己的会话里直接问用户（`ask_user`），你看不到问题内容，也不用处理。会出现在 `inbox` 的回传：
 
 - `input.handed_off` 与 `channel.reply_seen`：worker 会话中的问题超时（默认 10 分钟）无人回复，由例行会话转交给你；或经 Teams 转达的问题在 Teams 中有了以任务 ID 开头的回复。按 `handle-input` skill 处理：在授权边界内代为决定（`handoff_resolve`）；需要用户决定的，按 `plugins.human_channels` 交给用户（`in-session`：在本会话中直接问；`teams-chat`：按 `teams-chat` skill 发卡片；没有配置的方式不用）；渠道转回的答复按渠道的 skill 登记（`input_resolve`）。worker 标了 `reserved` 的问题只能交给用户。决定后用消息告诉 worker。`attention` 的 `handoff_due` 列出已到期但还没转交的问题（例行会话不在时），运行 `sync` 转交。用户之后在 worker 会话里的回复仍然有效：问题未决时它直接生效，已决时记为迟到答复，以用户的话为准。
+- `task.requirement_changed`（只有 worker 登记的才进入 inbox）：用户在 worker 会话中修改了需求，worker 已登记新的 revision、目标与验收（`user_source` 是 hook 记录的用户原话）。不需要退回、规划或重新派发，也不需要通知 worker 重读任务书：确认后 `inbox_ack`。迁移为 `T28` 时，已完成的任务回到了执行中，你之前的技术验收作废，等 worker 重新提交后按新 revision 核验；为 `T23` 时（独占资源或依赖不满足），任务回到了待受理，按新 revision 重新规划，之后派发会续用原会话。`sync` 列出的 `needs_stop` 下游按依赖失效处理。
 - `worker.question`：跨任务的事（独占资源冲突、依赖调整、改动其他任务的范围）。用 `judge` 处理：
 
 - 唯一的硬边界是不越过已有授权：凭据、用户验收与退回、配置 `policies.reserved_for_user` 中的决定、超出任务书的范围，都交给用户（`decision: escalate`）。

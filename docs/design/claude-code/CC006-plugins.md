@@ -62,7 +62,7 @@
 
 ## 4. `in-session` 渠道
 
-worker 有待答问题时，`UserPromptSubmit` hook 把用户消息记为 `input.session_message`（DN006 §8.1a）。这是 worker 层的会话内提问，账本中记为渠道 `in-session`；它不受 `plugins.human_channels` 控制。配置中的 `in-session` 人类渠道是另一回事：主会话在自己的会话中直接问用户（DN006 §8.6 的层次与命名）。哪些消息记录、哪些作为注入消息跳过，见 [CC008 §4](CC008-guardrails.md) 的 CC-S2。
+`UserPromptSubmit` hook 把用户在 worker 会话中输入的消息记为 `input.session_message`（DN006 §8.1a；T262 前只在 worker 有待答问题时记录），worker 引用它登记答复或需求变更（DN002 §5.1a）。这是 worker 层的会话内提问，账本中记为渠道 `in-session`；它不受 `plugins.human_channels` 控制。配置中的 `in-session` 人类渠道是另一回事：主会话在自己的会话中直接问用户（DN006 §8.6 的层次与命名）。哪些消息记录、哪些作为注入消息跳过，见 [CC008 §4](CC008-guardrails.md) 的 CC-S2。
 
 ## 5. 委托操作示例
 

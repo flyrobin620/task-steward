@@ -389,6 +389,7 @@ def events(run: Run) -> list[dict[str, Any]]:
             "sequence": e.sequence,
             "type": e.type,
             "task_id": e.task_id,
+            "revision": e.revision,
             "attempt": e.attempt,
             "actor": e.actor,
             "data": e.data,
@@ -1161,6 +1162,201 @@ def handoff_verify(args: argparse.Namespace) -> int:
         "GitHub 不参与本场景",
     ]
     return 0 if write_results(run, "handoff-e2e", checks, notes) else 1
+
+
+def change_prepare(args: argparse.Namespace) -> int:
+    return prepare("change-e2e", args)
+
+
+def change_verify(args: argparse.Namespace) -> int:
+    """The user adds to a task the orchestrator already accepted, in the worker's session; the
+    worker records the change itself, delivers again and the orchestrator accepts revision 2
+    (DN002 §5.1a, T262)."""
+    run = Run.open(args.run_id)
+    evs = events(run)
+    marker = json.loads((run.home / "tsw-home.json").read_text(encoding="utf-8"))
+    orch = [
+        e for e in evs if e["actor"].get("role") == "orchestrator" and e["actor"].get("session_id")
+    ]
+    for sid in sorted({str(e["actor"]["session_id"]) for e in orch}):
+        run.bind_main(sid)
+    reconcile_sessions(run, evs)
+    checks = [
+        check(
+            "H1",
+            "隔离：数据目录与产品仓库指向本运行，主会话在其中操作",
+            Path(marker.get("product_repo", "")).resolve() == ROOT.resolve() and bool(orch),
+            f"product_repo=<repo>; 主会话事件 {len(orch)} 条",
+        ),
+        *requirement_change_checks(evs),
+    ]
+    final = last(evs, "worker.submitted", "T001")
+    checks.append(merged(run, evs, {"T001": final}))
+    checks.append(
+        check(
+            "O",
+            "操作者观察：worker 与主会话发消息、worker 合并时没有被拦",
+            args.blocked == "no",
+            {"blocked": args.blocked or "未记录", "evidence": "操作者在 app 中的观察"},
+        )
+    )
+    notes = [
+        hook_summary(run),
+        "GitHub（push 目标、PR、合并）由运行目录内的 origin.git 与 gh 替身模拟，相关证据为模拟证据",
+    ]
+    return 0 if write_results(run, "change-e2e", checks, notes) else 1
+
+
+def requirement_change_checks(
+    evs: list[dict[str, Any]], task: str = "T001"
+) -> list[dict[str, Any]]:
+    """Checks A, M, X, R and I of ``change-e2e``: delivered once, the user's added requirement
+    recorded by the hook, registered by the worker (T28), delivered again and acknowledged."""
+
+    def revision_of(event: dict[str, Any] | None) -> int | None:
+        if event is None:
+            return None
+        submission = event["data"].get("submission") or {}
+        return int(submission.get("revision") or event.get("revision") or 0)
+
+    first_accept = first(evs, "task.accepted", task)
+    first_submit = first(evs, "worker.submitted", task)
+    checks = [
+        check(
+            "A",
+            "第一次交付：revision 1 的提交与主会话技术验收",
+            revision_of(first_submit) == 1
+            and first_accept is not None
+            and first_accept.get("revision") == 1,
+            {
+                "submitted": first_submit and first_submit["sequence"],
+                "accepted": first_accept and first_accept["sequence"],
+            },
+        )
+    ]
+    after = first_accept["sequence"] if first_accept else 0
+    change = next(
+        (
+            e
+            for e in evs
+            if e["type"] == "task.requirement_changed"
+            and e["task_id"] == task
+            and e["sequence"] > after
+        ),
+        None,
+    )
+    data = (change or {}).get("data") or {}
+    source = data.get("user_source") or {}
+    refs = str(source.get("message_ref") or "").split(",")
+    recorded = [
+        e
+        for e in evs
+        if e["type"] == "input.session_message"
+        and e["task_id"] == task
+        and e["sequence"] > after
+        and e["data"].get("message_id") in refs
+    ]
+    attempt_session = next(
+        (
+            str(e["data"].get("session_ref"))
+            for e in evs
+            if e["task_id"] == task
+            and e["type"] in ("attempt.bound", "attempt.brief_delivered", "attempt.prestarted")
+            and e["data"].get("session_ref")
+        ),
+        None,
+    )
+    checks.append(
+        check(
+            "M",
+            "记录：验收之后 hook 把用户在 worker 会话中追加的要求记为 input.session_message",
+            bool(recorded)
+            and all(
+                not e["data"].get("request_id") and e["data"].get("session_ref") == attempt_session
+                for e in recorded
+            ),
+            [
+                {"seq": e["sequence"], "id": e["data"].get("message_id"), "text": e["data"]["text"]}
+                for e in recorded
+            ],
+        )
+    )
+    texts = "\n\n".join(str(e["data"]["text"]) for e in recorded)
+    by_orchestrator = [
+        e["sequence"]
+        for e in evs
+        if e["type"] == "task.requirement_changed"
+        and e["task_id"] == task
+        and e["actor"].get("role") != "worker"
+    ]
+    checks.append(
+        check(
+            "X",
+            "登记：worker 记录 T28、revision 2，来源是 hook 记录的原话；主会话没有 task_update",
+            change is not None
+            and change["actor"].get("role") == "worker"
+            and data.get("transition") == "T28"
+            and data.get("revision") == 2
+            and source.get("channel") == "in-session"
+            and bool(recorded)
+            and source.get("text") == texts
+            and not by_orchestrator,
+            {
+                "change": change and change["sequence"],
+                "transition": data.get("transition"),
+                "revision": data.get("revision"),
+                "message_ref": source.get("message_ref"),
+                "orchestrator_changes": by_orchestrator,
+            },
+        )
+    )
+    at = change["sequence"] if change else 0
+    later = [e for e in evs if e["sequence"] > at and e["task_id"] == task]
+    finalize = first(later, "review.decision", task, decision="finalize")
+    second_submit = last(later, "worker.submitted", task)
+    second_accept = last(later, "task.accepted", task)
+    # The same attempt delivered both revisions: the change, the review that finalized it and
+    # every later submission belong to the attempt of the first submission.
+    original = (first_submit or {}).get("attempt")
+    attempts = {
+        e.get("attempt") or e["data"].get("attempt")
+        for e in later
+        if e["type"] in ("worker.submitted", "review.started", "review.decision")
+    } | {data.get("attempt")}
+    checks.append(
+        check(
+            "R",
+            "重新交付：同一 attempt 的 revision 2 评审定稿、提交并经主会话再次技术验收",
+            finalize is not None
+            and revision_of(second_submit) == 2
+            and second_accept is not None
+            and second_accept.get("revision") == 2
+            and original is not None
+            and attempts == {original},
+            {
+                "original_attempt": original,
+                "finalize": finalize and finalize["sequence"],
+                "submitted": second_submit and second_submit["sequence"],
+                "accepted": second_accept and second_accept["sequence"],
+                "attempts": sorted(str(a) for a in attempts),
+            },
+        )
+    )
+    acked = [
+        int(s)
+        for e in evs
+        if e["type"] == "orchestrator.inbox_acked"
+        for s in e["data"].get("sequences") or []
+    ]
+    checks.append(
+        check(
+            "I",
+            "通知：主会话确认了 worker 登记的需求变更",
+            change is not None and change["sequence"] in acked,
+            {"change": change and change["sequence"], "acked": acked},
+        )
+    )
+    return checks
 
 
 def lease_handoff(evs: list[dict[str, Any]]) -> tuple[dict[str, Any], str, str]:
@@ -2024,6 +2220,19 @@ def main(argv: list[str] | None = None) -> int:
         help="操作者观察：worker 或新主会话发消息时是否出现权限确认或分类器拒绝",
     )
     handoff_ver.set_defaults(handler=handoff_verify)
+    changed = sub.add_parser(
+        "change-e2e", help="用户在 worker 会话中追加要求，worker 登记并重新交付（需要用户在场）"
+    )
+    changed_steps = changed.add_subparsers(dest="step", required=True)
+    changed_steps.add_parser("prepare").set_defaults(handler=change_prepare)
+    changed_ver = changed_steps.add_parser("verify")
+    changed_ver.add_argument("run_id")
+    changed_ver.add_argument(
+        "--blocked",
+        choices=("yes", "no"),
+        help="操作者观察：worker 或主会话发消息、worker 合并时是否出现权限确认或分类器拒绝",
+    )
+    changed_ver.set_defaults(handler=change_verify)
     clean = sub.add_parser("cleanup", help="记录已归档的会话并报告剩余对象")
     clean.add_argument("run_id")
     clean.add_argument("--archived", action="append", help="已归档并用 get_session 读回的会话 ID")

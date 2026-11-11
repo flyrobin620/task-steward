@@ -143,6 +143,7 @@ DEFAULTS: dict[str, Any] = {
                 "channel.reply_seen",
                 "task.paused",
                 "report_back",
+                "task.requirement_changed",
             ],
         },
     },

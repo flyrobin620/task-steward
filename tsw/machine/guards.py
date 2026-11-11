@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, cast
 
 from tsw.config import EffectiveConfig, resolve_repository
@@ -238,6 +238,62 @@ def g_user(
         channels=DIRECT_CHANNELS if role == "user" else USER_CHANNELS,
         mismatch="用户来源的决定对象与当前任务不一致",
     )
+
+
+def g_change(
+    conn: sqlite3.Connection,
+    events: Callable[[int], Iterable[Any]],
+    *,
+    task_id: str,
+    revision: int,
+    session_ref: str | None,
+    message_ids: list[str],
+) -> dict[str, Any]:
+    """G-CHANGE (DN002 §5.1a): the source of a requirement change the worker records is what the
+    user typed in that worker's own session, as the host recorded it (``input.session_message``)
+    under the task's current revision. Injected messages are never recorded, so neither the
+    orchestrator's relaying nor the worker's own reading of the conversation can be cited.
+
+    ``events(sequence)`` yields the ledger from ``sequence`` on; the recorded message's event
+    tells its revision. The source is built from the recorded words, never from the worker's.
+    """
+    if not message_ids:
+        raise rejected("需要引用用户在本会话中的消息编号", reason="g_change", field="message_ids")
+    texts: list[str] = []
+    for message_id in dict.fromkeys(message_ids):
+        message = conn.execute(
+            "SELECT * FROM session_messages WHERE message_id = ? AND task_id = ?",
+            (message_id, task_id),
+        ).fetchone()
+        if message is None or not session_ref or message["session_ref"] != session_ref:
+            raise rejected(
+                "引用的不是宿主在本会话中记录的用户消息",
+                reason="g_change",
+                check="message",
+                message_id=message_id,
+            )
+        recorded = next(iter(events(int(message["sequence"]))), None)
+        if (
+            recorded is None
+            or recorded.sequence != int(message["sequence"])
+            or recorded.revision != revision
+        ):
+            raise rejected(
+                "这条消息记录于更早的 revision：一条消息至多推动一次需求变更",
+                reason="g_change",
+                check="revision",
+                message_id=message_id,
+                revision=revision,
+            )
+        texts.append(str(message["text"]))
+    return {
+        "channel": "in-session",
+        "principal": "session-owner",
+        "message_ref": ",".join(dict.fromkeys(message_ids)),
+        "text": "\n\n".join(texts),
+        "request_id": None,
+        "target": [task_id, revision, "change"],
+    }
 
 
 def verified_source(

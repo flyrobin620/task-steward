@@ -210,7 +210,7 @@ def test_scrub_removes_machine_paths(tmp_path: Path) -> None:
 
 
 def test_scenario_definitions_are_complete() -> None:
-    for name in ("host-e2e", "reviewer", "routine-e2e", "handoff-e2e"):
+    for name in ("host-e2e", "reviewer", "routine-e2e", "handoff-e2e", "change-e2e"):
         spec = live.scenario(name)
         assert spec["id"] == name
         assert spec["useCases"] and spec["checks"]
@@ -643,3 +643,82 @@ def test_handoff_e2e_checks_the_handover_and_where_the_wake_went(tmp_path: Path)
     assert live.lease_handoff([*evs, taken])[0]["status"] == "failed"
     assert live.lease_handoff([evs[0], *evs[2:]])[0]["status"] == "failed"
     assert live.lease_handoff(evs[:1])[0]["status"] == "failed"
+
+
+@pytest.mark.use_case("UC-CHANGE-001")
+def test_change_e2e_checks_pass_on_a_real_change_and_fail_without_it(
+    home: Home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Checks A, M, X, R and I of change-e2e against the ledger the real tools and hook write."""
+    from tsw.host import inbox as inbox_mod  # noqa: PLC0415
+    from tsw.host.guard import Guard  # noqa: PLC0415
+
+    monkeypatch.setattr(lease, "this_machine", lambda: MACHINE)
+    h = Harness(home)
+    worker = h.complete("T001")
+
+    def ledger_events() -> list[dict[str, Any]]:
+        # The shape live.events reads from a run's ledger.
+        return [
+            {
+                "sequence": e.sequence,
+                "type": e.type,
+                "task_id": e.task_id,
+                "revision": e.revision,
+                "attempt": e.attempt,
+                "actor": e.actor,
+                "data": e.data,
+                "time": e.time,
+            }
+            for e in h.ledger.storage.read(since=0)
+        ]
+
+    def ids(evs: list[dict[str, Any]]) -> dict[str, str]:
+        return {c["id"]: c["status"] for c in live.requirement_change_checks(evs)}
+
+    assert ids(ledger_events())["X"] == "failed"
+    env = {"CLAUDE_CODE_HOST_SESSION_ID": str(worker.session_id)}
+    payload = {"cwd": str(home.root), "prompt": "README 再加一行", "hook_event_name": "x"}
+    Guard(h.home, env, payload).run("UserPromptSubmit")
+    changed = h.run(
+        "requirement_change",
+        worker,
+        task_id="T001",
+        message_ids=["M-T001-1"],
+        goal="g2",
+        acceptance=["a2"],
+    )
+    h.finalize(worker, "T001", head="h2")
+    h.submit(worker, "T001", head="h2")
+    h.ledger.commit(
+        inbox_mod.ack(
+            [changed["events"][0]["sequence"]],
+            actor={"role": "orchestrator", "session_id": "orch-1"},
+            config=h.config,
+            session_id="orch-1",
+            machine=MACHINE,
+        )
+    )
+    h.accept("T001", head="h2")
+    assert ids(ledger_events()) == {
+        "A": "passed",
+        "M": "passed",
+        "X": "passed",
+        "R": "passed",
+        "I": "passed",
+    }
+    # The orchestrator relaying the words itself (task_update) is not what the scenario checks.
+    relayed = [
+        {**e, "actor": {"role": "orchestrator"}} if e["type"] == "task.requirement_changed" else e
+        for e in ledger_events()
+    ]
+    assert ids(relayed)["X"] == "failed"
+    # Revision 2 delivered by another attempt (a2) is not the same attempt continuing.
+    elsewhere = [
+        {**e, "attempt": "a2"}
+        if e["type"] in ("worker.submitted", "review.started", "review.decision")
+        and e["sequence"] > changed["events"][0]["sequence"]
+        else e
+        for e in ledger_events()
+    ]
+    assert ids(elsewhere)["R"] == "failed"

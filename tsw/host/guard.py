@@ -501,7 +501,9 @@ class Guard:
                 "再 submit。需要用户决定的事用 ask_user "
                 "在本会话直接问用户（Claude app 中再用 wrap_up 的 ask 写问题、actions 给每个选项"
                 "一个按钮并设 blocked: true；用户点按钮等于在本会话发出按钮文字），"
-                "用户回复后用 user_answer 登记；跨任务的事（资源冲突、依赖、"
+                "用户回复后用 user_answer 登记；用户在本会话中修改或追加任务要求时（任务已提交"
+                "或已完成、但用户尚未验收也可以），用 requirement_change 引用 hook 给出的消息编号"
+                "登记需求变更，再继续、评审并重新提交；跨任务的事（资源冲突、依赖、"
                 "其他任务的范围）才用 question 交主会话。"
                 "唤醒主会话：tsw 工具结果带 wake 且 send 为 true 时，用 "
                 "mcp__ccd_session_mgmt__send_message 把 wake.message 原样发给 wake.session_id"
@@ -668,10 +670,17 @@ class Guard:
             return None
         notes: list[str] = []
         recorded = self._record_answer(who, prompt) if self.config.valid else None
-        if recorded is not None:
+        if recorded is not None and recorded.get("request_id"):
             notes.append(
                 f"这条用户消息已记录为 {recorded['message_id']}（问题 {recorded['request_id']}）。"
-                "它回答了问题时，用 user_answer 引用这个编号登记答复。"
+                "它回答了问题时，用 user_answer 引用这个编号登记答复；它修改了任务的目标、范围或"
+                "验收时，登记答复后再用 requirement_change 引用这个编号登记需求变更。"
+            )
+        elif recorded is not None:
+            notes.append(
+                f"这条用户消息已记录为 {recorded['message_id']}。它修改了任务的目标、范围或验收"
+                "（包括任务已提交或已完成后用户追加的要求）时，用 requirement_change 引用这个"
+                "编号登记需求变更，再继续工作、评审并重新提交；只是讨论或任务内的澄清时不登记。"
             )
         if "[report]" in prompt:
             notes.append(
@@ -702,7 +711,8 @@ class Guard:
         )
 
     def _record_answer(self, who: Identity, prompt: str) -> dict[str, Any] | None:
-        """Record the user's words while the worker's question is open (DN006 §8.2)."""
+        """Record the user's words in the worker's session (DN006 §8.1a, DN002 §5.1a): an
+        answer to its open question or the source of a requirement change."""
         if who.phase != "live" or not who.task_id or not who.session_id:
             return None
         task_id, session_id = who.task_id, who.session_id

@@ -259,3 +259,80 @@ def test_g_submit(conn: sqlite3.Connection, home: Home, tmp_path: Path) -> None:
     assert (
         _reason(lambda: guards.g_submit(conn, config, row, "a1", "h1")) == "g_submit"
     )  # not the reviewer
+
+
+class _Recorded:
+    """A recorded ``input.session_message`` as the ledger yields it (sequence and revision)."""
+
+    def __init__(self, sequence: int, revision: int) -> None:
+        self.sequence = sequence
+        self.revision = revision
+
+
+def _message(db: sqlite3.Connection, message_id: str, session: str, sequence: int) -> None:
+    db.execute(
+        "INSERT INTO session_messages(message_id, task_id, request_id, session_ref, text, "
+        "sequence) VALUES(?, 'T001', '', ?, ?, ?)",
+        (message_id, session, f"原话 {message_id}", sequence),
+    )
+
+
+@pytest.mark.use_case("UC-CHANGE-001")
+@pytest.mark.transition("G-CHANGE")
+def test_g_change_builds_the_source_from_the_recorded_words(conn: sqlite3.Connection) -> None:
+    _task(conn, "T001", "done", revision=2)
+    _message(conn, "M-T001-1", "w-1", 5)
+    _message(conn, "M-T001-2", "w-1", 9)
+    ledger = {5: _Recorded(5, 2), 9: _Recorded(9, 2)}
+
+    def events(sequence: int) -> list[_Recorded]:
+        return [ledger[sequence]] if sequence in ledger else []
+
+    source = guards.g_change(
+        conn,
+        events,
+        task_id="T001",
+        revision=2,
+        session_ref="w-1",
+        message_ids=["M-T001-1", "M-T001-2", "M-T001-1"],
+    )
+    assert source == {
+        "channel": "in-session",
+        "principal": "session-owner",
+        "message_ref": "M-T001-1,M-T001-2",
+        "text": "原话 M-T001-1\n\n原话 M-T001-2",
+        "request_id": None,
+        "target": ["T001", 2, "change"],
+    }
+
+
+@pytest.mark.use_case("UC-CHANGE-001")
+@pytest.mark.transition("G-CHANGE")
+@pytest.mark.parametrize(
+    ("message_ids", "session", "check"),
+    [
+        ([], "w-1", None),  # no message: the worker's own words are not a source
+        (["M-T001-9"], "w-1", "message"),  # not recorded by the host
+        (["M-T001-1"], "w-2", "message"),  # recorded in another session
+        (["M-T001-1"], None, "message"),  # no session to compare
+        (["M-T001-3"], "w-1", "revision"),  # recorded under an earlier revision
+    ],
+)
+def test_g_change_rejects_what_the_user_did_not_type_in_this_session(
+    conn: sqlite3.Connection, message_ids: list[str], session: str | None, check: str | None
+) -> None:
+    _task(conn, "T001", "in_progress", revision=2)
+    _message(conn, "M-T001-1", "w-1", 5)
+    _message(conn, "M-T001-3", "w-1", 3)
+    ledger = {5: _Recorded(5, 2), 3: _Recorded(3, 1)}
+    with pytest.raises(TswError) as info:
+        guards.g_change(
+            conn,
+            lambda sequence: [ledger[sequence]] if sequence in ledger else [],
+            task_id="T001",
+            revision=2,
+            session_ref=session,
+            message_ids=message_ids,
+        )
+    assert info.value.details["reason"] == "g_change"
+    assert info.value.details.get("check") == check

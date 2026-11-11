@@ -273,6 +273,16 @@
       "milestone": "M3"
     },
     {
+      "id": "T28",
+      "kind": "transition",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
+    },
+    {
       "id": "E01",
       "kind": "worker_transition",
       "status": "active",
@@ -344,6 +354,16 @@
     },
     {
       "id": "G-ACCEPT",
+      "kind": "guard",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "milestone": "M3"
+    },
+    {
+      "id": "G-CHANGE",
       "kind": "guard",
       "status": "active",
       "requiredTiers": [
