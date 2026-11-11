@@ -116,6 +116,8 @@ def test_follow_up_input_is_checked(home: Home) -> None:
     assert reason_of(record(items=[{"title": "两\n行", "detail": "说明"}])) == "invalid_input"
     assert reason_of(record(items=[{**ITEMS[0], "kind": "bug"}])) == "invalid_input"
     assert reason_of(record(items=[{**ITEMS[0], "severity": "urgent"}])) == "invalid_input"
+    # An out-of-scope finding says how serious it is (T264 A12).
+    assert reason_of(record(items=[{**ITEMS[0], "kind": "out_of_scope"}])) == "invalid_input"
     # Another session is not the task's worker.
     other = Caller(role="worker", session_id="w-other", machine=MACHINE)
     assert (
@@ -265,14 +267,26 @@ def test_update_open_follow_ups_and_put_one_off(home: Home) -> None:
         reason_of(lambda: h.run("follow_up_update", follow_up_id="F-T001-1", reason="r"))
         == "invalid_input"
     )
+    # Only YYYY-MM-DD: attention compares the date as text with today.
+    for odd in ("12/01", "20261201", "2026-W49-2", "2026-12-1"):
+        assert (
+            reason_of(
+                lambda d=odd: h.run(
+                    "follow_up_update", follow_up_id="F-T001-1", recheck_after=d, reason="r"
+                )
+            )
+            == "invalid_input"
+        )
+    # Made an out-of-scope finding, it needs a severity; one that has it can change kind freely.
     assert (
         reason_of(
             lambda: h.run(
-                "follow_up_update", follow_up_id="F-T001-1", recheck_after="12/01", reason="r"
+                "follow_up_update", worker, follow_up_id="F-T001-1", kind="out_of_scope", reason="r"
             )
         )
         == "invalid_input"
     )
+    h.run("follow_up_update", follow_up_id="F-T001-2", kind="out_of_scope", reason="仍是范围外")
     # Putting it off is the user's decision.
     assert (
         reason_of(

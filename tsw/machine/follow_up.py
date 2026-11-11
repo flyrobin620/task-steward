@@ -53,15 +53,24 @@ def _choice(value: str | None, allowed: tuple[str, ...], field_name: str) -> str
 
 
 def _date(value: str | None) -> str | None:
+    """A recheck date as ``YYYY-MM-DD`` exactly: ``attention`` compares it as text with today."""
     if value is None:
         return None
     try:
-        dt.date.fromisoformat(value)
+        parsed: dt.date | None = dt.date.fromisoformat(value)
     except ValueError:
-        raise rejected(
-            "复查日期应为 YYYY-MM-DD", reason="invalid_input", field="recheck_after"
-        ) from None
+        parsed = None
+    if parsed is None or parsed.isoformat() != value:
+        raise rejected("复查日期应为 YYYY-MM-DD", reason="invalid_input", field="recheck_after")
     return value
+
+
+def _severity_given(kind: str | None, severity: str | None, field_name: str) -> None:
+    """An out-of-scope finding says how serious it is (DN002 §5.7, T264 A12)."""
+    if kind == "out_of_scope" and severity is None:
+        raise rejected(
+            "范围外发现必须给出严重度（severity）", reason="invalid_input", field=field_name
+        )
 
 
 def _item(raw: Any, index: int) -> dict[str, Any]:
@@ -71,12 +80,10 @@ def _item(raw: Any, index: int) -> dict[str, Any]:
     detail = text(raw, "detail").strip()
     if "\n" in title:
         raise rejected("标题只能有一行", reason="invalid_input", field=f"items[{index}].title")
-    return {
-        "title": title,
-        "detail": detail,
-        "kind": _choice(opt_text(raw, "kind"), KINDS, "kind") or "remaining",
-        "severity": _choice(opt_text(raw, "severity"), SEVERITIES, "severity"),
-    }
+    kind = _choice(opt_text(raw, "kind"), KINDS, "kind") or "remaining"
+    severity = _choice(opt_text(raw, "severity"), SEVERITIES, "severity")
+    _severity_given(kind, severity, f"items[{index}].severity")
+    return {"title": title, "detail": detail, "kind": kind, "severity": severity}
 
 
 def _ids(conn: sqlite3.Connection, task_id: str, count: int) -> list[str]:
@@ -291,6 +298,11 @@ def follow_up_update(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 "follow-up 不属于该任务", reason="invalid_input", follow_up_id=follow_up_id
             )
         row, attempt = _writable(ctx, env, task_id)
+        _severity_given(
+            changes.get("kind", found["kind"]),
+            changes.get("severity", found["severity"]),
+            "severity",
+        )
         if env.caller.role == "worker":
             if loads(found["recorded_by"], {}).get("role") != "worker":
                 raise rejected("worker 只能修改 worker 记录的 follow-up", reason="role_denied")
