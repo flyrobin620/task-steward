@@ -266,7 +266,7 @@ interactive 动作（`create`、`deliver_brief`、`send`、`stop`、`observe`、
 
 1. worker 调用 `ask_user`（问题全文；可带上评审升级等待处理事项的编号；只有用户本人能决定的事——凭据、验收、`reserved_for_user` 中的决定——标 `reserved`）。tsw 记录 `input.escalated`（`kind: in_session`，渠道 `in-session`，记下 worker 会话与转交时间），任务经 T11 进入 `waiting_user`，名额保持。
 2. worker 在本会话的回复中把问题原样写给用户，结束这一轮。这个问题**不进入主会话 inbox**：主会话的 `attention` 只显示“某任务有一个会话内问题、何时转交”，不显示问题内容；STATUS 页是给用户看的，显示问题与转交时间。
-3. 用户在 worker 会话中发消息时，宿主集成把消息原文记为观察事件 `input.session_message`（消息编号 `M-…`），并把编号告诉 worker（Claude Code 用 `UserPromptSubmit` hook，见 [CC001 §6](claude-code/CC001-sessions-and-hooks.md)）。其他会话、app 或定时任务注入的消息不记录。只有该会话最新的一个问题接收消息：它已由用户在本会话答复、被更新的问题取代，或任务 revision 已变时，不再记录。
+3. 用户在 worker 会话中发消息时，宿主集成把消息原文记为观察事件 `input.session_message`（消息编号 `M-…`），并把编号告诉 worker（Claude Code 用 `UserPromptSubmit` hook，见 [CC001 §6](claude-code/CC001-sessions-and-hooks.md)）。其他会话、app 或定时任务注入的消息不记录。T262 起不限于有待答问题时：会话绑定在任务当前 attempt 上、任务不是 `accepted` / `cancelled` / `archived` 时，用户的每条消息都记录，可以作为答复的来源，也可以作为 worker 登记需求变更的来源（DN002 §5.1a）。消息只对应该会话最新的一个问题：它已由用户在本会话答复、被更新的问题取代，或任务 revision 已变时，消息照常记录，但不再对应这个问题（不能用 `user_answer` 引用）。
 4. 消息回答了问题时，worker 调用 `user_answer`，必须引用 hook 记录的消息编号，且该消息来自同一 worker 会话。tsw 用记录中的原文构造 `VerifiedSource`（渠道 `in-session`），记录 `input.resolved`，经 T12 回到离开时的子状态。同一次答复可以带上用户批准的追加评审轮次（`source = user`，没有累计上限）、批准延后或认定不成立的阻断项。答复以记录的用户原话为准，不以 worker 的转述为准（DN008 §9）。
 
 用户回复了但还没有回答问题（例如“让我想想”）时，worker 在会话中继续与用户交流；问题不会因超时转交。
@@ -301,7 +301,7 @@ interactive 动作（`create`、`deliver_brief`、`send`、`stop`、`observe`、
 | 情形 | 处理 |
 | --- | --- |
 | 已转交、主会话尚未决定时，用户在 worker 会话中回答 | 仍是有效答复：worker 经 `user_answer` 记录，T12 生效。主会话之后的 `handoff_resolve` 与经其他渠道收到的答复以 `request_not_pending` 拒绝或记为 `input.late_response`；已转达的渠道按 §8.6 撤回 |
-| 主会话已代答或其他渠道已答复之后，用户才在 worker 会话中回答 | hook 照常记录这条消息（该问题还没有来自 worker 会话的用户答复）；worker 经 `user_answer` 记为 `input.late_response`，标明它取代的答复（`supersedes`）。用户本人的话优先于主会话代答：worker 以用户的话为准继续，必要的返工是任务内的正常工作；超出任务范围时按需求变更经主会话处理（`[report]`，DN001 §6.5）。之前的答复也来自用户、两者冲突时，worker 再次 `ask_user` 确认 |
+| 主会话已代答或其他渠道已答复之后，用户才在 worker 会话中回答 | hook 照常记录这条消息（该问题还没有来自 worker 会话的用户答复）；worker 经 `user_answer` 记为 `input.late_response`，标明它取代的答复（`supersedes`）。用户本人的话优先于主会话代答：worker 以用户的话为准继续，必要的返工是任务内的正常工作；超出任务范围时，worker 引用这条消息自己登记需求变更（`requirement_change`，DN002 §5.1a）。之前的答复也来自用户、两者冲突时，worker 再次 `ask_user` 确认 |
 | 其他渠道的答复晚于已生效的答复 | 记为 `input.late_response`（§8.6 多渠道规则） |
 
 超时本身不是答复；转交只改变谁来处理，不替用户作出决定。
@@ -360,7 +360,7 @@ class DecisionRecord:
 ```
 
 - `input.decision_digest` 配置把主会话的自主决定按日或在任务完成时汇总，经支持 notify 的人类渠道通知用户，便于事后核对；`channel` 为 `"local"` 时只写入 STATUS 页与主控验收报告。
-- 用户不同意某个决定时，直接在主会话或该 worker 会话中给出新指示；它按需求变更或用户答复处理（DN002 §5.1、T12），已执行的部分按正常流程返工。
+- 用户不同意某个决定时，直接在主会话或该 worker 会话中给出新指示；它按需求变更或用户答复处理（DN002 §5.1、§5.1a、T12），已执行的部分按正常流程返工。
 - 任务的主控验收报告（`review.md`）列出本任务的全部主会话决定，用户验收时一并可见。
 
 ### 8.5 渠道接口
@@ -382,7 +382,7 @@ class VerifiedSource:              # DN002 G-USER 的统一证据
     message_ref: str               # 会话消息引用 / Teams 消息 ID / Portal 提交 ID
     text: str                      # 用户原话
     request_id: str | None         # 回答的 InputRequest（验收 / 退回等主动决定可为空）
-    target: tuple[str, int, str]   # (任务 ID, revision, 决定类别：answer / accept / reject / approve)
+    target: tuple[str, int, str]   # (任务 ID, revision, 决定类别：answer / accept / reject / approve / change)
 ```
 
 `InputRequest` 含请求 ID（如 `Q-T241-3`）、触发场合、问题正文、可选项、主会话已作的分析（`DecisionRecord` 摘要）、过期时间、worker 会话的直达链接（如果宿主支持用户直接对话），以及**上下文绑定**：任务 ID、revision、attempt、创建代次、提交周期。
@@ -408,7 +408,7 @@ T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与
 
 | 实现 | 能力 | 发送 | 回收 | 核实 |
 | --- | --- | --- | --- | --- |
-| （worker 层，不是 P3 渠道） | — | 无需发送：worker 用 `ask_user` 记录后在自己的会话里提问（§8.1a） | 宿主集成记录用户消息原文（`input.session_message`，Claude Code 见 CC006 §4），worker 用 `user_answer` 引用消息编号登记 | 只核对问题仍待答、消息属于该 worker 会话的这个问题；注入的其他会话消息不记录（DN008 §9） |
+| （worker 层，不是 P3 渠道） | — | 无需发送：worker 用 `ask_user` 记录后在自己的会话里提问（§8.1a） | 宿主集成记录用户消息原文（`input.session_message`，Claude Code 见 CC006 §4），worker 用 `user_answer` 引用消息编号登记答复，或用 `requirement_change` 引用消息编号登记需求变更（DN002 §5.1a） | 答复只核对问题仍待答、消息属于该 worker 会话的这个问题；需求变更只核对消息属于该 worker 会话、本任务与当前 revision（G-CHANGE）；注入的其他会话消息不记录（DN008 §9） |
 | `in-session` | request_response，push（不支持 notify） | 主会话 `input_relay`（`channel: in-session`）后在自己的会话中直接问用户 | 用户在主会话中答复，主会话用 `input_resolve` 记录（来源渠道 `main-session`） | 只核对问题仍待答、答复对应到问题编号；worker 会话中的原话不能由主会话记录 |
 | `teams-chat` | request_response，poll，delegated（本版本不提供 notify） | 主会话 `input_relay` 后，按渠道的 skill 把返回的富文本卡片用宿主的 Teams 工具发到配置的 chat（默认用户本人的自聊），再用 `channel_sent` 登记，例行表随之加入或更新 Teams 例行项 | 例行项的脚本取出 chat 中最近的、用户发送的、以等待中任务 ID 开头的消息，转给主会话（§8.7） | 只核对问题仍待答、消息能对应到任务 ID 与问题；卡片以 `[TaskSteward]` 开头，不会被当作答复（DN008 §9） |
 | `hub-portal` | request_response，notify（Portal 通知卡片），push，direct | tsw 把请求发布到 Hub 门户（问题卡片） | Portal 用户提交答复，经认证回调写回 tsw | Portal 的 owner 认证 + 请求 ID |

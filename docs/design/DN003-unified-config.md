@@ -97,7 +97,7 @@
     "max_workers": 5,
     "lease_minutes": 120,
     "prestart": {"enabled": true, "max_standby": 10},
-    "wake": {"worker_message_parent": true, "reportable_events": ["worker.submitted", "worker.question", "input.handed_off", "channel.reply_seen", "task.paused", "report_back"]}
+    "wake": {"worker_message_parent": true, "reportable_events": ["worker.submitted", "worker.question", "input.handed_off", "channel.reply_seen", "task.paused", "report_back", "task.requirement_changed"]}
   },
   "sessions": {
     "name_pattern": "{task_id_lower}-{attempt}-g{generation}",
@@ -254,6 +254,7 @@
 - `max_workers`：活动任务上限（DN002 G-SLOT）。实际并发取它与平台可用额度的较小值。
 - `prestart.enabled` / `prestart.max_standby`：是否在用户 turn 中为已规划任务预启动 worker 会话，以及同时待命的会话上限（DN002 §5.6）。关闭预启动时，自动 turn 中变为可派发的任务都要等用户下一次发消息才能创建会话。
 - `wake.worker_message_parent`：reportable 事件发生时，worker 是否同时用宿主的会话消息工具唤醒主会话（DN001 §6.3；Claude Code 见 CC001 §4）。键名沿用 parent，目标是当前持有调度租约的主会话，不是启动 worker 的会话。
+- `wake.reportable_events`：进入主会话 inbox、并让 worker 唤醒主会话的事件类型。`task.requirement_changed`（T262 起默认包含）只有 worker 登记的（DN002 §5.1a）才进入 inbox，主会话自己用 `task_update` 记录的不进入。
 - `sessions.archive_on_accept`：验收后是否归档子会话。默认 `false`，保留以便用户回看；归档时须有工具回执。
 
 ### 3.4 `repositories` 与 `accounts`

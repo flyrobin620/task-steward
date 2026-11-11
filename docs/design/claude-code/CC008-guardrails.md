@@ -57,7 +57,7 @@
 | 编号 | hook | 行为 | 归类 |
 | --- | --- | --- | --- |
 | CC-S1 | SessionStart | 识别角色；主会话领取租约并注入 attention 摘要（让出过租约的会话不领取，只注入只读说明，DN001 §6.4，T254）；worker 注入任务与回传规则（唤醒发给当前持租主会话）；待绑定会话提示等待绑定 | 保留（不是拦截） |
-| CC-S2 | UserPromptSubmit（worker） | worker 有待答问题时，把用户消息原文记为 `input.session_message` 并告诉 worker 编号；去掉宿主前置的 `<system-reminder>`（T241）；以 `<cross-session-message` `<side-sessions-event` `<task-notification` `<ci-monitor-event` `<scheduled-task` 开头的注入消息不记 | 保留。前置 reminder 的修复是必需的：本任务中用户在 worker 会话的回复以 `<system-reminder>` 开头，`main` 上的实现把它当成注入消息没有记录，worker 因而无法登记答复 |
+| CC-S2 | UserPromptSubmit（worker） | live worker 的任务不是 `accepted` / `cancelled` / `archived` 时（T262 前只在有待答问题时），把用户消息原文记为 `input.session_message` 并告诉 worker 编号，可用于登记答复（`user_answer`）或需求变更（`requirement_change`，DN002 §5.1a）；去掉宿主前置的 `<system-reminder>`（T241）；以 `<cross-session-message` `<side-sessions-event` `<task-notification` `<ci-monitor-event` `<scheduled-task` 开头的注入消息不记 | 保留。前置 reminder 的修复是必需的：本任务中用户在 worker 会话的回复以 `<system-reminder>` 开头，`main` 上的实现把它当成注入消息没有记录，worker 因而无法登记答复 |
 | CC-S3 | UserPromptSubmit（worker） | 检测 `[report]` 并提示回传 | 保留 |
 | CC-S4 | Stop（主会话） | 本会话可以持有租约（没有被另一个主会话的有效租约排除、没有让出过租约）时：有未处理的回传、到期未转交的问题或失效的例行会话（`attention` 的 `routine` 为 `stale`，提示给它发消息重新设定）时阻止结束一次；这一轮是用户的 turn（CC-S6）且 `attention` 的 `needs_prestart` 非空或例行会话需要启动（`missing`）时也阻止一次，提示为列出的任务预启动（DN002 §5.6）、启动例行会话（DN006 §8.9.2）。几条原因合在一条提示里，`stop_hook_active` 时不再阻止 | 保留；预启动提醒为 T244 新增，例行会话提醒为 T243 新增 |
 | CC-S5 | Stop（worker） | 评审进行中时阻止结束一次；记录 `worker.turn_ended` | 保留 |
