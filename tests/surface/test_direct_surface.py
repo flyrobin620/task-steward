@@ -324,3 +324,40 @@ def test_the_status_app_serves_linked_reports_and_nothing_else(h: Harness, app: 
     for path in ("/tsw-home.json", "/config/task-steward.json", "/runs/../tsw-home.json"):
         assert app.request("GET", path)[0] == 404, path
     assert app.request("GET", "/runs/T009/a1/report.html", headers={"Cookie": ""})[0] == 403
+
+
+@mark.use_case("UC-DIRECT-003")
+@mark.transition("T22")
+def test_the_status_app_serves_a_task_view_behind_the_same_admission(h: Harness, app: App) -> None:
+    h.complete("T001")
+    handed_back(h)
+    # The view needs the cookie and this server's host name, like the board.
+    assert app.request("GET", "/tasks/T001")[0] == 403
+    app.cookie = f"tsw_status_{app.port}={app.token}"
+    assert app.request("GET", "/tasks/T001", headers={"Host": f"evil.example:{app.port}"})[0] == 403
+    status, headers, body = app.request("GET", "/tasks/T001")
+    page = body.decode("utf-8")
+    assert status == 200 and headers["Content-Type"] == "text/html; charset=utf-8"
+    assert headers["X-Frame-Options"] == "DENY" and headers["Cache-Control"] == "no-store"
+    assert '<main class="task-view" data-tsw-task="T001">' in page
+    assert f'<meta name="tsw-token" content="{app.token}">' in page
+    assert "connect-src 'self'" in page.replace("&#x27;", "'")
+    assert re.search(r'<a class="session" data-tsw-session="[^"]+" data-tsw-task="T001"', page)
+    assert '<a class="back" href="../#task-T001">' in page
+    assert f"127.0.0.1:{app.port}" not in page
+    # The board links the view relatively; the view's report link resolves under /runs/.
+    board = app.request("GET", "/")[2].decode("utf-8")
+    assert '<a class="detail" href="tasks/T001">详情</a>' in board
+    assert '<a href="../runs/T001/a1/result.html">报告</a>' in page
+    assert app.request("GET", "/runs/T001/a1/result.html")[0] == 200
+    # The view's accept button posts to the same endpoint as the card's.
+    acts = re.search(r'<div class="acts" data-task="T001" data-revision="1">.*?</div>', page)
+    assert acts and 'data-act="accept"' in acts.group(0)
+    status, out = app.act("T001", "accept", revision=1)
+    assert (status, out["event"]) == (200, "task.user_accepted")
+    assert 'data-act="accept"' not in app.request("GET", "/tasks/T001")[2].decode("utf-8")
+    # An unknown task is a 404 page with the way back; other paths under /tasks are not views.
+    status, _, body = app.request("GET", "/tasks/T404")
+    assert status == 404 and '<a class="back" href="../">' in body.decode("utf-8")
+    for path in ("/tasks/", "/tasks", "/tasks/T001/x"):
+        assert app.request("GET", path)[0] == 404, path

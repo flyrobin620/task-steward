@@ -689,6 +689,27 @@
       }
     },
     {
+      "id": "UC-DIRECT-003",
+      "title": "STATUS 应用的单任务视图与会话链接（DN006 §8.10）",
+      "actor": "用户 / 嵌入 STATUS 应用的页面",
+      "acceptance": "GET /tasks/<任务> 与看板同一令牌 cookie 与 Host 核对，返回只读的单任务视图（已归档任务也可打开，不存在的任务 404 并给出返回看板的链接）；视图带与看板相同的 CSP、meta 令牌与脚本，按钮与卡片相同；依次列出概况、当前需求与 revision 历史、每个 attempt（阶段、会话链接、适配器、执行目录、分支、任务书）、当前提交与评审周期、轮次、产出、依赖与被依赖、资源与集成、全部提问与判断、决定、暂停、进展记录与本任务最近 200 条账本事件（改号后保留原号的事件），缺少的数据显示为空；应用内链接全为相对路径（看板 → tasks/<任务>，视图 → ../#task-<任务>、依赖 <任务>、报告 ../runs/...），不含主机与端口；看板卡片（当前 attempt，静态 STATUS.html 也有）与视图（每个 attempt）对有 session_ref 的 attempt 渲染会话链接 class=session，带 data-tsw-session、data-tsw-task、data-tsw-attempt、data-tsw-adapter，claude-app（或没有适配器记录）的地址为 claude://claude.ai/epitaxy/<session_ref>，其他适配器无地址时渲染为不带 href 的 span；视图的 main 带 data-tsw-task；静态 STATUS.html 没有详情链接",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；真实浏览器打开看板与单任务视图由本机手工验证记录在 PR 与报告中"
+      }
+    },
+    {
       "id": "UC-HOST-001",
       "title": "按会话解析角色的 MCP server",
       "actor": "主会话 / worker / 其他会话",

@@ -167,3 +167,35 @@ border-color:var(--line)}
 .reason textarea{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 8px;resize:vertical}
 .reason .act{justify-self:start}
 .act-reject-send{background:#ea580c;border-color:#ea580c;color:#fff}
+/* Session links (DN006 §8.10) and the way from a card to its task view. */
+a.session,span.session{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+a.session::before{content:"\2197 ";color:var(--muted)}
+.detail{font-size:12px;border:1px solid var(--line);border-radius:7px;padding:0 7px;text-decoration:none;
+background:var(--panel)}
+.top>.detail{margin-left:auto}
+.top>.flag~.detail{margin-left:0}
+/* The task view: /tasks/<task>. */
+.task-view{max-width:1200px}
+.crumbs{margin:0 0 10px;font-size:13px}
+.view{background:linear-gradient(180deg,color-mix(in srgb,var(--c) 9%,var(--card)),var(--card) 90px);
+border:1px solid var(--line);border-left:6px solid var(--c);border-radius:14px;padding:14px 18px;
+box-shadow:var(--shadow);display:grid;gap:8px;margin-bottom:14px}
+.view h1{font-size:22px;margin:0}
+.view .tid{text-decoration:none}
+.view .sess{margin:0;font-size:13px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 16px 12px;
+margin:0 0 12px;box-shadow:var(--shadow);overflow-wrap:anywhere}
+.panel h2{font-size:16px;margin:2px 0 8px;display:flex;align-items:center;gap:8px}
+.panel h2 .n{background:var(--chip);color:var(--muted);border-radius:999px;padding:0 8px;font-size:12px;font-weight:600}
+.panel h3{font-size:13px;color:var(--muted);margin:12px 0 4px;font-weight:600}
+.panel .brief>summary{font-size:13px}
+.facts.wide{font-size:13px;gap:4px 22px}
+.none{color:var(--muted);margin:0;font-size:13px}
+.tbl{overflow-x:auto}
+.tbl table{border-collapse:collapse;width:100%;font-size:13px}
+.tbl th{text-align:left;color:var(--muted);font-weight:600;font-size:12px;border-bottom:1px solid var(--line);
+padding:4px 8px;white-space:nowrap}
+.tbl td{border-bottom:1px solid var(--line);padding:5px 8px;vertical-align:top}
+.tbl td .clip{display:block;max-height:9em;overflow:auto;white-space:pre-wrap}
+.tbl td p{margin:0}
+.tbl code,.facts code{font-size:12px}

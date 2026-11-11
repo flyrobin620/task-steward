@@ -58,6 +58,7 @@
 | stop | `stop_session` |
 | observe | `get_session` |
 | find | `list_sessions {linked:true}` 按名称 |
+| 会话地址（STATUS 页的会话链接，DN006 §8.10） | `claude://claude.ai/epitaxy/<session_ref>`：`session_ref` 是 app 的会话 ID（`local_…`），按 URL 路径段编码；点击由桌面 app 打开该会话 |
 | 唤醒主会话 | push：worker `mcp__ccd_session_mgmt__send_message`，`session_id` 为 tsw 给出的当前持租主会话（DN001 §6.3）；兜底 side-sessions-event（只到原主会话） |
 
 ## 4. `in-session` 渠道

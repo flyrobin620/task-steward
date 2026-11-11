@@ -3,7 +3,9 @@
 A small HTTP server on the loopback address, started by the user in a terminal. Every page load
 renders the STATUS page from the ledger's projection with the user's direct actions as buttons;
 a button runs :func:`tsw.direct.perform` on the ``status-app`` channel, the same implementation as
-``tsw task accept``. Report links on the page are served read-only from ``runs/`` and ``legacy/``.
+``tsw task accept``. Each task has its own read-only view at ``/tasks/<task>``
+(:mod:`tsw.host.task_view`). Report links on the page are served read-only from ``runs/`` and
+``legacy/``.
 
 Requests are admitted only with this run's token (DN006 §8.10, DN008 §9): it is printed in the
 terminal and put in the address the browser is opened with; the first visit trades it for an
@@ -34,13 +36,14 @@ from tsw.errors import TswError, rejected
 from tsw.events import Event
 from tsw.home import Home
 from tsw.host.status import AppView, Revision, render
+from tsw.host.task_view import not_found, render_task, timeline
 from tsw.ledger import Ledger
 from tsw.storage.fs import FsStorage
 
 # The cookie is named per port: browsers share cookies across the ports of one host.
 COOKIE = "tsw_status"
 TOKEN_HEADER = "X-TSW-Token"
-# Files a page may link to (``tsw.host.status._href``), served read-only.
+# Files a page may link to (``tsw.host.status.link_for``), served read-only.
 SERVED_DIRS = ("runs", "legacy")
 MAX_BODY = 16 * 1024
 # Served documents (reports) keep their own images and styles but run no script in this origin.
@@ -130,6 +133,22 @@ class StatusApp:
                 actions[str(row["task_id"])] = (found.actions, found.cancel_blocked)
             past = history(ledger.storage.read(since=0))
             return render(conn, AppView(token=self.token, actions=actions, history=past))
+
+    def task_page(self, task_id: str) -> tuple[bool, str]:
+        """The task's view (DN006 §8.10); False with the not-found page when there is no task."""
+        ledger, _ = self.ledger()
+        with ledger.view() as conn:
+            row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+            actions: dict[str, tuple[tuple[str, ...], str | None]] = {}
+            if row is not None:
+                found = direct.availability(conn, row)
+                actions[task_id] = (found.actions, found.cancel_blocked)
+            events = list(ledger.storage.read(since=0))
+            view = AppView(token=self.token, actions=actions, history=history(events))
+            page = render_task(conn, task_id, view, timeline(events).get(task_id, []))
+            if page is None:
+                return False, not_found(task_id, view)
+            return True, page
 
     def act(self, task_id: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
         revision = body.get("revision")
@@ -245,6 +264,10 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             if url.path == "/":
                 self._serve(lambda: app.page().encode("utf-8"), "text/html; charset=utf-8")
                 return
+            parts = url.path.split("/")
+            if len(parts) == 3 and parts[1] == "tasks" and parts[2]:
+                self._serve_task(unquote(parts[2]))
+                return
             self._serve_file(unquote(url.path))
 
         def _serve(self, produce: Callable[[], bytes], content_type: str) -> None:
@@ -254,6 +277,15 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 self._text(HTTPStatus.SERVICE_UNAVAILABLE, f"错误 [{exc.code.value}] {exc.message}")
                 return
             self._send(HTTPStatus.OK, body, content_type)
+
+        def _serve_task(self, task_id: str) -> None:
+            try:
+                found, page = app.task_page(task_id)
+            except TswError as exc:
+                self._text(HTTPStatus.SERVICE_UNAVAILABLE, f"错误 [{exc.code.value}] {exc.message}")
+                return
+            status = HTTPStatus.OK if found else HTTPStatus.NOT_FOUND
+            self._send(status, page.encode("utf-8"), "text/html; charset=utf-8")
 
         def _serve_file(self, path: str) -> None:
             parts = [p for p in path.split("/") if p]
