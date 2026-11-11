@@ -229,6 +229,12 @@ def test_the_board_counts_open_follow_ups_and_names_where_a_task_came_from(
     assert '<span class="fu">2 条待处理</span>' in static
     assert '<a href="#task-T001">F-T001-1</a>' in static
     assert "tasks/T001" not in static
+    # Once the source is archived its card is gone: the static page names it without a link,
+    # the app still links its task view.
+    conn.execute("UPDATE tasks SET status = 'archived' WHERE task_id = 'T001'")
+    static = render(conn)
+    assert "<dt>来自</dt><dd>F-T001-1</dd>" in static and 'href="#task-T001"' not in static
+    assert 'href="tasks/T001#follow-up-F-T001-1"' in render(conn, APP)
 
 
 @mark.use_case("UC-FOLLOWUP-004")

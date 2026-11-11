@@ -1968,13 +1968,22 @@ def follow_ups(evs: list[dict[str, Any]]) -> dict[str, Any]:
     submitted = last(evs, "worker.submitted", "T002")
     problems: list[str] = []
     evidence: dict[str, Any] = {"recorded": [e["sequence"] for e in recorded]}
+    # Only what the session that made the last submission recorded before it counts: an earlier
+    # attempt's records neither pass nor fail the check.
+    before = [
+        e
+        for e in by_worker
+        if submitted is not None
+        and e["sequence"] < submitted["sequence"]
+        and e["actor"].get("session_id") == submitted["actor"].get("session_id")
+    ]
     if not by_worker:
         problems.append("T002 的 worker 没有记录 follow-up")
-    elif submitted is None or by_worker[0]["sequence"] > submitted["sequence"]:
-        problems.append("follow-up 没有在最后一次提交之前记录")
-    elif by_worker[0]["actor"].get("session_id") != submitted["actor"].get("session_id"):
-        problems.append("记录 follow-up 的不是提交 T002 的 worker 会话")
-    ids = [str(i["follow_up_id"]) for e in by_worker for i in e["data"].get("items") or []]
+    elif submitted is None:
+        problems.append("T002 没有提交")
+    elif not before:
+        problems.append("提交 T002 的 worker 会话没有在最后一次提交之前记录 follow-up")
+    ids = [str(i["follow_up_id"]) for e in before for i in e["data"].get("items") or []]
     converted = next(
         (
             e

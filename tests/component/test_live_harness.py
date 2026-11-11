@@ -213,6 +213,25 @@ def test_f_requires_the_workers_follow_up_before_submitting_and_its_conversion()
     assert live.follow_ups([recorded, submitted])["status"] == "failed"
     unlinked = ev(3, "task.registered", "T004")
     assert live.follow_ups([recorded, submitted, unlinked, converted])["status"] == "failed"
+    # An earlier attempt's record does not count, nor does it fail the session that took over.
+    old = ev(1, "follow_up.recorded", "T002", "w-old", items=[{"follow_up_id": "F-T002-1"}])
+    items2 = [{"follow_up_id": "F-T002-2", "title": "README 补充用法示例"}]
+    new = ev(2, "follow_up.recorded", "T002", "w2", items=items2)
+    final = ev(3, "worker.submitted", "T002", "w2")
+    made2 = ev(
+        4,
+        "task.registered",
+        "T005",
+        follow_up_of=[{"task_id": "T002", "follow_up_id": "F-T002-2"}],
+    )
+    conv2 = ev(
+        5, "follow_up.converted", "T002", follow_up_ids=["F-T002-2"], to_task="T005", mode="new"
+    )
+    assert live.follow_ups([old, new, final, made2, conv2])["status"] == "passed"
+    conv_old = ev(
+        5, "follow_up.converted", "T002", follow_up_ids=["F-T002-1"], to_task="T005", mode="new"
+    )
+    assert live.follow_ups([old, new, final, made2, conv_old])["status"] == "failed"
 
 
 def test_b2_requires_a_handoff_and_the_orchestrator_handling_it() -> None:

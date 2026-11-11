@@ -129,8 +129,14 @@ def follow_up_anchor(follow_up_id: str) -> str:
     return "follow-up-" + quote(follow_up_id, safe="")
 
 
-def follow_up_facts(card: Card, app: AppView | None) -> list[tuple[str, str]]:
-    """The card's follow-up lines: how many are open, and where the task came from."""
+def follow_up_facts(
+    card: Card, app: AppView | None, on_board: frozenset[str] = frozenset()
+) -> list[tuple[str, str]]:
+    """The card's follow-up lines: how many are open, and where the task came from.
+
+    In the app a source links to its task view, which archived tasks keep too; the static page
+    links to the source's card only while the board shows it (``on_board``).
+    """
     task_id = str(card.row["task_id"])
     facts: list[tuple[str, str]] = []
     if card.follow_ups:
@@ -148,6 +154,8 @@ def follow_up_facts(card: Card, app: AppView | None) -> list[tuple[str, str]]:
             f'<a href="{_e(task_href(src))}#{_e(follow_up_anchor(fid))}">{_e(fid)}</a>'
             if app
             else f'<a href="#task-{_e(src)}">{_e(fid)}</a>'
+            if src in on_board
+            else _e(fid)
             for src, fid in card.follow_up_of
         ]
         facts.append(("来自", " ".join(links)))
@@ -323,6 +331,7 @@ def _card(
     note: str | None,
     *,
     app: AppView | None = None,
+    on_board: frozenset[str] = frozenset(),
 ) -> str:
     row = card.row
     status = str(row["status"])
@@ -357,7 +366,7 @@ def _card(
     ]
     if deps:
         facts.append(("依赖", " ".join(f'<a href="#task-{_e(d)}">{_e(d)}</a>' for d in deps)))
-    facts += follow_up_facts(card, app)
+    facts += follow_up_facts(card, app, on_board)
     # A long text (a question, a pause) scrolls inside its note, so the card keeps its height.
     notes = "".join(
         f'<div class="note {cls}"><b>{_e(head)}</b>'
@@ -630,6 +639,7 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
     repos = sorted({str(c.row["repo"]) for c in cards})
     repo_options = "".join(f'<option value="{_e(r)}">{_e(r)}</option>' for r in repos)
 
+    on_board = frozenset(str(c.row["task_id"]) for c in cards)
     groups: list[str] = []
     for status in present:
         members = [c for c in cards if c.row["status"] == status]
@@ -641,6 +651,7 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
                 deps.get(c.row["task_id"], []),
                 latest_note.get(c.row["task_id"]),
                 app=app,
+                on_board=on_board,
             )
             for c in members
         )
