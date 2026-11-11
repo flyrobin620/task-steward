@@ -304,7 +304,9 @@ follow-up 不是任务状态：记录、修改、转为任务或驳回都不改�
 | --- | --- |
 | `follow_up_id` | `F-<任务>-<n>`，在任务内递增，不复用 |
 | `title` / `detail` | 标题（一行）与说明（可多行：背景、已知信息、建议做法、外部反馈的位置） |
-| `kind` | `remaining`（本任务未完成或延后的部分，包括批准延后的评审阻断项）、`out_of_scope`（执行中发现的、本任务范围之外的问题）或 `idea`（改进建议）；缺省为 `remaining` |
+| `kind` | `remaining`（本任务未完成或延后的部分，包括批准延后的评审阻断项）、`out_of_scope`（执行中发现的、本任务范围之外的问题，T264 复盘 A12）或 `idea`（改进建议）；缺省为 `remaining` |
+| `severity` | 可选：`high` / `medium` / `low`。范围外发现（尤其安全问题）必须给出 |
+| `recheck_after` | 可选的复查日期：用户决定“暂不处理”时记下，条目保持 `open`，到期前不在 `attention` 中列出；决定附用户来源 |
 | 来源 | 记录在哪个任务、哪个 revision，谁（`worker` 附 attempt 与会话、`orchestrator`）在何时（事件时间与账本序号）记录；出于用户原话时附来源：worker 引用 hook 在本会话记录的用户消息编号（`message_ids`），主会话引用 hook 为该任务记录的消息编号，或附用户在主会话中原话的 `user_source`（`target` 为 `[任务, revision, "follow_up"]`）。tsw 只用记录的原文构造来源，不采信转述 |
 | `status` | `open`（待处理）、`converted`（已转为任务）、`dismissed`（已驳回）。后两者是终态：要重新考虑一条已驳回的事项时记一条新的 follow-up |
 | `converted_to` | 转成的任务 ID（`converted` 时） |
@@ -315,7 +317,7 @@ follow-up 不是任务状态：记录、修改、转为任务或驳回都不改�
 | 事件 | 记录者 | 内容 |
 | --- | --- | --- |
 | `follow_up.recorded` | W / O | 一条或多条新的 follow-up（字段如上），同一事件中分配编号 |
-| `follow_up.updated` | W / O | 修改 `open` 的 follow-up 的标题、说明或类别，附修改理由 |
+| `follow_up.updated` | W / O | 修改 `open` 的 follow-up 的标题、说明、类别或严重度，或（主会话）记下用户“暂不处理”的决定与复查日期，附修改理由；用户决定的附用户来源 |
 | `follow_up.converted` | O | 一条或多条 `open` 的 follow-up 转为任务：`converted_to`、方式（`new`：同一命令中登记的新任务；`existing`：并入已登记的任务）；可附用户来源 |
 | `follow_up.dismissed` | O | 驳回一条或多条 `open` 的 follow-up，附理由；用户决定的附用户来源 |
 
@@ -324,7 +326,7 @@ follow-up 不是任务状态：记录、修改、转为任务或驳回都不改�
 | 操作 | worker | 主会话 |
 | --- | --- | --- |
 | 记录（`follow_up_record`） | 自己是任务当前 attempt 绑定的 live 会话时（`in_progress`、`waiting_user`、`verifying`、`done`）：执行中随时、提交前、提交后到用户验收前都可以；用户在本会话中要求记录时引用 hook 记录的消息编号 | 除 `archived` 以外的任何状态，包括 `accepted` 与 `cancelled`（例如用户验收时说“这个记成 follow-up”）；需要用户原话时附来源 |
-| 修改（`follow_up_update`） | 只改自己（同一任务的 worker）记录的、仍为 `open` 的条目，时机同上 | 任何 `open` 的条目，任务不是 `archived` |
+| 修改（`follow_up_update`） | 只改自己（同一任务的 worker）记录的、仍为 `open` 的条目，时机同上；不能设复查日期 | 任何 `open` 的条目，任务不是 `archived`；用户决定暂不处理时设复查日期并附用户来源 |
 | 转为任务（`follow_up_convert`） | — | 持租时；先问用户（§“验收时”） |
 | 驳回（`follow_up_dismiss`） | — | 持租时，附理由；用户决定的附用户原话 |
 
@@ -338,6 +340,10 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 一条 follow-up 只能转一次；转成的任务之后被退回、取消或改号，follow-up 仍指向它（改号时跟随新编号）。
 
 **驳回**：用户决定不做，或事项已在别处完成、被需求变更并入当前任务时，主会话 `follow_up_dismiss`，理由写明去向（例如“已并入 T270 revision 2”）。
+
+**暂不处理**：用户决定先放着、以后再看时（例如 T258 发现的安全问题，T264 §2.9），主会话用 `follow_up_update` 记下用户原话与复查日期 `recheck_after`。条目保持 `open`，到期后重新出现在 `attention` 中，再问用户。
+
+**防止变成垃圾桶**：只记录确实可能要做、并且能说清楚的事：每条都要有标题与说明，说明写到别人不读原报告也能接手的程度；不记录已经做完的事、本任务验收要求内的事（那些要在本任务完成）和泛泛的想法。主会话验收时逐条交给用户决定，`attention` 持续列出未决定或已到复查日期的条目，归档前必须处理完（见下）。
 
 **与归档**：已验收任务的自动归档（T24）与已取消任务的归档（T26）要求没有 `open` 的 follow-up：归档的任务不可变（§8 第 5 条），所以 follow-up 先转为任务或驳回。等待用户决定期间任务留在看板上，`attention` 持续列出这些条目。
 
@@ -355,7 +361,7 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 
 **验收时**：主会话核验提交时读取任务的 follow-up（`task_read`），技术验收（T18）后告诉用户任务完成，同时列出 `open` 的 follow-up，问用户哪些转成任务、哪些驳回、哪些先保留；用户的决定按上文登记。用户暂不决定的条目保持 `open`。
 
-**展示**：`task_read` 返回任务的 `follow_ups`（全部条目）与 `follow_up_of`（本任务由哪些 follow-up 转来）；`attention` 的 `follow_ups` 按任务列出全部 `open` 的条目；STATUS 页的卡片显示 `open` 条目数，单任务视图列出全部条目、状态与转成的任务（DN006 §8.10）。
+**展示**：`task_read` 返回任务的 `follow_ups`（全部条目）与 `follow_up_of`（本任务由哪些 follow-up 转来）；`attention` 的 `follow_ups` 列出 `open` 且没有复查日期或已到复查日期的条目（编号、任务、类别、严重度、标题）；STATUS 页的卡片显示 `open` 条目数，单任务视图列出全部条目、状态与转成的任务（DN006 §8.10）。
 
 ## 6. attempt 阶段（属性）
 
