@@ -137,7 +137,7 @@ def _full_task(conn: sqlite3.Connection) -> None:
         "revision": 2,
         "cycle": 1,
         "head": "abc1234",
-        "rounds": 2,
+        "rounds": [1, 2],
         "report": {"md_path": "runs/T005/a2/result.md", "html_path": "runs/T005/a2/result.html"},
         "worktree_clean": True,
         "merge": {
@@ -245,7 +245,7 @@ def _full_task(conn: sqlite3.Connection) -> None:
                 "round": round_no,
                 "cycle": 1,
                 "head": "abc1234",
-                "reviewer": "codex-app-server",
+                "reviewer": json.dumps({"session": "codex-app-server", "model": "gpt-6-astra"}),
                 "verdict": verdict,
             },
         )
@@ -368,6 +368,9 @@ def test_the_task_view_shows_more_than_the_card(conn: sqlite3.Connection) -> Non
         and "1（阻塞 1）" in submission
         and "finalize" in submission
     )
+    # The recorded reviewer and round list read as text, not as raw JSON.
+    assert "<td>codex-app-server · gpt-6-astra</td>" in submission and "{" not in submission
+    assert "<dt>评审轮次</dt><dd>1、2</dd>" in submission
     # Outputs, relations, questions, notes, timeline.
     assert 'href="https://example.test/o/r/pull/9"' in _section(page, "outputs")
     relations = _section(page, "relations")

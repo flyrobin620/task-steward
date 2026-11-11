@@ -86,6 +86,24 @@ def _mapping(value: Any) -> dict[str, Any]:
     return cast("dict[str, Any]", value) if isinstance(value, dict) else {}
 
 
+def _rounds(value: Any) -> str:
+    """The submission's review rounds: a list of round numbers, or a count in older records."""
+    if isinstance(value, list):
+        return "、".join(str(n) for n in cast("list[Any]", value)) or "—"
+    return "" if value is None else str(value)
+
+
+def _reviewer(value: Any) -> str:
+    """A round's reviewer, recorded as ``{"session": …, "model": …}``."""
+    try:
+        found = _mapping(loads(value, None))
+    except ValueError:  # not JSON: a bare name
+        found = {}
+    if not found:
+        return str(value or "—")
+    return " · ".join(str(found[k]) for k in ("session", "model") if found.get(k)) or "—"
+
+
 def _attempt_key(attempt: str) -> tuple[int, str]:
     digits = attempt[1:]
     return (int(digits) if digits.isdigit() else 0, attempt)
@@ -220,7 +238,7 @@ def _submission(row: Mapping[str, Any]) -> str:
         ("revision", escape(sub.get("revision", ""))),
         ("评审周期", escape(sub.get("cycle", ""))),
         ("head", _code(sub.get("head"))),
-        ("评审轮数", escape(sub.get("rounds", ""))),
+        ("评审轮次", escape(_rounds(sub.get("rounds")))),
         ("报告", links),
         ("工作树干净", "是" if sub.get("worktree_clean") else "否"),
         ("差异说明", escape(sub.get("diff_note") or "")),
@@ -274,7 +292,7 @@ def _reviews(conn: sqlite3.Connection, task_id: str) -> tuple[str, int]:
                 escape(r["attempt"]),
                 escape(r["round"]),
                 escape(r["cycle"]),
-                escape(r["reviewer"]),
+                escape(_reviewer(r["reviewer"])),
                 _code(r["head"]),
                 escape(r["verdict"] or "—"),
                 escape(r["decision"] or "—"),
