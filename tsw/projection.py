@@ -260,6 +260,26 @@ CREATE TABLE IF NOT EXISTS task_notes(
     text TEXT NOT NULL,
     PRIMARY KEY(task_id, sequence)
 );
+-- Follow-ups of a task (DN002 §5.7). Only follow_up.* events write this table, so a projection
+-- made before it stays valid.
+CREATE TABLE IF NOT EXISTS follow_ups(
+    follow_up_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    severity TEXT,
+    title TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    status TEXT NOT NULL,
+    recorded_seq INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL,
+    recorded_by TEXT NOT NULL,
+    source TEXT,
+    recheck_after TEXT,
+    converted_to TEXT,
+    resolution TEXT,
+    updated_at TEXT
+);
 CREATE TABLE IF NOT EXISTS leases(
     name TEXT PRIMARY KEY,
     holder_session TEXT,

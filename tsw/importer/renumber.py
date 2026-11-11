@@ -186,6 +186,8 @@ def reduce(conn: sqlite3.Connection, event: Any) -> None:
         "AND task_id NOT IN (SELECT task_id FROM imported_tasks)",
         (new, old),
     )
+    # A follow-up turned into the task keeps pointing at it (DN002 §5.7).
+    conn.execute("UPDATE follow_ups SET converted_to = ? WHERE converted_to = ?", (new, old))
     for task_id, attempt, read_set in conn.execute(
         "SELECT task_id, attempt, read_set FROM attempts WHERE read_set LIKE ? "
         "AND task_id NOT IN (SELECT task_id FROM imported_tasks)",

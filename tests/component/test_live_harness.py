@@ -190,6 +190,31 @@ def test_b1_requires_the_hook_message_from_the_asking_session() -> None:
     assert live.b1([asked, answer])["status"] == "failed"
 
 
+@pytest.mark.use_case("UC-FOLLOWUP-001")
+def test_f_requires_the_workers_follow_up_before_submitting_and_its_conversion() -> None:
+    items = [{"follow_up_id": "F-T002-1", "title": "README 补充用法示例"}]
+    recorded = ev(1, "follow_up.recorded", "T002", "w2", items=items)
+    submitted = ev(2, "worker.submitted", "T002", "w2")
+    made = ev(
+        3,
+        "task.registered",
+        "T004",
+        follow_up_of=[{"task_id": "T002", "follow_up_id": "F-T002-1"}],
+    )
+    converted = ev(
+        4, "follow_up.converted", "T002", follow_up_ids=["F-T002-1"], to_task="T004", mode="new"
+    )
+    assert live.follow_ups([recorded, submitted, made, converted])["status"] == "passed"
+    # Recorded after the submission, by another session, or never turned into a task: failed.
+    late = ev(5, "follow_up.recorded", "T002", "w2", items=items)
+    assert live.follow_ups([submitted, late, made, converted])["status"] == "failed"
+    other = ev(1, "follow_up.recorded", "T002", "w9", items=items)
+    assert live.follow_ups([other, submitted, made, converted])["status"] == "failed"
+    assert live.follow_ups([recorded, submitted])["status"] == "failed"
+    unlinked = ev(3, "task.registered", "T004")
+    assert live.follow_ups([recorded, submitted, unlinked, converted])["status"] == "failed"
+
+
 def test_b2_requires_a_handoff_and_the_orchestrator_handling_it() -> None:
     asked = ev(
         1, "input.escalated", "T002", "w2", kind="in_session", request_id="Q2", session_ref="w2"

@@ -11,6 +11,7 @@ from tsw.config import EffectiveConfig
 from tsw.errors import rejected
 from tsw.events import Event, EventDraft, utc_now
 from tsw.lease import require_lease
+from tsw.machine import follow_up as follow_up_mod
 from tsw.machine import routine as routine_mod
 from tsw.machine.ask_user import handoff_due
 from tsw.machine.guards import dependency_problems, invalidated, topological
@@ -159,6 +160,8 @@ def attention(
             for r in conn.execute("SELECT task_id, pause FROM tasks WHERE status = 'paused'")
         ],
         "inbox": [{"count": len(inbox(conn, storage, config, limit=1000))}],
+        # Open follow-ups the user has not put off, or whose recheck date has come (DN002 §5.7).
+        "follow_ups": follow_up_mod.due(conn, (now or utc_now())[:10]),
         "routine": routine_attention(conn, config, routine_cache or {}, now),
     }
     invalid = invalidated(conn)

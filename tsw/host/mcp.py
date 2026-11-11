@@ -63,7 +63,7 @@ HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
     ),
     "task_read": (
         ("orchestrator", "worker"),
-        "读取任务（worker 只能读本任务）",
+        "读取任务（worker 只能读授权读取集合中的任务）：含 follow_ups 与 follow_up_of",
         {"type": "object", "properties": {"task_id": {"type": "string"}}, "required": ["task_id"]},
     ),
     "task_list": (("orchestrator",), "列出任务", EMPTY),
@@ -79,7 +79,7 @@ HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
     ),
     "attention": (
         ("orchestrator",),
-        "只读自检：待判断、待答复、需对账、需停止、stale、待启动、待核验、暂停",
+        "只读自检：待判断、待答复、需对账、需停止、stale、待启动、待核验、暂停、待处理的 follow-up",
         EMPTY,
     ),
     "lease_status": (("orchestrator",), "调度租约状态", EMPTY),

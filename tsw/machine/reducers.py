@@ -916,6 +916,89 @@ def channel_reply_seen(conn: sqlite3.Connection, event: Event) -> None:
     )
 
 
+def _follow_up_touch(conn: sqlite3.Connection, event: Event) -> None:
+    """A follow-up changes the task's record, not its business (DN002 §5.7)."""
+    _touch(conn, event, business=False)
+
+
+def follow_up_recorded(conn: sqlite3.Connection, event: Event) -> None:
+    data = event.data
+    by = dumps(dict(data.get("by") or {"role": event.actor.get("role")}))
+    source = data.get("source")
+    for item in data["items"]:
+        conn.execute(
+            "INSERT INTO follow_ups(follow_up_id, task_id, revision, kind, severity, title, "
+            "detail, status, recorded_seq, recorded_at, recorded_by, source) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)",
+            (
+                item["follow_up_id"],
+                _tid(event),
+                event.revision or 1,
+                item.get("kind") or "remaining",
+                item.get("severity"),
+                item["title"],
+                item.get("detail") or "",
+                event.sequence,
+                event.time,
+                by,
+                dumps(source) if source else None,
+            ),
+        )
+    _follow_up_touch(conn, event)
+
+
+def _follow_up_row(conn: sqlite3.Connection, event: Event, follow_up_id: str) -> sqlite3.Row:
+    row = conn.execute(
+        "SELECT * FROM follow_ups WHERE follow_up_id = ? AND task_id = ?",
+        (follow_up_id, _tid(event)),
+    ).fetchone()
+    if row is None or row["status"] != "open":
+        raise rejected(
+            "账本引用了不存在或已处理的 follow-up",
+            reason="ledger_inconsistent",
+            follow_up_id=follow_up_id,
+        )
+    return row
+
+
+def follow_up_updated(conn: sqlite3.Connection, event: Event) -> None:
+    data = event.data
+    _follow_up_row(conn, event, str(data["follow_up_id"]))
+    changes = {
+        key: value
+        for key, value in dict(data["changes"]).items()
+        if key in ("title", "detail", "kind", "severity", "recheck_after")
+    }
+    columns = "".join(f"{key} = ?, " for key in changes)
+    conn.execute(
+        f"UPDATE follow_ups SET {columns}updated_at = ? WHERE follow_up_id = ?",
+        (*changes.values(), event.time, data["follow_up_id"]),
+    )
+    _follow_up_touch(conn, event)
+
+
+def _follow_up_closed(status: str) -> Reducer:
+    def reduce(conn: sqlite3.Connection, event: Event) -> None:
+        data = event.data
+        resolution = {
+            "status": status,
+            "at": event.time,
+            "sequence": event.sequence,
+            "by": event.actor.get("role"),
+            **{k: data[k] for k in ("reason", "mode", "source") if data.get(k) is not None},
+        }
+        for follow_up_id in data["follow_up_ids"]:
+            _follow_up_row(conn, event, str(follow_up_id))
+            conn.execute(
+                "UPDATE follow_ups SET status = ?, converted_to = ?, resolution = ?, "
+                "updated_at = ? WHERE follow_up_id = ?",
+                (status, data.get("to_task"), dumps(resolution), event.time, follow_up_id),
+            )
+        _follow_up_touch(conn, event)
+
+    return reduce
+
+
 REDUCERS: dict[str, Reducer] = {
     "task.planned": task_planned,
     "task.requirement_changed": requirement_changed,
@@ -984,4 +1067,8 @@ REDUCERS: dict[str, Reducer] = {
     "routine.job_removed": routine_job_removed,
     "channel.message_sent": channel_message_sent,
     "channel.reply_seen": channel_reply_seen,
+    "follow_up.recorded": follow_up_recorded,
+    "follow_up.updated": follow_up_updated,
+    "follow_up.converted": _follow_up_closed("converted"),
+    "follow_up.dismissed": _follow_up_closed("dismissed"),
 }

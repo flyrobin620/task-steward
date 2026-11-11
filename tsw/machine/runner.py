@@ -13,6 +13,7 @@ from tsw.lease import parse_time
 from tsw.ledger import Ledger
 from tsw.machine import ask_user as _ask_user
 from tsw.machine import config_tools as _config_tools
+from tsw.machine import follow_up as _follow_up
 from tsw.machine import orchestrator as _orchestrator
 from tsw.machine import routine as _routine
 from tsw.machine import worker as _worker
@@ -22,7 +23,7 @@ from tsw.machine.guards import dependency_problems, invalidated, topological
 from tsw.machine.model import OCCUPYING, loads, next_item_id
 
 # Importing the tool modules registers their tools.
-TOOL_MODULES = (_orchestrator, _worker, _config_tools, _ask_user, _routine)
+TOOL_MODULES = (_orchestrator, _worker, _config_tools, _ask_user, _routine, _follow_up)
 
 SYNC = Tool(
     "sync",
@@ -107,7 +108,13 @@ def sync_command(env: ToolEnv, report: dict[str, Any] | None = None) -> Command:
                     "SELECT 1 FROM input_requests WHERE task_id = ? AND status = 'pending'",
                     (task_id,),
                 ).fetchone()
-                if quiet and live is None and pending is None:
+                # Follow-ups still to be decided keep the task out of the archive (DN002 §5.7).
+                if (
+                    quiet
+                    and live is None
+                    and pending is None
+                    and not _follow_up.has_open(ctx.conn, task_id)
+                ):
                     drafts.append(
                         EventDraft(
                             type="task.archived",

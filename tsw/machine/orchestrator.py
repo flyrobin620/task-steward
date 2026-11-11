@@ -1606,6 +1606,14 @@ def task_archive(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     def build(ctx: CommitContext) -> list[EventDraft]:
         row = task(ctx.conn, task_id)
         require_status(row, "cancelled")
+        if ctx.conn.execute(
+            "SELECT 1 FROM follow_ups WHERE task_id = ? AND status = 'open' LIMIT 1", (task_id,)
+        ).fetchone():
+            # An archived task does not change (DN002 §8): its follow-ups are decided first.
+            raise rejected(
+                "任务还有 open 的 follow-up：先转为任务或驳回，再归档（DN002 §5.7）",
+                reason="follow_ups_open",
+            )
         source = guards.g_user(
             source_in, task_id=task_id, revision=int(row["revision"]), kind="archive"
         )

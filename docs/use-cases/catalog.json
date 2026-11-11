@@ -835,6 +835,100 @@
         "conformance": "不经过插件接口",
         "live": "真实 orchestrator-agent 数据的导入在 v2 切换时执行并核对导入报告"
       }
+    },
+    {
+      "id": "UC-FOLLOWUP-001",
+      "title": "worker 与主会话记录、修改任务的 follow-up，主会话记下用户暂不处理的决定（DN002 §5.7）",
+      "actor": "worker / 主会话 / 用户",
+      "acceptance": "follow_up_record 在同一事件中分配 F-<任务>-<n> 编号，记录标题、说明、类别（缺省 remaining）、严重度、revision 与记录者；不改变任务状态、revision 与业务时间；worker 只能在自己持有任务、用户验收前（in_progress、waiting_user、verifying、done）记录，主会话除 archived 外都可以；出于用户原话时 worker 只能引用 hook 在本会话为该任务记录的消息，主会话可以引用该任务任何会话的消息或附 target 为 [任务, revision, follow_up] 的主会话原话，来源取记录的原文；follow_up_update 只改 open 的条目，worker 只改 worker 记录的、不能设复查日期，复查日期须附用户来源；attention 的 follow_ups 列出 open 且没有复查日期或已到期的条目；hook 提示 worker 用 follow_up_record 记录",
+      "surfaces": [
+        "mcp",
+        "hook"
+      ],
+      "claims": [
+        "tool:follow_up_record",
+        "tool:follow_up_update"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-FOLLOWUP-002",
+      "title": "主会话把一条或多条 follow-up 转为新任务或并入已登记的任务（DN002 §5.7）",
+      "actor": "主会话 / 用户",
+      "acceptance": "follow_up_convert 给 task 时在同一命令中登记新任务（T01，task.registered 记录 follow_up_of），标题、仓库、类型、目标与验收缺省时由 follow-up 与来源任务生成（多条时须给标题，来源跨仓库或类型时须给出），每个来源任务一条 follow_up.converted（mode new）；给 into_task 时只建立关联（mode existing），目标任务须已登记、不是 accepted / cancelled / archived，也不是来源任务本身；来源 follow-up 变为 converted 并指向新任务，已处理或不存在的条目被拒；task_read 与 tsw task show 返回 follow_ups 与 follow_up_of；改号时 converted_to 跟随新编号",
+      "surfaces": [
+        "mcp",
+        "cli"
+      ],
+      "claims": [
+        "tool:follow_up_convert"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-FOLLOWUP-003",
+      "title": "主会话驳回 follow-up；有 open follow-up 的任务不归档（DN002 §5.7、T24、T26）",
+      "actor": "主会话 / 用户 / 系统",
+      "acceptance": "follow_up_dismiss 须附理由，可附用户来源，条目变为 dismissed 并记录处理时间与理由，已处理的条目被拒；已验收任务的自动归档（T24）与已取消任务的归档（T26）在有 open follow-up 时不发生（task_archive 以 follow_ups_open 拒绝），条目处理完后照常归档；已归档的任务不再接受 follow-up",
+      "surfaces": [
+        "mcp",
+        "cli"
+      ],
+      "claims": [
+        "tool:follow_up_dismiss"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "只有主会话的账本操作，不依赖宿主行为"
+      }
+    },
+    {
+      "id": "UC-FOLLOWUP-004",
+      "title": "STATUS 页与单任务视图展示 follow-up（DN006 §8.10）",
+      "actor": "用户",
+      "acceptance": "卡片在有 open follow-up 时显示条数（STATUS 应用中链接到详细页的 follow-up 一节），由 follow-up 转来的任务在卡片上列出来源；顶部“待处理 follow-up”计数按 followups 标记筛选；单任务视图列出全部条目（open 在前）：编号、类别与严重度、标题与说明（转义）、来源（revision、记录者、时间、用户原话）、状态与去向（转成的任务链接、驳回理由、复查日期），每条有 follow-up-<编号> 锚点，并列出本任务来自哪些 follow-up；投影从账本重建后条目不变",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "页面由账本生成，不依赖宿主行为"
+      }
     }
   ]
 }

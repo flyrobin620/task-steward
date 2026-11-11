@@ -503,7 +503,9 @@ class Guard:
                 "一个按钮并设 blocked: true；用户点按钮等于在本会话发出按钮文字），"
                 "用户回复后用 user_answer 登记；用户在本会话中修改或追加任务要求时（任务已提交"
                 "或已完成、但用户尚未验收也可以），用 requirement_change 引用 hook 给出的消息编号"
-                "登记需求变更，再继续、评审并重新提交；跨任务的事（资源冲突、依赖、"
+                "登记需求变更，再继续、评审并重新提交；本任务不做、之后可能要做的事（未完成或延后"
+                "的部分、范围外发现、用户要求记成 follow-up 的事）用 follow_up_record 记录，报告中"
+                "引用其编号；跨任务的事（资源冲突、依赖、"
                 "其他任务的范围）才用 question 交主会话。"
                 "唤醒主会话：tsw 工具结果带 wake 且 send 为 true 时，用 "
                 "mcp__ccd_session_mgmt__send_message 把 wake.message 原样发给 wake.session_id"
@@ -680,7 +682,8 @@ class Guard:
             notes.append(
                 f"这条用户消息已记录为 {recorded['message_id']}。它修改了任务的目标、范围或验收"
                 "（包括任务已提交或已完成后用户追加的要求）时，用 requirement_change 引用这个"
-                "编号登记需求变更，再继续工作、评审并重新提交；只是讨论或任务内的澄清时不登记。"
+                "编号登记需求变更，再继续工作、评审并重新提交；要求把某些事记成 follow-up（以后再"
+                "做）时，用 follow_up_record 引用这个编号记录；只是讨论或任务内的澄清时不登记。"
             )
         if "[report]" in prompt:
             notes.append(

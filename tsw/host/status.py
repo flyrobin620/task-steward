@@ -32,6 +32,7 @@ from tsw.host.status_assets import (
     SCRIPT,
     STATUS_COLORS,
 )
+from tsw.machine.follow_up import open_count
 from tsw.machine.guards import invalidated
 from tsw.machine.model import OCCUPYING, loads
 from tsw.tasks import KINDS, STATUS_LABELS
@@ -123,6 +124,36 @@ def task_href(task_id: str) -> str:
     return "tasks/" + quote(task_id, safe="")
 
 
+def follow_up_anchor(follow_up_id: str) -> str:
+    """The anchor of a follow-up on its task's view (DN006 §8.10)."""
+    return "follow-up-" + quote(follow_up_id, safe="")
+
+
+def follow_up_facts(card: Card, app: AppView | None) -> list[tuple[str, str]]:
+    """The card's follow-up lines: how many are open, and where the task came from."""
+    task_id = str(card.row["task_id"])
+    facts: list[tuple[str, str]] = []
+    if card.follow_ups:
+        label = f"{card.follow_ups} 条待处理"
+        facts.append(
+            (
+                "follow-up",
+                f'<a class="fu" href="{_e(task_href(task_id))}#follow-ups">{_e(label)}</a>'
+                if app
+                else f'<span class="fu">{_e(label)}</span>',
+            )
+        )
+    if card.follow_up_of:
+        links = [
+            f'<a href="{_e(task_href(src))}#{_e(follow_up_anchor(fid))}">{_e(fid)}</a>'
+            if app
+            else f'<a href="#task-{_e(src)}">{_e(fid)}</a>'
+            for src, fid in card.follow_up_of
+        ]
+        facts.append(("来自", " ".join(links)))
+    return facts
+
+
 def repo_hue(repo: str) -> int:
     digest = hashlib.sha256(repo.encode("utf-8")).digest()
     return REPO_HUES[digest[0] % len(REPO_HUES)]
@@ -150,11 +181,18 @@ def _no_flags() -> set[str]:
     return set()
 
 
+def _no_sources() -> list[tuple[str, str]]:
+    return []
+
+
 @dataclass
 class Card:
     row: dict[str, Any]
     notes: list[tuple[str, str, str]] = field(default_factory=_no_notes)
     flags: set[str] = field(default_factory=_no_flags)
+    # Open follow-ups of the task, and the follow-ups it was made from (DN002 §5.7).
+    follow_ups: int = 0
+    follow_up_of: list[tuple[str, str]] = field(default_factory=_no_sources)
 
 
 ACTION_LABELS = {"accept": "验收", "reject": "退回", "cancel": "取消"}
@@ -319,6 +357,7 @@ def _card(
     ]
     if deps:
         facts.append(("依赖", " ".join(f'<a href="#task-{_e(d)}">{_e(d)}</a>' for d in deps)))
+    facts += follow_up_facts(card, app)
     # A long text (a question, a pause) scrolls inside its note, so the card keeps its height.
     notes = "".join(
         f'<div class="note {cls}"><b>{_e(head)}</b>'
@@ -522,6 +561,21 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
         for row in shown
     ]
     to_start = sum(1 for c in cards if "tostart" in c.flags)
+    # Follow-ups (DN002 §5.7): open ones on their task's card, the source on the task made.
+    open_follow_ups = open_count(conn)
+    sources: dict[str, list[tuple[str, str]]] = {}
+    for r in conn.execute(
+        "SELECT task_id, follow_up_id, converted_to FROM follow_ups "
+        "WHERE converted_to IS NOT NULL ORDER BY task_id, recorded_seq, follow_up_id"
+    ):
+        sources.setdefault(str(r["converted_to"]), []).append(
+            (str(r["task_id"]), str(r["follow_up_id"]))
+        )
+    for c in cards:
+        c.follow_ups = open_follow_ups.get(str(c.row["task_id"]), 0)
+        c.follow_up_of = sources.get(str(c.row["task_id"]), [])
+        if c.follow_ups:
+            c.flags.add("followups")
 
     judgments = conn.execute(
         "SELECT COUNT(*) AS n FROM judgments WHERE status = 'open'"
@@ -537,6 +591,7 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
         ("待判断", judgments, "#7c3aed", "", ""),
         ("待用户答复", pending, "#e11d48", "", "asking"),
         ("待用户验收", counts.get("done", 0), "#ea580c", "done", ""),
+        ("待处理 follow-up", sum(c.follow_ups for c in cards), "#0891b2", "", "followups"),
         ("已归档", archived, "#64748b", "", ""),
     ]
     tile_html: list[str] = []
@@ -631,7 +686,8 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
 <label>仓库 <select id="repo"><option value="">全部仓库</option>{repo_options}</select></label>
 <label>关注 <select id="flag"><option value="">全部</option><option value="user">待用户处理</option>
 <option value="asking">待用户答复</option><option value="tostart">待启动</option>
-<option value="paused">暂停</option><option value="alert">需要处理的异常</option></select></label>
+<option value="paused">暂停</option><option value="alert">需要处理的异常</option>
+<option value="followups">有待处理的 follow-up</option></select></label>
 <span class="sep"></span>
 <button type="button" class="ghost" id="timeline" aria-pressed="false" title="不分组，按最近一次修改时间倒序排列">按时间顺序</button>
 <label>排序 <select id="sort"><option value="status">状态优先</option><option value="activity">最近活动</option>

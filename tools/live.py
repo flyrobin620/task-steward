@@ -1057,11 +1057,14 @@ def host_verify(args: argparse.Namespace) -> int:
     checks.append(worktrees(run, evs, submitted))
     checks.append(b1(evs))
     checks.append(b2(evs))
+    checks.append(follow_ups(evs))
     checks.append(scheduled_prompts(run, evs))
     checks.append(merged(run, evs, submitted))
     checks.append(observed(args))
     # Only the checks the scenario lists (a check's id is the first word of its line).
     wanted = {str(c).split()[0] for c in spec["checks"]} - (set() if prestart else {"H5"})
+    if "T002" not in tasks:
+        wanted -= {"F"}
     checks = [c for c in checks if c["id"] in wanted or c["id"].rstrip("u") in wanted]
     notes.append(hook_summary(run))
     entries = [e for e in run.manifest()["entries"] if e["kind"] == "claude-session"]
@@ -1954,6 +1957,48 @@ def unresolved(run: Run) -> list[dict[str, Any]]:
         if e["kind"] in ("claude-session", "codex-thread")
         and e["state"] not in ("archived", "not_created")
     ]
+
+
+def follow_ups(evs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Check F (DN002 §5.7): T002's worker records a follow-up from its own session before it
+    submits, and the orchestrator turns it into a new task that records where it came from."""
+    title = "follow-up：T002 的 worker 提交前记录，主会话按用户要求转为新任务"
+    recorded = [e for e in evs if e["type"] == "follow_up.recorded" and e["task_id"] == "T002"]
+    by_worker = [e for e in recorded if e["actor"].get("role") == "worker"]
+    submitted = last(evs, "worker.submitted", "T002")
+    problems: list[str] = []
+    evidence: dict[str, Any] = {"recorded": [e["sequence"] for e in recorded]}
+    if not by_worker:
+        problems.append("T002 的 worker 没有记录 follow-up")
+    elif submitted is None or by_worker[0]["sequence"] > submitted["sequence"]:
+        problems.append("follow-up 没有在最后一次提交之前记录")
+    elif by_worker[0]["actor"].get("session_id") != submitted["actor"].get("session_id"):
+        problems.append("记录 follow-up 的不是提交 T002 的 worker 会话")
+    ids = [str(i["follow_up_id"]) for e in by_worker for i in e["data"].get("items") or []]
+    converted = next(
+        (
+            e
+            for e in evs
+            if e["type"] == "follow_up.converted"
+            and e["task_id"] == "T002"
+            and set(e["data"].get("follow_up_ids") or []) & set(ids)
+        ),
+        None,
+    )
+    if converted is None:
+        problems.append("主会话没有把 worker 记录的 follow-up 转为任务")
+    else:
+        evidence["converted"] = converted["sequence"]
+        target = converted["data"].get("to_task")
+        made = first(evs, "task.registered", str(target))
+        of = (made or {}).get("data", {}).get("follow_up_of") or []
+        if converted["actor"].get("role") != "orchestrator":
+            problems.append("转为任务的不是主会话")
+        if made is None or not any(f.get("task_id") == "T002" for f in of):
+            problems.append(f"新任务 {target} 没有记录 follow_up_of")
+        else:
+            evidence["task"] = target
+    return check("F", title, not problems, problems or evidence)
 
 
 def b1(evs: list[dict[str, Any]]) -> dict[str, Any]:
