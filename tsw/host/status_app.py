@@ -1,7 +1,7 @@
-"""The STATUS app: ``tsw status serve`` (DN006 §8.10).
+"""The Dashboard app: ``tsw status serve``, also ``tsw dashboard`` (DN006 §8.10).
 
 A small HTTP server on the loopback address, started by the user in a terminal. Every page load
-renders the STATUS page from the ledger's projection with the user's direct actions as buttons;
+renders the Dashboard page from the ledger's projection with the user's direct actions as buttons;
 a button runs :func:`tsw.direct.perform` on the ``status-app`` channel, the same implementation as
 ``tsw task accept``. Each task has its own read-only view at ``/tasks/<task>``
 (:mod:`tsw.host.task_view`). Report links on the page are served read-only from ``runs/`` and
@@ -158,7 +158,7 @@ class StatusApp:
         if reason is not None and not isinstance(reason, str):
             raise rejected("理由应为文本", reason="invalid_input")
         label = direct.ACTIONS[action][2] if action in direct.ACTIONS else action
-        text = f"在 STATUS 页面点击「{label}」：{task_id} revision {revision}" + (
+        text = f"在 Dashboard 页面点击「{label}」：{task_id} revision {revision}" + (
             f"；理由：{reason}" if reason else ""
         )
         ledger, config = self.ledger()
@@ -364,11 +364,11 @@ def make_server(app: StatusApp, port: int = 0) -> ThreadingHTTPServer:
 
 
 def serve_status(home: Home, *, port: int = 0, open_browser: bool = True) -> None:
-    """Run the STATUS app until Ctrl+C."""
+    """Run the Dashboard app until Ctrl+C."""
     app = StatusApp(home)
     server = make_server(app, port)
     url = f"http://127.0.0.1:{app.port}/?token={app.token}"
-    print(f"TaskSteward STATUS 应用：{url}", flush=True)
+    print(f"TaskSteward Dashboard：{url}", flush=True)
     print("这个地址带本次启动的令牌，只给你自己用；按 Ctrl+C 停止。", flush=True)
     if open_browser:
         webbrowser.open(url)

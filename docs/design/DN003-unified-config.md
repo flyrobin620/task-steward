@@ -196,7 +196,7 @@
 | `input.triage` | `orchestrator_judgment` | `orchestrator_judgment`：主会话在授权边界内综合判断（DN006 §8.2）；`human_direct`：主会话不判断，一律交给人类 |
 | `input.in_session_timeout_minutes` | 10 | worker 在自己会话中提问后，用户这么久没有任何回复就转交主会话（DN006 §8.1b） |
 | `input.channels` | 已加载的全部 `request_response` 渠道 | 升级时同时投递的渠道；必须是已加载渠道的子集；第一个通过核实的答复生效 |
-| `input.decision_digest` | 每日及任务完成时，经 Teams | 把主会话的自主决定汇总通知用户，便于事后核对（DN006 §8.4）；`channel` 为 `"local"` 时只写入 STATUS 页与验收报告 |
+| `input.decision_digest` | 每日及任务完成时，经 Teams | 把主会话的自主决定汇总通知用户，便于事后核对（DN006 §8.4）；`channel` 为 `"local"` 时只写入 Dashboard 页面与验收报告 |
 | `input.teams.chat` | `self` | Teams 问题卡片发到哪个 chat：`self` 为用户本人的自聊，也可以写 chat ID（DN006 §8.7） |
 | `input.teams_poll` | 不设置 | 已不起作用（T243）：Teams 答复由例行表的 Teams 例行项回收，间隔为 `routine.interval_minutes`（DN006 §8.7）。为兼容旧配置仍接受该字段 |
 
@@ -287,7 +287,7 @@ tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命�
 6. 每个仓库的 `auth_profile` 必须在 `accounts` 中存在，且 provider / host 一致；`accounts.*.auth.config_dir` 解析后必须位于数据目录之外（凭据不进入 `TSW_HOME`，也就不会被备份）。
 7. 别名全局唯一，不能与其他仓库 ID 冲突。`delivery.merge` 为 `true` 的仓库必须写明 `repository`（`owner/name`）。
 8. `input.channels` 中的每个渠道都必须已在 `plugins.human_channels` 中加载，且能力为 `request_response`；未显式设置时取已加载的全部 `request_response` 渠道。
-9. `input.decision_digest.enabled=true` 时，`channel` 必须为 `"local"`（只写入 STATUS 页与验收报告，不经任何渠道通知），或是已加载且支持 `notify` 的渠道；合并后缺少 `channel` 视为配置错误。`null` 只用于合并时删除字段（§5a），不作为业务取值。
+9. `input.decision_digest.enabled=true` 时，`channel` 必须为 `"local"`（只写入 Dashboard 页面与验收报告，不经任何渠道通知），或是已加载且支持 `notify` 的渠道；合并后缺少 `channel` 视为配置错误。`null` 只用于合并时删除字段（§5a），不作为业务取值。
 10. `routine.enabled=true` 时，`roles.routine.session` 必须是已加载的、具备 `interactive` 与 `timer` 的会话适配器（delegated 时与主会话同宿主），权限模式不高于主会话；`routine.interval_minutes` 按 §3.1b 的取值范围检查。
 11. 校验针对合并后的有效配置（默认值 + 数据目录配置 + 本机覆盖），`tsw config show --effective` 可查看结果。
 

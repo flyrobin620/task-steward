@@ -216,6 +216,7 @@ def test_command_inventory_is_known() -> None:
             "backup",
             "config show",
             "config validate",
+            "dashboard",
             "guard",
             "home",
             "host install-hint",

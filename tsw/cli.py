@@ -577,17 +577,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="按用户决定排除只有任务书、旧账本未登记的任务（可重复）：不导入，也不列为待决定",
     )
 
-    status = sub.add_parser("status", help="STATUS 页面").add_subparsers(
+    status = sub.add_parser("status", help="TaskSteward Dashboard").add_subparsers(
         dest="status_command", required=True, metavar="<status command>"
     )
-    serve_cmd = add(
-        status,
-        "serve",
-        _cmd_status_serve,
-        "在本机启动 STATUS 应用：直接读账本，提供验收、退回、取消按钮（Ctrl+C 停止）",
+    serve_help = (
+        "在本机启动 TaskSteward Dashboard 应用：直接读账本，提供验收、退回、取消按钮（Ctrl+C 停止）"
     )
-    serve_cmd.add_argument("--port", type=int, default=0, help="端口（默认任选空闲端口）")
-    serve_cmd.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
+    # `tsw dashboard` is the same command under the page's name (DN006 §8.10, T273).
+    for target, name in ((status, "serve"), (sub, "dashboard")):
+        serve_cmd = add(target, name, _cmd_status_serve, serve_help)
+        serve_cmd.add_argument("--port", type=int, default=0, help="端口（默认任选空闲端口）")
+        serve_cmd.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
 
     add(sub, "quiesce", _cmd_quiesce, "静止数据目录（之后可直接复制）")
     add(sub, "resume-writes", _cmd_resume_writes, "解除静止")

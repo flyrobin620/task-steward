@@ -77,7 +77,7 @@ tsw init --home <数据目录> --remember
 - **运行时**（tsw 的代码）在本仓库：安装后 `tsw` 在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw，不需要这一步。
 - **数据目录**（账本、任务书、报告）按顺序定位：当前目录所在的、声明了 `claim_sessions` 的数据目录（只用于 live 测试隔离）→ 环境变量 `TSW_HOME` → 本仓库的 `.local/tsw-home` → `~/.tsw`。`tsw home` 显示找到的目录和依据。
 - **当前目录**只影响两件事：上面的 `claim_sessions`，以及 `tsw review run`（在 worker 的 worktree 中评审当前 HEAD）。其他命令在哪个目录运行都一样；`backup`、`restore` 的相对路径按当前目录解析。
-- 这些命令由你在**会话外的终端**中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 STATUS 应用在任何会话中都会被拒绝，以免会话替你做决定（[DN006 §8.10](docs/design/DN006-plugin-layer.md)）。
+- 这些命令由你在**会话外的终端**中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 Dashboard 应用在任何会话中都会被拒绝，以免会话替你做决定（[DN006 §8.10](docs/design/DN006-plugin-layer.md)）。
 
 ### 需要你运行的命令
 
@@ -86,7 +86,8 @@ tsw home                                     显示数据目录与定位依据
 tsw init --home <目录> --remember            初始化数据目录并记为本仓库的数据目录
 tsw host install-hint                        显示 Claude Code 插件的安装步骤
 tsw host render                              更新主会话的 CLAUDE.md、skill 与插件副本（产品更新后）
-tsw status serve                             打开 STATUS 应用：浏览器中查看任务，一键验收、退回、取消
+tsw dashboard                                打开 TaskSteward Dashboard：浏览器中查看任务，一键验收、退回、取消
+                                             （与 tsw status serve 相同）
 tsw task accept T255 [--note "看过报告"]     验收待验收的任务（先显示任务并要求确认；--yes 跳过）
 tsw task reject T255 --reason "缺少导出"     退回待验收的任务
 tsw task cancel T255                         取消任务（有运行中的 worker 时须先由主会话停止）
@@ -100,7 +101,7 @@ tsw ledger audit  /  tsw ledger rebuild      审计账本 / 从账本重建投�
 tsw config show  /  tsw config validate      查看 / 校验统一配置
 ```
 
-`tsw status serve` 只监听本机，每次启动输出一个带一次性令牌的地址并在浏览器中打开；页面与数据目录中的 `views/STATUS.html` 相同，另有按钮，报告与 PR 链接照常可点。每张卡片的「详情」打开该任务的单任务视图（`/tasks/<任务>`），列出需求与历史 revision、每个 attempt 与它的会话、提交与评审轮次、产出、依赖、问题和时间线；有会话的 attempt 带会话链接，点击在 Claude 桌面 app 中打开该会话。按 Ctrl+C 停止。`views/STATUS.html` 仍在每次提交后生成，可以离线打开，但没有按钮。
+`tsw dashboard`（即 `tsw status serve`）打开 TaskSteward Dashboard。它只监听本机，每次启动输出一个带一次性令牌的地址并在浏览器中打开；页面与数据目录中的 `views/STATUS.html` 相同，另有按钮，报告与 PR 链接照常可点。页面有三种视图：按状态分组、按时间顺序，以及按依赖关系画出的任务流（最新的任务在左，依赖的任务在右，每个仓库一条泳道）；顶部的计数卡只列出有任务的状态。筛选、视图与滚动位置在自动刷新后保留。每张卡片的「详情」打开该任务的单任务视图（`/tasks/<任务>`），列出需求与历史 revision、每个 attempt 与它的会话、提交与评审轮次、产出、依赖、问题和时间线；有会话的 attempt 带会话链接，点击在 Claude 桌面 app 中打开该会话。按 Ctrl+C 停止。`views/STATUS.html` 仍在每次提交后生成，可以离线打开，但没有按钮。
 
 开发者另需安装开发工具（`pip install -r requirements-dev.txt`），并用 `python tools/gate.py` 运行本地门禁。
 

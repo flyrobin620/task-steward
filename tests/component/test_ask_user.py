@@ -303,7 +303,7 @@ def test_a_reserved_question_can_only_be_relayed_to_the_user(home: Home) -> None
     assert out["events"][0]["data"]["transition"] == "T12"
     assert h.status("T001") == "in_progress"
     status = home.path("views/STATUS.html").read_text(encoding="utf-8")
-    assert "等待用户" not in status
+    assert '<div class="note ask">' not in status  # the question is answered: no note
 
 
 def refusal(call: Callable[[], Any]) -> dict[str, Any]:

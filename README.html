@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="6066cb6e8711b5ed9aa1e0fa9a10b814d2d428440a93bba818f90d9c8f1112cf">
+<meta name="tsw-source-sha256" content="d34e52a44a5b3f162e806d696943829c0f0fe8d6e6c5d82b4e01657ebf4a2e4a">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -65,13 +65,14 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 tsw init --home &lt;数据目录&gt; --remember</code></pre>
 <p>第一行把 <code>tsw</code> 装进 Python 的 <code>Scripts</code> 目录（Windows 的 PowerShell、cmd 与 Git Bash 都能直接运行 <code>tsw</code>）。这是可编辑安装，运行的就是本仓库当前的代码，<code>git pull</code> 后不用重装；请保留 <code>-e</code>：<code>host render</code> 等宿主命令要用仓库中的 <code>plugin/</code>，它不在 Python 包里。第二行初始化（或打开已有的）数据目录，并把它记在本仓库的 <code>.local/tsw-home</code> 中，之后终端不需要设置 <code>TSW_HOME</code>。不想安装时，在仓库根目录用 <code>python -m tsw</code> 代替 <code>tsw</code>。</p>
 <h3 id="哪些命令在哪里运行">哪些命令在哪里运行</h3>
-<ul><li><strong>运行时</strong>（tsw 的代码）在本仓库：安装后 <code>tsw</code> 在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw，不需要这一步。</li><li><strong>数据目录</strong>（账本、任务书、报告）按顺序定位：当前目录所在的、声明了 <code>claim_sessions</code> 的数据目录（只用于 live 测试隔离）→ 环境变量 <code>TSW_HOME</code> → 本仓库的 <code>.local/tsw-home</code> → <code>~/.tsw</code>。<code>tsw home</code> 显示找到的目录和依据。</li><li><strong>当前目录</strong>只影响两件事：上面的 <code>claim_sessions</code>，以及 <code>tsw review run</code>（在 worker 的 worktree 中评审当前 HEAD）。其他命令在哪个目录运行都一样；<code>backup</code>、<code>restore</code> 的相对路径按当前目录解析。</li><li>这些命令由你在<strong>会话外的终端</strong>中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 STATUS 应用在任何会话中都会被拒绝，以免会话替你做决定（<a href="docs/design/DN006-plugin-layer.html">DN006 §8.10</a>）。</li></ul>
+<ul><li><strong>运行时</strong>（tsw 的代码）在本仓库：安装后 <code>tsw</code> 在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw，不需要这一步。</li><li><strong>数据目录</strong>（账本、任务书、报告）按顺序定位：当前目录所在的、声明了 <code>claim_sessions</code> 的数据目录（只用于 live 测试隔离）→ 环境变量 <code>TSW_HOME</code> → 本仓库的 <code>.local/tsw-home</code> → <code>~/.tsw</code>。<code>tsw home</code> 显示找到的目录和依据。</li><li><strong>当前目录</strong>只影响两件事：上面的 <code>claim_sessions</code>，以及 <code>tsw review run</code>（在 worker 的 worktree 中评审当前 HEAD）。其他命令在哪个目录运行都一样；<code>backup</code>、<code>restore</code> 的相对路径按当前目录解析。</li><li>这些命令由你在<strong>会话外的终端</strong>中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 Dashboard 应用在任何会话中都会被拒绝，以免会话替你做决定（<a href="docs/design/DN006-plugin-layer.html">DN006 §8.10</a>）。</li></ul>
 <h3 id="需要你运行的命令">需要你运行的命令</h3>
 <pre><code class="lang-text">tsw home                                     显示数据目录与定位依据
 tsw init --home &lt;目录&gt; --remember            初始化数据目录并记为本仓库的数据目录
 tsw host install-hint                        显示 Claude Code 插件的安装步骤
 tsw host render                              更新主会话的 CLAUDE.md、skill 与插件副本（产品更新后）
-tsw status serve                             打开 STATUS 应用：浏览器中查看任务，一键验收、退回、取消
+tsw dashboard                                打开 TaskSteward Dashboard：浏览器中查看任务，一键验收、退回、取消
+                                             （与 tsw status serve 相同）
 tsw task accept T255 [--note &quot;看过报告&quot;]     验收待验收的任务（先显示任务并要求确认；--yes 跳过）
 tsw task reject T255 --reason &quot;缺少导出&quot;     退回待验收的任务
 tsw task cancel T255                         取消任务（有运行中的 worker 时须先由主会话停止）
@@ -83,7 +84,7 @@ tsw backup &lt;空目录&gt;  /  tsw restore &lt;备份&gt;   在线备份 / 恢
 tsw quiesce  /  tsw resume-writes            静止数据目录（之后可直接复制）/ 解除
 tsw ledger audit  /  tsw ledger rebuild      审计账本 / 从账本重建投影
 tsw config show  /  tsw config validate      查看 / 校验统一配置</code></pre>
-<p><code>tsw status serve</code> 只监听本机，每次启动输出一个带一次性令牌的地址并在浏览器中打开；页面与数据目录中的 <code>views/STATUS.html</code> 相同，另有按钮，报告与 PR 链接照常可点。每张卡片的「详情」打开该任务的单任务视图（<code>/tasks/&lt;任务&gt;</code>），列出需求与历史 revision、每个 attempt 与它的会话、提交与评审轮次、产出、依赖、问题和时间线；有会话的 attempt 带会话链接，点击在 Claude 桌面 app 中打开该会话。按 Ctrl+C 停止。<code>views/STATUS.html</code> 仍在每次提交后生成，可以离线打开，但没有按钮。</p>
+<p><code>tsw dashboard</code>（即 <code>tsw status serve</code>）打开 TaskSteward Dashboard。它只监听本机，每次启动输出一个带一次性令牌的地址并在浏览器中打开；页面与数据目录中的 <code>views/STATUS.html</code> 相同，另有按钮，报告与 PR 链接照常可点。页面有三种视图：按状态分组、按时间顺序，以及按依赖关系画出的任务流（最新的任务在左，依赖的任务在右，每个仓库一条泳道）；顶部的计数卡只列出有任务的状态。筛选、视图与滚动位置在自动刷新后保留。每张卡片的「详情」打开该任务的单任务视图（<code>/tasks/&lt;任务&gt;</code>），列出需求与历史 revision、每个 attempt 与它的会话、提交与评审轮次、产出、依赖、问题和时间线；有会话的 attempt 带会话链接，点击在 Claude 桌面 app 中打开该会话。按 Ctrl+C 停止。<code>views/STATUS.html</code> 仍在每次提交后生成，可以离线打开，但没有按钮。</p>
 <p>开发者另需安装开发工具（<code>pip install -r requirements-dev.txt</code>），并用 <code>python tools/gate.py</code> 运行本地门禁。</p>
 <h2 id="仓库布局">仓库布局</h2>
 <pre><code class="lang-text">task-steward/
