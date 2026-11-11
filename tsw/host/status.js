@@ -218,10 +218,17 @@
         b.setAttribute("aria-pressed", String(on));
         b.hidden = !on && b.dataset.n === "0";
       }
+      // With the archived tasks in the task flow, kinds and repositories count every task.
+      const counted = el => (flowing && state.arch ? el.dataset.na : el.dataset.n) || "0";
       for (const b of tools.querySelectorAll("[data-kind]")) {
         const on = state.kind.includes(b.dataset.kind);
         b.setAttribute("aria-pressed", String(on));
-        b.hidden = !on && b.dataset.n === "0";
+        b.hidden = !on && counted(b) === "0";
+        const small = b.querySelector("small");
+        if (small) small.textContent = counted(b);
+      }
+      for (const o of repo.options) {
+        if (o.value) o.hidden = o.value !== state.repo && counted(o) === "0";
       }
       $("mine").setAttribute("aria-pressed", String(state.flag === "user"));
       $("view-status").setAttribute("aria-pressed", String(!flowing && !timeline()));

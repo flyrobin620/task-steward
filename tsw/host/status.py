@@ -693,17 +693,29 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
         f"{_e(STATUS_LABELS.get(s, s))}<small>{counts.get(s, 0)}</small></button>"
         for s in pick_statuses
     )
-    kinds_present = list(KINDS) + sorted({str(c.row["kind"]) for c in cards} - set(KINDS))
+    # Kinds and repositories count the board's tasks (data-n) and, for the task flow with the
+    # archived tasks, every task (data-na); the script shows those with tasks in the view.
+    kinds_present = list(KINDS) + sorted({str(t["kind"]) for t in tasks} - set(KINDS))
     kind_count = {k: sum(1 for c in cards if c.row["kind"] == k) for k in kinds_present}
+    kind_all = {k: sum(1 for t in tasks if t["kind"] == k) for k in kinds_present}
     kind_picks = "".join(
         f'<button type="button" class="pick k-{_e(k)}" data-kind="{_e(k)}" '
-        f'data-label="{_e(KINDS.get(k, k))}" data-n="{kind_count[k]}" aria-pressed="false"'
-        f"{'' if kind_count[k] else ' hidden'}>{_e(KINDS.get(k, k))}"
+        f'data-label="{_e(KINDS.get(k, k))}" data-n="{kind_count[k]}" data-na="{kind_all[k]}" '
+        f'aria-pressed="false"{"" if kind_count[k] else " hidden"}>{_e(KINDS.get(k, k))}'
         f"<small>{kind_count[k]}</small></button>"
         for k in kinds_present
     )
-    repos = sorted({str(c.row["repo"]) for c in cards})
-    repo_options = "".join(f'<option value="{_e(r)}">{_e(r)}</option>' for r in repos)
+    repo_count: dict[str, int] = {}
+    for c in cards:
+        repo_count[str(c.row["repo"])] = repo_count.get(str(c.row["repo"]), 0) + 1
+    repo_all: dict[str, int] = {}
+    for t in tasks:
+        repo_all[str(t["repo"])] = repo_all.get(str(t["repo"]), 0) + 1
+    repo_options = "".join(
+        f'<option value="{_e(r)}" data-n="{repo_count.get(r, 0)}" data-na="{n}"'
+        f"{'' if repo_count.get(r) else ' hidden'}>{_e(r)}</option>"
+        for r, n in sorted(repo_all.items())
+    )
 
     on_board = frozenset(str(c.row["task_id"]) for c in cards)
     groups: list[str] = []

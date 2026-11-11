@@ -11,7 +11,7 @@ import pytest
 
 from tsw.host.flow import FIRST_COLUMN, FIRST_ROW, LANE_CAPACITY, FlowTask, lane_order, place
 from tsw.host.status import TITLE, AppView, render
-from tsw.host.status_assets import SCRIPT
+from tsw.host.status_assets import CSS, SCRIPT
 from tsw.projection import SCHEMA_SQL
 
 mark = pytest.mark
@@ -273,3 +273,23 @@ def test_a_reload_keeps_the_choices_and_does_not_follow_the_anchor_again() -> No
     assert "} else if (anchor) reveal(anchor);" in SCRIPT
     assert "repo.add(new Option(state.repo, state.repo))" in SCRIPT
     assert 'session.set("flow-scroll", flow.scroll())' in SCRIPT
+
+
+@mark.use_case("UC-DIRECT-004")
+def test_archived_only_repositories_and_kinds_can_be_chosen_in_the_task_flow(
+    conn: sqlite3.Connection,
+) -> None:
+    _task(conn, "T001", "archived", 1, repo="gone", kind="research")
+    _task(conn, "T002", "in_progress", 2, repo="live")
+    page = render(conn)
+    # Offered but hidden on the board; the script shows them with the archived tasks (data-na).
+    assert '<option value="gone" data-n="0" data-na="1" hidden>gone</option>' in page
+    assert '<option value="live" data-n="1" data-na="1">live</option>' in page
+    assert re.search(r'data-kind="research"[^>]*data-n="0" data-na="1"[^>]*hidden', page)
+    assert "flowing && state.arch ? el.dataset.na : el.dataset.n" in SCRIPT
+
+
+def test_the_lane_names_stick_to_the_scrolling_area() -> None:
+    # overflow:hidden on the box inside the scroller would capture the sticky lane names.
+    assert ".flow-size{position:relative;overflow:clip}" in CSS
+    assert re.search(r"\.flow-grid>\.lane-name\{[^}]*position:sticky;left:0", CSS)
