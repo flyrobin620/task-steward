@@ -1298,7 +1298,9 @@ def title_checks(run: Run, evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             (
                 e
                 for e in updates(task, at)
-                if e["data"].get("action") == "title" and e["data"].get("reason") == "dispatch"
+                if e["data"].get("action") == "title"
+                and e["data"].get("reason") == "dispatch"
+                and e["data"].get("outcome") in ("renamed", "already")
             ),
             None,
         )
@@ -1355,7 +1357,9 @@ def title_checks(run: Run, evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         (
             e
             for e in updates("T001", at)
-            if e["data"].get("action") == "title" and e["data"].get("reason") == "accepted"
+            if e["data"].get("action") == "title"
+            and e["data"].get("reason") == "accepted"
+            and e["data"].get("outcome") == "renamed"
         ),
         None,
     )

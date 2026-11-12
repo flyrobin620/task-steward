@@ -631,3 +631,43 @@ def test_a_standby_session_kept_through_a_cancel_gets_the_prefix(home: Home) -> 
         observed=observed("w-T002", data["session_title"], isArchived=True),
     )
     assert gone["outcome"] == "missing" and sessions(h) == []
+
+
+@mark.use_case("UC-SESSION-001")
+def test_a_session_gone_before_its_prefix_is_closed_when_archive_is_on(home: Home) -> None:
+    # archive_on_accept: a session already gone when its title is checked would otherwise keep
+    # its attempt live with no receipt (PR #43 review).
+    h = Harness(home, {"sessions": {"archive_on_accept": True}})
+    delivered_and_done(h)
+    accept_from_terminal(h)
+    out = h.run(
+        "session_check", task_id="T001", attempt="a1", observed="Session not found", missing=True
+    )
+    assert [e["type"] for e in out["events"]] == ["attempt.session_updated", "attempt.closed"]
+    assert out["events"][1]["data"]["disposition"] == "missing"
+    assert h.query("SELECT phase FROM attempts WHERE task_id = 'T001'")[0]["phase"] == "closed"
+    assert sessions(h) == []
+
+
+@mark.use_case("UC-SESSION-001")
+def test_a_late_rename_record_when_only_the_archive_is_left(home: Home) -> None:
+    # The prefix was emptied after the rename was asked for: what is due is the archive, which
+    # has no title; the rename that happened is still recorded (PR #43 review).
+    h = Harness(home, {"sessions": {"archive_on_accept": True}})
+    session = delivered_and_done(h)
+    accept_from_terminal(h)
+    asked = h.run("session_check", task_id="T001", attempt="a1", observed=observed(session, BASE))
+    assert asked["title"] == f"[已验收] {BASE}"
+    h.config.values["sessions"]["title_on_accept"] = ""
+    assert [i["action"] for i in sessions(h)] == ["archive"]
+    out = h.run(
+        "session_record",
+        task_id="T001",
+        attempt="a1",
+        action="title",
+        title=f"[已验收] {BASE}",
+        ok=True,
+        result="Renamed",
+    )
+    data = out["events"][0]["data"]
+    assert (data["outcome"], data["reason"]) == ("renamed", "superseded")

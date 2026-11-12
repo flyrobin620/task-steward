@@ -396,7 +396,7 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 | 等于应有的标题 | 不改名，tsw 记下的标题更新为它 | `already` |
 | 等于 tsw 记下的标题，或等于 tsw 上一次让主会话改成的标题（检查返回改名时记为 `asked`；改名成功但回执没有记下时，会话显示的就是它） | 改名为应有的标题 | 先记 `asked`；改名成功为 `renamed`，工具报错为 `failed` |
 | 其他（包括看起来像 tsw 会起、但 tsw 从没让主会话改成的标题，例如用户自己加的“[已取消]”） | 认定用户（或 tsw 之外的人）改过：不改名，也不尝试（不弹确认）；这个 attempt 之后不再自动改名 | `user_title`（附当时的标题） |
-| 会话不存在或已归档 | 不改名；这个 attempt 之后不再处理标题与归档 | `missing` |
+| 会话不存在或已归档 | 不改名；这个 attempt 之后不再处理标题与归档（还应归档的，同时记 `attempt.closed`，附原因） | `missing` |
 
 **验收后归档**：`sessions.archive_on_accept` 为 `true` 时，任务为 `accepted`、标题已处理完（任何结果）的会话随后归档；成功记 `attempt.closed`（工具回执，附 `disposition: archived`），失败（例如宿主拒绝归档正在工作或显示在屏幕上的会话）记 `attempt.session_updated`（`action: archive`，`outcome: failed`），会话不存在时同样记 `attempt.closed`（附原因）。用户改过标题不影响归档：归档是用户自己打开的配置。取消的任务不在这里归档（待命会话按 `sessions.archive_on_archive` 在取消前处置，§5.6）。
 

@@ -231,18 +231,23 @@ def session_check(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             )
         if gone or (seen is not None and seen.get("isArchived") is True):
             output.update(action="none", outcome="missing")
+            closed = _closed(row, f"会话已不存在或已归档：{_evidence(raw)}", "missing")
             if item["action"] == "archive":
                 # Nothing left to archive: the receipt says why (DN002 §5.8).
-                return [_closed(row, f"会话已不存在或已归档：{_evidence(raw)}", "missing")]
-            return [
-                _event(
-                    row,
-                    action=item["action"],
-                    outcome="missing",
-                    reason=item["reason"],
-                    evidence=_evidence(raw),
-                )
-            ]
+                return [closed]
+            missing = _event(
+                row,
+                action=item["action"],
+                outcome="missing",
+                reason=item["reason"],
+                evidence=_evidence(raw),
+            )
+            # Gone before its title was done: the archive it was still due is settled too, or
+            # the attempt would stay live with no receipt (PR #43 review).
+            archive_due = row["status"] == "accepted" and row["phase"] != "closed"
+            if archive_due and env.config.get("sessions.archive_on_accept"):
+                return [missing, closed]
+            return [missing]
         if seen is None:
             raise rejected(
                 "observed 应为 get_session 的返回（含 title）；会话不存在时给 missing: true",
@@ -316,7 +321,9 @@ def session_record(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 # A rename that happened is recorded even when the task moved on before its
                 # record (accepted in a terminal meanwhile): tsw then knows the title it left,
                 # and the next check renames again instead of taking it for the user's.
-                reason = item["reason"] if item is not None and item["title"] == title else None
+                # The item may be the archive by now (a prefix emptied meanwhile): no title.
+                current = item is not None and item.get("title") == title
+                reason = item["reason"] if item is not None and current else None
                 return [
                     _event(
                         row,
