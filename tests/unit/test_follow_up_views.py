@@ -221,8 +221,12 @@ def test_the_board_counts_open_follow_ups_and_names_where_a_task_came_from(
         made.group(0)
     )
     assert "followups" not in re.findall(r'data-flags="([^"]*)"', made.group(0))[0]
-    # The tile counts every open follow-up and filters on the flag.
-    assert re.search(r'data-tile-flag="followups"[^>]*><b>3</b><span>待处理 follow-up', page)
+    # The quick pick after the kinds counts the tasks with open follow-ups, not the items
+    # (T273 revision 3), and filters on the flag; it is not a top-level tile.
+    with_open = len(re.findall(r'<article [^>]*data-flags="[^"]*followups', page))
+    pick = re.search(r'<button[^>]*data-quick="followups"[^>]*>follow-up<small>(\d+)</small>', page)
+    assert pick is not None and int(pick.group(1)) == with_open < 3
+    assert "follow-up" not in page.split('<section class="tiles">')[1].split("</section>")[0]
     assert '<option value="followups">' in page
     # The static page has no task views: the counts are text, the source is the card.
     static = render(conn)

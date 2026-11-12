@@ -250,9 +250,23 @@ def test_tiles_show_only_nonzero_counts_and_every_status_on_the_board(
     assert all(n != "0" for n, _ in shown)
     assert ("3", "已验收") in shown and ("1", "执行中") in shown
     assert ("1", "完成·待用户验收") in shown and ("1", "已归档") in shown
-    assert ("1", "占用名额") in shown
-    for absent in ("待启动", "待判断", "待用户答复", "待处理 follow-up", "暂停"):
+    for absent in ("运行中", "占用名额", "待启动", "待判断", "待用户答复", "follow-up", "暂停"):
         assert absent not in tiles, absent
+    # Running tasks and tasks with open follow-ups are short picks after the kinds (revision 3).
+    picks = page.split('<span class="lbl">类型</span>')[1].split("</div>")[0]
+    assert re.search(
+        r'<span class="lbl">快捷</span><button[^>]*data-quick="running" data-n="1" '
+        r'aria-pressed="false"[^>]*>运行中<small>1</small>',
+        picks,
+    )
+    assert re.search(r'data-quick="followups" data-n="0"[^>]*hidden>follow-up', picks)
+    running = re.search(r'data-running="([^"]+)"', page)
+    assert running and set(running.group(1).split()) == {
+        "dispatching",
+        "in_progress",
+        "waiting_user",
+        "verifying",
+    }
     # The tiles, the bar and the picks count the same statuses.
     bar = re.findall(r'<i class="st-(\w+)" style="flex:(\d+)"', page)
     states = tiles.split('aria-label="状态"')[1]

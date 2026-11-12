@@ -55,6 +55,7 @@
     const cards = Array.from(board.querySelectorAll("article.card"));
     const ORDER = board.dataset.order.split(" ");
     const KINDS = board.dataset.kinds.split(" ");
+    const RUNNING = (board.dataset.running || "").split(" ").filter(Boolean);
     const statusLabels = Object.create(null), kindLabels = Object.create(null);
     for (const b of tools.querySelectorAll("[data-st]")) statusLabels[b.dataset.st] = b.dataset.label;
     for (const b of tools.querySelectorAll("[data-kind]")) kindLabels[b.dataset.kind] = b.dataset.label;
@@ -181,6 +182,10 @@
       state.st = state.st.filter(v => v in statusLabels);
       state.kind = state.kind.filter(v => v in kindLabels);
     }
+    // The quick picks after the kinds (T273 revision 3): the running statuses, and the flag.
+    function running() {
+      return state.st.length === RUNNING.length && RUNNING.every(s => state.st.includes(s));
+    }
     function timeline() {
       return state.group === "none" && state.sort === "activity";
     }
@@ -229,6 +234,11 @@
       }
       for (const o of repo.options) {
         if (o.value) o.hidden = o.value !== state.repo && counted(o) === "0";
+      }
+      for (const b of tools.querySelectorAll("[data-quick]")) {
+        const on = b.dataset.quick === "running" ? running() : state.flag === b.dataset.quick;
+        b.setAttribute("aria-pressed", String(on));
+        b.hidden = !on && b.dataset.n === "0";
       }
       $("mine").setAttribute("aria-pressed", String(state.flag === "user"));
       $("view-status").setAttribute("aria-pressed", String(!flowing && !timeline()));
@@ -434,6 +444,8 @@
       const b = event.target.closest("button");
       if (!b) return;
       if (b.dataset.st) state.st = toggle(state.st, b.dataset.st);
+      else if (b.dataset.quick === "running") state.st = running() ? [] : [...RUNNING];
+      else if (b.dataset.quick) state.flag = state.flag === b.dataset.quick ? "" : b.dataset.quick;
       else if (b.dataset.kind) state.kind = toggle(state.kind, b.dataset.kind);
       else if (b.id === "mine") state.flag = state.flag === "user" ? "" : "user";
       else if (b.id === "view-status") { state.view = "board"; state.group = "status"; state.sort = "status"; }
