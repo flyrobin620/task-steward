@@ -168,6 +168,8 @@ def run_tool(
             for e in result.events
         ],
     }
+    if not result.duplicate:
+        out.update(command.output)
     if name == "sync":
         out["needs_stop"] = report.get("needs_stop", [])
     elif spec.sync_after and not result.duplicate:

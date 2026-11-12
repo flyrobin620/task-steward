@@ -219,8 +219,9 @@ def _by(env: ToolEnv, attempt: str | None) -> dict[str, Any]:
     "worker",
     "orchestrator",
     description=(
-        "记录任务的 follow-up（本任务不做、之后可能要做的事；DN002 §5.7）：worker 只记本任务、"
-        "用户验收前；主会话除已归档外都可以。不改变任务状态"
+        "记录任务的 follow-up（执行中发现、本任务不做、将来可能变成任务的事，先停放以免忘记；"
+        "验收请求、本任务自己的待办、等待中的状态、没有具体问题的设想都不是；DN002 §5.7）："
+        "worker 只记本任务、用户验收前；主会话除已归档外都可以。不改变任务状态"
     ),
 )
 def follow_up_record(inp: Mapping[str, Any], env: ToolEnv) -> Command:

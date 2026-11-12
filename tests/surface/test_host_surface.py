@@ -281,6 +281,7 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
         handle_input,
         teams_chat,
         settings,
+        home / "roles" / "worker.md",
     ]
     # The test's Claude configuration directory has no plugin installed.
     assert out["plugin"]["installed"] == [] and "note" in out["plugin"]

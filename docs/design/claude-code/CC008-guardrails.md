@@ -1,6 +1,6 @@
 # CC008 Claude Code 上的护栏
 
-- 状态：设计草案（T242 r2；T243 增加例行会话的规则；T251 Worker Merge 规则覆盖仓库 worktree）
+- 状态：设计草案（T242 r2；T243 增加例行会话的规则；T251 Worker Merge 规则覆盖仓库 worktree；T276 §6 worker 会话的 prompt 以 worker 说明开头，Worker Dispatch 规则随之更新）
 - 日期：2026-11-08
 - 实现：[DN008 校验原则](../DN008-guardrails.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC006 Claude Code 插件](CC006-plugins.md)
@@ -56,7 +56,7 @@
 
 | 编号 | hook | 行为 | 归类 |
 | --- | --- | --- | --- |
-| CC-S1 | SessionStart | 识别角色；主会话领取租约并注入 attention 摘要（让出过租约的会话不领取，只注入只读说明，DN001 §6.4，T254）；worker 注入任务与回传规则（唤醒发给当前持租主会话）；待绑定会话提示等待绑定 | 保留（不是拦截） |
+| CC-S1 | SessionStart | 识别角色；主会话领取租约并注入 attention 摘要（让出过租约的会话不领取，只注入只读说明，DN001 §6.4，T254）；worker 注入任务、任务书路径与可写路径，并指向会话提示语开头的 worker 说明与数据目录副本（回传与唤醒规则在其中，T276）；待绑定会话提示等待绑定 | 保留（不是拦截） |
 | CC-S2 | UserPromptSubmit（worker） | live worker 的任务不是 `accepted` / `cancelled` / `archived` 时（T262 前只在有待答问题时），把用户消息原文记为 `input.session_message` 并告诉 worker 编号，可用于登记答复（`user_answer`）或需求变更（`requirement_change`，DN002 §5.1a）；去掉宿主前置的 `<system-reminder>`（T241）；以 `<cross-session-message` `<side-sessions-event` `<task-notification` `<ci-monitor-event` `<scheduled-task` 开头的注入消息不记 | 保留。前置 reminder 的修复是必需的：本任务中用户在 worker 会话的回复以 `<system-reminder>` 开头，`main` 上的实现把它当成注入消息没有记录，worker 因而无法登记答复 |
 | CC-S3 | UserPromptSubmit（worker） | 检测 `[report]` 并提示回传 | 保留 |
 | CC-S4 | Stop（主会话） | 本会话可以持有租约（没有被另一个主会话的有效租约排除、没有让出过租约）时：有未处理的回传、到期未转交的问题或失效的例行会话（`attention` 的 `routine` 为 `stale`，提示给它发消息重新设定）时阻止结束一次；这一轮是用户的 turn（CC-S6）且 `attention` 的 `needs_prestart` 非空或例行会话需要启动（`missing`）时也阻止一次，提示为列出的任务预启动（DN002 §5.6）、启动例行会话（DN006 §8.9.2）。几条原因合在一条提示里，`stop_hook_active` 时不再阻止 | 保留；预启动提醒为 T244 新增，例行会话提醒为 T243 新增 |
@@ -149,9 +149,9 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 | 主会话 | 数据目录的 `.claude/settings.json`（`render_instructions` 一并生成） | tsw MCP 工具；`start_session`、`send_message` / `SendMessage`、`stop_session`、`get_session`、`list_sessions`、`archive_session` | CC-B9；tsw 工具按角色、守卫与用户来源校验 |
 | worker | 无（T245 起不生成）。执行目录带自己的设置文件时，即使在已信任的数据目录之下，app 也会为它再次要求信任确认（Claude Code 文档 permissions.md“project allow rules and workspace trust”说的是允许规则；桌面 app 实测对只有 `env` 与 `hooks` 的 `settings.local.json` 同样要求，确认框写明 “Execution allowed by: .claude/settings.local.json”；数据目录中 T241、T245 的执行目录各有一条单独的信任记录，没有规则文件的 T242–T244 没有），每个新任务因此多一次确认。`attempt_start` 删除早先 tsw 写下、只含 tsw 规则的 `settings.local.json`；含其他内容（如用户在该会话中放行的规则）的文件不动 | worker 的 tsw 工具、`send_message` / `SendMessage` 由 auto 分类器判断（T242–T244 的 worker 没有允许规则，调用都没有被拦）；合并由用户设置中的“TaskSteward Worker Merge”放行 | CC-B6、CC-B7；hook 的拒绝优先于一切放行 |
 
-`start_session` 与 `send_message` 等会话工具由 app 自己的分类器把关，不受 `permissions.allow` 约束（live 中允许规则已生效，带“worker 自行合并”的任务书正文仍被拦截）。用户 2026-11-07 决定：创建 worker 会话时 `prompt` 只写短指令（角色、attempt、任务书路径），`background` 只写任务标题、仓库与执行目录，任务书正文（含交付与合并方式）由 worker 从 `runs/` 读取；合并的把关点因此在 worker 实际合并时，由 auto 模式规则与 hooks 守卫承担，而不是在创建会话时由 app 分类器判断。会话可能在 `attempt_reconcile` 之前开始第一轮（`whoami` 仍为 pending），主会话绑定后发消息通知它。
+`start_session` 与 `send_message` 等会话工具由 app 自己的分类器把关，不受 `permissions.allow` 约束（live 中允许规则已生效，带“worker 自行合并”的任务书正文仍被拦截）。用户 2026-11-07 决定：创建 worker 会话时 `prompt` 只写短指令（角色、attempt、任务书路径），`background` 只写任务标题、仓库与执行目录，任务书正文（含交付与合并方式）由 worker 从 `runs/` 读取；合并的把关点因此在 worker 实际合并时，由 auto 模式规则与 hooks 守卫承担，而不是在创建会话时由 app 分类器判断。用户 2026-11-12 修改（T276）：prompt 开头放 worker 说明全文（`plugin/roles/worker.md` 的数据目录副本，适用于所有任务的通用规则，含合并规则），后接上述短指令；完整 prompt 由 `attempt_start` 生成，主会话原样传入；任务书正文与本任务的交付方式仍不进 prompt。分类器可能把说明中的合并规则当作主会话交给 worker 的未授权指令，所以“TaskSteward Worker Dispatch”规则写明这份 prompt 的组成；live 中若仍被拦截，需另行决定。会话可能在 `attempt_reconcile` 之前开始第一轮（`whoami` 仍为 pending），主会话绑定后发消息通知它。
 
-auto 模式分类器另有自己的规则（`autoMode.allow` / `soft_deny`），其中“Merge Without Review”把 worker 合并自己的 PR 判为未经评审的合并（live 中即使命中允许规则的合并也出现过被拒）。Claude Code 只从用户设置、命令行设置与托管设置读取 `autoMode`，项目设置与本地设置中的一律忽略（Claude Code 2.1.302 中核实），所以 tsw 不能把它与允许规则一起生成：`tsw host install-hint` 给出三条规则，由用户加入自己的用户设置（用户 2026-11-08 决定：凡是 tsw 已把关、分类器仍会误拦的动作，都用 auto 模式规则在策略层放行）：“TaskSteward Worker Dispatch”（主会话以 `attempt_start` 返回的会话名与 `cwd`、只指向任务书的短指令创建 worker 会话；live 中同样的短指令创建曾被分类器以“Blocked by classifier”拒绝一次，用户重试后通过）与“TaskSteward Worker Merge”（限 worker 会话、本任务的 PR、单独的 `gh pr merge … -R …`，不含 `--admin` 与绕过检查；不看任务类型），以及“TaskSteward Routine”（限例行会话：按 `routine_board` 的返回设定、续期自己的定时任务，用 WorkIQ `fetch` 读取 tsw 指定的 Teams chat（T253 前为 Teams MCP 的 `ListChatMessages`），把 tsw 生成的消息发给主会话，清空自己的上下文；T243）。worker 的 tsw 工具与发给主会话的消息没有对应的规则：分类器本来就不拦它们（上表）；如果 live 中出现误拦，再按同一原则在 install hint 中加一条覆盖它们的规则。`attempt_start` 同时返回执行目录在磁盘上的实际写法 `cwd`：app 拒绝大小写不同的同一目录。
+auto 模式分类器另有自己的规则（`autoMode.allow` / `soft_deny`），其中“Merge Without Review”把 worker 合并自己的 PR 判为未经评审的合并（live 中即使命中允许规则的合并也出现过被拒）。Claude Code 只从用户设置、命令行设置与托管设置读取 `autoMode`，项目设置与本地设置中的一律忽略（Claude Code 2.1.302 中核实），所以 tsw 不能把它与允许规则一起生成：`tsw host install-hint` 给出三条规则，由用户加入自己的用户设置（用户 2026-11-08 决定：凡是 tsw 已把关、分类器仍会误拦的动作，都用 auto 模式规则在策略层放行）：“TaskSteward Worker Dispatch”（主会话以 `attempt_start` 返回的会话名与 `cwd`、`attempt_start` 返回的 prompt（worker 说明加指向任务书的短指令，T276 起；此前为只指向任务书的短指令）创建 worker 会话；用户设置中的旧规则需按 `tsw host install-hint` 更新；live 中同样的短指令创建曾被分类器以“Blocked by classifier”拒绝一次，用户重试后通过）与“TaskSteward Worker Merge”（限 worker 会话、本任务的 PR、单独的 `gh pr merge … -R …`，不含 `--admin` 与绕过检查；不看任务类型），以及“TaskSteward Routine”（限例行会话：按 `routine_board` 的返回设定、续期自己的定时任务，用 WorkIQ `fetch` 读取 tsw 指定的 Teams chat（T253 前为 Teams MCP 的 `ListChatMessages`），把 tsw 生成的消息发给主会话，清空自己的上下文；T243）。worker 的 tsw 工具与发给主会话的消息没有对应的规则：分类器本来就不拦它们（上表）；如果 live 中出现误拦，再按同一原则在 install hint 中加一条覆盖它们的规则。`attempt_start` 同时返回执行目录在磁盘上的实际写法 `cwd`：app 拒绝大小写不同的同一目录。
 
 Claude Code 对复合命令（`;`、`&&`、管道）逐段核对允许规则，有一段不在规则内就交给权限模式与分类器判断。live 中单独的 `gh pr merge … -R …` 直接执行，而后面接了 `git fetch` 等命令的同一合并被分类器以“Merge Without Review”拒绝；worker 指令因此要求合并命令单独运行，auto 模式规则也只描述单独的合并命令。
 

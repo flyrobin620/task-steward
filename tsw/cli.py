@@ -551,7 +551,12 @@ def build_parser() -> argparse.ArgumentParser:
     host = sub.add_parser("host", help="宿主集成").add_subparsers(
         dest="host_command", required=True, metavar="<host command>"
     )
-    add(host, "render", _cmd_host_render, "在数据目录生成主会话的 CLAUDE.md 与 orchestrate skill")
+    add(
+        host,
+        "render",
+        _cmd_host_render,
+        "在数据目录生成主会话的 CLAUDE.md、skill 与 worker 说明 roles/worker.md",
+    )
     add(host, "install-hint", _cmd_host_install_hint, "显示插件安装步骤")
 
     review = sub.add_parser("review", help="worker 自评审").add_subparsers(

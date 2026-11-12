@@ -40,6 +40,7 @@ from tsw.machine.model import (
     row_dict,
     task,
 )
+from tsw.roles import record_given, worker_instructions, worker_prompt
 from tsw.tasks import TaskSpec, register, render_spec, validate_spec
 from tsw.workspace import brief_section, ensure, home_skills, plan
 
@@ -635,7 +636,12 @@ def _ensure_dir(home: Home, recorded: str) -> None:
 
 
 @tool(
-    "attempt_start", "orchestrator", description="请求创建会话（attempt.start_requested，含预启动）"
+    "attempt_start",
+    "orchestrator",
+    description=(
+        "请求创建会话（attempt.start_requested，含预启动）；返回 start_session 用的 cwd 与 "
+        "prompt（worker 说明加短指令或待命说明），原样传入"
+    ),
 )
 def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
@@ -686,6 +692,10 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     "已有待命或可续用的会话", reason="g_one_attempt", phase=current["phase"]
                 )
         guards.g_one_attempt(ctx.conn, task_id, allowed=None)
+        # The session is created with the worker instructions at the top of its prompt
+        # (DN006 §6.2): refuse before the directory and the worktree are made when the data
+        # directory's copy is missing or not the current one.
+        instructions, digest = worker_instructions(ctx.home.root)
         previous = attempt(ctx.conn, task_id, attempt_id)
         # Every prestart generation records its directory, the default included, so a retry
         # never inherits the directory of a generation that was not created.
@@ -707,7 +717,12 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             "controller": env.caller.session_id,
             "adapter": str(env.config.get("roles.worker.session")),
             **({"worktree": made} if made is not None else {}),
+            "worker_instructions_sha256": digest,
         }
+        # What the main session passes to start_session unchanged, and which version of the
+        # instructions this session gets (the worker's hooks tell it of a newer one).
+        output["prompt"] = worker_prompt(instructions, task_id, attempt_id, purpose)
+        record_given(ctx.home.root, str(data["session_name"]), digest)
         if purpose == "prestart":
             # The brief is written now, at the current revision, so what was decided for the
             # task is on disk before the context that decided it is gone; dispatch and every
@@ -734,7 +749,10 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             )
         ]
 
-    return _cmd(env, "attempt_start", inp, build)
+    output: dict[str, Any] = {}
+    command = _cmd(env, "attempt_start", inp, build)
+    command.output = output
+    return command
 
 
 @tool("attempt_reconcile", "orchestrator", description="会话创建结果对账（T08 / T09 / 迟到会话）")

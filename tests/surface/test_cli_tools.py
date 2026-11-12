@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from tests.support import run_json, run_tsw
+from tests.support import REPO_ROOT, run_json, run_tsw
 
 ORCH = ["--role", "orchestrator", "--session", "orch-1", "--machine", "m1"]
 
@@ -173,3 +173,38 @@ def test_tool_errors_are_reported_on_stderr(home: Path) -> None:
     names = [t["name"] for t in listing["tools"]]
     assert "task_dispatch" in names
     assert "sync" in names
+
+
+@pytest.mark.use_case("UC-HOST-007")
+def test_a_session_needs_the_rendered_worker_instructions(home: Path) -> None:
+    copy = home / "roles" / "worker.md"
+    source = (REPO_ROOT / "plugin" / "roles" / "worker.md").read_bytes()
+    assert copy.read_bytes() == source  # tsw init wrote it
+    tool(
+        "task_register",
+        ORCH,
+        task_id="T001",
+        title="任务",
+        repo="demo",
+        kind="code",
+        goal="目标",
+        acceptance=["可用"],
+    )
+    tool("task_plan", ORCH, task_id="T001", dependencies=[], resources=[], reason="规划")
+    tool("task_dispatch", ORCH, task_id="T001", workdir=str(home / "w1"), user_turn=True)
+    brief = (home / "runs" / "T001" / "a1" / "brief.md").read_text(encoding="utf-8")
+    assert brief.startswith("# 任务书 T001 a1\n")  # the task alone
+    copy.unlink()
+    inp = json.dumps({"task_id": "T001", "purpose": "dispatch", "user_turn": True})
+    proc = run_tsw("tool", "run", "attempt_start", "--input", inp, *ORCH, "--json")
+    assert proc.returncode == 3
+    refused = json.loads(proc.stderr)
+    assert refused["details"]["reason"] == "worker_instructions_missing"
+    assert "tsw host render" in refused["message"]
+    assert run_json("host", "render")[0] == 0
+    started = tool("attempt_start", ORCH, task_id="T001", purpose="dispatch", user_turn=True)
+    instructions = source.decode("utf-8").replace("\r\n", "\n").rstrip()
+    assert started["prompt"] == (
+        f"{instructions}\n\n---\n\n你是 TaskSteward 任务 T001 的 worker（attempt a1）。"
+        "先调用 whoami，再按任务书 runs/T001/a1/brief.md 执行。\n"
+    )

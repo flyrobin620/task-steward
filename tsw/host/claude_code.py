@@ -7,7 +7,10 @@ the project skills ``.claude/skills/orchestrate/SKILL.md``, ``handle-input`` (qu
 over by the routine session, CC006 §6.4) and the human channels' skills (``teams-chat``, CC006
 §7). Sessions whose directory is under the data directory and not in a git repository (the
 routine session, a worker without a repository worktree) also discover them; a worker in a
-repository worktree does not (CC006 §8). It also generates the permission rules for the actions
+repository worktree does not (CC006 §8). A worker's own instructions are not a skill: they
+are copied from ``plugin/roles/worker.md`` to ``roles/worker.md`` (``tsw.roles``) and every
+worker session's prompt starts with them (CC006 §2). It also generates the permission rules
+for the actions
 tsw guards itself (CC008 §6): ``.claude/settings.json`` in the data directory for the
 orchestrator. A worker's execution directory gets no settings file:
 a folder that brings its own permission rules asks for trust again even under a trusted data
@@ -24,6 +27,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from tsw.home import Home
+from tsw.roles import render_roles
 from tsw.storage.fs import atomic_write
 
 PLUGIN_DIR = Path(__file__).resolve().parent.parent.parent / "plugin"
@@ -75,8 +79,8 @@ orchestrator 时，忽略二者：worker 按任务书工作，例行会话按会
 
 
 def render_instructions(home: Home) -> list[Path]:
-    """Write the orchestrator's CLAUDE.md, its ``orchestrate`` skill and its permission rules
-    into the data directory."""
+    """Write the orchestrator's CLAUDE.md, its ``orchestrate`` skill and its permission rules,
+    and the worker instructions every brief starts with, into the data directory."""
     claude_md = home.root / "CLAUDE.md"
     atomic_write(claude_md, CLAUDE_MD.encode("utf-8"))
     skill = home.root / SKILL_PATH
@@ -90,7 +94,8 @@ def render_instructions(home: Home) -> list[Path]:
         channels.append(channel)
     settings = home.root / SETTINGS_PATH
     allow_actions(settings, ORCHESTRATOR_ALLOW)
-    return [claude_md, skill, handle_input, *channels, settings]
+    roles = render_roles(home.root)
+    return [claude_md, skill, handle_input, *channels, settings, *roles]
 
 
 def clear_worker_settings(workdir: Path) -> bool:
@@ -177,8 +182,11 @@ AUTO_MODE_WORKER_DISPATCH = (
     "TaskSteward data directory and tsw's whoami reports role orchestrator), calling "
     "start_session to create a worker session is the user's standing instruction to run their "
     "TaskSteward tasks, when the session's name is the session_name and its cwd the cwd that "
-    "tsw's attempt_start just returned, and its prompt only points the worker at its brief "
-    "under runs/; the same holds for the routine session, named and placed by tsw's "
+    "tsw's attempt_start just returned, and its prompt is exactly the prompt that attempt_start "
+    "returned: TaskSteward's standing worker instructions (the user's own rules for every "
+    "worker, rendered from the product's plugin/roles/worker.md) followed by one line that "
+    "points the worker at its brief under runs/; the same holds for the routine session, named "
+    "and placed by tsw's "
     "routine_start, and for detaching that routine session from the main session with "
     "detach_session after routine_bind (or when tsw reports it still attached), so that its turns "
     "stop waking the main session. "
@@ -223,7 +231,9 @@ def install_hint(home: Home) -> str:
             f"3. 设置环境变量 TSW_HOME={home.root}（或在仓库的 .local/tsw-home 中写入该路径），",
             "   让 worktree 中的 worker 会话也能找到数据目录。",
             "4. 运行 tsw host render，在数据目录生成主会话的 CLAUDE.md 与项目 skill",
-            "   .claude/skills/orchestrate/、handle-input/、teams-chat/（产品更新后重新运行）。",
+            "   .claude/skills/orchestrate/、handle-input/、teams-chat/，以及 worker 说明",
+            "   roles/worker.md（来自 plugin/roles/worker.md，每个 worker 会话的提示语以它开头；",
+            "   产品更新后重新运行，否则创建 worker 会话会因说明缺失或不一致被拒绝）。",
             "   worker 会话中的提问不受配置影响；超时转交后需要你决定的问题怎样交给你，由配置",
             "   plugins.human_channels 决定：in-session 在主会话中直接问，teams-chat 经 Teams。",
             f"5. 在数据目录 {home.root} 中打开一个会话作为主会话。",

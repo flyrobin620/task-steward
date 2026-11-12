@@ -85,7 +85,7 @@ tsw init --home <数据目录> --remember
 tsw home                                     显示数据目录与定位依据
 tsw init --home <目录> --remember            初始化数据目录并记为本仓库的数据目录
 tsw host install-hint                        显示 Claude Code 插件的安装步骤
-tsw host render                              更新主会话的 CLAUDE.md、skill 与插件副本（产品更新后）
+tsw host render                              更新主会话的 CLAUDE.md、skill、worker 说明与插件副本（产品更新后）
 tsw dashboard                                打开 TaskSteward Dashboard：浏览器中查看任务，一键验收、退回、取消
                                              （与 tsw status serve 相同）
 tsw task accept T255 [--note "看过报告"]     验收待验收的任务（先显示任务并要求确认；--yes 跳过）
@@ -114,7 +114,7 @@ task-steward/
   docs/development/       开发规则
   docs/decisions/         决定记录
   docs/use-cases/         use-case 目录与状态迁移清单
-  plugin/                 Claude Code 插件：hooks、MCP 配置（主会话 skill 由 tsw host render 生成在数据目录）
+  plugin/                 Claude Code 插件：hooks、MCP 配置；roles/worker.md 是 worker 说明的唯一来源（tsw host render 把它与主会话 skill 生成在数据目录）
   tsw/                    核心库与 CLI：数据目录、存储、账本、投影、任务（逐步扩展）
   tests/                  unit / component / surface / conformance 测试
   tools/                  门禁、文档生成与检查（live 场景在后续里程碑加入）

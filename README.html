@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="57145b3ac5e7c5c513cbea9dfbd33c1979d9693c5ac5469d3aeb361aff6a1e24">
+<meta name="tsw-source-sha256" content="e27676fdfb60acf58d42cc235552fe662ba5e944ee7036e31d3b3f45b6c1d4d1">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -70,7 +70,7 @@ tsw init --home &lt;数据目录&gt; --remember</code></pre>
 <pre><code class="lang-text">tsw home                                     显示数据目录与定位依据
 tsw init --home &lt;目录&gt; --remember            初始化数据目录并记为本仓库的数据目录
 tsw host install-hint                        显示 Claude Code 插件的安装步骤
-tsw host render                              更新主会话的 CLAUDE.md、skill 与插件副本（产品更新后）
+tsw host render                              更新主会话的 CLAUDE.md、skill、worker 说明与插件副本（产品更新后）
 tsw dashboard                                打开 TaskSteward Dashboard：浏览器中查看任务，一键验收、退回、取消
                                              （与 tsw status serve 相同）
 tsw task accept T255 [--note &quot;看过报告&quot;]     验收待验收的任务（先显示任务并要求确认；--yes 跳过）
@@ -93,7 +93,7 @@ tsw config show  /  tsw config validate      查看 / 校验统一配置</code><
   docs/development/       开发规则
   docs/decisions/         决定记录
   docs/use-cases/         use-case 目录与状态迁移清单
-  plugin/                 Claude Code 插件：hooks、MCP 配置（主会话 skill 由 tsw host render 生成在数据目录）
+  plugin/                 Claude Code 插件：hooks、MCP 配置；roles/worker.md 是 worker 说明的唯一来源（tsw host render 把它与主会话 skill 生成在数据目录）
   tsw/                    核心库与 CLI：数据目录、存储、账本、投影、任务（逐步扩展）
   tests/                  unit / component / surface / conformance 测试
   tools/                  门禁、文档生成与检查（live 场景在后续里程碑加入）</code></pre>

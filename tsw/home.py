@@ -169,11 +169,18 @@ def open_home(root: Path) -> Home:
 
 
 def init_home(root: Path) -> tuple[Home, bool]:
-    """Create the data directory layout. Returns ``(home, created)``; idempotent."""
+    """Create the data directory layout. Returns ``(home, created)``; idempotent.
+
+    A data directory without the worker instructions every brief starts with gets them
+    (DN006 §6.2); keeping them current is ``tsw host render``'s job.
+    """
+    from tsw.roles import ensure_roles  # noqa: PLC0415  (roles writes through storage.fs)
+
     if (root / MARKER).exists():
         home = open_home(root)
         for rel in LAYOUT:
             (root / rel).mkdir(parents=True, exist_ok=True)
+        ensure_roles(root)
         return home, False
     if root.exists() and any(root.iterdir()):
         raise rejected("目录非空且不是 TaskSteward 数据目录，拒绝初始化", path=str(root))
@@ -185,6 +192,7 @@ def init_home(root: Path) -> tuple[Home, bool]:
         "created_by": f"tsw {__version__}",
     }
     _write_marker(root, marker)
+    ensure_roles(root)
     return Home(root), True
 
 
