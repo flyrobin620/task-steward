@@ -1053,7 +1053,7 @@
       "id": "UC-CONTEXT-005",
       "title": "用户决定与长期偏好：preference_record 记录、context_decisions 检索并标明能否作为依据（DN007 §6、§12.2）",
       "actor": "主会话 / worker",
-      "acceptance": "preference_record（主会话、需要租约）须附 target 为 [preference, <scope>, standing] 的用户原话，scope 为 global / repo:<名> / project:<名>，替代旧偏好须同范围或更窄且旧偏好未被替代；context_decisions 返回长期偏好与从事件中抽取的历史用户决定（任务答复、验收、退回、需求变更、follow-up 处置、配置授权），按主题词、范围（global / repo / task）过滤，标出类型、范围、替代关系与 usable_as_basis（in_scope / this_task_only / this_object_only / false）",
+      "acceptance": "preference_record（主会话、需要租约）须附 target 为 [preference, <scope>, standing] 的用户原话，scope 为 global / repo:<名> / project:<名>，替代旧偏好须同范围或更窄且旧偏好未被替代，更窄范围的偏好只在其范围内优先，项目偏好只适用于该项目的任务；context_decisions 返回长期偏好与从事件中抽取的历史用户决定（任务答复、验收、退回、需求变更、follow-up 处置、配置授权），按主题词、范围（global / repo / task）过滤，标出类型、范围、替代关系与 usable_as_basis（in_scope / this_task_only / this_object_only / false）",
       "surfaces": [
         "mcp"
       ],

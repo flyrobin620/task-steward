@@ -152,6 +152,9 @@ class Scan:
     touched: set[str] = field(default_factory=set[str])
     decisions: list[dict[str, Any]] = field(default_factory=lambda: [])
     timeline: list[tuple[Any, ...]] = field(default_factory=lambda: [])
+    # (sequence, old id, new id) of each task.renumbered: what the old id did before belongs to
+    # the new id; a task that takes the old id later is another task (DN005 §4.4).
+    renames: list[tuple[int, str, str]] = field(default_factory=lambda: [])
 
 
 def outputs_digest(outputs: Iterable[Mapping[str, Any]]) -> str:
@@ -387,6 +390,7 @@ class ContextIndex:
                     scan.touched |= more.touched
                     scan.decisions += more.decisions
                     scan.timeline += more.timeline
+                    scan.renames += more.renames
                     scan.end = more.end
                 rebuild = start.sequence == 0
                 present = {r["task_id"] for r in l1.execute("SELECT task_id FROM tasks")}
@@ -436,6 +440,11 @@ class ContextIndex:
         for event in self.storage.read(since=since):
             if upto is not None and event.sequence > upto:
                 break
+            if event.type == "task.renumbered" and event.task_id is not None:
+                old = str(event.data.get("from") or "")
+                if old:
+                    scan.renames.append((event.sequence, old, event.task_id))
+                    scan.touched.add(old)
             if event.task_id is not None:
                 scan.touched.add(event.task_id)
                 row = timeline_row(event)
@@ -515,6 +524,12 @@ class ContextIndex:
                 "revision, actor, text) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
                 scan.timeline,
             )
+            for sequence, old, new in scan.renames:
+                for table in ("timeline", "decisions"):
+                    conn.execute(
+                        f"UPDATE {table} SET task_id = ? WHERE task_id = ? AND sequence < ?",
+                        (new, old, sequence),
+                    )
             self._write_aliases(conn, titles)
             _set_meta(conn, "indexed_seq", str(scan.end.sequence))
             _set_meta(conn, "indexed_checksum", scan.end.checksum)

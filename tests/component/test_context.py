@@ -521,3 +521,146 @@ def test_imported_tasks_take_their_keywords_from_the_legacy_records(
     ]
     hits = svc.search(ORCH_READER, {"query": "写入路径"})["hits"]
     assert [(h["task_id"], h["kind"]) for h in hits] == [("T001", "report")]
+
+
+@pytest.mark.use_case("UC-CONTEXT-004")
+@pytest.mark.use_case("UC-CONTEXT-005")
+def test_a_renumbered_task_keeps_its_history_and_decisions(home: Home, tmp_path: Path) -> None:
+    """Review r1 F1: what T001 did before it became T011 is T011's, not the imported T001's."""
+    h = Harness(home)
+    h.register("T001", title="本地任务")
+    h.run("task_cancel", task_id="T001", user_source=h.source("T001", 1, "cancel", "不做了"))
+    svc = service(h)
+    svc.index.refresh()  # the incremental path: the index knew T001 before the move
+    _, snapshot = build(tmp_path)
+    run_import(home, h.ledger, snapshot, renumber_local=[("T001", "T011")])
+
+    def check() -> None:
+        moved = svc.task(ORCH_READER, {"task_id": "T011"})
+        assert {"task.registered", "task.cancelled", "task.renumbered"} <= {
+            t["type"] for t in moved["timeline"]
+        }
+        imported = svc.task(ORCH_READER, {"task_id": "T001"})
+        assert [t["type"] for t in imported["timeline"]] == ["import.task_imported"]
+        mine = svc.decisions(ORCH_READER, {"scope": "task", "task_id": "T011"})["decisions"]
+        assert [d["text"] for d in mine] == ["不做了"]
+        assert svc.decisions(ORCH_READER, {"scope": "task", "task_id": "T001"})["decisions"] == []
+
+    check()
+    svc.rebuild()  # and the same from scratch
+    check()
+
+
+@pytest.mark.use_case("UC-CONTEXT-005")
+def test_a_narrower_preference_overrides_only_inside_its_scope(home: Home) -> None:
+    """Review r1 F2 and F3: scopes of standing preferences."""
+    h = seeded(home)
+
+    def source(scope: str, ref: str) -> dict[str, Any]:
+        return {
+            "channel": "main-session",
+            "principal": "owner",
+            "message_ref": ref,
+            "text": "原话",
+            "target": ["preference", scope, "standing"],
+        }
+
+    h.run(
+        "preference_record",
+        topic="PR",
+        text="PR 先开 draft",
+        scope="global",
+        user_source=source("global", "m1"),
+    )
+    h.run(
+        "preference_record",
+        topic="PR",
+        text="demo 的 PR 直接 ready",
+        scope="repo:demo",
+        supersedes=["P-1"],
+        user_source=source("repo:demo", "m2"),
+    )
+    h.run(
+        "preference_record",
+        topic="PR",
+        text="项目 alpha 的 PR 要两人评审",
+        scope="project:alpha",
+        user_source=source("project:alpha", "m3"),
+    )
+    svc = service(h)
+
+    def seen(**args: Any) -> dict[str, Any]:
+        out = svc.decisions(ORCH_READER, {"query": "PR", **args})["decisions"]
+        return {d["ref"]: d["usable_as_basis"] for d in out if d["kind"] == "standing"}
+
+    # In demo the narrower one wins; elsewhere the global one still holds.
+    assert seen(scope="repo", repo="demo") == {"P-1": False, "P-2": "in_scope"}
+    assert seen(scope="repo", repo="other") == {"P-1": "in_scope"}
+    assert seen(scope="task", task_id="T004") == {"P-1": "in_scope"}
+    # A project preference reaches only that project; globally all three are listed.
+    everything = svc.decisions(ORCH_READER, {"query": "PR"})["decisions"]
+    by_ref = {d["ref"]: d for d in everything}
+    assert set(by_ref) == {"P-1", "P-2", "P-3"}
+    assert by_ref["P-1"]["usable_as_basis"] == "in_scope"
+    assert by_ref["P-1"]["overridden_in"] == [{"ref": "P-2", "scope": "repo:demo"}]
+    assert "P-3" not in seen(scope="repo", repo="demo")
+
+
+@pytest.mark.use_case("UC-CONTEXT-004")
+def test_reading_decisions_catches_the_index_up_first(home: Home) -> None:
+    """Review r1 F4: a decision made after the index was built is in context_read."""
+    h = seeded(home)
+    svc = service(h)
+    svc.index.refresh()
+    asked = h.run("intake_question", task_id="T003", question="管理员包括审计员吗？")
+    request_id = asked["events"][0]["data"]["request_id"]
+    h.run(
+        "input_resolve",
+        task_id="T003",
+        request_id=request_id,
+        answer="包括",
+        user_source=Harness.source("T003", 1, "answer", "审计员也算管理员", request_id),
+    )
+    out = svc.read(ORCH_READER, {"task_ids": ["T003"], "part": "decisions", "reason": "核对口径"})
+    assert "审计员也算管理员" in out["text"] and "incomplete" not in out
+
+
+@pytest.mark.use_case("UC-CONTEXT-002")
+def test_full_text_filters_by_scope_before_counting(home: Home) -> None:
+    """Review r1 F5: many better-ranked documents elsewhere do not hide one in scope."""
+    h = seeded(home)
+    svc = service(h)
+    svc.index.refresh()
+    with svc.index.connection() as conn:
+        for _ in range(250):
+            cur = conn.execute(
+                "INSERT INTO docs(task_id, kind, ref, chars) VALUES('T004', 'spec', 'x', 1)"
+            )
+            conn.execute(
+                "INSERT INTO fts_docs(rowid, body) VALUES(?, ?)",
+                (cur.lastrowid, "下载链接 " * 20),
+            )
+    hits = svc.search(ORCH_READER, {"query": "下载链接", "repo": "demo"})["hits"]
+    assert [x["task_id"] for x in hits] == ["T001"]
+
+
+@pytest.mark.use_case("UC-CONTEXT-003")
+def test_a_lagging_task_is_not_found_by_its_old_text(
+    home: Home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r1 F6: until the index catches up, a changed task's full text is not searched."""
+    h = seeded(home)
+    svc = service(h)
+    assert [x["task_id"] for x in svc.search(ORCH_READER, {"query": "下载链接"})["hits"]] == [
+        "T001"
+    ]
+    h.run("task_summary", task_id="T001", keywords=["CSV"], stage="intake")
+    monkeypatch.setenv("TSW_TEST_FAULTS", "context.refresh")
+    out = svc.search(ORCH_READER, {"query": "下载链接"})
+    assert out["hits"] == [] and "T001" in out["index"]["lagging_tasks"]
+    catalog = svc.catalog(ORCH_READER, {"query": "下载链接", "repo": "demo"})
+    assert catalog["cards"] == []
+    monkeypatch.delenv("TSW_TEST_FAULTS")
+    assert [x["task_id"] for x in svc.search(ORCH_READER, {"query": "下载链接"})["hits"]] == [
+        "T001"
+    ]

@@ -124,6 +124,9 @@ class ContextService:
             aliases = _aliases(c2)
             variants = {w: _expand(w, aliases) | pieces(w) for w in words}
             fts_hits = self._fts_tasks(c2, variants) if fts_ok(c2, self.index) else {}
+            for hits in fts_hits.values():  # a lagging task's old text is not searched
+                for task_id in fresh.lagging:
+                    hits.pop(task_id, None)
             pinned = self._pinned(l1, cards, named)
             preferred = self._preferred(l1, reader)
         in_scope = [c for c in cards.values() if _in_scope(c, scope, repo, project, aliases)]
@@ -280,6 +283,7 @@ class ContextService:
         scope, repo, project = self._scope(reader, args)
         limit = _limit(args, 10)
         fresh = self.freshness()
+        lagging = set(fresh.lagging)
         with self.index.connection() as c2, self.ledger.view() as l1:
             cards = self._cards(c2, l1, fresh)
             aliases = _aliases(c2)
@@ -292,11 +296,17 @@ class ContextService:
                     "SELECT d.task_id AS task_id, d.kind AS kind, d.ref AS ref, "
                     "snippet(fts_docs, 0, '«', '»', '…', 24) AS snippet FROM fts_docs "
                     "JOIN docs d ON d.doc_id = fts_docs.rowid WHERE fts_docs MATCH ? "
-                    "ORDER BY rank LIMIT ?",
-                    (_match(longs), MAX_LIMIT * 4),
+                    "ORDER BY rank",
+                    (_match(longs),),
                 ):
+                    # Rows come lazily in rank order: filter by scope before counting, and
+                    # leave out a lagging task's old text (DN007 §5.4).
                     card = cards.get(row["task_id"])
-                    if card is None or not _in_scope(card, scope, repo, project, aliases):
+                    if (
+                        card is None
+                        or row["task_id"] in lagging
+                        or not _in_scope(card, scope, repo, project, aliases)
+                    ):
                         continue
                     hits.append(
                         {
@@ -365,11 +375,24 @@ class ContextService:
                 repo = repos[task_id]
             if scope == "repo" and not repo:
                 raise rejected("scope=repo 需要 repo", reason="invalid_input", field="repo")
-            items = [_standing(r) for r in l1.execute("SELECT * FROM user_decisions")]
+            where = None
+            if scope in ("repo", "task"):
+                projects = {str(repo)}
+                if scope == "task":
+                    row = c2.execute(
+                        "SELECT card FROM cards WHERE task_id = ?", (task_id,)
+                    ).fetchone()
+                    projects |= (
+                        set(json.loads(row["card"]).get("project_ids") or []) if row else set()
+                    )
+                where = (str(repo), projects)
+            items = standing_items(list(l1.execute("SELECT * FROM user_decisions")), where)
             items += [_historic(r) for r in c2.execute("SELECT * FROM decisions")]
         chosen: list[tuple[dict[str, Any], int]] = []
         for item in items:
-            if not _decision_in_scope(item, scope, repo, task_id, repos):
+            if item["kind"] != "standing" and not _decision_in_scope(
+                item, scope, repo, task_id, repos
+            ):
                 continue
             haystack = " ".join(str(item.get(k) or "") for k in ("topic", "text", "detail"))
             score = sum(1 for w in words if contains(haystack, w))
@@ -380,7 +403,7 @@ class ContextService:
         chosen.sort(
             key=lambda pair: (
                 pair[0].get("task_id") == mine and mine is not None,
-                pair[0]["kind"] == "standing" and not pair[0].get("superseded_by"),
+                pair[0]["kind"] == "standing" and bool(pair[0]["usable_as_basis"]),
                 pair[1],
                 int(pair[0]["source_seq"]),
             ),
@@ -422,6 +445,9 @@ class ContextService:
         offset = _offset(args)
         sections: list[str] = []
         sources: list[dict[str, Any]] = []
+        # The users' decisions in this part come from the index: catch it up first, outside the
+        # commit lock, and say when it could not be (DN007 §5.4).
+        fresh = self.freshness() if part == "decisions" else None
         with self.ledger.view() as l1:
             gathered = {}
             for task_id in task_ids:
@@ -447,7 +473,7 @@ class ContextService:
                 "chars": len(chunk),
             },
         )
-        return {
+        out: dict[str, Any] = {
             "part": part,
             "tasks": task_ids,
             "text": chunk,
@@ -457,6 +483,15 @@ class ContextService:
             "sources": sources,
             "recorded": sequence,
         }
+        if fresh is not None:
+            out["index"] = fresh.to_dict()
+            behind = sorted(set(task_ids) & set(fresh.lagging))
+            if behind:
+                out["incomplete"] = {
+                    "tasks": behind,
+                    "note": "索引落后：这些任务的用户决定可能不全，稍后重读或 context_rebuild",
+                }
+        return out
 
     def _l1_part(self, l1: sqlite3.Connection, facts: Facts, part: str) -> str:
         task_id = facts.task["task_id"]
@@ -827,6 +862,42 @@ def _match(forms: Sequence[str]) -> str:
     return " OR ".join('"' + f.replace('"', '""') + '"' for f in forms)
 
 
+def applies(scope: str, where: tuple[str, set[str]] | None) -> bool:
+    """Whether a preference of ``scope`` reaches a query about ``where`` = (repo, projects)."""
+    if where is None or scope == "global":
+        return True
+    kind, _, name = scope.partition(":")
+    return (kind == "repo" and name == where[0]) or (kind == "project" and name in where[1])
+
+
+def standing_items(
+    rows: list[sqlite3.Row], where: tuple[str, set[str]] | None
+) -> list[dict[str, Any]]:
+    """The standing preferences that reach ``where`` (all of them when None), each saying whether
+    it is in force there: replaced by one of the same scope, or overridden by a narrower one that
+    reaches ``where`` too (DN007 §6)."""
+    items = [_standing(r) for r in rows]
+    overriders: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        for old in item["supersedes"]:
+            overriders.setdefault(str(old), []).append(item)
+    out: list[dict[str, Any]] = []
+    for item in items:
+        if not applies(str(item["scope"]), where):
+            continue
+        narrower = [n for n in overriders.get(str(item["ref"]), []) if n["scope"] != item["scope"]]
+        if where is None:
+            if narrower:
+                item["overridden_in"] = [{"ref": n["ref"], "scope": n["scope"]} for n in narrower]
+        else:
+            here = [n for n in narrower if applies(str(n["scope"]), where) and n["usable_as_basis"]]
+            if here:
+                item["overridden_by"] = here[0]["ref"]
+                item["usable_as_basis"] = False
+        out.append(item)
+    return out
+
+
 def _standing(row: sqlite3.Row) -> dict[str, Any]:
     superseded = row["superseded_by"]
     return {
@@ -874,9 +945,6 @@ def _decision_in_scope(
 ) -> bool:
     if scope == "global":
         return True
-    if item["kind"] == "standing":
-        kind, _, name = str(item["scope"]).partition(":")
-        return item["scope"] == "global" or (kind == "repo" and name == repo) or kind == "project"
     owner = item.get("task_id")
     if scope == "task":
         return owner == task_id

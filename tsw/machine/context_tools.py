@@ -223,8 +223,13 @@ def reduce_preference_recorded(conn: sqlite3.Connection, event: Event) -> None:
             event.sequence,
         ),
     )
+    # A preference of the same scope replaces the old one everywhere; a narrower one only takes
+    # precedence inside its own scope (DN007 §6), which the readers work out per query.
     for old in data.get("supersedes") or []:
-        conn.execute("UPDATE user_decisions SET superseded_by = ? WHERE ref = ?", (ref, str(old)))
+        conn.execute(
+            "UPDATE user_decisions SET superseded_by = ? WHERE ref = ? AND scope = ?",
+            (ref, str(old), str(data.get("scope") or "global")),
+        )
 
 
 def reduce_context_read(conn: sqlite3.Connection, event: Event) -> None:
