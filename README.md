@@ -98,6 +98,7 @@ tsw lease release --session <主会话 ID>       释放租约
 tsw backup <空目录>  /  tsw restore <备份>   在线备份 / 恢复到空的数据目录
 tsw quiesce  /  tsw resume-writes            静止数据目录（之后可直接复制）/ 解除
 tsw ledger audit  /  tsw ledger rebuild      审计账本 / 从账本重建投影
+tsw context rebuild                          重建任务检索索引（任务卡片、关键词与全文，DN007）
 tsw config show  /  tsw config validate      查看 / 校验统一配置
 ```
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="5deaf0ddefe722b39e4ba7f13223b7116506bcc975de6adcddb63787cb0a777d">
+<meta name="tsw-source-sha256" content="e27676fdfb60acf58d42cc235552fe662ba5e944ee7036e31d3b3f45b6c1d4d1">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -83,6 +83,7 @@ tsw lease release --session &lt;主会话 ID&gt;       释放租约
 tsw backup &lt;空目录&gt;  /  tsw restore &lt;备份&gt;   在线备份 / 恢复到空的数据目录
 tsw quiesce  /  tsw resume-writes            静止数据目录（之后可直接复制）/ 解除
 tsw ledger audit  /  tsw ledger rebuild      审计账本 / 从账本重建投影
+tsw context rebuild                          重建任务检索索引（任务卡片、关键词与全文，DN007）
 tsw config show  /  tsw config validate      查看 / 校验统一配置</code></pre>
 <p><code>tsw dashboard</code>（即 <code>tsw status serve</code>）打开 TaskSteward Dashboard。它只监听本机，每次启动输出一个带一次性令牌的地址并在浏览器中打开；页面与数据目录中的 <code>views/STATUS.html</code> 相同，另有按钮，报告与 PR 链接照常可点。页面有三种视图：按状态分组、按时间顺序，以及按依赖关系画出的任务流（最新的任务在左，依赖的任务在右，每个仓库一条泳道）；顶部的计数卡只列出有任务的状态。筛选、视图与滚动位置在自动刷新后保留。每张卡片的「详情」打开该任务的单任务视图（<code>/tasks/&lt;任务&gt;</code>），列出需求与历史 revision、每个 attempt 与它的会话、提交与评审轮次、产出、依赖、问题和时间线；有会话的 attempt 带会话链接，点击在 Claude 桌面 app 中打开该会话。按 Ctrl+C 停止。<code>views/STATUS.html</code> 仍在每次提交后生成，可以离线打开，但没有按钮。</p>
 <p>开发者另需安装开发工具（<code>pip install -r requirements-dev.txt</code>），并用 <code>python tools/gate.py</code> 运行本地门禁。</p>

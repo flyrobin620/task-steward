@@ -15,6 +15,7 @@ from tsw.errors import rejected
 from tsw.events import Event
 from tsw.host.inbox import reduce_acked
 from tsw.importer import renumber
+from tsw.machine.context_tools import REDUCERS as CONTEXT_REDUCERS
 from tsw.machine.reducers import REDUCERS as MACHINE_REDUCERS
 from tsw.projection import Reducer
 
@@ -210,6 +211,7 @@ REDUCERS: dict[str, Reducer] = {
     "controller.lease_taken_over": lease.reduce_taken_over,
     "controller.lease_stood_down": lease.reduce_stood_down,
     **MACHINE_REDUCERS,
+    **CONTEXT_REDUCERS,
     "orchestrator.inbox_acked": reduce_acked,
     confedit.CHANGE_EVENT: confedit.reduce_changed,
     "maintenance.performed": _maintenance,

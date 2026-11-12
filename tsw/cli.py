@@ -17,6 +17,7 @@ from typing import Any
 
 from tsw import __version__, direct, lease
 from tsw.config import EffectiveConfig, lease_minutes, load_config
+from tsw.context import ContextService
 from tsw.errors import EXIT_CODES, ErrorCode, TswError
 from tsw.events import utc_now
 from tsw.home import (
@@ -211,6 +212,11 @@ def _cmd_ledger_audit(args: argparse.Namespace) -> dict[str, Any]:
 def _cmd_ledger_rebuild(args: argparse.Namespace) -> dict[str, Any]:
     tail = _writer(args)[0].rebuild()
     return {"projected_seq": tail.sequence}
+
+
+def _cmd_context_rebuild(args: argparse.Namespace) -> dict[str, Any]:
+    ledger, config = _writer(args)
+    return ContextService(ledger.home, ledger, config).rebuild()
 
 
 def _cmd_backup(args: argparse.Namespace) -> dict[str, Any]:
@@ -486,6 +492,10 @@ def build_parser() -> argparse.ArgumentParser:
     add(ledger, "tail", _cmd_ledger_tail, "账本末端序号与摘要")
     add(ledger, "audit", _cmd_ledger_audit, "全量审计摘要链与投影")
     add(ledger, "rebuild", _cmd_ledger_rebuild, "丢弃投影并从账本重建")
+    context = sub.add_parser("context", help="任务上下文检索索引（DN007）").add_subparsers(
+        dest="context_command", required=True, metavar="<context command>"
+    )
+    add(context, "rebuild", _cmd_context_rebuild, "丢弃并从账本与原始材料重建检索索引")
 
     backup = add(sub, "backup", _cmd_backup, "在线备份到空目录")
     backup.add_argument("dest")

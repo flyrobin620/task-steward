@@ -13,6 +13,7 @@ from tsw.lease import parse_time
 from tsw.ledger import Ledger
 from tsw.machine import ask_user as _ask_user
 from tsw.machine import config_tools as _config_tools
+from tsw.machine import context_tools as _context_tools
 from tsw.machine import follow_up as _follow_up
 from tsw.machine import orchestrator as _orchestrator
 from tsw.machine import routine as _routine
@@ -23,7 +24,15 @@ from tsw.machine.guards import dependency_problems, invalidated, topological
 from tsw.machine.model import OCCUPYING, loads, next_item_id
 
 # Importing the tool modules registers their tools.
-TOOL_MODULES = (_orchestrator, _worker, _config_tools, _ask_user, _routine, _follow_up)
+TOOL_MODULES = (
+    _orchestrator,
+    _worker,
+    _config_tools,
+    _ask_user,
+    _routine,
+    _follow_up,
+    _context_tools,
+)
 
 SYNC = Tool(
     "sync",

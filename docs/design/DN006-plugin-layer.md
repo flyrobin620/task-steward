@@ -692,6 +692,7 @@ class StorageBackend(Protocol):
 | `home_backup` | `tsw backup <dest>` | 目标为数据目录之外的绝对路径，不存在或为空 | `maintenance.performed`（`kind: backup`，目标、账本末端、文件数） |
 | `ledger_audit` | `tsw ledger audit` | 只读，不需要租约 | 不记 |
 | `ledger_rebuild` | `tsw ledger rebuild` | 先全量审计，有问题时拒绝 | `maintenance.performed`（`kind: ledger_rebuild`） |
+| `context_rebuild` | `tsw context rebuild` | 只重建检索索引 `cache/context.sqlite`，不改变账本与投影（DN007 §12） | `maintenance.performed`（`kind: context_rebuild`，卡片数、索引到的序号） |
 | `import_orchestrator_agent`（`dry_run: true`） | `tsw import orchestrator-agent --dry-run` | 只读演练 | `maintenance.performed`（`kind: import_dry_run`，参数与参数摘要） |
 | `import_orchestrator_agent` | `tsw import orchestrator-agent` | 附用户原话（决定对象 `["import", "orchestrator-agent", "authorize"]`）；在上一次完成的导入之后有同参数的演练；一条原话只授权一次完成的导入 | `maintenance.performed`（`kind: import_authorized`，参数、用户来源），然后是导入事件（DN005） |
 
@@ -699,7 +700,7 @@ class StorageBackend(Protocol):
 
 `restore`、`quiesce` / `resume-writes` 与 `host render` 不开放：恢复要求先停止会话，静止会挡住主会话自己的写入，`host render` 改写数据目录的 `CLAUDE.md` 与 skill。它们仍由用户在终端运行。
 
-由用户在终端运行的命令（安装与定位见 §9.1；README 给出示例）：`init`（`--remember`）、`home`、`host render` / `install-hint`、`lease show` / `takeover` / `release`、`backup` / `restore`、`quiesce` / `resume-writes`、`ledger audit` / `rebuild`、`config show` / `validate`，以及用户直接操作 `task accept` / `reject` / `cancel` 与 `status serve`（§8.10）。tsw 在会话中请用户运行命令时（租约被占、插件副本过期、需要 `host render`）给出的就是这些简短形式。用户自己运行 `lease takeover` 时，运行命令本身就是确认原主会话已停止的来源：`--user-source` 可省略，tsw 记为渠道 `user-cli`（§8.10）。
+由用户在终端运行的命令（安装与定位见 §9.1；README 给出示例）：`init`（`--remember`）、`home`、`host render` / `install-hint`、`lease show` / `takeover` / `release`、`backup` / `restore`、`quiesce` / `resume-writes`、`ledger audit` / `rebuild`、`context rebuild`、`config show` / `validate`，以及用户直接操作 `task accept` / `reject` / `cancel` 与 `status serve`（§8.10）。tsw 在会话中请用户运行命令时（租约被占、插件副本过期、需要 `host render`）给出的就是这些简短形式。用户自己运行 `lease takeover` 时，运行命令本身就是确认原主会话已停止的来源：`--user-source` 可省略，tsw 记为渠道 `user-cli`（§8.10）。
 
 ## 10. 组合示例
 
