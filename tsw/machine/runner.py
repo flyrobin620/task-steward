@@ -17,6 +17,7 @@ from tsw.machine import context_tools as _context_tools
 from tsw.machine import follow_up as _follow_up
 from tsw.machine import orchestrator as _orchestrator
 from tsw.machine import routine as _routine
+from tsw.machine import session_titles as _session_titles
 from tsw.machine import worker as _worker
 from tsw.machine.ask_user import handed_off_event, handoff_due
 from tsw.machine.base import REGISTRY, Caller, Tool, ToolEnv, check_caller, check_version
@@ -32,6 +33,7 @@ TOOL_MODULES = (
     _routine,
     _follow_up,
     _context_tools,
+    _session_titles,
 )
 
 SYNC = Tool(

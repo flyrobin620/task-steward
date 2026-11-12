@@ -7,6 +7,8 @@
                                                                   check the run's ledger
     python tools/live.py handoff-e2e prepare | verify RUN_ID [--blocked yes|no]
                                                     one orchestrator hands over to another
+    python tools/live.py title-e2e prepare | verify RUN_ID [--observed yes|no]
+                                                    worker session titles (DN002 §5.8)
     python tools/live.py cleanup RUN_ID [--archived SESSION ...]   finish a run's cleanup
     python tools/live.py list                                       runs and their state
 
@@ -897,6 +899,8 @@ def prepare(name: str, args: argparse.Namespace) -> int:
         "run_id": run.id,
         "repo": str(run.repo),
         "interval": str((spec["config"].get("routine") or {}).get("interval_minutes", 10)),
+        # The user's own terminal runs this checkout's tsw against the run's data directory.
+        "tsw_cmd": f'cd "{ROOT}" && python -X utf8 -m tsw --home "{run.home}"',
     }
     session_settings(run, run.home)
     for task in tasks:
@@ -1208,6 +1212,190 @@ def change_verify(args: argparse.Namespace) -> int:
         "GitHub（push 目标、PR、合并）由运行目录内的 origin.git 与 gh 替身模拟，相关证据为模拟证据",
     ]
     return 0 if write_results(run, "change-e2e", checks, notes) else 1
+
+
+def title_prepare(args: argparse.Namespace) -> int:
+    return prepare("title-e2e", args)
+
+
+def title_verify(args: argparse.Namespace) -> int:
+    """Worker session titles (DN002 §5.8, T272): prestarted with the standby mark, which the
+    orchestrator drops on dispatch; accepted in the user's terminal, passed on by the routine
+    session and prefixed by the orchestrator; renamed by the user, so left alone on cancel."""
+    run = Run.open(args.run_id)
+    evs = events(run)
+    marker = json.loads((run.home / "tsw-home.json").read_text(encoding="utf-8"))
+    orch = [
+        e for e in evs if e["actor"].get("role") == "orchestrator" and e["actor"].get("session_id")
+    ]
+    for sid in sorted({str(e["actor"]["session_id"]) for e in orch}):
+        run.bind_main(sid)
+    reconcile_sessions(run, evs)
+    checks = [
+        check(
+            "H1",
+            "隔离：数据目录与产品仓库指向本运行，主会话在其中操作",
+            Path(marker.get("product_repo", "")).resolve() == ROOT.resolve() and bool(orch),
+            f"product_repo=<repo>; 主会话事件 {len(orch)} 条",
+        ),
+        *title_checks(run, evs),
+        check(
+            "O",
+            "操作者观察：T001 改为“[已验收] …”，T002 保持用户的标题，没有出现改名确认",
+            args.observed == "yes",
+            {"observed": args.observed or "未记录", "evidence": "操作者在 app 中的观察"},
+        ),
+    ]
+    notes = [
+        hook_summary(run),
+        "GitHub（push 目标、PR、合并）由运行目录内的 origin.git 与 gh 替身模拟，相关证据为模拟"
+        "证据；会话标题由真实 app 的 set_session_title 修改，结果原文记在账本中",
+    ]
+    return 0 if write_results(run, "title-e2e", checks, notes) else 1
+
+
+def title_checks(run: Run, evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Checks T, D, U, F, A and X of ``title-e2e``."""
+
+    def updates(task: str, after: int = 0) -> list[dict[str, Any]]:
+        return [
+            e
+            for e in evs
+            if e["type"] == "attempt.session_updated"
+            and e["task_id"] == task
+            and e["sequence"] > after
+        ]
+
+    bases: dict[str, str] = {}
+    started: list[dict[str, Any]] = []
+    for task in ("T001", "T002"):
+        found = first(evs, "attempt.start_requested", task, purpose="prestart")
+        data = (found or {}).get("data") or {}
+        bases[task] = str(data.get("title_base") or "")
+        started.append(
+            {
+                "task": task,
+                "title_base": data.get("title_base"),
+                "session_title": data.get("session_title"),
+            }
+        )
+    checks = [
+        check(
+            "T",
+            "标题：预启动记下 title_base 与以“（待命）”结尾的 session_title",
+            all(
+                s["title_base"] and s["session_title"] == f"{s['title_base']}（待命）"
+                for s in started
+            ),
+            started,
+        )
+    ]
+    dispatched: list[dict[str, Any]] = []
+    for task in ("T001", "T002"):
+        delivered = first(evs, "attempt.brief_delivered", task)
+        at = delivered["sequence"] if delivered else 0
+        renamed = next(
+            (
+                e
+                for e in updates(task, at)
+                if e["data"].get("action") == "title" and e["data"].get("reason") == "dispatch"
+            ),
+            None,
+        )
+        dispatched.append(
+            {
+                "task": task,
+                "delivered": delivered and delivered["sequence"],
+                "updated": renamed and renamed["sequence"],
+                "outcome": renamed and renamed["data"].get("outcome"),
+                "title": renamed and renamed["data"].get("title"),
+            }
+        )
+    checks.append(
+        check(
+            "D",
+            "派发：投递任务书之后主会话去掉了“（待命）”",
+            all(
+                d["delivered"]
+                and d["outcome"] in ("renamed", "already")
+                and d["title"] == bases[str(d["task"])]
+                for d in dispatched
+            ),
+            dispatched,
+        )
+    )
+    accepted = first(evs, "task.user_accepted", "T001")
+    source = ((accepted or {}).get("data") or {}).get("user_source") or {}
+    checks.append(
+        check(
+            "U",
+            "终端验收：T001 的 task.user_accepted 渠道为 user-cli",
+            accepted is not None and source.get("channel") == "user-cli",
+            {"accepted": accepted and accepted["sequence"], "channel": source.get("channel")},
+        )
+    )
+    at = accepted["sequence"] if accepted else 0
+    since = str((accepted or {}).get("time") or "")
+    forwarded = [
+        p["time"]
+        for p in main_prompts(run)
+        if since
+        and p["time"] >= since
+        and "TaskSteward 例行项 session-scan" in user_words(p["prompt"])
+    ]
+    checks.append(
+        check(
+            "F",
+            "转告：终端验收之后主会话收到例行项 session-scan 的消息",
+            bool(forwarded),
+            {"since": since, "forwards": forwarded},
+        )
+    )
+    prefixed = next(
+        (
+            e
+            for e in updates("T001", at)
+            if e["data"].get("action") == "title" and e["data"].get("reason") == "accepted"
+        ),
+        None,
+    )
+    wanted = f"[已验收] {bases['T001']}"
+    data = (prefixed or {}).get("data") or {}
+    checks.append(
+        check(
+            "A",
+            "加前缀：主会话把 T001 的 worker 会话改为“[已验收] <title_base>”",
+            prefixed is not None
+            and prefixed["actor"].get("role") == "orchestrator"
+            and data.get("outcome") == "renamed"
+            and data.get("title") == wanted
+            and wanted in str(data.get("result") or ""),
+            {
+                "updated": prefixed and prefixed["sequence"],
+                "outcome": data.get("outcome"),
+                "title": data.get("title"),
+                "result": data.get("result"),
+            },
+        )
+    )
+    cancelled = first(evs, "task.cancelled", "T002")
+    after_cancel = updates("T002", cancelled["sequence"] if cancelled else 0)
+    left = next((e for e in after_cancel if e["data"].get("outcome") == "user_title"), None)
+    renamed_after = [e["sequence"] for e in after_cancel if e["data"].get("outcome") == "renamed"]
+    checks.append(
+        check(
+            "X",
+            "用户改过名：T002 取消后记为 user_title，没有改名",
+            cancelled is not None and left is not None and not renamed_after,
+            {
+                "cancelled": cancelled and cancelled["sequence"],
+                "user_title": left and left["sequence"],
+                "observed": left and left["data"].get("observed"),
+                "renamed_after": renamed_after,
+            },
+        )
+    )
+    return checks
 
 
 def requirement_change_checks(
@@ -2287,6 +2475,20 @@ def main(argv: list[str] | None = None) -> int:
         help="操作者观察：worker 或主会话发消息、worker 合并时是否出现权限确认或分类器拒绝",
     )
     changed_ver.set_defaults(handler=change_verify)
+    titled = sub.add_parser(
+        "title-e2e",
+        help="worker 会话的标题：派发、终端验收后加前缀、用户改过名不动（需要用户在场）",
+    )
+    titled_steps = titled.add_subparsers(dest="step", required=True)
+    titled_steps.add_parser("prepare").set_defaults(handler=title_prepare)
+    titled_ver = titled_steps.add_parser("verify")
+    titled_ver.add_argument("run_id")
+    titled_ver.add_argument(
+        "--observed",
+        choices=("yes", "no"),
+        help="操作者观察：T001 改为“[已验收] …”、T002 保持用户的标题、没有出现改名确认",
+    )
+    titled_ver.set_defaults(handler=title_verify)
     clean = sub.add_parser("cleanup", help="记录已归档的会话并报告剩余对象")
     clean.add_argument("run_id")
     clean.add_argument("--archived", action="append", help="已归档并用 get_session 读回的会话 ID")

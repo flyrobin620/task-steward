@@ -106,6 +106,11 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         purpose={"enum": ["dispatch", "prestart"]},
         user_turn=B,
         workdir=S,
+        session_title={
+            **S,
+            "description": "会话的简短基准标题（不给时为“<任务> <任务标题>”）；结果中的 "
+            "session_title 原样作为 start_session 的 title（DN002 §5.8）",
+        },
     ),
     "attempt_reconcile": schema(
         ["task_id", "attempt", "generation", "outcome"],
@@ -116,6 +121,29 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         session_ref=S,
         receipt=OBJ,
         brief_delivered=B,
+        session_title={
+            **S,
+            "description": "实际创建会话用的标题，只在与 attempt_start 返回的不同时给出",
+        },
+    ),
+    "session_check": schema(
+        ["task_id", "attempt", "observed"],
+        task_id=S,
+        attempt=S,
+        observed={
+            "description": "get_session(会话 ID) 的返回原样（对象或文本）；"
+            "会话不存在时为工具的报错原文",
+        },
+        missing={**B, "description": "get_session 报告会话不存在时为 true"},
+    ),
+    "session_record": schema(
+        ["task_id", "attempt", "action", "ok", "result"],
+        task_id=S,
+        attempt=S,
+        action={"enum": ["title", "archive"]},
+        title={**S, "description": "action 为 title 时：session_check 给出的新标题"},
+        ok={**B, "description": "工具是否成功（改名或归档已生效）"},
+        result={**S, "description": "set_session_title / archive_session 的返回原文"},
     ),
     "attempt_deliver": schema(["task_id"], task_id=S),
     "attempt_continue": schema(["task_id"], task_id=S, read_set=STRS),

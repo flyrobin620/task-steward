@@ -420,7 +420,23 @@ def attempt_start_requested(conn: sqlite3.Connection, event: Event) -> None:
             "WHERE task_id = ?",
             (data["attempt"], task_id),
         )
+    if data.get("title_base"):
+        # Every generation starts over: the new session gets this title (DN002 §5.8).
+        conn.execute(
+            "INSERT OR REPLACE INTO session_titles(task_id, attempt, base, known) "
+            "VALUES(?, ?, ?, ?)",
+            (task_id, data["attempt"], data["title_base"], data["session_title"]),
+        )
     _touch(conn, event, business=False)
+
+
+def _title_used(conn: sqlite3.Connection, event: Event) -> None:
+    """The title a session was actually created with, when the main session reports one."""
+    if event.data.get("session_title"):
+        conn.execute(
+            "UPDATE session_titles SET known = ? WHERE task_id = ? AND attempt = ?",
+            (event.data["session_title"], _tid(event), event.data["attempt"]),
+        )
 
 
 def attempt_prestarted(conn: sqlite3.Connection, event: Event) -> None:
@@ -431,6 +447,7 @@ def attempt_prestarted(conn: sqlite3.Connection, event: Event) -> None:
         phase="standby",
         session_ref=event.data["session_ref"],
     )
+    _title_used(conn, event)
     _touch(conn, event, business=False)
 
 
@@ -472,6 +489,7 @@ def attempt_bound(conn: sqlite3.Connection, event: Event) -> None:
     if "read_set" in data:
         values["read_set"] = dumps(data["read_set"])
     _attempt(conn, task_id, data["attempt"], **values)
+    _title_used(conn, event)
     if tid == "T08":
         _new_cycle(conn, task_id)
     _touch(conn, event)
@@ -486,6 +504,36 @@ def attempt_late_session(conn: sqlite3.Connection, event: Event) -> None:
     late = loads(row["late_sessions"] if row else None, [])
     late.append({"generation": event.data["generation"], "session_ref": event.data["session_ref"]})
     _attempt(conn, task_id, attempt_id, late_sessions=dumps(late))
+    _touch(conn, event, business=False)
+
+
+def attempt_session_updated(conn: sqlite3.Connection, event: Event) -> None:
+    """A worker session's title or archive receipt (DN002 §5.8): no state changes."""
+    data = event.data
+    key = (_tid(event), data["attempt"])
+    outcome = data["outcome"]
+    if data["action"] == "title" and outcome in ("renamed", "already"):
+        conn.execute(
+            "UPDATE session_titles SET known = ?, failed_title = NULL "
+            "WHERE task_id = ? AND attempt = ?",
+            (data["title"], *key),
+        )
+    elif data["action"] == "title" and outcome == "user_title":
+        conn.execute(
+            "UPDATE session_titles SET user_title = ? WHERE task_id = ? AND attempt = ?",
+            (data.get("observed") or "", *key),
+        )
+    elif data["action"] == "title" and outcome == "failed":
+        conn.execute(
+            "UPDATE session_titles SET failed_title = ? WHERE task_id = ? AND attempt = ?",
+            (data["title"], *key),
+        )
+    elif outcome == "missing":
+        conn.execute("UPDATE session_titles SET missing = 1 WHERE task_id = ? AND attempt = ?", key)
+    elif data["action"] == "archive" and outcome == "failed":
+        conn.execute(
+            "UPDATE session_titles SET archive_failed = 1 WHERE task_id = ? AND attempt = ?", key
+        )
     _touch(conn, event, business=False)
 
 
@@ -1026,6 +1074,7 @@ REDUCERS: dict[str, Reducer] = {
     "attempt.stopped": attempt_phase("stopped"),
     "attempt.replaced": attempt_phase("replaced"),
     "attempt.closed": attempt_phase("closed"),
+    "attempt.session_updated": attempt_session_updated,
     "attempt.lost": attempt_lost,
     "task.paused": task_paused,
     "task.resumed": task_resumed,

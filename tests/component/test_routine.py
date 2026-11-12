@@ -154,7 +154,7 @@ def test_board_arms_renews_clears_and_recovers(home: Home) -> None:
     arm = first["maintenance"][0]
     assert arm["cron"] == "*/10 * * * *" and arm["replace"] is None
     assert arm["prompt"].startswith("<scheduled-task>")
-    assert [j["job_id"] for j in first["jobs"]] == ["handoff-scan"]
+    assert [j["job_id"] for j in first["jobs"]] == ["handoff-scan", "session-scan"]
     assert first["orchestrator_session"] == "orch-1"
     # Recent run times stay in the cache (live evidence), at most RECENT_RUNS of them.
     assert cache["runs"] == [h.clock.now]
@@ -260,7 +260,10 @@ def test_teams_round_trip(home: Home) -> None:
     assert f'<a href="{link}">{link}</a>' in rich
     assert routine_mod.plain_text(rich).startswith(f"{routine_mod.CARD_PREFIX} T001 {request_id}")
     cache: dict[str, Any] = {}
-    assert [j["job_id"] for j in board(h, routine, cache)["jobs"]] == ["handoff-scan"]
+    assert [j["job_id"] for j in board(h, routine, cache)["jobs"]] == [
+        "handoff-scan",
+        "session-scan",
+    ]
     sent = h.run(
         "channel_sent",
         task_id="T001",
@@ -271,7 +274,7 @@ def test_teams_round_trip(home: Home) -> None:
     )
     assert [e["type"] for e in sent["events"]] == ["channel.message_sent", "routine.job_added"]
     jobs = board(h, routine, cache)["jobs"]
-    teams = jobs[1]
+    teams = jobs[2]
     assert teams["job_id"] == "teams-replies" and teams["input"]["tasks"] == ["T001"]
     assert teams["run"] == {"job_id": "teams-replies", "chat_id": "chat-1"}
     assert teams["fetch"]["tool"] == "mcp__workiq__fetch"
@@ -351,7 +354,10 @@ def test_teams_round_trip(home: Home) -> None:
     assert out["events"][0]["data"]["transition"] == "T12"
     assert h.status("T001") == "in_progress"
     # Answered: the task leaves the Teams job's list, and the job is no longer run.
-    assert [j["job_id"] for j in board(h, routine, cache)["jobs"]] == ["handoff-scan"]
+    assert [j["job_id"] for j in board(h, routine, cache)["jobs"]] == [
+        "handoff-scan",
+        "session-scan",
+    ]
     # Questions waiting in two chats (the configured chat changed in between): one row each, and
     # a reply is read only in the chat its question went to.
     _, second = asked(h, "T002")

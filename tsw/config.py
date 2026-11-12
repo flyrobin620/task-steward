@@ -151,6 +151,10 @@ DEFAULTS: dict[str, Any] = {
         "name_pattern": "{task_id_lower}-{attempt}-g{generation}",
         "archive_on_accept": False,
         "archive_on_archive": True,
+        # Prefixes of a worker session's title once its task is accepted / cancelled (DN002 §5.8);
+        # an empty string adds none.
+        "title_on_accept": "[已验收]",
+        "title_on_cancel": "[已取消]",
     },
     "worktrees": {
         "root": "~/tsw-worktrees",
@@ -272,7 +276,13 @@ SCHEMA: dict[str, Any] = _obj(
         prestart=_obj(enabled=B, max_standby=_int(0)),
         wake=_obj(worker_message_parent=B, reportable_events=STRS),
     ),
-    sessions=_obj(name_pattern=S, archive_on_accept=B, archive_on_archive=B),
+    sessions=_obj(
+        name_pattern=S,
+        archive_on_accept=B,
+        archive_on_archive=B,
+        title_on_accept=S,
+        title_on_cancel=S,
+    ),
     worktrees=_obj(root=S, branch_pattern=S, work_dir=S),
     reports=_obj(formats=STRS, html_from_md=B, print_styles=B),
     repositories={

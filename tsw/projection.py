@@ -283,6 +283,20 @@ CREATE TABLE IF NOT EXISTS follow_ups(
     resolution TEXT,
     updated_at TEXT
 );
+-- The titles tsw gave worker sessions and what became of them (DN002 §5.8). Only events that
+-- carry a title (attempt.start_requested since T272) and attempt.session_updated write this
+-- table, so a projection made before it stays valid: older attempts have no row.
+CREATE TABLE IF NOT EXISTS session_titles(
+    task_id TEXT NOT NULL,
+    attempt TEXT NOT NULL,
+    base TEXT NOT NULL,
+    known TEXT NOT NULL,
+    user_title TEXT,
+    missing INTEGER NOT NULL DEFAULT 0,
+    failed_title TEXT,
+    archive_failed INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(task_id, attempt)
+);
 CREATE TABLE IF NOT EXISTS leases(
     name TEXT PRIMARY KEY,
     holder_session TEXT,

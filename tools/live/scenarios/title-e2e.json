@@ -1,0 +1,75 @@
+{
+  "id": "title-e2e",
+  "title": "Claude 桌面 app 中 worker 会话的标题：预启动带“（待命）”、派发后去掉；用户在终端验收后，例行会话转告主会话加“[已验收]”前缀；用户改过名的会话取消后不改名、不弹确认",
+  "useCases": [
+    "UC-SESSION-001",
+    "UC-DIRECT-001",
+    "UC-ROUTINE-001"
+  ],
+  "modelCalls": {
+    "sessions": "主会话 1 个、例行会话 1 个、worker 2 个",
+    "reviewer": "codex-app-server，T001 至少 1 轮，上限 3 轮（review.max_rounds）；T002 不评审"
+  },
+  "repository": "live/live-repo",
+  "config": {
+    "input": {
+      "in_session_timeout_minutes": 10
+    },
+    "roles": {
+      "reviewer": {
+        "effort": "low"
+      }
+    },
+    "review": {
+      "max_rounds": 3
+    },
+    "routine": {
+      "interval_minutes": 2,
+      "stale_after_intervals": 3
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "T001",
+      "title": "live：README 加说明（之后用户在终端验收）",
+      "kind": "design",
+      "goal": "在 live-repo 的 README.md 加一行项目说明“四则运算示例”。做法：会话目录就是 tsw 为本任务创建的 live-repo worktree（任务书“仓库与 worktree”一节，分支已建好），在其中提交、自评审（review_run）直到 finalize、git push origin <分支>；本次运行的 GitHub 由替身代替，命令就是 {gh}（用这个完整路径，不要加 PATH 前缀或其他前置命令）：{gh} pr create -R github.com/{repository} --head <分支> --title <标题>，再按任务书的交付授权 {gh} pr merge <编号> -R github.com/{repository} --squash；合并后查看主分支上合并提交的 CI：{gh} run list --commit <合并提交> -R github.com/{repository}（替身模拟一次已通过的运行）。提交时 merge 带 PR 链接、合并提交、合并的 head、ci 与 live（写明“不需要：live-repo 没有 live 场景”）。开始前按任务书读仓库指令文件并照做；报告写明读了哪些仓库指令文件。",
+      "acceptance": [
+        "README.md 加了说明",
+        "PR 由 worker 自行合并，合并的 head 等于最后一轮评审的 HEAD，提交附合并提交的 CI（通过）"
+      ]
+    },
+    {
+      "task_id": "T002",
+      "title": "live：待命后派发、再被取消",
+      "kind": "research",
+      "goal": "本任务用于验证会话标题：收到任务书后调用 progress_note 记录“就绪”，然后结束这一轮，等待主会话的消息，不做其他工作。",
+      "acceptance": [
+        "任务按用户要求预启动、派发后取消"
+      ]
+    }
+  ],
+  "operator": [
+    "开始前，在 Claude 桌面 app 以本运行的仓库检出 {repo} 为文件夹新建一个会话并信任该文件夹，然后归档这个会话：真实使用中仓库的主检出已经信任过，worker 的 worktree 沿用主检出的信任。",
+    "在 Claude 桌面 app 新建会话，文件夹选择本运行的数据目录 {home}（首次打开需要信任该文件夹），权限模式用 auto。",
+    "在该主会话中说：“为 T001、T002 预启动待命会话，然后派发并执行它们”。留意侧栏：两个 worker 会话先以“（待命）”结尾的标题出现，派发后主会话把“（待命）”去掉。",
+    "等 T001 的 worker 提交、主会话核验并技术验收（主会话告诉你 T001 完成、等待人工验收）。不要在主会话中验收，也不要再在主会话中说话。",
+    "在 Claude 之外的终端中运行（用户本人验收，渠道 user-cli）：{tsw_cmd} task accept T001 --yes。然后等待最多 {interval} 分钟的两倍：例行会话应把 T001 转告主会话，主会话被唤醒后把 T001 的 worker 会话改名为“[已验收] …”。看侧栏中的标题，记下是否出现改名确认。",
+    "在侧栏中手动把 T002 的 worker 会话改名为“我的 T002”。然后在主会话中说：“取消 T002”。主会话停止 T002 的 worker、取消任务；它应当认出这个标题是你改的，不改名，也不应弹出改名确认。",
+    "回到运行 live.py 的会话，运行 python tools/live.py title-e2e verify {run_id} --observed <yes|no>（yes：T001 的标题变为“[已验收] …”、T002 保持“我的 T002”、两次都没有出现改名确认），然后归档本次运行的会话并运行 cleanup。"
+  ],
+  "prerequisites": [
+    "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则“TaskSteward Worker Merge”“TaskSteward Worker Dispatch”与“TaskSteward Routine”。",
+    "已安装插件所用的运行时（真实数据目录 tsw-home.json 的 product_repo 指向的检出）已更新到含 session_check 的 main；prepare 会检查 claim_sessions。"
+  ],
+  "checks": [
+    "H1 隔离：数据目录与产品仓库指向本运行，主会话在其中操作",
+    "T 标题：T001、T002 的预启动（attempt.start_requested，purpose prestart）记下 title_base 与以“（待命）”结尾的 session_title",
+    "D 派发：每个任务投递任务书（attempt.brief_delivered）之后，主会话记录 attempt.session_updated（title，原因 dispatch，结果 renamed 或 already，标题等于 title_base）",
+    "U 终端验收：T001 的 task.user_accepted 来自用户本人（渠道 user-cli）",
+    "F 转告：终端验收之后，主会话的 hook 记下一条以“TaskSteward 例行项 session-scan”开头的消息（例行会话转来，不是用户的 turn）",
+    "A 加前缀：终端验收之后，主会话记录 T001 的 attempt.session_updated（renamed，标题为“[已验收] <title_base>”），工具结果原文写着改名成功",
+    "X 用户改过名：T002 取消之后，主会话记录 T002 的 attempt.session_updated（user_title，读到的标题为用户改的），之后没有 T002 的 renamed",
+    "O 操作者观察：T001 的标题变为“[已验收] …”，T002 保持用户改的标题，两次都没有出现改名确认（verify 的 --observed yes）"
+  ]
+}

@@ -31,6 +31,7 @@ live 层级调用真实 app 与模型，有费用，并且需要用户在场（�
 | 例行会话与例行表、超时转交、`teams-chat` 渠道（DN006 §8.7、§8.9） | `routine-e2e`：例行会话的启动、分离与定时任务、超时转交与主会话代答、经 Teams 转达与答复登记；空跑不唤醒主会话由主会话的 hook 记录判定（检查 W） |
 | 调度租约的交接与唤醒目标（DN001 §6.3–§6.4：让出、领取、worker 与例行会话发给持租主会话） | `handoff-e2e`：主会话 A 派发 worker 后让出租约，B 领取；worker 的唤醒消息到达 B 而不是 A，B 按会话 ID 回复 worker |
 | worker 登记会话中的需求变更（DN002 §5.1a：hook 记录用户消息、`requirement_change`、T28 后重新交付） | `change-e2e`：主会话技术验收后，用户在 worker 会话中追加要求；worker 引用 hook 记录的原话登记变更（T28），重新评审、合并、提交，主会话从 inbox 得知并再次验收 |
+| worker 会话的标题与验收后归档（DN002 §5.8：`session_check` / `session_record`、例行项 `session-scan`、主会话 Stop hook 的提醒） | `title-e2e`：预启动带“（待命）”的会话派发后去掉它；用户在终端验收后例行会话转告主会话加“[已验收]”前缀；用户改过名的会话取消后不改名、不弹确认 |
 | P2 `claude-app` 适配器（会话创建、对账、投递、唤醒） | `host-e2e` |
 | P2 评审器适配器（`claude-headless`、`codex-app-server`）或评审协议（DN004） | `reviewer`：每种已实现的评审器在固定样例上各做一次全量评审与一次增量评审，核对只读（目标目录无写入）与输出 schema；未实现的评审器报告为“未验证” |
 | 发布前 | 全部场景 |
@@ -46,6 +47,7 @@ live 层级调用真实 app 与模型，有费用，并且需要用户在场（�
 | `routine-e2e` | `python tools/live.py routine-e2e prepare`，按 `OPERATOR.md` 在 app 与 Teams 中操作，再 `python tools/live.py routine-e2e verify <runId>` | 需要：新建主会话、不在 worker 会话中回答、在 Teams 自聊中以任务 ID 开头回复 |
 | `handoff-e2e` | `python tools/live.py handoff-e2e prepare`，按 `OPERATOR.md` 在 app 中操作，再 `python tools/live.py handoff-e2e verify <runId>` | 需要：先后新建两个主会话、在 worker 会话中发一条消息 |
 | `change-e2e` | `python tools/live.py change-e2e prepare`，按 `OPERATOR.md` 在 app 中操作，再 `python tools/live.py change-e2e verify <runId>` | 需要：新建主会话、让它执行并技术验收任务后，在 worker 会话中发一条追加要求 |
+| `title-e2e` | `python tools/live.py title-e2e prepare`，按 `OPERATOR.md` 在 app 与终端中操作，再 `python tools/live.py title-e2e verify <runId> --observed yes` | 需要：新建主会话、在 Claude 之外的终端运行 `tsw task accept`、在侧栏手动改一个会话的标题 |
 | 收尾 | `python tools/live.py cleanup <runId> --archived <会话 ID>…`，`python tools/live.py discard <runId>` | 在 app 中归档本次运行的会话 |
 
 `verify` 逐项核对隔离账本中的事件（场景定义的 `checks`），把结果写进运行目录的 `result.json` 与可附在
