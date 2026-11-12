@@ -17,6 +17,7 @@ from tsw.events import EventDraft, digest
 from tsw.home import Home, same_dir, workdir_path
 from tsw.importer.resume import resume_package
 from tsw.machine import guards
+from tsw.machine import session_titles as _titles
 from tsw.machine.base import (
     ToolEnv,
     flag,
@@ -648,6 +649,7 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     purpose = text(inp, "purpose")
     user_turn = flag(inp, "user_turn")
     given_workdir = opt_text(inp, "workdir")  # where the session is created
+    given_title = opt_text(inp, "session_title")  # the main session's short title (DN002 §5.8)
     if purpose not in ("dispatch", "prestart"):
         raise rejected(
             "purpose 必须是 dispatch 或 prestart", reason="invalid_input", field="purpose"
@@ -709,6 +711,10 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         ws = plan(ctx.home, env.config, row, attempt_id, str(recorded or workdir))
         made = ensure(ws) if ws is not None and ws.worktree is not None else None
         generation = (int(previous["generation"]) if previous else 0) + 1
+        # The title the session is created with, and the base the later titles are made of
+        # (DN002 §5.8): tsw renames a session only while it still has the title tsw gave it.
+        base = _titles.base_title(task_id, str(row["title"]), given_title)
+        session_title = _titles.creation_title(base, purpose)
         data: dict[str, Any] = {
             "attempt": attempt_id,
             "generation": generation,
@@ -718,10 +724,13 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             "adapter": str(env.config.get("roles.worker.session")),
             **({"worktree": made} if made is not None else {}),
             "worker_instructions_sha256": digest,
+            "title_base": base,
+            "session_title": session_title,
         }
         # What the main session passes to start_session unchanged, and which version of the
         # instructions this session gets (the worker's hooks tell it of a newer one).
         output["prompt"] = worker_prompt(instructions, task_id, attempt_id, purpose)
+        output["session_title"] = session_title
         record_given(ctx.home.root, str(data["session_name"]), digest)
         if purpose == "prestart":
             # The brief is written now, at the current revision, so what was decided for the
@@ -763,6 +772,10 @@ def attempt_reconcile(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     outcome = text(inp, "outcome")
     session_ref = opt_text(inp, "session_ref")
     receipt = mapping(inp, "receipt", required=False)
+    # The title the session was actually created with, when it is not the one attempt_start
+    # returned (DN002 §5.8).
+    used_title = opt_text(inp, "session_title")
+    titled = {"session_title": used_title} if used_title else {}
     if outcome not in ("created", "not_created"):
         raise rejected(
             "outcome 必须是 created 或 not_created", reason="invalid_input", field="outcome"
@@ -842,6 +855,7 @@ def attempt_reconcile(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                         "attempt": attempt_id,
                         "session_ref": session_ref,
                         "generation": generation,
+                        **titled,
                     },
                 )
             ]
@@ -862,6 +876,7 @@ def attempt_reconcile(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     "session_ref": session_ref,
                     "generation": generation,
                     "receipt": receipt or {},
+                    **titled,
                 },
             )
         ]

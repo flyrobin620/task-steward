@@ -10,6 +10,9 @@ programs: the routine session decides nothing.
 
 - ``handoff-scan`` (always on the board): in-session questions past their timeout with no reply
   from the user are handed off (``by: system``) and listed for the orchestrator (DN006 §8.1b).
+- ``session-scan`` (always on the board): worker sessions whose title or archive has not caught
+  up with their task, for instance after the user accepted it in a terminal, are listed for the
+  orchestrator, which renames or archives them (DN002 §5.8, DN006 §8.9.4a).
 - ``teams-replies`` (added by ``channel_sent``): messages in the Teams chat the question cards
   went to, sent by the user, starting with the ID of a task whose Teams question is still
   waiting (DN006 §8.7). The orchestrator decides whether a message answers the question.
@@ -39,6 +42,7 @@ from tsw.events import EventDraft
 from tsw.home import Home
 from tsw.lease import format_time, parse_time
 from tsw.lease import orchestrator_session as lease_orchestrator
+from tsw.machine import session_titles
 from tsw.machine.ask_user import handed_off_event, handoff_due
 from tsw.machine.base import ToolEnv, flag, integer, opt_text, text, tool
 from tsw.machine.model import row_dict, task
@@ -47,6 +51,7 @@ from tsw.storage.fs import atomic_write
 
 WORKDIR = "routine"  # the routine session's directory, relative to the data directory
 HANDOFF_SCAN = "handoff-scan"
+SESSION_SCAN = "session-scan"
 TEAMS_REPLIES = "teams-replies"
 TEAMS_CHANNEL = "teams-chat"
 CARD_PREFIX = "[TaskSteward]"
@@ -61,7 +66,8 @@ START_PROMPT = (
 )
 START_BACKGROUND = (
     "TaskSteward 的例行会话：按固定间隔运行数据目录中的例行表，每一行运行一个 tsw 内置脚本"
-    "（例如把超时无人回复的会话内问题转交主会话、取出 Teams 中等待中的问题的答复），"
+    "（例如把超时无人回复的会话内问题转交主会话、取出 Teams 中等待中的问题的答复、"
+    "告诉主会话哪些 worker 会话的标题还没跟上任务状态），"
     "把脚本给出的消息原样转给主会话。它不改代码、不运行命令、不建会话，也不作任何判断。"
 )
 RECENT_RUNS = 24  # run times kept in cache/routine.json (DN006 §8.9.3)
@@ -280,7 +286,8 @@ def board(
     recent = kept.get("runs")
     kept["runs"] = [*(recent if isinstance(recent, list) else [])[-(RECENT_RUNS - 1) :], now]
     jobs: list[dict[str, Any]] = [
-        {"job_id": HANDOFF_SCAN, "script": "handoff_scan", "every": 1, "forward": "if_any"}
+        {"job_id": HANDOFF_SCAN, "script": "handoff_scan", "every": 1, "forward": "if_any"},
+        {"job_id": SESSION_SCAN, "script": "session_scan", "every": 1, "forward": "if_any"},
     ]
     host = str(config.get("plugins.host_integration"))
     # One row per chat that still has a waiting Teams question (cards may go to several chats).
@@ -871,6 +878,82 @@ def run_next(
     }
 
 
+# ---------------------------------------------------------------------- the session job
+
+
+def _scan_key(item: Mapping[str, Any]) -> str:
+    return "/".join(str(item.get(k) or "") for k in ("task_id", "attempt", "action", "title"))
+
+
+def session_scan(
+    conn: sqlite3.Connection,
+    config: EffectiveConfig,
+    cache: dict[str, Any],
+    now: str,
+    *,
+    sending: bool = True,
+) -> list[dict[str, Any]]:
+    """The ``session-scan`` row (DN006 §8.9.4a): worker sessions whose title or archive has not
+    caught up, not passed on lately.
+
+    ``cache`` remembers when each item still to do was passed on. An item comes again once it
+    has stayed undone for ``routine.stale_after_intervals`` intervals: the message may not have
+    arrived (the send failed, the run broke off) and nothing else would wake the orchestrator.
+    Without anyone to send to (``sending`` false) nothing is marked. Losing the cache passes an
+    item on once more; doing an item twice is harmless.
+    """
+    due = session_titles.pending(conn, config)
+    seen = cache.get("session_scan")
+    sent: dict[str, Any] = dict(seen) if isinstance(seen, dict) else {}
+    again = timedelta(
+        minutes=int(config.get("routine.interval_minutes"))
+        * int(config.get("routine.stale_after_intervals"))
+    )
+    fresh: list[dict[str, Any]] = []
+    kept: dict[str, str] = {}
+    for item in due:
+        key = _scan_key(item)
+        when = sent.get(key)
+        with contextlib.suppress(ValueError):  # a damaged entry only passes the item on again
+            if isinstance(when, str) and parse_time(now) - parse_time(when) < again:
+                kept[key] = when
+                continue
+        fresh.append(item)
+        if sending:
+            kept[key] = now
+    cache["session_scan"] = kept
+    return fresh
+
+
+def session_scan_text(items: Sequence[Mapping[str, Any]]) -> str:
+    """The message ``session-scan`` sends the orchestrator, or "" when there is nothing new."""
+    if not items:
+        return ""
+    reasons = {
+        "accepted": "任务已验收",
+        "cancelled": "任务已取消",
+        "dispatch": "已派发",
+        "standby": "待命",
+    }
+    lines = [
+        f"- {item['task_id']} {item['attempt']}，worker 会话 {item['session_id']}："
+        + (
+            f"改标题为“{item['title']}”"
+            if item["action"] == "title"
+            else "按 sessions.archive_on_accept 归档"
+        )
+        + f"（{reasons.get(str(item['reason']), str(item['reason']))}）"
+        for item in items
+    ]
+    head = (
+        "TaskSteward 例行项 session-scan：以下 worker 会话的标题或归档还没跟上任务状态"
+        "（例如用户在终端或 STATUS 应用中验收、取消了任务）。按 orchestrate skill 逐个处理："
+        "get_session → session_check → 按返回改名或归档 → session_record；"
+        "用户改过的标题 session_check 会直接跳过。"
+    )
+    return "\n".join([head, *lines])
+
+
 # ---------------------------------------------------------------------- forwarding
 
 
@@ -1078,6 +1161,9 @@ def routine_run(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         require_routine(ctx.conn, env)
         if job_id == HANDOFF_SCAN:
             return [handed_off_event(due, "system") for due in handoff_due(ctx.conn, ctx.now)]
+        if job_id == SESSION_SCAN:
+            # Only reads the ledger: what to pass on is worked out from it (session_scan).
+            return []
         if job_id == TEAMS_REPLIES:
             chat_id = opt_text(inp, "chat_id")
             job = next((j for j in teams_jobs(ctx.conn) if j["chat_id"] == chat_id), None)

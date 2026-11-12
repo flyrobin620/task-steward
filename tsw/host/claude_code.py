@@ -52,6 +52,8 @@ ORCHESTRATOR_ALLOW = (
     "mcp__ccd_session_mgmt__get_session",
     "mcp__ccd_session_mgmt__list_sessions",
     "mcp__ccd_session_mgmt__archive_session",
+    # Worker session titles after dispatch, acceptance and cancellation (CC006 §9, T272).
+    "mcp__ccd_session_mgmt__set_session_title",
 )
 # What tsw wrote into a worker's ``.claude/settings.local.json`` before decision 0003; a file
 # holding nothing else is tsw's own and is removed (``clear_worker_settings``).

@@ -1,6 +1,6 @@
 # DN002 任务状态机
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T251 §5.6 开始时为仓库任务创建 worktree；T262 §5.1a worker 登记会话中的需求变更；T270 §5.7 follow-up；T276 §5.7 follow-up 的定义与边界）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T251 §5.6 开始时为仓库任务创建 worktree；T262 §5.1a worker 登记会话中的需求变更；T270 §5.7 follow-up；T276 §5.7 follow-up 的定义与边界；T272 §5.8 worker 会话的标题与验收后归档）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN006 插件层](DN006-plugin-layer.md)
 
@@ -366,6 +366,52 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 
 **展示**：`task_read` 返回任务的 `follow_ups`（全部条目）与 `follow_up_of`（本任务由哪些 follow-up 转来）；`attention` 的 `follow_ups` 列出 `open` 且没有复查日期或已到复查日期的条目（编号、任务、类别、严重度、标题）；Dashboard 页面的卡片显示 `open` 条目数，单任务视图列出全部条目、状态与转成的任务（DN006 §8.10）。
 
+### 5.8 worker 会话的标题与验收后归档
+
+用户 2026-11-11 要求（T272）：任务验收后，对应 worker 会话的标题加上“[已验收]”前缀，验收来自主会话、终端命令（`user-cli`）还是 STATUS 应用（`status-app`）都要处理；用户手动改过标题的会话不自动改名（“我手工改名的你就不能自动改了”）。2026-11-12 用户决定：由主会话执行；同一机制顺带做取消的任务加“[已取消]”前缀、派发给待命会话时去掉“（待命）”，以及 `sessions.archive_on_accept` 的验收后归档。
+
+会话标题只能由宿主中的会话调用会话工具修改（Claude Code 见 [CC006 §9](claude-code/CC006-plugins.md)），终端命令与 STATUS 应用不在会话中，所以由 tsw 从账本算出“哪些会话的标题或归档还没跟上任务状态”，由主会话执行并记录回执。标题与归档不是任务状态：不改变任务状态与 revision，不进入状态图，也不算业务变化（不推迟自动归档，T24）。
+
+**基准标题与 tsw 记下的标题**
+
+- `attempt_start` 接受主会话给的简短标题 `session_title`（不给时为“<任务> <任务标题>”，截到 50 个字符），作为这个 attempt 的**基准标题**，并返回创建会话时要用的标题：预启动为“<基准>（待命）”，派发为“<基准>”。二者记在 `attempt.start_requested` 上。主会话创建会话时原样使用；实际用了别的标题时，`attempt_reconcile` 带回实际的标题。
+- **tsw 记下的标题**是 tsw 最近一次让会话使用的标题：创建时的标题，之后每次改名成功（或核实已是应有标题）后更新。
+- 本版本之前创建的 attempt 没有基准标题：不自动改名，也不列入待处置；是否一次性补加由用户决定（T272 报告）。
+
+**应有的标题**（由任务状态与 attempt 阶段算出）
+
+| 情形 | 应有的标题 |
+| --- | --- |
+| attempt 处于 `standby` | “<基准>（待命）” |
+| 任务为 `accepted` | “`sessions.title_on_accept` <基准>”（默认“[已验收] <基准>”） |
+| 任务为 `cancelled` | “`sessions.title_on_cancel` <基准>”（默认“[已取消] <基准>”） |
+| 其他 | “<基准>”（因此投递给待命会话后要去掉“（待命）”） |
+
+前缀配置为空字符串时，对应情形的应有标题就是“<基准>”。只处理会话可能还在的 attempt：阶段为 `standby`、`live` 或 `stopped`，有会话引用；任务已验收或已取消时也包括 `closed` 的 attempt（例如 `sessions.archive_on_archive` 为 `false` 时，取消前关闭的待命会话留在宿主中，同样加“[已取消]”前缀；会话已归档时读取结果会说明，记为 `missing`）。`replaced` 的会话不再处理。已归档的任务（`archived`）不可变，不再处理。
+
+**用户改过的标题**：宿主不告诉 tsw 标题是不是用户设定的（Claude app 只在改名时弹出确认，T272 实测），所以执行前先读取会话当前的标题，与 tsw 记下的标题比较：
+
+| 当前标题 | 处理 | 结果（`outcome`） |
+| --- | --- | --- |
+| 等于应有的标题 | 不改名，tsw 记下的标题更新为它 | `already` |
+| 等于 tsw 记下的标题，或等于 tsw 上一次让主会话改成的标题（检查返回改名时记为 `asked`；改名成功但回执没有记下时，会话显示的就是它） | 改名为应有的标题 | 先记 `asked`；改名成功为 `renamed`，工具报错为 `failed` |
+| 其他（包括看起来像 tsw 会起、但 tsw 从没让主会话改成的标题，例如用户自己加的“[已取消]”） | 认定用户（或 tsw 之外的人）改过：不改名，也不尝试（不弹确认）；这个 attempt 之后不再自动改名 | `user_title`（附当时的标题） |
+| 会话不存在或已归档 | 不改名；这个 attempt 之后不再处理标题与归档（还应归档的，同时记 `attempt.closed`，附原因） | `missing` |
+
+**验收后归档**：`sessions.archive_on_accept` 为 `true` 时，任务为 `accepted`、标题已处理完（任何结果）的会话随后归档；成功记 `attempt.closed`（工具回执，附 `disposition: archived`），失败（例如宿主拒绝归档正在工作或显示在屏幕上的会话）记 `attempt.session_updated`（`action: archive`，`outcome: failed`），会话不存在时同样记 `attempt.closed`（附原因）。用户改过标题不影响归档：归档是用户自己打开的配置。取消的任务不在这里归档（待命会话按 `sessions.archive_on_archive` 在取消前处置，§5.6）。
+
+**事件**：`attempt.session_updated`（主会话，经工具记录），`action` 为 `title` 或 `archive`，`outcome` 如上（另有 `asked`：检查返回改名时记下要改成的标题，当时读到的标题既已认定是 tsw 的，也成为 tsw 记下的标题），附应有的标题、当时读到的标题、原因（`standby`、`dispatch`、`accepted`、`cancelled`）与工具结果原文。它不改变任务状态与 attempt 阶段；`title` 的 `renamed` / `already` 更新 tsw 记下的标题，`user_title` 与 `missing` 让这个 attempt 不再处理。
+
+**待处置清单与幂等**：`attention` 的 `sessions` 列出应有的标题与 tsw 记下的标题不同（且没有 `user_title`、`missing`，同一应有标题没有记过 `failed`），或应当归档还没有回执（同样没有记过 `failed`）的 attempt：任务、attempt、会话、动作、应有的标题与原因；记过 `failed` 的单独标明，不再提醒，主会话可以再执行一次。清单从账本算出，所以验收来自哪个渠道都一样。重复执行是安全的：每次先读当前标题，已是应有标题的只记 `already`。改名成功之后、记录回执之前任务状态变了（例如用户这时在终端验收），回执照样记下刚改成的标题（须是记为 `asked` 的那个；原因记为 `superseded`），清单随后列出新的应有标题；用户改过标题之后不再接受改名回执。
+
+**谁执行、何时执行**：主会话（持有调度租约时）按 `attention` 的 `sessions` 逐项执行，改名与归档都不需要用户 turn（不创建会话）：
+
+- 在主会话中验收（`user_accept`）、取消（`task_cancel`）或投递任务书（`attempt_deliver`）后，同一轮执行；
+- 终端命令与 STATUS 应用的验收与取消：例行表的默认例行项 `session-scan` 发现新的待处置项后转给主会话（DN006 §8.9.4a），主会话被唤醒后执行；
+- 兜底：清单中有待处置项时，主会话的 Stop hook 在任何一轮结束前提醒一次（Claude Code 见 CC008 的 CC-S4），例行会话不在时也能在主会话的下一轮处理。
+
+所以终端命令与 STATUS 应用的验收在一个例行间隔内、或主会话的下一轮被处理。
+
 ## 6. attempt 阶段（属性）
 
 attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行目录。它的阶段是任务状态的属性，不另成状态机：
@@ -378,7 +424,7 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 | `live` | 子会话存在且绑定；平台事实 working / idle / awaiting_input 只作观察，不改变任务状态 | in_progress、waiting_user、verifying、done（验收后会话处置前）（续用时也可在 ready、waiting_dependency、intake 中保持） | T08、`attempt.continued` |
 | `stopped` | 子会话被停止但仍存在；可控时可续用 | paused、ready、waiting_dependency | 会话适配器的 `stop` 或用户停止 |
 | `replaced` | 已核实停止或已不存在，由新 attempt 接手同一执行目录；也用于待命会话丢失、取消时会话已不存在或不可控 | — | R-ATTEMPT、T15、§5.6（丢失；T25 取消时会话不可控或已不存在） |
-| `closed` | 任务验收、归档或取消后按配置处置会话（须有工具回执）；取消时可控的待命会话按 `sessions.archive_on_archive` 处置后进入此阶段 | done、accepted、archived、cancelled | T18 之后、T24、T25（§5.6） |
+| `closed` | 任务验收、归档或取消后按配置处置会话（须有工具回执）：验收后按 `sessions.archive_on_accept` 归档（§5.8），取消时可控的待命会话按 `sessions.archive_on_archive` 处置后进入此阶段 | done、accepted、archived、cancelled | T22 之后（§5.8）、T24、T25（§5.6） |
 
 ## 7. 事件类型
 
@@ -388,7 +434,7 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 | --- | --- |
 | 任务 | `task.registered` `task.planned` `task.dispatch_started` `task.paused` `task.resumed` `task.requirement_changed` `task.accepted` `task.user_accepted` `task.user_rejected` `task.cancelled` `task.archived` `task.note` |
 | 依赖 / 资源 | `dependency.satisfied` `dependency.invalidated` `dependency.rebound` `dependency.stale_cleared` `resource.released` |
-| attempt | `attempt.start_requested` `attempt.reconciling` `attempt.not_created` `attempt.prestarted` `attempt.brief_delivered` `attempt.late_session` `attempt.bound` `attempt.continued` `attempt.stopped` `attempt.lost` `attempt.replaced` `attempt.closed` `attempt.dispatch_abandoned` |
+| attempt | `attempt.start_requested` `attempt.reconciling` `attempt.not_created` `attempt.prestarted` `attempt.brief_delivered` `attempt.late_session` `attempt.bound` `attempt.continued` `attempt.stopped` `attempt.lost` `attempt.replaced` `attempt.closed` `attempt.dispatch_abandoned` `attempt.session_updated`（会话的标题与归档回执，§5.8；不改变任务状态与 attempt 阶段） |
 | worker | `worker.progress` `worker.question` `worker.submitted` `worker.self_check_failed` `worker.turn_ended` |
 | 评审 | `review.started` `review.failed` `review.unavailable` `review.completed` `review.triaged` `review.decision` `review.budget_exhausted` `review.budget_extended` `review.defer_requested` `review.defer_approved` `review.finding_overruled` |
 | 主控 / 输入 | `orchestrator.feedback` `orchestrator.decision` `input.requested` `input.escalated` `input.resolved` `input.late_response` `input.session_message`（worker 会话中的用户消息，hook 记录） `input.handed_off` `input.relayed`（DN006 §8.1） `orchestrator.inbox_acked` `controller.lease_acquired` `controller.lease_released` `controller.lease_taken_over` `controller.lease_stood_down`（让出或被接管的会话不在会话开始时自动领回，DN001 §6.4） |

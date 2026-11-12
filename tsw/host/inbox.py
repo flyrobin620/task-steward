@@ -13,6 +13,7 @@ from tsw.events import Event, EventDraft, utc_now
 from tsw.lease import require_lease
 from tsw.machine import follow_up as follow_up_mod
 from tsw.machine import routine as routine_mod
+from tsw.machine import session_titles as session_titles_mod
 from tsw.machine.ask_user import handoff_due
 from tsw.machine.guards import dependency_problems, invalidated, topological
 from tsw.machine.model import OCCUPYING, loads
@@ -163,6 +164,8 @@ def attention(
         # Open follow-ups the user has not put off, or whose recheck date has come (DN002 §5.7).
         "follow_ups": follow_up_mod.due(conn, (now or utc_now())[:10]),
         "routine": routine_attention(conn, config, routine_cache or {}, now),
+        # Worker sessions whose title or archive has not caught up with the task (DN002 §5.8).
+        "sessions": session_titles_mod.due(conn, config),
     }
     invalid = invalidated(conn)
     for row in conn.execute("SELECT task_id, status FROM tasks"):

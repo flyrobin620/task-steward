@@ -1,6 +1,6 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -238,3 +238,36 @@ T251 依据实测与官方文档（[skills](https://code.claude.com/docs/en/skil
 ### 8.4 Codex（记录，未实现）
 
 TaskSteward 目前只把 Codex 用作评审器。Codex 从项目根（默认以 `.git` 为标记）到会话目录读取 `AGENTS.md`，`.agents/skills` 的查找也在这个范围内；MCP 只来自 `config.toml`（用户级或受信任项目的 `.codex/config.toml`），不读 `.mcp.json`。以后实现 Codex worker 时，会话目录同样应是仓库 worktree；数据目录的 skill 与 `AGENTS.md` 在 worktree 中同样读不到，需要由任务书列出。
+
+## 9. worker 会话的标题与归档
+
+DN002 §5.8 在 Claude app 上的做法（T272）。
+
+### 9.1 实测（T272，2026-11-11，auto 模式）
+
+在 worker 自建的两个临时会话上测 `mcp__ccd_session_mgmt__set_session_title`（记录在 T272 报告）：
+
+| 情形 | 结果 |
+| --- | --- |
+| 标题由 Claude 设定（`start_session` 的 `title`，或之后 Claude 改过），启动者在用户 turn 中改 | 直接改名，没有确认，auto 分类器没有拦 |
+| 同上，非启动者的会话在由其他会话的消息触发的一轮中改 | 同上 |
+| 同上，定时提示（`<scheduled-task>`）触发的一轮中改 | 同上 |
+| 标题由用户在侧栏手动设定，用户 turn 中改 | 弹出确认卡片：“This replaces the name you gave it yourself.”，用户拒绝后工具返回 “The user doesn't want to proceed with this tool use” |
+| 同上，定时提示触发的一轮中改（会话在 app 中打开着） | 同样弹出确认，这一轮被中断，没有改名；不是工具说明所说的“无人值守时直接拒绝” |
+
+`get_session` / `list_sessions` 只返回标题文字，不返回标题是不是用户设定的。所以 tsw 记下自己让会话使用的标题，改名前比较（DN002 §5.8）。
+
+### 9.2 主会话的做法
+
+- 创建会话：`start_session` 的 `title` 用 `attempt_start` 返回的 `session_title`（预启动带“（待命）”）。
+- 逐项处理 `attention` 的 `sessions`：
+  1. `mcp__ccd_session_mgmt__get_session(session_id)`，原样交给 `session_check`（任务、attempt、`observed`）。不存在或已归档时 tsw 记 `missing`；当前标题已是应有标题时记 `already`；与 tsw 记下的标题不同时记 `user_title`。这三种都不再调用改名工具。
+  2. `session_check` 返回 `rename` 时，`mcp__ccd_session_mgmt__set_session_title(session_id, title)`，再 `session_record`（`action: title`，`ok` 与工具结果原文）。
+  3. 返回 `archive` 时（`sessions.archive_on_accept`），`mcp__ccd_session_mgmt__archive_session(session_id, reason)`，再 `session_record`（`action: archive`）；成功记 `attempt.closed`。
+- 数据目录的允许规则（CC008 §6）加入 `set_session_title`。会话工具由 app 的分类器把关，实测中改 Claude 设定的标题没有被拦，所以不新增 auto 模式规则。
+
+### 9.3 待验证
+
+| 编号 | 假设 | 不成立时 |
+| --- | --- | --- |
+| R6 | auto 模式下主会话按 `sessions.archive_on_accept` 归档它启动的、已验收任务的会话不被分类器拦下（工具说明：auto 模式“may approve without asking”；会话正在工作或显示在屏幕上时 app 拒绝） | 拒绝记为 `failed`，`attention` 中标明，由用户决定；必要时在 install hint 的 “TaskSteward Worker Dispatch” 规则中加入按配置归档已验收任务的会话 |

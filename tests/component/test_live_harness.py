@@ -766,3 +766,125 @@ def test_change_e2e_checks_pass_on_a_real_change_and_fail_without_it(
         for e in ledger_events()
     ]
     assert ids(elsewhere)["R"] == "failed"
+
+
+@pytest.mark.use_case("UC-SESSION-001")
+def test_title_e2e_checks_read_the_receipts_not_the_requests(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Checks T, D, U, F, A and X of title-e2e against the ledger the real tools write; a rename
+    asked for but never recorded (``asked``) is not a done rename (PR #43 review)."""
+    from tsw import direct  # noqa: PLC0415
+
+    monkeypatch.setattr(lease, "this_machine", lambda: MACHINE)
+    h = Harness(home)
+
+    def seen(session: str, title: str) -> dict[str, Any]:
+        return {"sessionId": session, "title": title, "isArchived": False}
+
+    def renamed(task: str, session: str, current: str) -> None:
+        out = h.run("session_check", task_id=task, attempt="a1", observed=seen(session, current))
+        h.run(
+            "session_record",
+            task_id=task,
+            attempt="a1",
+            action="title",
+            title=out["title"],
+            ok=True,
+            result=f'Renamed session {session} to "{out["title"]}" (was "{current}").',
+        )
+
+    workers: dict[str, Caller] = {}
+    for task in ("T001", "T002"):
+        h.register(task)
+        h.plan(task)
+        data = h.run(
+            "attempt_start",
+            task_id=task,
+            purpose="prestart",
+            user_turn=True,
+            session_title=f"{task} 短标题",
+        )["events"][0]["data"]
+        h.run(
+            "attempt_reconcile",
+            task_id=task,
+            attempt="a1",
+            generation=data["generation"],
+            outcome="created",
+            session_ref=f"w-{task}",
+        )
+        h.run("task_dispatch", task_id=task, workdir=f"work/{task}/a1")
+        h.run("attempt_deliver", task_id=task)
+        workers[task] = Caller(role="worker", session_id=f"w-{task}", machine=MACHINE)
+        renamed(task, f"w-{task}", f"{task} 短标题（待命）")
+    h.finalize(workers["T001"], "T001")
+    h.submit(workers["T001"], "T001")
+    h.accept("T001")
+    direct.perform(
+        h.ledger,
+        h.config,
+        "accept",
+        "T001",
+        channel="user-cli",
+        message_ref="cli:2026-11-12T00:00:00Z:1",
+        text="tsw task accept T001",
+    )
+    h.run("session_check", task_id="T001", attempt="a1", observed=seen("w-T001", "T001 短标题"))
+    h.run(
+        "task_cancel",
+        task_id="T002",
+        user_source=h.source("T002", 1, "cancel"),
+        worker_stopped=True,
+    )
+    h.run("session_check", task_id="T002", attempt="a1", observed=seen("w-T002", "我的 T002"))
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    forward = {
+        "event": "UserPromptSubmit",
+        "session": "orch-1",
+        "time": h.clock.now,
+        "payload": {
+            "cwd": str(home.root),
+            "prompt": '<cross-session-message from="routine-1">TaskSteward 例行项 session-scan：…',
+        },
+    }
+    (run_dir / "hook-payloads.jsonl").write_text(
+        json.dumps(forward, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    run = cast(Any, SimpleNamespace(dir=run_dir, home=home.root))
+
+    def ids() -> dict[str, str]:
+        evs = [
+            {
+                "sequence": e.sequence,
+                "type": e.type,
+                "task_id": e.task_id,
+                "revision": e.revision,
+                "attempt": e.attempt,
+                "actor": e.actor,
+                "data": e.data,
+                "time": e.time,
+            }
+            for e in h.ledger.storage.read(since=0)
+        ]
+        return {c["id"]: c["status"] for c in live.title_checks(run, evs)}
+
+    # Asked for, not yet done: A waits for the receipt.
+    assert ids() == {
+        "T": "passed",
+        "D": "passed",
+        "U": "passed",
+        "F": "passed",
+        "A": "failed",
+        "X": "passed",
+    }
+    h.run(
+        "session_record",
+        task_id="T001",
+        attempt="a1",
+        action="title",
+        title="[已验收] T001 短标题",
+        ok=True,
+        result='Renamed session w-T001 to "[已验收] T001 短标题" (was "T001 短标题").',
+    )
+    assert set(ids().values()) == {"passed"}
