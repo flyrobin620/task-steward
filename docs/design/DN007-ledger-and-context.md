@@ -1,7 +1,7 @@
 # DN007 账本存储、投影与任务上下文检索
 
-- 状态：设计草案（T233 r4）
-- 日期：2026-11-05
+- 状态：设计草案（T233 r4）；L2 第一阶段按 §12 实现（T275）
+- 日期：2026-11-05；2026-11-12 补充 §12
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN006 插件层](DN006-plugin-layer.md)
 
 ## 1. 要解决的问题
@@ -49,7 +49,8 @@ DN001 §8 只定义了事件格式和“JSONL 账本为唯一事实、SQLite 投
 | `findings` | (task_id, attempt, round, finding_id) | cycle、severity、disposition、decision_ref | G-SUBMIT 只读取当前 attempt、当前提交周期的意见 |
 | `decisions` | decision_id | task_id、trigger、decision、rationale、basis_refs、confidence | 验收报告、决定摘要、主会话判断 |
 | `input_requests` | request_id | task_id、status、context_binding、channels、resolved_by | T11 / T12 |
-| `user_decisions` | ref | task_id（可空）、kind、text、scope、verified_source | G-USER、偏好检索（§6） |
+| `user_decisions` | ref | task_id（可空）、kind、text、scope、verified_source | G-USER、偏好检索（§6）；第一阶段只由 `user.preference_recorded` 写入，其他用户决定由 L2 从事件中抽取（§12.2） |
+| `task_summaries` | task_id | keywords、summary、stage、bound_revision、bound_outputs | 卡片的关键词与摘要（§5.1、§12.2） |
 | `outputs` / `pull_requests` | (task_id, output_id) | type、form、delivery、ref、verified_at、evidence | G-ACCEPT、目录 |
 | `resource_claims` | (resource, owner_task) | status、released_by | G-RES |
 | `slots` / `leases` | — | 占用名额的任务、调度租约持有者与机器 | G-SLOT、G-LEASE |
@@ -126,8 +127,9 @@ DN001 §8 只定义了事件格式和“JSONL 账本为唯一事实、SQLite 投
 卡片的来源：
 
 - 结构化字段（标题、仓库、状态、依赖、产出）由 tsw 从 L1 直接生成；
-- `keywords`（通常 4–8 个具体短语）与 `summary`（一两句话的实际成果）由**主会话在 T18 验收时**写入（`task.summary_recorded` 事件），依据已读的任务书与交付；任务受理时先写一版基于任务书的关键词，验收时补全成果；
-- 卡片绑定任务 revision 与产出 generation，任一变化都把卡片标为 `stale`，在下次验收或主会话补写时更新。
+- `keywords`（通常 4–8 个具体短语）与 `summary`（一两句话的实际成果）由**主会话在 T18 验收时**写入（`task_summary` 工具，`task.summary_recorded` 事件），依据已读的任务书与交付；任务受理时先写一版基于任务书的关键词，验收时补全成果；
+- 没有主会话写入的关键词时：导入任务取 §8 的旧关键词记录，其余任务由 tsw 从标题与任务书生成初版（`keyword_source: generated`，标为 `stale`）；摘要缺失时以任务目标的开头代替并标出（`summary_source: goal`）；
+- 卡片绑定任务 revision 与产出 generation（已登记产出的摘要），任一变化都把卡片标为 `stale`，在下次验收或主会话补写时更新。
 
 ### 5.2 全文与关键词索引
 
@@ -151,7 +153,9 @@ DN001 §8 只定义了事件格式和“JSONL 账本为唯一事实、SQLite 投
 | `context_decisions` | 主题词、范围（全局 / 仓库 / 任务） | 相关用户决定与偏好（§6） | 主会话判断时引用依据 |
 | `context_task` | 任务 ID | 本任务的完整过程：各 attempt、评审轮次、决定、反馈、输入请求 | 核验与验收 |
 
-所有工具只读，不改变任务状态；返回内容都带出处（任务 ID、文件路径、事件序号），主会话据此写决定依据。
+所有工具只读，不改变任务状态；返回内容都带出处（任务 ID、文件路径、事件序号），主会话据此写决定依据。`context_read`、`context_search` 与全局范围的 `context_catalog` 记 `context.read` 审计事件（§7.1），它不属于任何任务、不改变投影。
+
+写入卡片与偏好的是两个主会话工具（需要调度租约）：`task_summary`（关键词、摘要与阶段 `intake` / `acceptance` / `update`，记 `task.summary_recorded`）与 `preference_record`（§6）。维护：`tsw context rebuild`（终端）与主会话的 `context_rebuild` 工具（DN006 §9.7 的同类维护，记 `maintenance.performed`）。
 
 ### 5.4 索引更新与新鲜度
 
@@ -174,7 +178,7 @@ DN001 §8 只定义了事件格式和“JSONL 账本为唯一事实、SQLite 投
 
 - **覆盖必须同类型、同范围且显式**：新的长期偏好只有在类型相同、范围相同或更窄，并由用户明确表示替代旧偏好时，才记录 `supersedes` 关系覆盖旧的；一次性授权与任务决定永远不覆盖长期偏好。更窄范围的偏好只在该范围内优先。
 - 同一主题、同一范围存在没有替代关系的冲突偏好时，主会话不能自行取舍，交给人类（DN006 §8）。
-- 长期偏好只能来自用户明确说出的长期意图，由主会话记录 `user.preference_recorded`，附用户原话的 `VerifiedSource`；主会话不能凭推测或归纳写入偏好。
+- 长期偏好只能来自用户明确说出的长期意图，由主会话用 `preference_record` 记录 `user.preference_recorded`，附用户原话的 `VerifiedSource`（决定对象 `["preference", <范围>, "standing"]`）；主会话不能凭推测或归纳写入偏好。worker 报告“决定与约定”一节中的长期约定，由主会话在验收时向用户确认后转记。
 - `context_decisions` 按主题词、类型与范围检索，返回时标出类型、范围、是否已被替代。
 
 **导入的旧约定**：orchestrator-agent 的 `AGENTS.md` 中带日期的用户约定在导入时记为**候选约定**（`user.preference_candidate`），保存原文件的 Git 提交 SHA、原文与原文中写明的适用范围，不推断为全局。候选约定可以被检索，但在被核实前**不能作为主会话自主判断的依据**；主会话遇到依赖候选约定的判断时交给人类。导入完成后，tsw 把全部候选约定整理成一份清单交用户核对，用户逐条或批量确认（带 `VerifiedSource`，记录 `user.preference_confirmed`）后才转为长期偏好；已经由统一配置 `policies` 表达的约定（如邮件只存草稿、不做可执行文件哈希）以配置为准，不再重复登记。
@@ -246,3 +250,39 @@ DN001 §8 只定义了事件格式和“JSONL 账本为唯一事实、SQLite 投
 | C1 | 运行环境的 Python 自带 SQLite 支持 FTS5 与 `trigram` 分词器（本机 3.49.1 已验证） | 退化为卡片与别名上的子串匹配，全文检索不可用 |
 | C2 | 卡片 + 分层读取足以让主会话在上下文预算内找到相关任务（以当前约 230 个历史任务做 A/B：给定已知相关任务，检查召回率与读取量） | 增加关键词覆盖或引入向量检索插件（后续设计） |
 | C3 | 在目标规模（数千任务、数十万事件）下，冷启动从检查点恢复与增量归约在秒级完成 | 调整检查点间隔与分段大小 |
+
+## 12. 实现差距与分阶段交付（T275，2026-11-12）
+
+### 12.1 核对结果
+
+T275 开始时 §4–§8 的检索部分都没有实现：
+
+| 设计 | 当时的实现 |
+| --- | --- |
+| L1 `index_queue`（§3.2 第 6 步） | 表存在，归约时每个带任务的事件都写入一行，但没有消费者，只增不减 |
+| L1 `user_decisions`、`project_ids` | 没有；用户决定分散在 `input_requests`、`follow_ups` 的 resolution 与各事件的 `source` 中 |
+| 事件 `task.summary_recorded` `context.read` `user.preference_*`（DN002 §7） | 没有定义，也没有归约规则 |
+| L2 `cache/context.sqlite`、`tsw context rebuild` | 没有 |
+| `context_*` 工具（DN001 §7.2） | 没有；配置 `context.*` 已有校验但无人使用 |
+| 导入任务的关键词（§8） | 旧记录已复制到 `legacy/orchestrator-agent/metadata/task-keywords/`（`index.json` 指向 230 个任务的当前记录，`records/` 共 387 个文件含历史版本），但 `import.task_imported` 事件没有写入采用的关键词 |
+| brief 的“背景”一节（§7.2） | 没有；推荐读取集合只有本任务与依赖 |
+| 导入的候选约定（§6） | 没有；旧系统的 `AGENTS.md` 不在数据目录中，现有数据无法生成候选 |
+
+### 12.2 第一阶段（T275）
+
+- **事件**：新增 `task.summary_recorded`（主会话，绑定当时的 revision 与产出摘要）、`context.read`（审计：读者、任务、部分、理由、读取字符数，不属于任何任务）、`user.preference_recorded`。三者只写入新表 `task_summaries`、`user_decisions`（或不写表），已有投影仍然有效，不提升 `REDUCER_VERSION`、不需要 `tsw ledger rebuild`。
+- **L2 的数据来源**：索引器按序读取 L0 中 `indexed_seq` 之后的事件，得到受影响的任务与用户决定，再从 L1 与原始材料重新生成这些任务的卡片和全文条目，最后推进 `indexed_seq`（同时记下该序号的事件摘要），并删除 L1 `index_queue` 中不超过它的行。L2 的版本、所记摘要与账本不一致或文件损坏时自动全量重建（L2 只是缓存，不需要像 L1 一样显式 rebuild）。索引更新在提交锁之外进行（只在读取 L1 快照时短暂持有），多个读者用独立的 `context` 锁串行化。
+- **历史上的用户决定**：任务答复（`input.resolved`）、用户验收与退回、需求变更、follow-up 的用户处置、配置授权等事件中带 `VerifiedSource` 的部分，由 L2 抽取为可检索的用户决定（`task` 或 `one_time` 类型，绑定任务与 revision），不写入 L1。只有 `user.preference_recorded` 是长期偏好。
+- **卡片关键词**：主会话写入 > 导入任务的旧记录（按 `legacy/.../task-keywords/index.json`）> 生成初版（标签、反引号中的标识符、英文标识符与标题短语，标为 `stale`）。生成初版和读取旧记录都在重建时完成，不写事件：现有任务的“回填”就是一次 `tsw context rebuild`；主会话之后对需要的任务用 `task_summary` 补写。
+- **别名**：配置 `repositories.<名>.aliases`、标题中方括号标签与仓库的对应（如 `[tsw]` ↔ `task-steward`，同一标签多数任务指向同一仓库时采用），以及旧记录的 `project_ids`。项目范围按 `project_ids`（没有时取仓库名）匹配。
+- **检索**：查询词按空白与标点切分并经别名扩展；不少于 3 个字符的词查 FTS5 trigram 全文，少于 3 个字符的词只在卡片与别名上做子串匹配。卡片按点名任务与硬依赖 > 关键词与别名命中 > 标题与摘要命中 > 全文命中 > 最近活动排序。索引落后且当场补不齐时，落后任务按 L1 的标题与仓库过滤参与结果并标注 `index_lag`。
+- **工具与角色**：§5.3 的五个只读工具对主会话与 worker 都开放（§7.2 的表）；worker 的推荐读取集合与本任务排在前面。`task_summary`、`preference_record`、`context_rebuild` 只给主会话。`task_read` 对 worker 的读取集合限制不在本阶段改变。
+- **skill**：主会话受理新任务时先用 `context_catalog` 在同仓库 / 项目范围查重复、相关任务、可能的依赖，用 `context_decisions` 查用户既有决定，需要时 `context_read`，有缺口再扩大范围；受理时写初版关键词，技术验收时 `task_summary` 补全。worker 说明增加检索工具的用法。
+
+### 12.3 第二阶段（后续任务）
+
+- 导入候选约定：重新从旧系统取得 `AGENTS.md`，生成 `user.preference_candidate`，交用户核对后 `user.preference_confirmed`；第一阶段的 `context_decisions` 已为每条结果给出 `usable_as_basis`，候选约定接入后为 `false`。
+- brief 的“背景”一节：派发时由卡片、主会话选定的相关任务与适用的用户决定生成，并扩充推荐读取集合（§7.2）。
+- `task_read` 的 worker 读取范围与 DN001 §7.2 对齐。
+- 术语同义词表（配置或主会话维护）、按 C2 的结果决定是否引入向量检索插件（§11）。
+
