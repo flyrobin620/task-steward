@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import quote
 
-from tsw.context.index import IndexedCard, task_facts
+from tsw.context.index import IndexedCard, outputs_digest, task_facts
 from tsw.context.service import fallback_card
 from tsw.events import Event
 from tsw.host.relations import label, references
@@ -448,7 +448,8 @@ def card_state(
     The index is used when it belongs to this ledger: the event at its position has the checksum
     it recorded (so the position is not past the ledger either). When the task has events after
     that position, or no card yet, the structured fields come from the projection and the
-    keywords and summary stay as indexed, as the retrieval tools do (DN007 §5.4).
+    keywords and summary stay as indexed, as the retrieval tools do (DN007 §5.4); the card is
+    then stale when the revision or the outputs it was bound to are no longer the task's.
     """
     facts = task_facts(conn, task_id)
     if facts is None:
@@ -460,7 +461,15 @@ def card_state(
     if problem is not None:
         return CardState(fallback_card(facts, None), problem, False, indexed, task_seq)
     if found.card is None or task_seq > indexed:
-        return CardState(fallback_card(facts, found.card), None, True, indexed, task_seq)
+        card = fallback_card(facts, found.card)
+        bound = _mapping(card.get("card_revision"))
+        if bound and not bound.get("stale"):
+            outputs = outputs_digest(facts.outputs)[: len(str(bound.get("outputs") or ""))]
+            if bound.get("task_revision") != facts.task["revision"] or (
+                bound.get("outputs") is not None and bound.get("outputs") != outputs
+            ):
+                card["card_revision"] = {**bound, "stale": True}
+        return CardState(card, None, True, indexed, task_seq)
     return CardState(found.card, None, False, indexed, task_seq)
 
 
@@ -518,7 +527,14 @@ def _card(state: CardState | None, revision: int) -> str:
         ("摘要来源", escape(SUMMARY_SOURCES.get(summary_source, summary_source))),
         ("标签", escape("、".join(_strings(card.get("tags"))))),
         ("项目", escape("、".join(_strings(card.get("project_ids"))))),
-        ("stale", f"是：{escape(_stale_reason(card, revision))}" if stale else "否"),
+        (
+            "stale",
+            f"是：{escape(_stale_reason(card, revision))}"
+            if stale
+            else "否"
+            if bound
+            else "未知（索引中还没有这张卡片）",
+        ),
         (
             "卡片绑定",
             escape(

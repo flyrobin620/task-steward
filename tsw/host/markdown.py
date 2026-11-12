@@ -22,6 +22,7 @@ import html
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from urllib.parse import unquote
 
 # Above this size the dialog offers the original file instead (DN006 §8.10).
 MAX_SOURCE_CHARS = 2_000_000
@@ -281,8 +282,21 @@ def _urls(text: str, *, links: bool) -> str:
     return "".join(out)
 
 
+ANCHOR_PREFIX = "md-"
+
+
+def anchor_id(name: str) -> str:
+    """The id of a heading named ``name``, or the target of a ``#name`` link: GitHub's slug
+    (lower case, spaces to ``-``, other punctuation dropped) behind a prefix, so the document's
+    ids never meet the page's own."""
+    slug = re.sub(r"[^\w\- ]", "", unquote(name).strip().lower()).replace(" ", "-")
+    return ANCHOR_PREFIX + slug
+
+
 def _anchor(target: str, label: str, *, cls: str = "") -> str:
     href = safe_href(target)
+    if href is not None and href.startswith("#"):
+        href = "#" + anchor_id(href[1:])
     if href is None:
         return label
     extra = f' class="{cls}"' if cls else ""
@@ -343,10 +357,23 @@ class _Item:
 
 
 class _Blocks:
-    def __init__(self, lines: list[str]) -> None:
+    def __init__(self, lines: list[str], ids: dict[str, int] | None = None) -> None:
         self.lines = lines
         self.i = 0
         self.out: list[str] = []
+        self.ids = ids if ids is not None else {}  # shared by the whole document
+
+    def _sub(self, lines: list[str]) -> str:
+        return _Blocks(lines, self.ids).run()
+
+    def _title(self, level: int, text: str) -> str:
+        """A heading with a unique id, as GitHub numbers repeated names (``-1``, ``-2``)."""
+        body = inline(text)
+        base = anchor_id(html.unescape(re.sub(r"<[^>]*>", "", body)))
+        n = self.ids.get(base, 0)
+        self.ids[base] = n + 1
+        name = base if n == 0 else f"{base}-{n}"
+        return f'<h{level} id="{_e(name)}">{body}</h{level}>'
 
     def run(self) -> str:
         steps: list[Callable[[], bool]] = [
@@ -418,7 +445,7 @@ class _Blocks:
         if not m:
             return False
         level = len(m.group(1))
-        self.out.append(f"<h{level}>{inline((m.group(2) or '').strip())}</h{level}>")
+        self.out.append(self._title(level, (m.group(2) or "").strip()))
         self.i += 1
         return True
 
@@ -442,7 +469,7 @@ class _Blocks:
             else:
                 break
             self.i += 1
-        self.out.append(f"<blockquote>{_Blocks(body).run()}</blockquote>")
+        self.out.append(f"<blockquote>{self._sub(body)}</blockquote>")
         return True
 
     def _table(self) -> bool:
@@ -499,7 +526,7 @@ class _Blocks:
             if _SETEXT.match(line) and line.strip()[0] in "=-":
                 level = 1 if line.strip()[0] == "=" else 2
                 self.i += 1
-                self.out.append(f"<h{level}>{inline(chr(10).join(body).strip())}</h{level}>")
+                self.out.append(self._title(level, chr(10).join(body).strip()))
                 return True
             if self._interrupts(self.i):
                 break
@@ -570,7 +597,7 @@ class _Blocks:
                     checked = " checked" if task.group(1) in "xX" else ""
                     box = f'<input type="checkbox" disabled{checked}> '
                     item.lines[0] = item.lines[0][task.end() :]
-            body = _Blocks(item.lines).run()
+            body = self._sub(item.lines)
             if not loose and body.startswith("<p>"):
                 body = re.sub(r"^<p>(.*?)</p>", r"\1", body, count=1, flags=re.S)
             cls = ' class="task"' if box else ""

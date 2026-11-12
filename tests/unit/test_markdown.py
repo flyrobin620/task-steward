@@ -6,7 +6,8 @@ import re
 
 import pytest
 
-from tsw.host.markdown import inline, render_markdown, safe_href
+from tsw.host.markdown import anchor_id, inline, render_markdown, safe_href
+from tsw.host.status_assets import APP_SCRIPT
 
 mark = pytest.mark
 
@@ -20,11 +21,12 @@ def md(source: str) -> str:
 @mark.use_case("UC-DIRECT-005")
 def test_headings_paragraphs_and_breaks() -> None:
     assert md("# 任务书 T278 a1\n\n## 目标\n###### six ##") == (
-        "<h1>任务书 T278 a1</h1><h2>目标</h2><h6>six</h6>"
+        '<h1 id="md-任务书-t278-a1">任务书 T278 a1</h1><h2 id="md-目标">目标</h2>'
+        '<h6 id="md-six">six</h6>'
     )
     assert md("第一行\n第二行") == "<p>第一行\n第二行</p>"
     assert md("hard  \nbreak") == "<p>hard<br>\nbreak</p>"
-    assert md("Title\n=====\n\nSub\n---") == "<h1>Title</h1><h2>Sub</h2>"
+    assert md("Title\n=====\n\nSub\n---") == '<h1 id="md-title">Title</h1><h2 id="md-sub">Sub</h2>'
     assert md("#not a heading") == "<p>#not a heading</p>"
     assert md("---") == "<hr>" and md("* * *") == "<hr>"
 
@@ -161,6 +163,31 @@ def test_a_whole_brief_renders() -> None:
         "\r\n## 目标\r\n\r\n用户的原话：“新task”。\r\n\r\n要做的：\r\n1. 引用\r\n2. 卡片\r\n"
     )
     out = md(source)
-    assert out.startswith("<h1>任务书 T278 a1</h1><ul><li>标题：[tsw dashboard] 引用</li>")
-    assert "<h2>目标</h2>" in out and "<ol><li>引用</li><li>卡片</li></ol>" in out
+    assert out.startswith('<h1 id="md-任务书-t278-a1">任务书 T278 a1</h1><ul><li>标题：')
+    assert '<h2 id="md-目标">目标</h2>' in out and "<ol><li>引用</li><li>卡片</li></ol>" in out
     assert "\r" not in out and "\ufeff" not in out
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_headings_have_unique_ids_and_anchors_point_at_them() -> None:
+    # GitHub's slugs behind a prefix, numbered when repeated, also inside lists and quotes.
+    out = md(
+        "[目录](#验收) [另一处](#%E7%9B%AE%E6%A0%87) [文件](other.md#Section-2)\n\n"
+        "## 目标\n\n## 验收 `T278`!\n\n> ## 目标\n\n- ## 目标"
+    )
+    assert re.findall(r'<h2 id="([^"]+)"', out) == [
+        "md-目标",
+        "md-验收-t278",
+        "md-目标-1",
+        "md-目标-2",
+    ]
+    assert '<a href="#md-验收">目录</a>' in out and '<a href="#md-目标">另一处</a>' in out
+    # Another file's fragment is the dialog's to resolve against that file.
+    assert '<a href="other.md#Section-2">文件</a>' in out
+    assert anchor_id("Hello, World <x>") == "md-hello-world-x"
+    # The dialog keeps the fragment, scrolls to it, and only shows the latest request.
+    assert "function reveal(hash)" in APP_SCRIPT and 'if (href.startsWith("#"))' in APP_SCRIPT
+    assert (
+        "if (mine !== latest || !dialog.open) return;" in APP_SCRIPT
+        and 'dialog.addEventListener("close", released)' in APP_SCRIPT
+    )

@@ -437,7 +437,7 @@ def test_the_dashboard_renders_markdown_shows_references_and_the_index_card(
     html = body.decode("utf-8")
     assert (status, headers["Content-Type"]) == (200, "text/html; charset=utf-8")
     assert "script-src 'none'" in headers["Content-Security-Policy"]
-    assert html.startswith('<article class="md"><h1>任务书</h1>')
+    assert html.startswith('<article class="md"><h1 id="md-任务书">任务书</h1>')
     assert "<table>" in html and "<li>链接</li>" in html
     assert "<script>" not in html and "&lt;script&gt;" in html and "javascript:" not in html
     status, headers, body = dashboard.request("GET", "/runs/T003/a1/brief.md")

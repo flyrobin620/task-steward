@@ -134,15 +134,39 @@
      app (?view=html, tsw.host.markdown), instead of as plain text (DN006 §8.10, T278). */
   function documents() {
     let dialog = null, title = null, raw = null, body = null;
-    // A link to a .md file of this app: same origin; a modified or middle click keeps the browser's way.
+    // The latest request: a response to an older one (closed, or replaced by another document)
+    // never lands in the dialog. ``shown`` is the document on display, without its fragment.
+    let latest = 0, shown = "";
+    // A link to a .md file of this app (its fragment kept): same origin; a modified or middle
+    // click keeps the browser's way.
     function documentUrl(link) {
       if (!link || link.target === "_blank" || link.hasAttribute("download")) return null;
       let url;
       try { url = new URL(link.getAttribute("href") || "", link.baseURI); } catch (_) { return null; }
       if (url.origin !== location.origin || !/\.md$/i.test(url.pathname)) return null;
       url.search = "";
-      url.hash = "";
       return url;
+    }
+    // The heading a fragment names: the renderer's ids (md-<slug>) or a bare GitHub slug.
+    function reveal(hash) {
+      if (!hash || hash === "#") return;
+      let name;
+      try { name = decodeURIComponent(hash.slice(1)); } catch (_) { return; }
+      for (const id of [name, "md-" + name.trim().toLowerCase().replace(/ /g, "-")]) {
+        const target = body.querySelector(`[id="${CSS.escape(id)}"]`);
+        if (target) { target.scrollIntoView({block: "start"}); return; }
+      }
+    }
+    // Closing, by the button, the backdrop or Esc (the close event), lets the page refresh again.
+    function released() {
+      latest += 1;
+      shown = "";
+      delete document.documentElement.dataset.docOpen;
+      hold();
+    }
+    function shut() {
+      dialog.close();
+      released();
     }
     function build() {
       dialog = document.createElement("dialog");
@@ -162,7 +186,7 @@
       close.className = "ghost doc-close";
       close.textContent = "关闭";
       close.setAttribute("aria-label", "关闭");
-      close.addEventListener("click", () => dialog.close());
+      close.addEventListener("click", shut);
       bar.append(title, raw, close);
       body = document.createElement("div");
       body.className = "doc-body";
@@ -174,16 +198,17 @@
         const box = dialog.getBoundingClientRect();
         const inside = event.clientX >= box.left && event.clientX <= box.right
           && event.clientY >= box.top && event.clientY <= box.bottom;
-        if (!inside) dialog.close();
+        if (!inside) shut();
       });
-      dialog.addEventListener("close", () => {
-        delete document.documentElement.dataset.docOpen;
-        hold();
-      });
+      dialog.addEventListener("close", released);
       body.addEventListener("click", event => {
         const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
         if (!link || event.defaultPrevented || event.button !== 0
           || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        // A link within the document scrolls the dialog; the page's own fragment (the board's
+        // filters) is left alone.
+        const href = link.getAttribute("href");
+        if (href.startsWith("#")) { event.preventDefault(); reveal(href); return; }
         const url = documentUrl(link);
         if (url) { event.preventDefault(); open(url); }
       });
@@ -193,7 +218,7 @@
       // The fragment's relative links are relative to the file, not to this page.
       for (const a of body.querySelectorAll("a[href]")) {
         const href = a.getAttribute("href");
-        if (href.startsWith("#")) { a.removeAttribute("href"); continue; }
+        if (href.startsWith("#")) continue;  // within the document: handled on click
         let url;
         try { url = new URL(href, base); } catch (_) { a.removeAttribute("href"); continue; }
         a.href = url.href;
@@ -211,27 +236,36 @@
     }
     async function open(url) {
       if (!dialog) build();
+      const address = new URL(url.href);
+      address.hash = "";
+      if (dialog.open && shown === address.href) { reveal(url.hash); return; }
+      const mine = ++latest;
+      shown = "";
       const path = decodeURIComponent(url.pathname).split("/").slice(-4).join("/");
       title.textContent = path;
       title.title = decodeURIComponent(url.pathname);
-      raw.href = url.href;
+      raw.href = address.href;
       message("正在载入…");
       if (!dialog.open) dialog.showModal();
       document.documentElement.dataset.docOpen = "";
       document.documentElement.dataset.holdRefresh = "";
-      const ask = new URL(url.href);
+      const ask = new URL(address.href);
       ask.searchParams.set("view", "html");
       try {
         const response = await fetch(ask.href, {credentials: "same-origin"});
-        if (!response.ok) throw new Error(`HTTP ${response.status}：${(await response.text()).slice(0, 200)}`);
         const html = await response.text();
+        // Closed meanwhile (its close event may come later), or another document asked for.
+        if (mine !== latest || !dialog.open) return;
+        if (!response.ok) throw new Error(`HTTP ${response.status}：${html.slice(0, 200)}`);
         // The app escapes every piece of text; the page's CSP runs no script either way.
         const parsed = new DOMParser().parseFromString(html, "text/html");
         body.replaceChildren(...Array.from(parsed.body.childNodes));
-        relink(url.href);
+        relink(address.href);
+        shown = address.href;
         body.scrollTop = 0;
+        reveal(url.hash);
       } catch (error) {
-        message(`无法载入（${error.message || error}），可以打开原文查看。`);
+        if (mine === latest && dialog.open) message(`无法载入（${error.message || error}），可以打开原文查看。`);
       }
     }
     document.addEventListener("click", event => {

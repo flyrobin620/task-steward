@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from tsw.context.index import IndexedCard
+from tsw.context.index import IndexedCard, outputs_digest
 from tsw.host.relations import find_references, label, mentions, references
 from tsw.host.status import AppView, render
 from tsw.host.status_assets import CSS, SCRIPT
@@ -255,18 +255,37 @@ def test_a_lagging_index_keeps_its_words_and_takes_the_projections_fields(
     conn: sqlite3.Connection,
 ) -> None:
     _referring_board(conn)
-    found = IndexedCard(LedgerTail(40, "c40"), _card())
+    bound = {"task_revision": 1, "outputs": outputs_digest([])[:12], "stale": False}
+    found = IndexedCard(LedgerTail(40, "c40"), _card(card_revision=bound))
     state = card_state(conn, "T005", found, {40: "c40"}, task_seq=45)
     assert state is not None and state.lagging and state.problem is None
+    assert state.card["card_revision"]["stale"] is False  # nothing it was bound to changed
     assert state.card["title"] == "title T005" and state.card["keywords"] == ["任务流", "引用关系"]
     section = _section(render_task(conn, "T005", APP, [], state) or "", "card")
     assert "索引落后" in section and "索引到账本序号 40，本任务最近记录序号 45" in section
     assert "tsw context rebuild" in section
-    # A task the index has no card for yet is behind as well; its words are missing.
+    # The revision changed after the card was indexed: stale, even though the index said not.
+    conn.execute("UPDATE tasks SET revision = 2 WHERE task_id = 'T005'")
+    state = card_state(conn, "T005", found, {40: "c40"}, task_seq=45)
+    assert state is not None and state.card["card_revision"]["stale"] is True
+    section = _section(render_task(conn, "T005", APP, [], state) or "", "card")
+    assert "是：卡片记录于 revision 1，任务现在是 revision 2" in section
+    conn.execute("UPDATE tasks SET revision = 1 WHERE task_id = 'T005'")
+    # So do outputs registered since.
+    conn.execute(
+        "INSERT INTO outputs(task_id, output_id, type, ref, delivery, evidence) "
+        "VALUES('T005', 'O-1', 'pr', 'https://example.test/pull/42', 'merged', '{}')"
+    )
+    state = card_state(conn, "T005", found, {40: "c40"}, task_seq=45)
+    assert state is not None and state.card["card_revision"]["stale"] is True
+    conn.execute("DELETE FROM outputs")
+    # A task the index has no card for yet is behind as well; its words are missing and
+    # whether it is stale is not known.
     state = card_state(conn, "T005", IndexedCard(LedgerTail(40, "c40"), None), {40: "c40"}, 10)
     assert state is not None and state.lagging
     section = _section(render_task(conn, "T005", APP, [], state) or "", "card")
     assert "<dt>关键词来源</dt><dd>缺失</dd>" in section
+    assert "<dt>stale</dt><dd>未知（索引中还没有这张卡片）</dd>" in section
 
 
 @mark.use_case("UC-DIRECT-005")
