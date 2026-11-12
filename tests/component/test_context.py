@@ -604,6 +604,38 @@ def test_a_narrower_preference_overrides_only_inside_its_scope(home: Home) -> No
     assert by_ref["P-1"]["usable_as_basis"] == "in_scope"
     assert by_ref["P-1"]["overridden_in"] == [{"ref": "P-2", "scope": "repo:demo"}]
     assert "P-3" not in seen(scope="repo", repo="demo")
+    # Review r2 F7: replacing the narrower one in its own scope keeps the override.
+    h.run(
+        "preference_record",
+        topic="PR",
+        text="demo 的 PR 直接 ready 并自动合并",
+        scope="repo:demo",
+        supersedes=["P-2"],
+        user_source=source("repo:demo", "m4"),
+    )
+    h.run(
+        "preference_record",
+        topic="PR",
+        text="demo 的 PR 直接 ready，不自动合并",
+        scope="repo:demo",
+        supersedes=["P-4"],
+        user_source=source("repo:demo", "m5"),
+    )
+    assert seen(scope="repo", repo="demo") == {
+        "P-1": False,
+        "P-2": False,
+        "P-4": False,
+        "P-5": "in_scope",
+    }
+    assert seen(scope="repo", repo="other") == {"P-1": "in_scope"}
+    everything = {d["ref"]: d for d in svc.decisions(ORCH_READER, {"query": "PR"})["decisions"]}
+    assert everything["P-1"]["overridden_in"] == [{"ref": "P-5", "scope": "repo:demo"}]
+    assert (
+        svc.decisions(ORCH_READER, {"scope": "repo", "repo": "demo", "query": "PR"})["decisions"][
+            0
+        ]["ref"]
+        == "P-5"
+    )
 
 
 @pytest.mark.use_case("UC-CONTEXT-004")

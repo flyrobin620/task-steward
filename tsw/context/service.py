@@ -877,6 +877,16 @@ def standing_items(
     it is in force there: replaced by one of the same scope, or overridden by a narrower one that
     reaches ``where`` too (DN007 §6)."""
     items = [_standing(r) for r in rows]
+    by_ref = {str(i["ref"]): i for i in items}
+
+    def current(item: dict[str, Any]) -> dict[str, Any]:
+        """The preference now in force in ``item``'s scope: follow same-scope replacements."""
+        seen: set[str] = set()
+        while item.get("superseded_by") and str(item["ref"]) not in seen:
+            seen.add(str(item["ref"]))
+            item = by_ref.get(str(item["superseded_by"]), item)
+        return item
+
     overriders: dict[str, list[dict[str, Any]]] = {}
     for item in items:
         for old in item["supersedes"]:
@@ -885,12 +895,22 @@ def standing_items(
     for item in items:
         if not applies(str(item["scope"]), where):
             continue
-        narrower = [n for n in overriders.get(str(item["ref"]), []) if n["scope"] != item["scope"]]
+        # A narrower override keeps holding when it is itself replaced in its own scope.
+        narrower = list(
+            {
+                str(n["ref"]): n
+                for n in (
+                    current(o)
+                    for o in overriders.get(str(item["ref"]), [])
+                    if o["scope"] != item["scope"]
+                )
+            }.values()
+        )
         if where is None:
             if narrower:
                 item["overridden_in"] = [{"ref": n["ref"], "scope": n["scope"]} for n in narrower]
         else:
-            here = [n for n in narrower if applies(str(n["scope"]), where) and n["usable_as_basis"]]
+            here = [n for n in narrower if applies(str(n["scope"]), where)]
             if here:
                 item["overridden_by"] = here[0]["ref"]
                 item["usable_as_basis"] = False
