@@ -1,6 +1,6 @@
 # CC001 Claude Code 上的会话与 hooks
 
-- 状态：设计草案（T242 r2 自 DN001 拆出；T243 增加例行会话；T251 仓库任务的会话目录为执行目录下的 worktree；T262 worker 会话中的用户消息都记录；T276 worker 会话的 prompt 以 worker 说明开头，SessionStart 只给会话特有信息）
+- 状态：设计草案（T242 r2 自 DN001 拆出；T243 增加例行会话；T251 仓库任务的会话目录为执行目录下的 worktree；T262 worker 会话中的用户消息都记录；T276 worker 会话的 prompt 以 worker 说明开头，SessionStart 只给会话特有信息；T272 主会话 Stop hook 提醒处置 worker 会话的标题与归档）
 - 日期：2026-11-08
 - 实现：[DN001 总体架构](../DN001-architecture.md)
 - 相关：[CC006 Claude Code 插件](CC006-plugins.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -61,7 +61,7 @@ tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC �
 | UserPromptSubmit | worker | 检测 `[report]`，注入回传协议提示；live worker 的任务不是 `accepted` / `cancelled` / `archived` 时，把用户消息原文记为 `input.session_message` 并告诉 worker 消息编号：回答了待答问题时用 `user_answer` 登记，修改了任务需求时用 `requirement_change` 登记（注入的其他会话消息不记，DN006 §8.1a、DN002 §5.1a；T262 前只在有未获用户答复的会话内问题时记录） |
 | SessionStart | routine | 注入例行会话的指令：调用 `routine_board`，逐行执行例行项并原样转发结果，不作判断，不做其他事（CC006 §6） |
 | UserPromptSubmit | orchestrator | 记下这一轮是不是用户本人的 turn（[CC008](CC008-guardrails.md) CC-S6）：去掉宿主前置的 `<system-reminder>` 后还有内容，且不以注入消息的标记开头时是用户的 turn |
-| Stop | orchestrator | 运行只读 `attention`；有未处理 reportable 事件，有已超时未转交的会话内问题（提示运行 `sync`），例行会话失效（提示给它发消息重新设定），或这一轮是用户的 turn 且 `needs_prestart` 非空或例行会话需要启动（提示预启动、启动例行会话）时阻止一次结束（`stop_hook_active` 防循环），几条原因合在一条提示里 |
+| Stop | orchestrator | 运行只读 `attention`；有未处理 reportable 事件，有已超时未转交的会话内问题（提示运行 `sync`），例行会话失效（提示给它发消息重新设定），有 worker 会话的标题或归档待处置（`attention` 的 `sessions`，DN002 §5.8，任何一轮），或这一轮是用户的 turn 且 `needs_prestart` 非空或例行会话需要启动（提示预启动、启动例行会话）时阻止一次结束（`stop_hook_active` 防循环），几条原因合在一条提示里 |
 | Stop | worker | 记录 `worker.turn_ended` 观察事件（不改状态）；若处于 `reviewing`，提示完成这一轮再结束 |
 
 hooks 是防错护栏，不是安全边界（DN008）；skill 和 CLAUDE.md 只写流程与判断准则。
