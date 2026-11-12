@@ -348,6 +348,9 @@ class ContextIndex:
         except sqlite3.DatabaseError:
             conn.close()
             return None
+        except BaseException:
+            conn.close()
+            raise
         return conn
 
     def _create_fts(self, conn: sqlite3.Connection) -> bool:

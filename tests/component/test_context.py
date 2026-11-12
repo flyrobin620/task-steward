@@ -3,6 +3,7 @@ SQLite, and the read tools the orchestrator and workers use."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from pathlib import Path
@@ -464,7 +465,7 @@ def test_events_written_before_these_tables_still_reduce(home: Home) -> None:
     """A projection made before the new tables gets them without a rebuild (DN007 §12.2)."""
     h = seeded(home)
     state = home.cache_dir / "state.sqlite"
-    with sqlite3.connect(state) as conn:
+    with contextlib.closing(sqlite3.connect(state)) as conn, conn:
         conn.execute("DROP TABLE task_summaries")
         conn.execute("DROP TABLE user_decisions")
     h.run("task_summary", task_id="T001", keywords=["CSV"], stage="intake")
