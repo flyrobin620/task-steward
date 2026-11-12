@@ -838,9 +838,9 @@
     },
     {
       "id": "UC-HOST-007",
-      "title": "worker 说明的单一来源：host render 放入数据目录，每份任务书以它开头（DN006 §6.2）",
+      "title": "worker 说明的单一来源：host render 放入数据目录，worker 会话的 prompt 以它开头（DN006 §6.2）",
       "actor": "用户 / 主会话 / worker",
-      "acceptance": "产品仓库的 plugin/roles/worker.md 是 worker 通用说明的唯一来源；tsw host render 把它复制到数据目录的 roles/worker.md 并列在 written 中，tsw init 为没有它的数据目录写入一次、不覆盖已有的；roles/ 属于 tsw 管理的目录，会话的编辑与 shell 写入被 hooks 拒绝；预启动、派发与需求变更写出的每份任务书都以这份副本的全文开头，后接“# 任务书 <任务> <attempt>”与任务专有内容；副本缺失（worker_instructions_missing）或与运行中 tsw 旁边的来源字节不同（worker_instructions_stale）时，这三处都拒绝并提示运行 tsw host render，且在任何写入之前（不建执行目录与 worktree、不改任务卡与任务书、不记事件）；worker 的 SessionStart 只注入任务、attempt、任务书路径、可写路径与待命状态，指向任务书开头的说明，不含任何工具规则；还没有任务书时只提示等待投递",
+      "acceptance": "产品仓库的 plugin/roles/worker.md 是 worker 通用说明的唯一来源；tsw host render 把它复制到数据目录的 roles/worker.md 并列在 written 中，tsw init 为没有它的数据目录写入一次、不覆盖已有的；roles/ 属于 tsw 管理的目录，会话的编辑与 shell 写入被 hooks 拒绝；attempt_start（派发与预启动）的结果带 prompt：这份副本的全文，后接“---”与本会话的一句指令（派发：先调用 whoami，再按任务书 runs/<任务>/<attempt>/brief.md 执行；预启动：可以先读任务书、不要开始工作、等派发消息），事件记录 worker_instructions_sha256；任务书只写任务本身，不附 worker 说明；副本缺失（worker_instructions_missing）或与运行中 tsw 旁边的来源字节不同（worker_instructions_stale）时 attempt_start 拒绝并提示运行 tsw host render，且在任何写入之前（不建执行目录与 worktree、不写任务书、不记事件）；worker 的 SessionStart 只注入任务、attempt、任务书路径、可写路径、待命状态与副本路径，不含任何工具规则；会话得到的说明版本与当前副本不同或没有记录时，SessionStart 或 UserPromptSubmit 提示完整重读副本，每个版本一次",
       "surfaces": [
         "cli",
         "mcp",
@@ -856,7 +856,7 @@
       ],
       "omittedTiers": {
         "conformance": "不经过插件接口",
-        "live": "生成与拼接不依赖宿主行为，surface 以独立进程覆盖；真实数据目录中 host render 后新派发的任务书由 T276 合并后核对，作为任务证据而不是可重复的 live 场景"
+        "live": "生成与拼接不依赖宿主行为，surface 以独立进程覆盖；真实 app 中 host render 后新建 worker 会话的首个 prompt 由 T276 合并后核对，作为任务证据而不是可重复的 live 场景"
       }
     },
     {

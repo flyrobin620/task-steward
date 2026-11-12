@@ -38,6 +38,9 @@ class Command:
     command_id: str | None = None
     # Only a lease takeover may run while another machine holds an unreleased lease.
     foreign_lease_ok: bool = False
+    # What ``build`` hands back besides events (``attempt_start``'s session prompt): the tool's
+    # result carries it; a duplicate command, whose build does not run, carries none.
+    output: dict[str, Any] = field(default_factory=lambda: {})
 
 
 @dataclass

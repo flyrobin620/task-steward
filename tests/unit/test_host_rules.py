@@ -206,7 +206,7 @@ def test_the_worker_start_text_is_only_about_the_session(tmp_path: Path) -> None
     )
     text = worker_start_text(who, home)
     assert "T001" in text and "runs/T001/a1/brief.md" in text and str(root) in text
-    assert "开头是 worker 的通用说明" in text and "待命中" not in text
+    assert "提示语开头" in text and "roles" in text and "待命中" not in text
     assert "待命中" in worker_start_text(replace(who, phase="standby"), home)
     waiting = worker_start_text(replace(who, brief_path=None), home)
     assert "还没有任务书" in waiting and "不要开始工作" in waiting

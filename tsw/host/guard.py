@@ -32,7 +32,7 @@ from tsw.machine import routine as routine_mod
 from tsw.machine.ask_user import handoff_due, is_automated, session_message
 from tsw.machine.guards import merge_authorized
 from tsw.machine.model import row_dict
-from tsw.roles import WORKER
+from tsw.roles import RENDERED_DIR, WORKER, reread_notice
 from tsw.storage.fs import atomic_write
 
 WRITE_TOOLS = {
@@ -168,11 +168,17 @@ def owned_reason(top: str) -> str:
 def worker_start_text(who: Identity, home: Home) -> str:
     """What a worker is told when its session starts: only what is particular to this session.
 
-    The rules every worker follows are in one place, the worker instructions every brief starts
-    with (``roles/worker.md``, DN006 §6.2); this text points there instead of repeating them.
+    The rules every worker follows are in one place, the worker instructions at the top of the
+    session's prompt (``roles/worker.md``, DN006 §6.2); this text points there instead of
+    repeating them.
     """
     roots = "、".join(str(p) for p in who.writable_roots)
-    head = f"你是 TaskSteward 任务 {who.task_id} 的 worker（attempt {who.attempt}）。"
+    copy = home.root / RENDERED_DIR / WORKER
+    head = (
+        f"你是 TaskSteward 任务 {who.task_id} 的 worker（attempt {who.attempt}）。"
+        f"整个任务都按 worker 说明工作：本会话提示语开头的那份，副本在 {copy}"
+        f"（由 tsw host render 从产品仓库的 plugin/roles/{WORKER} 生成）。"
+    )
     if not who.brief_path:
         return (
             f"{head}还没有任务书：回复“就绪”后结束这一轮，等主会话投递任务书并发消息，"
@@ -185,11 +191,9 @@ def worker_start_text(who: Identity, home: Home) -> str:
         else ""
     )
     return (
-        f"{head}任务书：{who.brief_path}（数据目录 {home.root} 中）。{standby}"
-        f"只在可写路径内修改：{roots}。先完整阅读任务书：开头是 worker 的通用说明（由 tsw "
-        f"host render 从产品仓库的 plugin/roles/{WORKER} 生成），整个任务都按它工作；"
-        "后面是本任务的目标、交付与验收。主会话告诉你任务书已更新时，重新读取任务书"
-        "（whoami 的 brief_revision），按新 revision 继续。"
+        f"{head}任务书：{who.brief_path}（数据目录 {home.root} 中），是本任务的目标、交付与"
+        f"验收。{standby}只在可写路径内修改：{roots}。主会话告诉你任务书已更新时，重新读取"
+        "任务书（whoami 的 brief_revision），按新 revision 继续。"
     )
 
 
@@ -526,7 +530,9 @@ class Guard:
                 "（routine_board 的 orchestrator_session：当前持有调度租约的主会话）。",
             )
         if who.role == "worker":
-            return context("SessionStart", worker_start_text(who, self.home))
+            notice = self._instructions_notice(who)
+            text = worker_start_text(who, self.home)
+            return context("SessionStart", f"{text}{notice}" if notice else text)
         lines = [f"你是 TaskSteward 主会话（数据目录 {self.home.root}）。"]
         with self.ledger.view() as conn:
             stood = lease.stood_down(conn, who.session_id)
@@ -699,6 +705,9 @@ class Guard:
                 "编号登记需求变更，再继续工作、评审并重新提交；要求把某些事记成 follow-up（以后再"
                 "做）时，用 follow_up_record 引用这个编号记录；只是讨论或任务内的澄清时不登记。"
             )
+        reread = self._instructions_notice(who)
+        if reread:
+            notes.append(reread)
         if "[report]" in prompt:
             notes.append(
                 "用户要求回传（[report]）：先用 progress_note 记录用户决定、已做动作与影响范围，"
@@ -706,6 +715,18 @@ class Guard:
                 f"{self._wake_hint()}"
             )
         return context("UserPromptSubmit", "".join(notes)) if notes else None
+
+    def _instructions_notice(self, who: Identity) -> str | None:
+        """Once per newer version: read the worker instructions again (DN006 §6.2)."""
+        try:
+            with self.ledger.view() as conn:
+                found = conn.execute(
+                    "SELECT session_name FROM attempts WHERE task_id = ? AND attempt = ?",
+                    (who.task_id, who.attempt),
+                ).fetchone()
+            return reread_notice(self.home.root, found["session_name"] if found else None)
+        except Exception:  # a hint never blocks the session
+            return None
 
     def _wake_hint(self) -> str:
         """Where a worker's message to the orchestrator goes: the lease holder (DN001 §6.3)."""

@@ -40,7 +40,7 @@ from tsw.machine.model import (
     row_dict,
     task,
 )
-from tsw.roles import worker_instructions
+from tsw.roles import record_given, worker_instructions, worker_prompt
 from tsw.tasks import TaskSpec, register, render_spec, validate_spec
 from tsw.workspace import brief_section, ensure, home_skills, plan
 
@@ -325,21 +325,6 @@ def requirement_change_event(
         task_id=task_id,
     )
     validate_spec(spec)
-    current = current_attempt(ctx.conn, task_id)
-    # A session prestarted before briefs were written at prestart has none yet: it gets one.
-    unwritten = (
-        current is not None
-        and not current["brief_path"]
-        and current["purpose"] == "prestart"
-        and current["phase"] in ("starting", "standby")
-    )
-    rewrite = current is not None and bool(
-        unwritten or (current["brief_path"] and current["phase"] not in ("replaced", "closed"))
-    )
-    if rewrite:
-        # The rewritten brief starts with the worker instructions: refuse before anything is
-        # written when they cannot be had (DN006 §6.2).
-        worker_instructions(ctx.home.root)
     body = render_spec(task_id, spec) + f"\n（revision {revision}）\n"
     spec_sha = ctx.storage.put_artifact(str(row["spec_path"]), body.encode("utf-8"))
     data: dict[str, Any] = {
@@ -350,7 +335,17 @@ def requirement_change_event(
         "user_source": dict(source),
         **(extra or {}),
     }
-    if current is not None and rewrite:
+    current = current_attempt(ctx.conn, task_id)
+    # A session prestarted before briefs were written at prestart has none yet: it gets one.
+    unwritten = (
+        current is not None
+        and not current["brief_path"]
+        and current["purpose"] == "prestart"
+        and current["phase"] in ("starting", "standby")
+    )
+    if current is not None and (
+        unwritten or (current["brief_path"] and current["phase"] not in ("replaced", "closed"))
+    ):
         # DN002 §5.1: the brief of the task's session (prestarted, being dispatched or at
         # work) is brought to the new revision; the orchestrator tells a session that has
         # one, and dispatch rewrites it again from the latest revision.
@@ -508,16 +503,13 @@ def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
     read_set: list[str],
     config: EffectiveConfig,
 ) -> str:
-    # Every brief starts with the worker instructions, rendered into the data directory from
-    # their one source (DN006 §6.2); the hook's SessionStart text only points here.
-    instructions = worker_instructions(ctx.home.root).rstrip("\n") + "\n\n"
     acceptance = "\n".join(f"- {item}" for item in loads(row["acceptance"], []))
     ws = plan(ctx.home, config, row, attempt_id, workdir)
     repository = (
         brief_section(ws, home_skills(ctx.home) if ws.worktree else [], workdir) if ws else ""
     )
     return (
-        instructions + f"# 任务书 {row['task_id']} {attempt_id}\n\n"
+        f"# 任务书 {row['task_id']} {attempt_id}\n\n"
         f"- 标题：{row['title']}\n- 仓库：{row['repo']}\n- revision：{row['revision']}\n"
         f"- 执行目录：{workdir}\n- 授权读取集合：{', '.join(read_set)}\n"
         + _delivery_line(config, row)
@@ -644,7 +636,12 @@ def _ensure_dir(home: Home, recorded: str) -> None:
 
 
 @tool(
-    "attempt_start", "orchestrator", description="请求创建会话（attempt.start_requested，含预启动）"
+    "attempt_start",
+    "orchestrator",
+    description=(
+        "请求创建会话（attempt.start_requested，含预启动）；返回 start_session 用的 cwd 与 "
+        "prompt（worker 说明加短指令或待命说明），原样传入"
+    ),
 )
 def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
@@ -695,10 +692,10 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     "已有待命或可续用的会话", reason="g_one_attempt", phase=current["phase"]
                 )
         guards.g_one_attempt(ctx.conn, task_id, allowed=None)
-        if purpose == "prestart":
-            # The brief written below starts with the worker instructions: refuse before the
-            # directory and the worktree are made when they cannot be had.
-            worker_instructions(ctx.home.root)
+        # The session is created with the worker instructions at the top of its prompt
+        # (DN006 §6.2): refuse before the directory and the worktree are made when the data
+        # directory's copy is missing or not the current one.
+        instructions, digest = worker_instructions(ctx.home.root)
         previous = attempt(ctx.conn, task_id, attempt_id)
         # Every prestart generation records its directory, the default included, so a retry
         # never inherits the directory of a generation that was not created.
@@ -720,7 +717,12 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             "controller": env.caller.session_id,
             "adapter": str(env.config.get("roles.worker.session")),
             **({"worktree": made} if made is not None else {}),
+            "worker_instructions_sha256": digest,
         }
+        # What the main session passes to start_session unchanged, and which version of the
+        # instructions this session gets (the worker's hooks tell it of a newer one).
+        output["prompt"] = worker_prompt(instructions, task_id, attempt_id, purpose)
+        record_given(ctx.home.root, str(data["session_name"]), digest)
         if purpose == "prestart":
             # The brief is written now, at the current revision, so what was decided for the
             # task is on disk before the context that decided it is gone; dispatch and every
@@ -747,7 +749,10 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             )
         ]
 
-    return _cmd(env, "attempt_start", inp, build)
+    output: dict[str, Any] = {}
+    command = _cmd(env, "attempt_start", inp, build)
+    command.output = output
+    return command
 
 
 @tool("attempt_reconcile", "orchestrator", description="会话创建结果对账（T08 / T09 / 迟到会话）")

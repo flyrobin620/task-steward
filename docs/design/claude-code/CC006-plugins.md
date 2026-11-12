@@ -1,6 +1,6 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -30,7 +30,7 @@
 
 `claude-code` 的插件按用户级启用，任何目录的会话（主会话、`work/<任务>/<attempt>` 或其中仓库 worktree 中的 worker、无关会话）都会加载它，所以插件只携带每个会话都需要的 MCP 注册与 hooks。主会话的流程说明不放进插件：`render_instructions` 把 `CLAUDE.md` 和 `orchestrate` skill 写进数据目录，后者是 Claude Code 的项目 skill（`<cwd>/.claude/skills/`）。Claude Code 也从上级目录加载 `CLAUDE.md` 与项目 skill（skill 的查找在 git 仓库根停下，§8），执行目录在数据目录之下的例行会话与 worker 同样会看到二者（仓库 worktree 中的 worker 只看到 `CLAUDE.md`），所以二者都写明：`whoami` 的角色不是 orchestrator 时忽略。skill 的来源在产品代码中（`tsw/host/orchestrate_skill.md`），产品更新后重新运行 `tsw host render`。
 
-worker 的说明不是 skill，也不在插件里加载（Claude Code 不加载插件的 `roles/` 目录）：`render_instructions` 把 `plugin/roles/worker.md` 复制到数据目录的 `roles/worker.md`，tsw 写每份任务书时把它放在开头（DN006 §6.2）。这样仓库 worktree 中看不到数据目录 skill 的 worker 也能读到同一份说明；SessionStart hook 只指向任务书（CC001 §6）。`host render` 的输出 `written` 列出这份文件；产品更新后没有重新 render 时，副本与 `plugin/roles/worker.md` 不一致，预启动、派发与需求变更都会被拒绝并提示运行 `tsw host render`。
+worker 的说明不是 skill，也不在插件里加载（Claude Code 不加载插件的 `roles/` 目录）：`render_instructions` 把 `plugin/roles/worker.md` 复制到数据目录的 `roles/worker.md`，`attempt_start` 生成的 worker 会话 prompt 以它的全文开头（DN006 §6.2，CC001 §3）。这样仓库 worktree 中看不到数据目录 skill 的 worker 也能拿到同一份说明；SessionStart hook 只指向提示语开头的说明与副本路径（CC001 §6）。`host render` 的输出 `written` 列出这份文件；产品更新后没有重新 render 时，副本与 `plugin/roles/worker.md` 不一致，`attempt_start` 被拒绝并提示运行 `tsw host render`；render 改变了说明时，已有 worker 会话由 hook 在下一轮提示重读副本。
 
 插件由 Claude Code 复制到插件缓存运行，缓存里没有 `tsw` 运行时。启动器按顺序查找：`TSW_REPO` 环境变量、插件所在的产品仓库（源码树或原地使用的本地市场）、`tsw init` 写入数据目录标记文件的 `product_repo`；都找不到时 MCP server 报错退出，hooks 静默放行。
 
@@ -54,7 +54,7 @@ worker 的说明不是 skill，也不在插件里加载（Claude Code 不加载�
 
 | 动作 | `claude-app` |
 | --- | --- |
-| create | `start_session`（fresh、cwd 为 `attempt_start` 返回的执行目录或其中的仓库 worktree（§8）、use_worktree=false；预启动时 prompt 为待命说明） |
+| create | `start_session`（fresh、cwd 为 `attempt_start` 返回的执行目录或其中的仓库 worktree（§8）、use_worktree=false；prompt 为 `attempt_start` 返回的 `prompt`：worker 说明加待命说明（预启动）或启动指令（派发）） |
 | deliver_brief | `SendMessage`（任何 turn 都可以；直接启动时由 `start_session` 的短指令 prompt 指向任务书路径，两阶段合一；正文不放进 prompt，见 [CC008 §6](CC008-guardrails.md)） |
 | send | `SendMessage` |
 | stop | `stop_session` |

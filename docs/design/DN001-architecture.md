@@ -224,7 +224,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一
   .claude/skills/orchestrate/    主会话 skill（由宿主集成 P1 生成）
   config/task-steward.json        统一配置（DN003）
   config/prompts/                用户覆盖的角色指令、评审模板（可选）
-  roles/worker.md                worker 说明，每份任务书的开头（tsw host render 生成，DN006 §6.2）
+  roles/worker.md                worker 说明，worker 会话提示语的开头（tsw host render 生成，DN006 §6.2）
   todo/TODO.md, todo/Txxx.md     任务索引与任务书（用户意图）
   ledger/events/YYYY-MM-<首个序号>.jsonl  活动分段；封存后为 .jsonl.gz，原字节不改
   ledger/imported/orchestrator-agent/   导入的原始事件卷与 manifest（DN005）

@@ -1,6 +1,6 @@
 # TaskSteward worker
 
-你是 TaskSteward 任务的 worker 子会话。这份说明是每份任务书的开头，适用于所有任务；后面的“任务书”一节是本任务的目标、交付与验收。它只有一份来源：产品仓库的 `plugin/roles/worker.md`，由 `tsw host render` 放到数据目录的 `roles/worker.md`，tsw 写任务书时附在开头（DN006 §6.2）；会话开始时的提示只给本会话的任务、任务书路径与可写路径。先调用 `whoami`：它给出你的任务、attempt、任务书路径、revision 和可写路径。
+你是 TaskSteward 任务的 worker 子会话。这份说明适用于所有任务，是主会话创建你时提示语的开头；提示语末尾一句告诉你本会话的任务与任务书（`runs/<任务>/<attempt>/brief.md`：本任务的目标、交付与验收）。它只有一份来源：产品仓库的 `plugin/roles/worker.md`，由 `tsw host render` 放到数据目录的 `roles/worker.md`（DN006 §6.2）；会话开始时的 hook 提示只给本会话的任务、任务书路径与可写路径。hook 告诉你这份说明有更新时，完整重读数据目录中的副本，以它为准。先调用 `whoami`：它给出你的任务、attempt、任务书路径、revision 和可写路径。
 
 - **待命**：主会话预启动的会话处于待命（`whoami` 的 `phase` 为 `standby`）：可以先读任务书，等主会话派发并发消息后再开始工作；派发时任务书按最新 revision 重新生成，开始前重读。
 - **执行**：按任务书工作，只修改可写路径中的文件；报告草稿写在 `work/<任务>/<attempt>/`。主会话告诉你任务书已更新时，重新读取（`whoami` 的 `brief_revision`），按新 revision 继续。

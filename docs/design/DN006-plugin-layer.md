@@ -142,9 +142,10 @@ class HostIntegration(Protocol):
 **角色说明的单一来源**（T276，按用户 2026-11-12 给定的设计）：每类会话的流程说明只有一份来源，避免几份说明各自漂移。worker 的通用说明的来源是产品仓库的 `plugin/roles/worker.md`；以前写在宿主会话开始提示里的另一份精简规则已删除。
 
 - **生成**：`tsw host render` 把它复制到数据目录的 `roles/worker.md`（只由 tsw 写入，会话写入被 hooks 拒绝，§9.4；不备份，恢复后重新 render）。`tsw init` 为还没有这份副本的数据目录写入一次；之后保持一致是 `host render` 的事。
-- **使用**：worker 读的任务说明就是任务书 `runs/<任务>/<attempt>/brief.md`。tsw 每次写任务书（预启动、派发、需求变更时重写）都把数据目录副本的全文放在开头，后接任务专有的内容（标题、仓库与交付、目标、验收、resume 资料）。会话适配器 `start_session` 的 prompt 不附全文，只写指向任务书的短指令：prompt 发出后不能更新，任务书则随 revision 重写，而且 prompt 中的正文会被宿主当作主会话交给 worker 的指令（CC008 §6）。
-- **会话开始提示**：宿主在会话开始时注入的文本（Claude Code 的 SessionStart hook，CC001 §6）只给本会话特有的信息：任务、attempt、任务书路径、可写路径、是否待命，并指向任务书开头的说明，不重复其中的规则。还没有任务书的会话只被告知等待投递。
-- **副本缺失或不一致**：副本不存在，或与运行中的 tsw 旁边的来源（`plugin/roles/worker.md`）字节不同时，拒绝写任务书（`worker_instructions_missing` / `worker_instructions_stale`），提示用户运行 `tsw host render`。拒绝发生在任何写入之前：不建执行目录与 worktree，不改任务卡，不记事件。不回退到产品仓库中的来源：不一致说明产品更新后还没有 render，此时主会话 skill 与插件副本同样过时，先 render 再派发才能让所有说明一起更新；产品仓库中的文件也可能正处于编辑中。运行的 tsw 旁边没有 `plugin/`（不是可编辑安装）时只检查副本存在。
+- **使用**（用户 2026-11-12 澄清：“task prompt”指创建会话时的提示语，任务书是提示语引导它去读的实际任务）：主会话创建 worker 会话（派发时新建、预启动待命）时传给会话适配器的 prompt，开头是数据目录副本的全文，后接一句本会话的指令：派发时为“你是 TaskSteward 任务 <任务> 的 worker（attempt <attempt>）。先调用 whoami，再按任务书 runs/<任务>/<attempt>/brief.md 执行。”，预启动时为待命说明（先读任务书、等派发消息）。完整 prompt 由 tsw 生成：`attempt_start` 在结果中返回 `prompt`，主会话原样传入，不自己拼接或改写；事件 `attempt.start_requested` 记录所用说明的摘要 `worker_instructions_sha256`。任务书 `runs/<任务>/<attempt>/brief.md` 只写任务本身（标题、仓库与交付、目标、验收、resume 资料），不附 worker 说明；任务书正文仍不复制进 prompt。
+- **会话开始提示**：宿主在会话开始时注入的文本（Claude Code 的 SessionStart hook，CC001 §6）只给本会话特有的信息：任务、attempt、任务书路径、可写路径、是否待命，并指向提示语开头的说明与数据目录副本的路径，不重复其中的规则。
+- **已有会话得知更新**：续用已有会话（投递给待命会话、需求变更、反馈后继续同一 attempt）不重新创建会话，说明已在它的首个 prompt 里。`attempt_start` 记下每个会话名得到的说明版本（数据目录 `cache/worker-instructions/<会话名>`，可重建的缓存，不是账本事实）。worker 的 SessionStart 与 UserPromptSubmit hook 把它与当前副本比较：不同时（`host render` 更新了说明），或没有记录时（本设计之前创建的会话，首个 prompt 里没有说明），在注入的文本中让会话完整重读副本 `roles/worker.md`、以它为准，然后记下当前版本，每个新版本只提示一次。worker 的每一轮都从一条消息开始（用户、主会话或唤醒），所以运行中的会话在下一轮就会得知。
+- **副本缺失或不一致**：副本不存在，或与运行中的 tsw 旁边的来源（`plugin/roles/worker.md`）字节不同时，`attempt_start` 拒绝（`worker_instructions_missing` / `worker_instructions_stale`），提示用户运行 `tsw host render`。两种 purpose 都在任何写入之前检查：不建执行目录与 worktree，不写任务书，不记事件。不回退到产品仓库中的来源：不一致说明产品更新后还没有 render，此时主会话 skill 与插件副本同样过时，先 render 再创建会话才能让所有说明一起更新；产品仓库中的文件也可能正处于编辑中。运行的 tsw 旁边没有 `plugin/`（不是可编辑安装）时只检查副本存在。派发（`task_dispatch`）、投递与需求变更不创建会话，不检查副本。
 
 ### 6.3 实现
 
@@ -633,7 +634,7 @@ Dashboard 应用：
   tsw-home.json                数据目录版本、创建时间、产品兼容版本
   config/task-steward.json      统一配置（DN003）
   config/prompts/              用户覆盖的角色指令与评审模板（可选）
-  roles/worker.md              worker 说明，每份任务书的开头（tsw host render 生成，§6.2）
+  roles/worker.md              worker 说明，worker 会话提示语的开头（tsw host render 生成，§6.2）
   todo/TODO.md, todo/Txxx.md   任务索引与任务书
   ledger/events/*.jsonl(.gz)   事件账本（唯一事实）
   ledger/imported/             导入的历史原始卷与 manifest（DN005）
