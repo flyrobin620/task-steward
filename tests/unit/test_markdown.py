@@ -223,6 +223,9 @@ def test_link_targets_keep_spaces_and_labels_skip_code() -> None:
     # Parity of backslashes, and a backtick consumed by a link target, as the parser reads them.
     assert inline(r"\\`code`") == r"\<code>code</code>"
     assert inline("[x](url`x) and `code`") == '<a href="url`x">x</a> and <code>code</code>'
+    assert inline("[x](url`x) and [y](other.md) and `code`") == (
+        '<a href="url`x">x</a> and <a href="other.md">y</a> and <code>code</code>'
+    )
 
 
 @mark.use_case("UC-DIRECT-005")

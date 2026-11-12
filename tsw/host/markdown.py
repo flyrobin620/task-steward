@@ -97,6 +97,9 @@ class _Scan:
     def __init__(self, text: str) -> None:
         self.text = text
         n = len(text)
+        self._stops: dict[str, list[int]] = {}
+        self._closers: dict[str, list[int]] = {}
+        self._parens: list[int] | None = None
         # Backtick runs by length. Which run opens a code span depends on where parsing is (an
         # escaped backtick or one inside a link target opens nothing), so an opener's closer is
         # looked up when the parser reaches it: the next run of the same length.
@@ -106,8 +109,9 @@ class _Scan:
             width = _run(text, i, "`")
             self._runs.setdefault(width, []).append(i)
             i = text.find("`", i + width)
-        # Brackets outside code spans, read the way the parser reads (escapes, code spans);
-        # an unmatched one has no entry.
+        # Brackets outside code spans, read the way the parser reads (escapes, code spans, and
+        # a link's target, which a backtick inside must not turn into code); an unmatched one
+        # has no entry.
         self.bracket: dict[int, int] = {}
         stack: list[int] = []
         i = 0
@@ -125,10 +129,11 @@ class _Scan:
                 stack.append(i)
             elif ch == "]" and stack:
                 self.bracket[stack.pop()] = i
+                bounds = _link_bounds(self, i + 1) if i + 1 < n and text[i + 1] == "(" else None
+                if bounds is not None:
+                    i = bounds[2]
+                    continue
             i += 1
-        self._stops: dict[str, list[int]] = {}
-        self._closers: dict[str, list[int]] = {}
-        self._parens: list[int] | None = None
 
     def code_close(self, start: int, width: int) -> int | None:
         """Where the code span opened by ``width`` backticks at ``start`` ends: the next run of
@@ -181,8 +186,9 @@ class _Scan:
         return found[k] if k < len(found) else -1
 
 
-def _link_end(scan: _Scan, start: int) -> tuple[str, int] | None:
-    """The target of a link whose ``(`` is at ``start``, and the index after its ``)``."""
+def _link_bounds(scan: _Scan, start: int) -> tuple[int, int, int] | None:
+    """Where the target of a link whose ``(`` is at ``start`` begins and ends, and the index
+    after its ``)``; None when there is no such link. Nothing is copied."""
     text = scan.text
     n = len(text)
     i = start + 1
@@ -215,8 +221,16 @@ def _link_end(scan: _Scan, start: int) -> tuple[str, int] | None:
             i += 1
     if i >= n or text[i] != ")":
         return None
-    # Only a link that is one is copied out: a failed opener must not copy the rest.
-    return text[target[0] : target[1]], i + 1
+    return target[0], target[1], i + 1
+
+
+def _link_end(scan: _Scan, start: int) -> tuple[str, int] | None:
+    """The target of a link whose ``(`` is at ``start``, and the index after its ``)``. Only a
+    link that is one is copied out: a failed opener must not copy the rest of the text."""
+    bounds = _link_bounds(scan, start)
+    if bounds is None:
+        return None
+    return scan.text[bounds[0] : bounds[1]], bounds[2]
 
 
 def inline(text: str, *, links: bool = True) -> str:
