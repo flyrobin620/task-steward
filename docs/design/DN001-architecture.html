@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="27351aa12fb1bbb24618fc90ed16344c3868a486018b15381887ce7a4b302ed8">
+<meta name="tsw-source-sha256" content="05319416e7a2685d73db24773857f124be711a270de253c9e60f90491905883b">
 <title>DN001 总体架构：TaskSteward 任务编排器（默认宿主 Claude Code）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -112,6 +112,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
   .claude/skills/orchestrate/    主会话 skill（由宿主集成 P1 生成）
   config/task-steward.json        统一配置（DN003）
   config/prompts/                用户覆盖的角色指令、评审模板（可选）
+  roles/worker.md                worker 说明，每份任务书的开头（tsw host render 生成，DN006 §6.2）
   todo/TODO.md, todo/Txxx.md     任务索引与任务书（用户意图）
   ledger/events/YYYY-MM-&lt;首个序号&gt;.jsonl  活动分段；封存后为 .jsonl.gz，原字节不改
   ledger/imported/orchestrator-agent/   导入的原始事件卷与 manifest（DN005）

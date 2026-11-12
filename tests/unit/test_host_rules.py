@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from tsw.home import Home
-from tsw.host.guard import bash_problem, tsw_owned_path
-from tsw.host.identity import within
+from tsw.host.guard import (
+    bash_problem,
+    owned_reason,
+    owned_top,
+    tsw_owned_path,
+    worker_start_text,
+)
+from tsw.host.identity import Identity, within
 
 pytestmark = pytest.mark.use_case("UC-HOST-002")
 
@@ -169,3 +176,37 @@ def test_a_repository_on_another_host_must_be_named_with_its_host(
         worker=True,
     )
     assert (problem is None) is allowed, problem
+
+
+def test_the_worker_instructions_copy_is_tsw_owned(tmp_path: Path) -> None:
+    home = Home(tmp_path / "home")
+    copy = home.root / "roles" / "worker.md"
+    assert tsw_owned_path(home, copy)
+    reason = owned_reason(owned_top(home, copy) or "")
+    assert "plugin/roles/" in reason and "tsw host render" in reason
+    problem = bash_problem(
+        f'echo x > "{copy}"', home=home, push_allowed=False, pr_allowed=False, worker=True
+    )
+    assert problem is not None and "roles/" in problem
+
+
+@pytest.mark.use_case("UC-HOST-007")
+def test_the_worker_start_text_is_only_about_the_session(tmp_path: Path) -> None:
+    home = Home(tmp_path / "home")
+    root = tmp_path / "home" / "work" / "T001" / "a1"
+    who = Identity(
+        role="worker",
+        session_id="w-1",
+        cwd=root,
+        task_id="T001",
+        attempt="a1",
+        phase="live",
+        brief_path="runs/T001/a1/brief.md",
+        writable_roots=(root,),
+    )
+    text = worker_start_text(who, home)
+    assert "T001" in text and "runs/T001/a1/brief.md" in text and str(root) in text
+    assert "开头是 worker 的通用说明" in text and "待命中" not in text
+    assert "待命中" in worker_start_text(replace(who, phase="standby"), home)
+    waiting = worker_start_text(replace(who, brief_path=None), home)
+    assert "还没有任务书" in waiting and "不要开始工作" in waiting

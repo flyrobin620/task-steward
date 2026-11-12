@@ -63,7 +63,7 @@ worker 先在自己的会话里直接问用户（`ask_user`），你看不到问
 
 ## follow-up（DN002 §5.7）
 
-- 任务的 follow-up 是本任务不做、之后可能要做的事：worker 执行中与提交前记录（报告中的“后续建议”“已知缺口”都应有对应的 `F-…` 编号），你在任何未归档的状态都可以记录（`follow_up_record`），例如用户验收时说“这个记成 follow-up”：附用户在本会话中的原话（`user_source`，`target` 为 `[任务, revision, "follow_up"]`），或引用 hook 为该任务记录的消息编号（`message_ids`）。核验提交时用 `task_read` 看 `follow_ups`，缺了报告里列出的后续事项就 `feedback` 让 worker 补记。
+- follow-up 是将来可能变成一个任务去执行的事：一般是执行任务时发现、需要解决，但和该任务关系不大或受限于 context，暂时优先级又不高，先停放以防忘记（用户 2026-11-12 的定义）。请用户验收或检查、任务自身的待办步骤、等待评审或反馈的状态、没有发现具体问题的设想都不是 follow-up；未验证项与已知限制写在报告的“验证与限制”中。worker 执行中与提交前记录（报告中符合定义的后续事项都应有对应的 `F-…` 编号），你在任何未归档的状态都可以记录（`follow_up_record`），例如用户验收时说“这个记成 follow-up”：附用户在本会话中的原话（`user_source`，`target` 为 `[任务, revision, "follow_up"]`），或引用 hook 为该任务记录的消息编号（`message_ids`）。核验提交时用 `task_read` 看 `follow_ups`，缺了报告里列出的、符合定义的后续事项就 `feedback` 让 worker 补记。
 - 用户决定后处理：
   - 转为任务：`follow_up_convert`，`follow_up_ids` 列出一条或多条（可以来自不同任务）。新任务给 `task`（可以只给 `repo`、`kind` 或干脆为空对象：标题、目标与验收由 follow-up 生成，多条时须给标题），新任务照常 `intake`，再按用户意见 `task_plan`；并入已登记、尚未完成的任务给 `into_task`（只建关联，需要改目标与验收时另用 `task_update`）。不要再手工把清单抄进新任务。
   - 驳回：`follow_up_dismiss`，理由写明去向；用户决定的附原话。

@@ -1,6 +1,6 @@
 # CC001 Claude Code 上的会话与 hooks
 
-- 状态：设计草案（T242 r2 自 DN001 拆出；T243 增加例行会话；T251 仓库任务的会话目录为执行目录下的 worktree；T262 worker 会话中的用户消息都记录）
+- 状态：设计草案（T242 r2 自 DN001 拆出；T243 增加例行会话；T251 仓库任务的会话目录为执行目录下的 worktree；T262 worker 会话中的用户消息都记录；T276 worker 的 SessionStart 只给会话特有信息）
 - 日期：2026-11-08
 - 实现：[DN001 总体架构](../DN001-architecture.md)
 - 相关：[CC006 Claude Code 插件](CC006-plugins.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -56,7 +56,7 @@ tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC �
 
 | hook | 角色 | 行为 |
 | --- | --- | --- |
-| SessionStart | 全部 | 按会话 ID 与目录识别角色；主会话尝试领取租约（让出过租约的会话不领取，只注入只读说明，DN001 §6.4），并注入未读 inbox 数与 attention 摘要；worker 注入任务 ID、brief 路径和评审规则（待命会话还提示可以先读任务书、等派发后再开始，任务书更新时重读）；待绑定会话提示等待绑定，绑定后 `phase` 为 `standby` 时只读任务书、等派发，为 `live` 时开始 |
+| SessionStart | 全部 | 按会话 ID 与目录识别角色；主会话尝试领取租约（让出过租约的会话不领取，只注入只读说明，DN001 §6.4），并注入未读 inbox 数与 attention 摘要；worker 只注入本会话特有的信息：任务 ID、attempt、brief 路径、可写路径，并指向任务书开头的 worker 说明（`roles/worker.md`，DN006 §6.2），不重复其中的规则（T276 前这里另有一份精简规则，与 `plugin/roles/worker.md` 各自漂移）；待命会话还提示可以先读任务书、等派发后再开始，任务书更新时重读；还没有任务书时只提示等待投递；待绑定会话提示等待绑定，绑定后 `phase` 为 `standby` 时只读任务书、等派发，为 `live` 时开始 |
 | PreToolUse | 已登记会话 | block list 护栏，见 [CC008 §3](CC008-guardrails.md) |
 | UserPromptSubmit | worker | 检测 `[report]`，注入回传协议提示；live worker 的任务不是 `accepted` / `cancelled` / `archived` 时，把用户消息原文记为 `input.session_message` 并告诉 worker 消息编号：回答了待答问题时用 `user_answer` 登记，修改了任务需求时用 `requirement_change` 登记（注入的其他会话消息不记，DN006 §8.1a、DN002 §5.1a；T262 前只在有未获用户答复的会话内问题时记录） |
 | SessionStart | routine | 注入例行会话的指令：调用 `routine_board`，逐行执行例行项并原样转发结果，不作判断，不做其他事（CC006 §6） |

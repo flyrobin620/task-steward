@@ -196,8 +196,12 @@ def test_workers_wake_the_session_that_holds_the_lease(h: Harness, tmp_path: Pat
     assert moved["send"] is True and moved["session_id"] == "orch-2"
     report = guard(h, session, workdir, prompt="[report] 结论").run("UserPromptSubmit")
     assert "orch-2" in context_of(report)
+    # The wake rule is in the worker instructions at the top of the brief; the session start
+    # text points there instead of repeating it (DN006 §6.2).
     start = context_of(guard(h, session, workdir).run("SessionStart"))
-    assert "wake.session_id" in start and 'session_id="parent"' not in start
+    assert "runs/T001/a1/brief.md" in start and "wake.session_id" not in start
+    brief = (h.home.root / "runs" / "T001" / "a1" / "brief.md").read_text(encoding="utf-8")
+    assert "wake.session_id" in brief and '不要发给 `"parent"`' in brief
     # The routine session's forwards follow the same holder.
     with Ledger(h.home, clock=h.clock, machine="m1").view() as conn:
         assert lease.orchestrator_session(conn) == "orch-2"
