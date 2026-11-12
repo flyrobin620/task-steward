@@ -199,3 +199,51 @@ def test_headings_have_unique_ids_and_anchors_point_at_them() -> None:
         "if (mine !== latest || !dialog.open) return;" in APP_SCRIPT
         and 'dialog.addEventListener("close", released)' in APP_SCRIPT
     )
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_link_targets_keep_spaces_and_labels_skip_code() -> None:
+    # The scheme check ignores spaces; the target keeps them for the URL parser to encode.
+    assert inline("[报告](<other report.md>)") == '<a href="other report.md">报告</a>'
+    assert safe_href(" a b.md ") == "a b.md"
+    assert safe_href(" java script:x ") is None  # read as browsers might: refused
+    assert safe_href("java\nscript:alert(1)") is None
+    # Balanced parentheses belong to the target; the unsafe one is refused whole.
+    assert inline("[w](https://example.com/A_(b)) x") == (
+        '<a href="https://example.com/A_(b)">w</a> x'
+    )
+    assert inline("[链接](javascript:alert(1))") == "链接"
+    # A bracket inside a code span does not end the link's text.
+    assert inline("[use `]` here](other.md)") == '<a href="other.md">use <code>]</code> here</a>'
+    # No link inside a link's text: the inner one stays text.
+    assert inline("[a [b](x) c](y)") == '<a href="y">a [b](x) c</a>'
+    # A backslash does not escape inside code, but an escaped backtick opens nothing.
+    assert inline(r"`a\`") == r"<code>a\</code>"
+    assert inline(r"\` `b`") == "` <code>b</code>"
+
+
+@mark.use_case("UC-DIRECT-005")
+@pytest.mark.parametrize(
+    "piece",
+    [
+        "[",
+        "![",
+        "[a](",
+        "[a](<",
+        "[a](x '",
+        "[a](((",
+        "[a](b)))",
+        "a`",
+        "a`` `",
+        "snake_case_name ",
+        "*a ",
+        "_a ",
+        "**a _b ",
+    ],
+)
+def test_unmatched_markup_renders_in_one_pass(piece: str) -> None:
+    # Each opener is looked up, not searched for, so a long paragraph of unmatched markup
+    # renders in about linear time (a quadratic scan of 300 000 characters would not finish).
+    source = piece * (300_000 // len(piece))
+    out = md(source)
+    assert out.startswith("<p>") and len(out) >= len(source) // 2

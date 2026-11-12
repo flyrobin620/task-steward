@@ -334,11 +334,16 @@ def read_card(path: Path, task_id: str, *, timeout: float = 2.0) -> IndexedCard:
     if not path.is_file():
         return IndexedCard(LedgerTail.empty(), None, "missing")
     try:
-        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=timeout)
+        conn = sqlite3.connect(
+            f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=timeout, isolation_level=None
+        )
     except sqlite3.Error:
         return IndexedCard(LedgerTail.empty(), None, "unreadable")
     try:
         conn.row_factory = sqlite3.Row
+        # One snapshot for the version, the position and the card: a refresh committing in
+        # between must not pair one position with another's checksum or card.
+        conn.execute("BEGIN")
         if not _has_table(conn, "meta") or not _has_table(conn, "cards"):
             return IndexedCard(LedgerTail.empty(), None, "missing")
         if _meta(conn, "version") != str(SCHEMA_VERSION):
