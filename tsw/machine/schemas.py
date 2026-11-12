@@ -478,4 +478,30 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         user_source={**SOURCE, "description": "恢复涉及权限类键时必填，target 同 config_change"},
         expected_sha256=S,
     ),
+    "task_summary": schema(
+        ["task_id", "keywords", "stage"],
+        task_id=S,
+        keywords={
+            **STRS,
+            "description": "4–8 个具体短语（模块、接口、现象、方案名），用于以后检索相关任务",
+        },
+        summary={**S, "description": "一两句话的实际成果；acceptance 时必填"},
+        stage={
+            "enum": ["intake", "acceptance", "update"],
+            "description": "intake 受理时按任务书写初版；acceptance 技术验收时补全成果；"
+            "update 其他时候修正或回填",
+        },
+    ),
+    "preference_record": schema(
+        ["topic", "text", "scope", "user_source"],
+        topic={**S, "description": "主题词，如“邮件发送”“PR 默认状态”"},
+        text={**S, "description": "偏好内容，按用户原意写清楚"},
+        scope={**S, "description": "global、repo:<仓库> 或 project:<项目>"},
+        supersedes={**STRS, "description": "被替代的偏好编号（P-…），须同范围或更宽"},
+        user_source={
+            **SOURCE,
+            "description": "用户明确表示长期适用的原话；target 为 "
+            '["preference", <scope>, "standing"]',
+        },
+    ),
 }

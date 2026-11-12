@@ -15,6 +15,7 @@ from typing import Any
 
 from tsw import confedit
 from tsw.commands import Command, CommitContext, CommitResult
+from tsw.context import ContextService
 from tsw.errors import rejected
 from tsw.events import EventDraft, digest, utc_now
 from tsw.home import Home
@@ -88,6 +89,13 @@ class Maintenance:
             raise rejected("账本审计有问题，不重建投影", reason="audit_failed", audit=report)
         tail = self.ledger.rebuild()
         out = {"kind": "ledger_rebuild", "projected_seq": tail.sequence}
+        return {**out, "sequence": self._record(out)}
+
+    def context_rebuild(self, service: ContextService) -> dict[str, Any]:
+        """Rebuild the retrieval index only (DN007 §12); the ledger and projection are untouched."""
+        self._require_lease()
+        built = service.rebuild()
+        out = {"kind": "context_rebuild", **built}
         return {**out, "sequence": self._record(out)}
 
     def import_orchestrator_agent(self, args: Mapping[str, Any]) -> dict[str, Any]:

@@ -952,6 +952,126 @@
         "conformance": "不经过插件接口",
         "live": "页面由账本生成，不依赖宿主行为"
       }
+    },
+    {
+      "id": "UC-CONTEXT-001",
+      "title": "任务卡片：主会话写入关键词与摘要，导入任务取旧关键词记录，其余任务生成初版并标 stale（DN007 §5.1、§8、§12）",
+      "actor": "主会话 / tsw",
+      "acceptance": "task_summary（主会话、需要租约）记 task.summary_recorded（关键词 1–12 个、acceptance 阶段须有摘要），绑定当时的 revision 与产出摘要，不改变任务状态与最近活动；卡片的关键词按 主会话写入 > legacy/orchestrator-agent/metadata/task-keywords 的旧记录 > 由标题与任务书生成（stale）选取，keyword_source 标出来源；revision 或产出变化后卡片标为 stale；摘要缺失时取目标开头并标 summary_source=goal",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "tool:task_summary"
+      ],
+      "component": "context",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "只读本地账本、投影与数据目录文件，不依赖宿主与模型；真实数据目录上的检索在合并后由主会话验证（T275 报告）"
+      }
+    },
+    {
+      "id": "UC-CONTEXT-002",
+      "title": "context_catalog / context_search：按范围、关键词、别名与全文检索任务（DN007 §5.2–§5.3、§7）",
+      "actor": "主会话 / worker",
+      "acceptance": "范围为 repo / project / global（worker 缺省为本任务仓库）；查询词经别名（配置的仓库别名、标题标签）扩展；点名任务（task_ids 或查询中的任务 ID）与其硬依赖总在 pinned 中，不受范围与分页影响；其余按 主会话写入或旧记录的关键词命中 > 标题 > 摘要与生成的关键词 > 全文命中 > 最近活动排序，worker 的推荐读取集合在前，next_offset 分页；不少于 3 个字符的词查 FTS5 trigram 全文，更短的只在卡片上匹配；context_search 返回片段与出处；global 范围的 catalog 与每次 search 记 context.read",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "mcp:context_catalog",
+        "mcp:context_search"
+      ],
+      "component": "context",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "只读本地账本、投影与数据目录文件，不依赖宿主与模型；真实数据目录上的检索在合并后由主会话验证（T275 报告）"
+      }
+    },
+    {
+      "id": "UC-CONTEXT-003",
+      "title": "检索索引 cache/context.sqlite 增量跟随账本，落后时退回投影，可完整重建（DN007 §5.4、§12.2）",
+      "actor": "tsw / 主会话 / 用户",
+      "acceptance": "读取前处理 indexed_seq 之后的事件，只重建受影响任务的卡片与全文，推进 indexed_seq 并清理 L1 index_queue；更新失败时结果标 index_lag，落后任务按 L1 的标题、仓库与依赖参与结果，点名任务不会丢失；索引缺失、损坏、版本不符或与账本历史不符时自动全量重建；tsw context rebuild 与主会话的 context_rebuild（需要租约，记 maintenance.performed）丢弃并重建索引，不改变账本与投影；新表只由新事件写入，旧投影不需要 rebuild",
+      "surfaces": [
+        "cli",
+        "mcp"
+      ],
+      "claims": [
+        "cli:context rebuild",
+        "mcp:context_rebuild"
+      ],
+      "component": "context",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "unit": "索引的规则依赖数据目录、账本与 SQLite，在 component 层验证",
+        "conformance": "不经过插件接口",
+        "live": "只读本地账本、投影与数据目录文件，不依赖宿主与模型；真实数据目录上的检索在合并后由主会话验证（T275 报告）"
+      }
+    },
+    {
+      "id": "UC-CONTEXT-004",
+      "title": "context_read / context_task：按部分读取任务材料与本任务的完整过程（DN007 §5.3、§7.1）",
+      "actor": "主会话 / worker",
+      "acceptance": "context_read 读取 spec / brief / report / reviews / decisions / outputs / follow_ups / requests，必须写理由（context.require_read_reason），按 context.max_chars 分页（next_offset），返回出处，并记 context.read（读者、任务、部分、理由、字符数）；任务不存在时拒绝；worker 可读任何任务；context_task 返回 attempt、评审轮次与意见、决定、问答、follow-up、产出与事件时间线",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "mcp:context_read",
+        "mcp:context_task"
+      ],
+      "component": "context",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "只读本地账本、投影与数据目录文件，不依赖宿主与模型；真实数据目录上的检索在合并后由主会话验证（T275 报告）"
+      }
+    },
+    {
+      "id": "UC-CONTEXT-005",
+      "title": "用户决定与长期偏好：preference_record 记录、context_decisions 检索并标明能否作为依据（DN007 §6、§12.2）",
+      "actor": "主会话 / worker",
+      "acceptance": "preference_record（主会话、需要租约）须附 target 为 [preference, <scope>, standing] 的用户原话，scope 为 global / repo:<名> / project:<名>，替代旧偏好须同范围或更窄且旧偏好未被替代；context_decisions 返回长期偏好与从事件中抽取的历史用户决定（任务答复、验收、退回、需求变更、follow-up 处置、配置授权），按主题词、范围（global / repo / task）过滤，标出类型、范围、替代关系与 usable_as_basis（in_scope / this_task_only / this_object_only / false）",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "tool:preference_record",
+        "mcp:context_decisions"
+      ],
+      "component": "context",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "只读本地账本、投影与数据目录文件，不依赖宿主与模型；真实数据目录上的检索在合并后由主会话验证（T275 报告）"
+      }
     }
   ]
 }

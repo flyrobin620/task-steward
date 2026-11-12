@@ -21,6 +21,7 @@ from typing import IO, Any
 
 from tsw import __version__, confedit, lease
 from tsw.config import EffectiveConfig, lease_minutes, load_config
+from tsw.context import ContextService, Reader
 from tsw.errors import ErrorCode, TswError, rejected
 from tsw.events import utc_now
 from tsw.home import Home, open_home, workdir_path
@@ -143,6 +144,92 @@ HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
             },
             "required": ["snapshot"],
         },
+    ),
+    "context_catalog": (
+        ("orchestrator", "worker"),
+        "检索任务卡片（DN007 §5.3）：先在同仓库 / 项目范围查，缺口再扩大到 global；点名任务"
+        "（task_ids 或查询中的任务 ID）与其硬依赖总在 pinned 中；看 next_offset 判断是否还有更多",
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "查询词：模块、接口、现象、方案名等"},
+                "scope": {"enum": ["repo", "project", "global"]},
+                "repo": {"type": "string", "description": "仓库名或别名（scope=repo）"},
+                "project": {"type": "string", "description": "项目（scope=project）"},
+                "task_ids": {"type": "array", "items": {"type": "string"}},
+                "limit": {"type": "integer"},
+                "offset": {"type": "integer"},
+                "reason": {"type": "string", "description": "global 范围时写明为何扩大"},
+            },
+        },
+    ),
+    "context_read": (
+        ("orchestrator", "worker"),
+        "读取入围任务的指定部分（只读，记 context.read）：必须写明理由；超过 context.max_chars "
+        "时按 next_offset 分页",
+        {
+            "type": "object",
+            "properties": {
+                "task_ids": {"type": "array", "items": {"type": "string"}},
+                "part": {
+                    "enum": [
+                        "spec",
+                        "brief",
+                        "report",
+                        "reviews",
+                        "decisions",
+                        "outputs",
+                        "follow_ups",
+                        "requests",
+                    ]
+                },
+                "reason": {"type": "string", "description": "为什么需要读这一部分"},
+                "offset": {"type": "integer"},
+            },
+            "required": ["task_ids", "part", "reason"],
+        },
+    ),
+    "context_search": (
+        ("orchestrator", "worker"),
+        "全文检索任务书、报告、决定、评审、follow-up 与问答（FTS5 trigram），返回片段与出处；"
+        "卡片召回不到时使用（记 context.read）",
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "scope": {"enum": ["repo", "project", "global"]},
+                "repo": {"type": "string"},
+                "project": {"type": "string"},
+                "limit": {"type": "integer"},
+                "reason": {"type": "string"},
+            },
+            "required": ["query"],
+        },
+    ),
+    "context_decisions": (
+        ("orchestrator", "worker"),
+        "检索用户既有决定与长期偏好（DN007 §6）：每条标出类型、范围、是否已被替代与能否作为依据",
+        {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "主题词"},
+                "scope": {"enum": ["global", "repo", "task"]},
+                "repo": {"type": "string"},
+                "task_id": {"type": "string"},
+                "limit": {"type": "integer"},
+                "offset": {"type": "integer"},
+            },
+        },
+    ),
+    "context_task": (
+        ("orchestrator", "worker"),
+        "一个任务的完整过程（只读）：attempt、评审轮次与意见、决定、问答、follow-up、产出与事件时间线",
+        {"type": "object", "properties": {"task_id": {"type": "string"}}},
+    ),
+    "context_rebuild": (
+        ("orchestrator",),
+        "丢弃并重建检索索引 cache/context.sqlite（tsw context rebuild）：不改变账本与投影",
+        EMPTY,
     ),
     "review_run": (
         ("worker",),
@@ -458,6 +545,19 @@ class Server:
                 "lease_acquire。",
             }
         maintenance = Maintenance(self.home, ledger, who.session_id, self.machine)
+        if name.startswith("context_"):
+            service = ContextService(self.home, ledger, config.require_valid())
+            if name == "context_rebuild":
+                return maintenance.context_rebuild(service)
+            reader = Reader(who.role, who.session_id, who.task_id, who.attempt)
+            reads = {
+                "context_catalog": service.catalog,
+                "context_read": service.read,
+                "context_search": service.search,
+                "context_decisions": service.decisions,
+                "context_task": service.task,
+            }
+            return reads[name](reader, args)
         if name == "home_backup":
             return maintenance.backup(str(args.get("dest") or ""))
         if name == "ledger_audit":

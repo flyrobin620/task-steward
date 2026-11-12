@@ -15,9 +15,23 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
 2. `inbox` 处理未读回传，处理完 `inbox_ack`；`attention` 查看待判断、待用户答复、需对账、需停止、stale、待启动、待预启动、待核验与暂停。
 3. 只处理用户要求的事。普通解释与维护不开始执行真实待办。
 
+## 检索历史（DN007）
+
+不要凭会话记忆判断相关任务：会话上下文会丢失，`task_list` 只有标题。按层读取，读得少、找得准：
+
+1. 先完整理解当前请求（与任务书）。
+2. `context_catalog` 在同仓库（`repo`，可用别名）或项目范围检索，`query` 写模块、接口、现象、方案名等具体词；请求或任务书中提到的任务 ID 放进 `task_ids`（它们与其硬依赖总在 `pinned` 中）。卡片的 `keyword_source` 为 `generated`、或 `stale` 为 true 时关键词不可靠，结合标题与摘要判断；`next_offset` 不为空表示还有更多。
+3. `context_decisions` 按主题词查用户既有的决定与偏好：只有 `usable_as_basis` 为 `in_scope` 的长期偏好能直接作为依据；`this_task_only` 在其他任务中只能作为先例参考；`false`（已被替代、候选约定）不能作为依据。
+4. 只对入围的任务 `context_read` 需要的部分（spec / report / decisions / reviews / outputs 等），`reason` 写明为什么读；核验与验收时用 `context_task` 看本任务的完整过程。
+5. 有具体缺口时再扩大：`scope: global`（写 `reason`）或 `context_search` 全文检索（少于 3 个字的词只在卡片上匹配）。
+6. 判断、规划与验收的依据引用卡片或原文出处（任务 ID、文件、事件序号）。
+
+索引是可重建的缓存：结果带 `index_lag` 时部分任务只按标题与仓库参与；损坏或明显过期时 `context_rebuild`。
+
 ## 受理与规划
 
-- 新任务：`task_register`（仓库、类型、目标、验收）。目标、范围或验收有疑问时 `intake_question`，用户答复后 `input_resolve`（附用户原话的 `user_source`，`request_id` 指向该问题）。
+- 受理新任务前先按“检索历史”在同仓库 / 项目范围查：是否与已有任务重复、相关任务与可复用的成果、可能的依赖、用户在类似问题上的既有决定；把查到的相关任务与理由告诉用户，重复或依赖由用户确认后再登记或规划。
+- 新任务：`task_register`（仓库、类型、目标、验收），随后 `task_summary`（`stage: intake`）按任务书写 4–8 个具体关键词（模块、接口、现象、方案名，不写“实现”“修复”这类泛词）。目标、范围或验收有疑问时 `intake_question`，用户答复后 `input_resolve`（附用户原话的 `user_source`，`request_id` 指向该问题）。
 - 规划：`task_plan`（依赖、独占资源、理由）。依赖未满足的任务进入等待依赖；上游完成后 `sync` 会让它就绪。
 - 用户实质修改需求：`task_update`（附用户来源）。用户在 worker 会话里直接给 worker 追加或修改要求时，不用你转录：只要任务还没被用户验收（不是 `accepted`、`cancelled`、`archived`），worker 会引用 hook 记录的用户原话自己登记（`requirement_change`，revision+1，DN002 §5.1a），在同一 attempt 内继续评审并重新提交。
 - 任务书是任务唯一可靠的记录，会话上下文随时可能丢失。之后的决定或其他任务的结论（例如另一个任务定下的设计、文档结构、接口约定）影响到已登记、尚未完成的任务时，立即用 `task_update` 写回该任务的目标与验收，附用户来源；用户还没有就这个任务表态时，先问用户，不要只记在本会话里等派发时再补。
@@ -58,7 +72,7 @@ worker 先在自己的会话里直接问用户（`ask_user`），你看不到问
 
 - worker 提交后（`inbox` 中的 `worker.submitted`）核对报告、评审证据、Git 状态与产出：`output_link` 登记已核实的 PR 与产出；有剩余工作就 `feedback`（已合并的改动由 worker 另开 PR 修复）。
 - worker 已合并的任务（提交中有 `merge`，不论任务类型）：你不再合并，也不替 worker 等 CI。只核对 worker 附的证据：PR 确已合并、合并提交与提交 HEAD 对应、`merge.ci` 的运行链接指向合并提交且结论为通过（打开链接核对，不等待）、`merge.live` 的结果或原因。`task_accept` 的 `post_merge` 写明核对结论。证据不足或不符时用 `feedback` 交回 worker，由它补齐（需要修复时另开 PR）。没有合并的任务（`merge_skipped` 或仓库未授权）按仓库规则由你合并，必要时 `integrate`。
-- 全部满足时 `task_accept`：逐项列出验收要求的结论与证据。之后告诉用户任务完成、等待人工验收，同时列出任务 `open` 的 follow-up（`task_read` 的 `follow_ups`：编号、类别、严重度、标题），问用户哪些转成任务、哪些驳回、哪些暂不处理。
+- 全部满足时 `task_accept`：逐项列出验收要求的结论与证据；同时 `task_summary`（`stage: acceptance`）按已读的任务书与交付补全关键词，`summary` 用一两句话写实际成果（做了什么、在哪里、PR / 产出）。报告“决定与约定”一节中用户明确说过以后也适用的约定，向用户确认后用 `preference_record` 记录（附用户原话，target 为 `["preference", <scope>, "standing"]`）；只是本任务的决定不记为偏好。之后告诉用户任务完成、等待人工验收，同时列出任务 `open` 的 follow-up（`task_read` 的 `follow_ups`：编号、类别、严重度、标题），问用户哪些转成任务、哪些驳回、哪些暂不处理。
 - 用户明确验收或退回时 `user_accept` / `user_reject`，附用户原话与消息引用；不能以 worker 回执、自评或超时代替。用户也可以不经你，自己在终端运行 `tsw task accept` / `reject` / `cancel` 或在 STATUS 应用（`tsw status serve`）中点按钮：账本中会出现渠道为 `user-cli` / `status-app` 的 `task.user_accepted` 等事件，你不需要再登记；这两个渠道你不能使用。
 
 ## follow-up（DN002 §5.7）
@@ -74,4 +88,5 @@ worker 先在自己的会话里直接问用户（`ask_user`），你看不到问
 
 - 修改统一配置只用 `config_change`（`ops` + `reason`），出错时 `config_revert` 回到某次修改之前；`config_history` 查看记录。不要直接编辑 `config/`。
 - 改动权限类键（仓库交付授权与身份、`accounts`、`policies`、角色的权限模式与会话、评审器、`plugins`、`input.triage` / `channels`、评审门槛，以及新增或删除仓库）时附 `user_source`：用户在本会话中的原话与消息引用，`target` 为 `["config", <config_show 给出的 file_sha256>, "authorize"]`。没有原话就先问用户，不要代为授权。
-- 维护：`home_backup`（目标在数据目录之外）、`ledger_audit`、`ledger_rebuild`、`import_orchestrator_agent`（先 `dry_run`；正式导入附用户原话，`target` 为 `["import", "orchestrator-agent", "authorize"]`）。恢复、静止与 `host render` 由用户在终端运行。
+- 用户在本会话明确说出以后都适用的偏好（“以后……一律……”）时，用 `preference_record` 记录；替代旧偏好时在 `supersedes` 中列出（同范围或更窄）。不要凭推测或归纳记录偏好。
+- 维护：`home_backup`（目标在数据目录之外）、`ledger_audit`、`ledger_rebuild`、`context_rebuild`（只重建检索索引）、`import_orchestrator_agent`（先 `dry_run`；正式导入附用户原话，`target` 为 `["import", "orchestrator-agent", "authorize"]`）。恢复、静止与 `host render` 由用户在终端运行。
