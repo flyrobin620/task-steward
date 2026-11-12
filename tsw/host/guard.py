@@ -29,6 +29,7 @@ from tsw.host.identity import HOST_CLI_COMMANDS, Identity, resolve, within
 from tsw.host.plugin_copy import session_hint
 from tsw.ledger import Ledger
 from tsw.machine import routine as routine_mod
+from tsw.machine import session_titles as session_titles_mod
 from tsw.machine.ask_user import handoff_due, is_automated, session_message
 from tsw.machine.guards import merge_authorized
 from tsw.machine.model import row_dict
@@ -42,6 +43,7 @@ WRITE_TOOLS = {
     "NotebookEdit": "notebook_path",
 }
 START_SESSION = "mcp__ccd_session__start_session"
+SESSION_ACTIONS = {"title": "改标题", "archive": "归档"}  # DN002 §5.8
 # The host's session-scheduling tools, and the tag every scheduled prompt of a session carries.
 SCHEDULERS = ("CronCreate", "ScheduleWakeup")
 SCHEDULED_TAG = "<scheduled-task"
@@ -793,6 +795,8 @@ class Guard:
                     if user_turn and may_dispatch
                     else []
                 )
+                # Renaming and archiving create no session: any turn of the lease holder can.
+                sessions = session_titles_mod.pending(conn, self.config) if may_dispatch else []
                 routine = (
                     inbox_mod.routine_attention(
                         conn, self.config, routine_mod.load_cache(self.home)
@@ -826,6 +830,18 @@ class Guard:
                     f"routine_detached（generation: {routine[0].get('generation')}）。"
                     "它已经分离或不是本会话启动的（get_session 的 detached 为 true，或 "
                     "parentSessionId 不是本会话）时，同样调用 routine_detached，在 note 中写明。"
+                )
+            if sessions:
+                names = "、".join(
+                    f"{item['task_id']} {item['attempt']}（{SESSION_ACTIONS[item['action']]}）"
+                    for item in sessions
+                )
+                reasons.append(
+                    "有 worker 会话的标题或归档还没跟上任务状态（attention 的 sessions）："
+                    f"{names}。"
+                    "按 orchestrate skill 逐个处理：get_session → session_check → 按返回改名"
+                    "（set_session_title）或归档（archive_session）→ session_record。"
+                    "用户改过的标题 session_check 会直接跳过，不要自己改名。"
                 )
             if state == "missing" and user_turn:
                 reasons.append(

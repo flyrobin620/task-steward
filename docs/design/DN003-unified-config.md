@@ -1,6 +1,6 @@
 # DN003 统一配置
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置；T243 增加 `roles.routine` 与 `routine`；T251 §3.4 仓库任务的 worktree 与 `instructions`；T256 `plugins.human_channels` 的含义）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置；T243 增加 `roles.routine` 与 `routine`；T251 §3.4 仓库任务的 worktree 与 `instructions`；T256 `plugins.human_channels` 的含义；T272 `sessions.title_on_accept` 与 `title_on_cancel`）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN004 worker 自评审](DN004-worker-self-review.md)
 
@@ -102,7 +102,9 @@
   "sessions": {
     "name_pattern": "{task_id_lower}-{attempt}-g{generation}",
     "archive_on_accept": false,
-    "archive_on_archive": true
+    "archive_on_archive": true,
+    "title_on_accept": "[已验收]",
+    "title_on_cancel": "[已取消]"
   },
   "worktrees": {
     "root": "~/tsw-worktrees",
@@ -255,7 +257,8 @@
 - `prestart.enabled` / `prestart.max_standby`：是否在用户 turn 中为已规划任务预启动 worker 会话，以及同时待命的会话上限（DN002 §5.6）。关闭预启动时，自动 turn 中变为可派发的任务都要等用户下一次发消息才能创建会话。
 - `wake.worker_message_parent`：reportable 事件发生时，worker 是否同时用宿主的会话消息工具唤醒主会话（DN001 §6.3；Claude Code 见 CC001 §4）。键名沿用 parent，目标是当前持有调度租约的主会话，不是启动 worker 的会话。
 - `wake.reportable_events`：进入主会话 inbox、并让 worker 唤醒主会话的事件类型。`task.requirement_changed`（T262 起默认包含）只有 worker 登记的（DN002 §5.1a）才进入 inbox，主会话自己用 `task_update` 记录的不进入。
-- `sessions.archive_on_accept`：验收后是否归档子会话。默认 `false`，保留以便用户回看；归档时须有工具回执。
+- `sessions.archive_on_accept`：用户验收后是否归档 worker 会话。默认 `false`，保留以便用户回看；归档时须有工具回执。为 `true` 时，主会话在会话标题处理完后归档它（DN002 §5.8）。
+- `sessions.title_on_accept` / `sessions.title_on_cancel`：任务被用户验收 / 取消后，worker 会话标题前加的前缀，默认 `[已验收]` / `[已取消]`，与基准标题之间隔一个空格；空字符串表示不加。主会话按 DN002 §5.8 改名，用户手动改过标题的会话不改（T272）。
 
 ### 3.4 `repositories` 与 `accounts`
 

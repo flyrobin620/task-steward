@@ -12,7 +12,7 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
 ## 每次开始
 
 1. `whoami` 确认角色；`lease_status` 确认持有调度租约（SessionStart 已尝试领取；没有租约时只读运行，不派发、不验收）。`lease_status` 的 `stood_down` 不为空时，本会话已让出租约（见“交接主会话”）：只读运行，不要自己领回。
-2. `inbox` 处理未读回传，处理完 `inbox_ack`；`attention` 查看待判断、待用户答复、需对账、需停止、stale、待启动、待预启动、待核验与暂停。
+2. `inbox` 处理未读回传，处理完 `inbox_ack`；`attention` 查看待判断、待用户答复、需对账、需停止、stale、待启动、待预启动、待核验与暂停，以及标题或归档还没跟上的 worker 会话（`sessions`，见“会话的标题与归档”）。
 3. 只处理用户要求的事。普通解释与维护不开始执行真实待办。
 
 ## 检索历史（DN007）
@@ -41,10 +41,10 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
 
 只有用户本人的 turn 能在任务目录创建会话；任何 turn 都能给已有会话发消息。
 
-1. 每个用户 turn 结束前，为还没有会话的就绪任务和等待依赖任务预启动：`attention` 的 `needs_prestart` 按就绪优先、上游在前列出它们，个数不超过还空着的待命名额（`scheduling.prestart.max_standby`）。用户明确要求先不开始的任务除外。这一步不限于用户要求执行任务的 turn：登记或规划之后的下一个用户 turn 同样要做。列表非空时 Stop hook 会在用户 turn 结束前提醒一次。做法：`attempt_start`（`purpose: prestart`，`user_turn: true`，`workdir` 为会话将要创建在的执行目录，不给时为 `work/<任务>/<attempt>`；目录不存在时 `attempt_start` 会创建；之后派发要沿用同一目录。预启动时按当前 revision 写出任务书 `runs/<任务>/<attempt>/brief.md`，派发时再按最新 revision 重新生成），再调用 `mcp__ccd_session__start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为 `attempt_start` 返回的 `cwd`（执行目录，或 tsw 在其中为仓库任务创建的 worktree `<执行目录>/<仓库名>`；磁盘上的实际写法，原样使用；`attempt_start` 因 `worktree_conflict` 或 `worktree_unavailable` 被拒绝时，把原因告诉用户）、`use_worktree: false`、`name` 为返回的 `session_name`，`model` / `effort` / `permission_mode` 取配置的 `roles.worker`，`prompt` 为 `attempt_start` 返回的 `prompt`（worker 说明加待命说明，原样传入，不自己拼接或改写）。`attempt_start` 因 `worker_instructions_missing` 或 `worker_instructions_stale` 被拒绝时，告诉用户运行 `tsw host render`（产品更新后没有重新生成），之后再预启动或派发。随后 `attempt_reconcile`（`outcome: created`，`session_ref` 为返回的会话 ID），再用 `SendMessage` 告诉它“已绑定为待命会话：可以先阅读任务书 runs/<任务>/<attempt>/brief.md，但不要开始工作，等派发的消息”。不要对待命会话说“可以开始”。
+1. 每个用户 turn 结束前，为还没有会话的就绪任务和等待依赖任务预启动：`attention` 的 `needs_prestart` 按就绪优先、上游在前列出它们，个数不超过还空着的待命名额（`scheduling.prestart.max_standby`）。用户明确要求先不开始的任务除外。这一步不限于用户要求执行任务的 turn：登记或规划之后的下一个用户 turn 同样要做。列表非空时 Stop hook 会在用户 turn 结束前提醒一次。做法：`attempt_start`（`purpose: prestart`，`user_turn: true`，`workdir` 为会话将要创建在的执行目录，不给时为 `work/<任务>/<attempt>`；目录不存在时 `attempt_start` 会创建；之后派发要沿用同一目录。预启动时按当前 revision 写出任务书 `runs/<任务>/<attempt>/brief.md`，派发时再按最新 revision 重新生成），再调用 `mcp__ccd_session__start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为 `attempt_start` 返回的 `cwd`（执行目录，或 tsw 在其中为仓库任务创建的 worktree `<执行目录>/<仓库名>`；磁盘上的实际写法，原样使用；`attempt_start` 因 `worktree_conflict` 或 `worktree_unavailable` 被拒绝时，把原因告诉用户）、`use_worktree: false`、`name` 为返回的 `session_name`，`model` / `effort` / `permission_mode` 取配置的 `roles.worker`，`prompt` 为 `attempt_start` 返回的 `prompt`（worker 说明加待命说明，原样传入，不自己拼接或改写），`title` 为 `attempt_start` 返回的 `session_title`（原样使用；想要更短的标题时，在 `attempt_start` 中给出 `session_title`，例如“T272 验收后会话加前缀”，tsw 在预启动时加上“（待命）”）。tsw 记下这个标题：之后只在会话还用着它时自动改名，用户改过的标题不动（DN002 §5.8）。万一用了别的标题，`attempt_reconcile` 带上实际的 `session_title`。`attempt_start` 因 `worker_instructions_missing` 或 `worker_instructions_stale` 被拒绝时，告诉用户运行 `tsw host render`（产品更新后没有重新生成），之后再预启动或派发。随后 `attempt_reconcile`（`outcome: created`，`session_ref` 为返回的会话 ID），再用 `SendMessage` 告诉它“已绑定为待命会话：可以先阅读任务书 runs/<任务>/<attempt>/brief.md，但不要开始工作，等派发的消息”。不要对待命会话说“可以开始”。
 2. 任务可以派发时：`task_dispatch`。有待命会话就 `attempt_deliver`，并用消息告诉它任务书路径（`runs/<任务>/<attempt>/brief.md`）；没有待命会话且是用户的 turn，就 `attempt_start`（`purpose: dispatch`）→ `start_session` → `attempt_reconcile`（`brief_delivered: true`）。
    - `start_session` 的 `prompt` 用 `attempt_start` 返回的 `prompt`，原样传入：开头是 worker 说明（数据目录 `roles/worker.md`，DN006 §6.2），末尾一句是“你是 TaskSteward 任务 <任务> 的 worker（attempt <attempt>）。先调用 whoami，再按任务书 runs/<任务>/<attempt>/brief.md 执行。”不自己拼接、删节或改写。`background` 只写任务标题、仓库与执行目录。不要把任务书正文、交付与合并方式复制进 prompt 或 background：worker 从任务书读取，交付授权由 tsw 的配置、hooks 与工具在执行时把关（DN006 §6.3）。续用已有会话（投递给待命会话、需求变更、反馈后继续）不重新创建会话，也不再发 worker 说明：它在会话的首个提示语里；说明更新后由 worker 的 hook 提示它重读。
-   - 派发时新建的会话：`attempt_reconcile` 之后，用 `SendMessage` 告诉它“已完成绑定，可以开始”：会话可能在绑定之前就开始了第一轮，那时 `whoami` 还是 pending。投递给待命会话（`attempt_deliver`）时，消息写明“已派发，按任务书开始”。
+   - 派发时新建的会话：`attempt_reconcile` 之后，用 `SendMessage` 告诉它“已完成绑定，可以开始”：会话可能在绑定之前就开始了第一轮，那时 `whoami` 还是 pending。投递给待命会话（`attempt_deliver`）时，消息写明“已派发，按任务书开始”，然后按“会话的标题与归档”去掉标题中的“（待命）”。
 3. 创建结果不明时，按会话名 `list_sessions {linked: true}` 对账，绝不再次创建；确认没有创建时 `attempt_reconcile`（`outcome: not_created`）。
 4. 不在用户 turn 时不能新建会话：任务保持就绪并在 STATUS 页显示“待启动”，下一个用户 turn 按第 1 步预启动。
 5. 例行会话（DN006 §8.9）：在用户第一次要求执行待办的那一轮，与预启动、派发一起启动它（`attention` 的 `routine` 为 `missing` 时，Stop hook 在用户 turn 结束前提醒一次）。做法：`routine_start`（`user_turn: true`），再 `mcp__ccd_session__start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为返回的 `cwd`、`use_worktree: false`、`name` 为事件中的 `session_name`，`model` / `effort` / `prompt` / `background` 取事件中的值，`permission_mode` 取事件中的 `host_permission_mode`（宿主的名称，例如 `acceptEdits`）；然后 `routine_bind`（`generation`、`session_id`）；事件中 `detach` 为 true 时，紧接着调用 `mcp__ccd_session_mgmt__detach_session(session_id)` 把它从本会话名下分离（否则它每结束一轮、包括没有转发内容的定时运行，都会唤醒本会话），成功后 `routine_detached`（`generation`）；最后用 `SendMessage` 告诉它“已绑定，调用 routine_board 开始”。分离之后它不在 linked 列表中，按会话 ID 联系它。`routine` 为 `attached` 时（分离没有完成或没有记录，例如本版本之前启动的例行会话），在任何一轮补做分离：已经分离或不是本会话启动的，也调用 `routine_detached` 并在 `note` 中写明。结果不明时按会话名对账，不再次创建。`routine` 为 `stale` 时（定时任务失效，例如 app 重启过），给例行会话发消息“运行 routine_board”，它会重新设定；会话不存在了就在下一个用户 turn 重新 `routine_start`。例行会话不作判断，它转来的消息按 `handle-input` skill 处理（Teams 中的回复与读取失败按 `teams-chat` skill）。
@@ -74,6 +74,21 @@ worker 先在自己的会话里直接问用户（`ask_user`），你看不到问
 - worker 已合并的任务（提交中有 `merge`，不论任务类型）：你不再合并，也不替 worker 等 CI。只核对 worker 附的证据：PR 确已合并、合并提交与提交 HEAD 对应、`merge.ci` 的运行链接指向合并提交且结论为通过（打开链接核对，不等待）、`merge.live` 的结果或原因。`task_accept` 的 `post_merge` 写明核对结论。证据不足或不符时用 `feedback` 交回 worker，由它补齐（需要修复时另开 PR）。没有合并的任务（`merge_skipped` 或仓库未授权）按仓库规则由你合并，必要时 `integrate`。
 - 全部满足时 `task_accept`：逐项列出验收要求的结论与证据；同时 `task_summary`（`stage: acceptance`）按已读的任务书与交付补全关键词，`summary` 用一两句话写实际成果（做了什么、在哪里、PR / 产出）。报告“决定与约定”一节中用户明确说过以后也适用的约定，向用户确认后用 `preference_record` 记录（附用户原话，target 为 `["preference", <scope>, "standing"]`）；只是本任务的决定不记为偏好。之后告诉用户任务完成、等待人工验收，同时列出任务 `open` 的 follow-up（`task_read` 的 `follow_ups`：编号、类别、严重度、标题），问用户哪些转成任务、哪些驳回、哪些暂不处理。
 - 用户明确验收或退回时 `user_accept` / `user_reject`，附用户原话与消息引用；不能以 worker 回执、自评或超时代替。用户也可以不经你，自己在终端运行 `tsw task accept` / `reject` / `cancel` 或在 STATUS 应用（`tsw status serve`）中点按钮：账本中会出现渠道为 `user-cli` / `status-app` 的 `task.user_accepted` 等事件，你不需要再登记；这两个渠道你不能使用。
+- 验收（`user_accept`）、取消（`task_cancel`）之后，同一轮按“会话的标题与归档”给 worker 会话加前缀（必要时归档）。用户在终端或 STATUS 应用中验收、取消的，例行会话的 `session-scan` 会发来消息，Stop hook 也会提醒，同样处理。
+
+## 会话的标题与归档（DN002 §5.8）
+
+tsw 记下它让每个 worker 会话使用的标题，并按任务状态算出应有的标题：待命“<基准>（待命）”，派发后“<基准>”，验收后“[已验收] <基准>”，取消后“[已取消] <基准>”（前缀取自 `sessions.title_on_accept` / `title_on_cancel`）；`sessions.archive_on_accept` 为 true 时，验收后还要归档会话。`attention` 的 `sessions` 列出还没跟上的会话（`state: due`；`failed` 的是宿主工具失败过的，不再提醒，可以再试一次）。改名与归档都不需要用户 turn。逐个处理 `state: due` 的项（一个会话可能先改标题、再归档，处理完一步后再看一次 `attention`）；`state: failed` 的项不自动重试，用户要求时才再试一次：
+
+1. `mcp__ccd_session_mgmt__get_session(session_id)`，把返回原样作为 `observed` 交给 `session_check`（`task_id`、`attempt`）；会话不存在时把报错原文作为 `observed` 并给 `missing: true`。
+2. 按 `session_check` 的 `action`：
+   - `rename`：`mcp__ccd_session_mgmt__set_session_title(session_id, title)`，`title` 用返回的原样；再 `session_record`（`action: title`、同一个 `title`、`ok` 为是否改名成功、`result` 为工具返回原文）。
+   - `archive`：`mcp__ccd_session_mgmt__archive_session(session_id, reason: "任务已验收（sessions.archive_on_accept）")`，再 `session_record`（`action: archive`、`ok`、`result`）。
+   - `none`：tsw 已经记录（已是应有标题、用户改过标题、会话不存在），不用再做什么。
+3. 用户改过的标题（`outcome: user_title`）一律不动：不要自己改名，也不要问用户要不要改。宿主弹出确认、用户拒绝时，`session_record` 记 `ok: false`。工具失败、记了 `ok: false` 之后，这一项就停下，不要在同一轮反复重试。
+4. 改名成功后任务状态又变了（例如用户这时在终端验收），`session_record` 照样记下刚才改成的标题；之后 `attention` 会再列出新的应有标题。
+
+本版本之前创建的会话 tsw 没有记下标题，不在列表中，不要自己去改它们。
 
 ## follow-up（DN002 §5.7）
 

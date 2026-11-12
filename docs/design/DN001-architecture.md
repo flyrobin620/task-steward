@@ -173,12 +173,13 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一
 | `follow_up_record` / `follow_up_update` | ✓ | 仅本任务，用户验收前 | 记录与修改任务的 follow-up（DN002 §5.7）；不改变任务状态 |
 | `follow_up_convert` / `follow_up_dismiss` | ✓ | — | 把 follow-up 转为新任务或并入已有任务、驳回 follow-up（DN002 §5.7） |
 | `routine_start` / `routine_bind` / `routine_detached` | ✓ | — | 启动例行会话、绑定会话并记录它已从主会话名下分离（DN006 §8.9.7） |
+| `session_check` / `session_record` | ✓ | — | 验收、取消、派发后让 worker 会话的标题与归档跟上任务状态，用户改过的标题不动（DN002 §5.8） |
 | `channel_sent` | ✓ | — | 登记发出的 Teams 卡片，并把任务加入 Teams 例行项（DN006 §8.7） |
 | `routine_board` / `routine_run` / `routine_armed` | — | — | 只给例行会话：读取到期的例行项、运行例行项的脚本、登记定时任务（DN006 §8.9） |
 | `review_run` / `review_triage` / `review_decide` | — | ✓ | DN004 |
 | `submit` | — | ✓ | T13，执行 G-SUBMIT 检查；worker 已合并时带合并记录（DN002 §3.5） |
 | `report_back` | — | ✓ | `[report]` 回传 |
-| `attention` | ✓ | — | 只读自检：缺证、过期问题、已停未收口、待预启动（`needs_prestart`，DN002 §5.6） |
+| `attention` | ✓ | — | 只读自检：缺证、过期问题、已停未收口、待预启动（`needs_prestart`，DN002 §5.6）、会话的标题与归档待处置（`sessions`，DN002 §5.8） |
 | `operations_pending` / `operation_receipt` | ✓ | — | 委托操作的领取与回执（DN006 §4） |
 | `input_triage` / `input_escalate` | ✓ | — | 主会话判断：回答、追加评审轮次、认定意见不成立、批准延后或交给人类（DN006 §8） |
 | `input_response` | 渠道回调 | — | 人类渠道写回答复，核实后生效 |
@@ -202,13 +203,14 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一
 | 主会话 | `handoff_resolve` `input_relay` | 转交后的 T12 与转达（DN006 §8.1b） |
 | 主会话 | `follow_up_record` `follow_up_update` `follow_up_convert` `follow_up_dismiss` | follow-up 的记录、修改、转为任务（含 T01）与驳回（DN002 §5.7） |
 | 主会话 | `routine_start` `routine_bind` `routine_detached` `channel_sent` | 启动、绑定、分离例行会话；登记 Teams 卡片（DN006 §8.7、§8.9） |
+| 主会话 | `session_check` `session_record` | worker 会话的标题与验收后归档：比较当前标题、记录改名与归档回执（DN002 §5.8），不改变任务状态 |
 | 例行会话 | `routine_board` `routine_run` `routine_armed` | 运行例行表：转交到期问题（`by: system`）、取出 Teams 答复转给主会话、定时任务的设定与续期（DN006 §8.9） |
 
 主会话的写工具都要求持有调度租约（G-LEASE）；worker 工具要求调用者就是该任务当前 attempt 绑定的会话；例行工具要求调用者就是当前代次绑定的例行会话。
 
 ### 7.3 宿主集成的检查点
 
-宿主集成在会话生命周期的几个时点运行 tsw：会话开始（识别角色、领取租约、注入上下文）、动作之前（DN008 的护栏）、用户消息到达（记录会话内答复、检测 `[report]`；主会话记下这一轮是不是用户本人的 turn）、一轮结束（有未处理的回传或评审未完成时提醒一次；用户 turn 结束时还有待预启动的任务也提醒一次，因为只有用户 turn 能创建会话）。这些都是确定性的防错护栏，不是安全边界（DN008）。Claude Code 的 hooks 见 [CC001 §6](claude-code/CC001-sessions-and-hooks.md) 与 [CC008](claude-code/CC008-guardrails.md)。
+宿主集成在会话生命周期的几个时点运行 tsw：会话开始（识别角色、领取租约、注入上下文）、动作之前（DN008 的护栏）、用户消息到达（记录会话内答复、检测 `[report]`；主会话记下这一轮是不是用户本人的 turn）、一轮结束（有未处理的回传、评审未完成或 worker 会话的标题与归档待处置时提醒一次；用户 turn 结束时还有待预启动的任务也提醒一次，因为只有用户 turn 能创建会话）。这些都是确定性的防错护栏，不是安全边界（DN008）。Claude Code 的 hooks 见 [CC001 §6](claude-code/CC001-sessions-and-hooks.md) 与 [CC008](claude-code/CC008-guardrails.md)。
 
 ## 8. 数据与存储
 

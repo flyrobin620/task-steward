@@ -1,6 +1,6 @@
 # DN006 插件层：宿主集成、会话、人类渠道与数据存储
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/；T272 §8.9.4a 默认例行项 session-scan）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN008 校验原则](DN008-guardrails.md) · 实现：[CC006 Claude Code 插件](claude-code/CC006-plugins.md)
 
@@ -481,7 +481,7 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | `state` | 脚本自己的进度（例如已转发过的消息 ID），由脚本的结果事件记录（`channel.reply_seen`），下次运行时从账本读出 |
 | `enabled` | 停用的行不列出、不执行（例如 Teams 例行项的任务列表为空时） |
 
-默认例行项 `handoff-scan` 内置在 tsw 中，始终在例行表里，不能删除，只能随 `routine.enabled` 一起停用。其他例行项由 tsw 的工具在需要时添加，例如主会话 `channel_sent` 登记第一张 Teams 卡片时加入 `teams-replies`。将来需要例行执行的事，也是新增一个内置脚本与添加它的规则。
+默认例行项 `handoff-scan` 与 `session-scan`（§8.9.4a）内置在 tsw 中，始终在例行表里，不能删除，只能随 `routine.enabled` 一起停用。其他例行项由 tsw 的工具在需要时添加，例如主会话 `channel_sent` 登记第一张 Teams 卡片时加入 `teams-replies`。将来需要例行执行的事，也是新增一个内置脚本与添加它的规则。
 
 #### 8.9.3 每次运行
 
@@ -503,6 +503,19 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | 转发 | `if_any`：“以下问题超时转交给你，按 skill 处理：…” |
 
 主会话按“处理转交问题”的 skill 判断（§8.1b、§8.2）：在授权内代答（`handoff_resolve`，并告诉 worker 继续），或经人类渠道问用户（`input_relay`，例如 Teams，§8.7）。
+
+#### 8.9.4a 默认例行项：`session-scan`
+
+用户 2026-11-12 决定（T272）：验收、取消后 worker 会话的改名与归档由主会话执行（DN002 §5.8），例行会话只发现并转发，与 `handoff-scan` 一样不作判断。终端命令与 STATUS 应用的验收不经过主会话，靠这一行在一个例行间隔内唤醒主会话。
+
+| 项目 | 内容 |
+| --- | --- |
+| 输入 | 无（读账本） |
+| 脚本 | 列出 `attention` 的 `sessions` 中待处置（不含 `failed`）的项，去掉本例行会话最近转发过的（按任务、attempt、动作与应有的标题记下转发时间，在 `cache/routine.json`）。转发过的项过了 `routine.stale_after_intervals` 个间隔仍未处理时再转发一次：消息可能没有送到（发送失败、这一轮中断），而别的事都不会唤醒主会话；没有主会话可发时不记为已转发。缓存丢失只会多转发一次，执行是幂等的。不记事件 |
+| 结果 | 新出现的待处置项（任务、attempt、会话、动作、应有的标题、原因） |
+| 转发 | `if_any`：“以下 worker 会话的标题或归档还没跟上任务状态，按 orchestrate skill 处理：…” |
+
+为什么不由例行会话自己改名（用户 2026-11-12 比较过）：tsw 用标题比较识别用户改过的标题（DN002 §5.8），万一漏判（用户改成的标题恰好与 tsw 记下的相同，或在读取与改名之间改名），宿主会弹出确认；Claude app 在定时触发的一轮中同样弹出并中断这一轮（T272 实测），没有人看着的例行会话就停在那里，之后的定时运行不再触发，问题转交与 Teams 答复回收随之停止。主会话中弹出的确认用户能看到。另外例行会话改名还要扩展用户设置中的 auto 模式规则，而派发去掉“（待命）”、在主会话中验收时本来就由主会话执行。代价是终端与 STATUS 的每次验收唤醒主会话一次。
 
 #### 8.9.5 Teams 例行项：`teams-replies`
 
