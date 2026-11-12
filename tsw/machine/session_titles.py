@@ -68,13 +68,29 @@ def wanted(status: str, phase: str, base: str, config: EffectiveConfig) -> tuple
     return base, "dispatch"
 
 
+def own_titles(base: str, config: EffectiveConfig) -> set[str]:
+    """Every title tsw may have given a session with this base. A session showing one of them
+    still has a title of tsw's, even when the last rename was not recorded (a crash, or the task
+    moved on between the rename and its record); only another title is the user's."""
+    return {
+        base,
+        creation_title(base, "prestart"),
+        _prefixed(config.get("sessions.title_on_accept"), base),
+        _prefixed(config.get("sessions.title_on_cancel"), base),
+    }
+
+
 def _rows(conn: sqlite3.Connection, where: str = "", args: tuple[Any, ...] = ()) -> list[Any]:
     phases = ", ".join(f"'{p}'" for p in WITH_SESSION)
+    # A closed attempt of a finished task may keep its session, for instance a standby session
+    # closed before the task was cancelled (sessions.archive_on_archive false): it still gets
+    # its prefix. get_session tells whether it is still there.
     return conn.execute(
         "SELECT s.*, a.phase, a.session_ref, t.status, t.revision FROM session_titles s "
         "JOIN attempts a ON a.task_id = s.task_id AND a.attempt = s.attempt "
         "JOIN tasks t ON t.task_id = s.task_id "
-        f"WHERE a.session_ref IS NOT NULL AND a.phase IN ({phases}) "
+        f"WHERE a.session_ref IS NOT NULL AND (a.phase IN ({phases}) OR (a.phase = 'closed' "
+        "AND t.status IN ('accepted', 'cancelled'))) "
         f"AND t.status != 'archived' AND s.missing = 0 {where} "
         "ORDER BY s.task_id, s.attempt",
         args,
@@ -96,7 +112,8 @@ def _next(row: Mapping[str, Any], config: EffectiveConfig) -> dict[str, Any] | N
     open_title = row["user_title"] is None and title != row["known"]
     if open_title and row["failed_title"] != title:
         return {**title_item, "state": "due"}
-    if row["status"] == "accepted" and config.get("sessions.archive_on_accept"):
+    archive = row["status"] == "accepted" and row["phase"] != "closed"
+    if archive and config.get("sessions.archive_on_accept"):
         # Archived whatever became of the title: the user turned the archive on.
         return {**item, "action": "archive", "state": "failed" if row["archive_failed"] else "due"}
     if open_title:
@@ -243,7 +260,7 @@ def session_check(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         if current == title:
             outcome = "already"
             output.update(action="none", outcome=outcome, title=title)
-        elif current == row["known"]:
+        elif current == row["known"] or current in own_titles(str(row["base"]), env.config):
             output.update(action="rename", session_id=row["session_ref"], title=title)
             return []
         else:
@@ -286,14 +303,30 @@ def session_record(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     def build(ctx: CommitContext) -> list[EventDraft]:
         row = _current(ctx.conn, task_id, attempt_id)
         item = _next(row, env.config)
-        if item is None or item["action"] != action:
-            raise rejected(
-                "这个会话现在不需要这一步（先 session_check）",
-                reason="not_due",
-                due=item and item["action"],
-            )
         if action == "title":
             title = text(inp, "title")
+            ours = row["user_title"] is None and title != row["known"]
+            if ok and ours and title in own_titles(str(row["base"]), env.config):
+                # A rename that happened is recorded even when the task moved on before its
+                # record (accepted in a terminal meanwhile): tsw then knows the title it left,
+                # and the next check renames again instead of taking it for the user's.
+                reason = item["reason"] if item is not None and item["title"] == title else None
+                return [
+                    _event(
+                        row,
+                        action="title",
+                        outcome="renamed",
+                        title=title,
+                        reason=reason or "superseded",
+                        result=result[:EVIDENCE_CHARS],
+                    )
+                ]
+            if item is None or item["action"] != "title":
+                raise rejected(
+                    "这个会话现在不需要改标题（先 session_check）",
+                    reason="not_due",
+                    due=item and item["action"],
+                )
             if title != item["title"]:
                 raise rejected(
                     "title 不是现在应有的标题（任务状态已变化？先 session_check）",
@@ -310,6 +343,12 @@ def session_record(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     result=result[:EVIDENCE_CHARS],
                 )
             ]
+        if item is None or item["action"] != action:
+            raise rejected(
+                "这个会话现在不需要这一步（先 session_check）",
+                reason="not_due",
+                due=item and item["action"],
+            )
         if ok:
             # The tool receipt of the configured disposition (DN002 §5.8, §6).
             return [_closed(row, result[:EVIDENCE_CHARS], "archived")]

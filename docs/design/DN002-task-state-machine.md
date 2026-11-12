@@ -387,14 +387,14 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 | 任务为 `cancelled` | “`sessions.title_on_cancel` <基准>”（默认“[已取消] <基准>”） |
 | 其他 | “<基准>”（因此投递给待命会话后要去掉“（待命）”） |
 
-前缀配置为空字符串时，对应情形的应有标题就是“<基准>”。只处理会话可能还在的 attempt：阶段为 `standby`、`live` 或 `stopped`，有会话引用；`replaced`、`closed` 的会话不再处理。已归档的任务（`archived`）不可变，不再处理。
+前缀配置为空字符串时，对应情形的应有标题就是“<基准>”。只处理会话可能还在的 attempt：阶段为 `standby`、`live` 或 `stopped`，有会话引用；任务已验收或已取消时也包括 `closed` 的 attempt（例如 `sessions.archive_on_archive` 为 `false` 时，取消前关闭的待命会话留在宿主中，同样加“[已取消]”前缀；会话已归档时读取结果会说明，记为 `missing`）。`replaced` 的会话不再处理。已归档的任务（`archived`）不可变，不再处理。
 
 **用户改过的标题**：宿主不告诉 tsw 标题是不是用户设定的（Claude app 只在改名时弹出确认，T272 实测），所以执行前先读取会话当前的标题，与 tsw 记下的标题比较：
 
 | 当前标题 | 处理 | 结果（`outcome`） |
 | --- | --- | --- |
 | 等于应有的标题 | 不改名，tsw 记下的标题更新为它 | `already` |
-| 等于 tsw 记下的标题 | 改名为应有的标题 | 成功为 `renamed`，工具报错为 `failed` |
+| 等于 tsw 记下的标题，或是 tsw 可能给过的标题之一（“<基准>”、“<基准>（待命）”与两种前缀的标题；改名成功但回执没有记下时 tsw 记下的标题会落后） | 改名为应有的标题 | 成功为 `renamed`，工具报错为 `failed` |
 | 其他 | 认定用户（或 tsw 之外的人）改过：不改名，也不尝试（不弹确认）；这个 attempt 之后不再自动改名 | `user_title`（附当时的标题） |
 | 会话不存在或已归档 | 不改名；这个 attempt 之后不再处理标题与归档 | `missing` |
 
@@ -402,7 +402,7 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 
 **事件**：`attempt.session_updated`（主会话，经工具记录），`action` 为 `title` 或 `archive`，`outcome` 如上，附应有的标题、当时读到的标题、原因（`standby`、`dispatch`、`accepted`、`cancelled`）与工具结果原文。它不改变任务状态与 attempt 阶段；`title` 的 `renamed` / `already` 更新 tsw 记下的标题，`user_title` 与 `missing` 让这个 attempt 不再处理。
 
-**待处置清单与幂等**：`attention` 的 `sessions` 列出应有的标题与 tsw 记下的标题不同（且没有 `user_title`、`missing`，同一应有标题没有记过 `failed`），或应当归档还没有回执（同样没有记过 `failed`）的 attempt：任务、attempt、会话、动作、应有的标题与原因；记过 `failed` 的单独标明，不再提醒，主会话可以再执行一次。清单从账本算出，所以验收来自哪个渠道都一样。重复执行是安全的：每次先读当前标题，已是应有标题的只记 `already`。
+**待处置清单与幂等**：`attention` 的 `sessions` 列出应有的标题与 tsw 记下的标题不同（且没有 `user_title`、`missing`，同一应有标题没有记过 `failed`），或应当归档还没有回执（同样没有记过 `failed`）的 attempt：任务、attempt、会话、动作、应有的标题与原因；记过 `failed` 的单独标明，不再提醒，主会话可以再执行一次。清单从账本算出，所以验收来自哪个渠道都一样。重复执行是安全的：每次先读当前标题，已是应有标题的只记 `already`。改名成功之后、记录回执之前任务状态变了（例如用户这时在终端验收），回执照样记下刚改成的标题（原因记为 `superseded`），清单随后列出新的应有标题；用户改过标题之后不再接受改名回执。
 
 **谁执行、何时执行**：主会话（持有调度租约时）按 `attention` 的 `sessions` 逐项执行，改名与归档都不需要用户 turn（不创建会话）：
 

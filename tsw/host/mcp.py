@@ -450,22 +450,23 @@ class Server:
         question names the human channels the user is told through (DN006 §8.1b)."""
         channels = user_channels(config)
         with ledger.view() as conn:
+            target = routine_mod.orchestrator_session(conn, utc_now())
             if job_id == routine_mod.SESSION_SCAN:
-                message = self._session_scan(conn, config)
+                message = self._session_scan(conn, config, sending=target is not None)
             else:
                 message = routine_mod.forward_text(conn, job_id, out.get("events") or [], channels)
-            target = routine_mod.orchestrator_session(conn, utc_now())
         if not message:
             return {"send": False}
         if target is None:
             return {"send": False, "note": "主会话不在线：结果已在账本中，主会话下次运行时会看到"}
         return {"send": True, "session_id": target, "message": message}
 
-    def _session_scan(self, conn: Any, config: EffectiveConfig) -> str:
+    def _session_scan(self, conn: Any, config: EffectiveConfig, *, sending: bool) -> str:
         """The ``session-scan`` message: worker sessions to rename or archive that were not passed
-        on before (DN006 §8.9.4a); what was passed on is kept in the routine cache."""
+        on lately (DN006 §8.9.4a); when each was passed on is kept in the routine cache, and only
+        when there is an orchestrator to send to."""
         kept = routine_mod.load_cache(self.home)
-        fresh = routine_mod.session_scan(conn, config, kept)
+        fresh = routine_mod.session_scan(conn, config, kept, utc_now(), sending=sending)
         try:
             self.home.cache_dir.mkdir(parents=True, exist_ok=True)
             atomic_write(self.home.cache_dir / "routine.json", json.dumps(kept).encode("utf-8"))

@@ -511,7 +511,7 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | 项目 | 内容 |
 | --- | --- |
 | 输入 | 无（读账本） |
-| 脚本 | 列出 `attention` 的 `sessions` 中待处置（不含 `failed`）的项，去掉本例行会话已经转发过的（按任务、attempt、动作与应有的标题记在 `cache/routine.json`；缓存丢失只会多转发一次，执行是幂等的）。不记事件 |
+| 脚本 | 列出 `attention` 的 `sessions` 中待处置（不含 `failed`）的项，去掉本例行会话最近转发过的（按任务、attempt、动作与应有的标题记下转发时间，在 `cache/routine.json`）。转发过的项过了 `routine.stale_after_intervals` 个间隔仍未处理时再转发一次：消息可能没有送到（发送失败、这一轮中断），而别的事都不会唤醒主会话；没有主会话可发时不记为已转发。缓存丢失只会多转发一次，执行是幂等的。不记事件 |
 | 结果 | 新出现的待处置项（任务、attempt、会话、动作、应有的标题、原因） |
 | 转发 | `if_any`：“以下 worker 会话的标题或归档还没跟上任务状态，按 orchestrate skill 处理：…” |
 

@@ -480,4 +480,115 @@ def test_session_scan_passes_new_items_on_once(home: Home) -> None:
     rename(h, "w-T001", BASE)
     assert server.call("routine_run", {"job_id": "session-scan"})["forward"] == {"send": False}
     with h.ledger.view() as conn:
-        assert routine_mod.session_scan(conn, h.config, {}) == []
+        assert routine_mod.session_scan(conn, h.config, {}, h.clock.now) == []
+
+
+@mark.use_case("UC-SESSION-001")
+@mark.use_case("UC-ROUTINE-001")
+def test_session_scan_passes_an_item_on_again_when_it_stays_undone(home: Home) -> None:
+    # A forward may not have arrived (the send failed, the run broke off): nothing else wakes
+    # the orchestrator, so an item still undone after the stale window comes again; without
+    # anyone to send to, nothing is marked (T272 review r1 F2).
+    h = Harness(home)
+    delivered_and_done(h)
+    accept_from_terminal(h)
+    cache: dict[str, Any] = {}
+    window = 10 * 3  # routine.interval_minutes × routine.stale_after_intervals (defaults)
+    with h.ledger.view() as conn:
+        assert routine_mod.session_scan(conn, h.config, cache, h.clock.now, sending=False)
+        assert cache["session_scan"] == {}
+        assert routine_mod.session_scan(conn, h.config, cache, "2026-11-05T00:00:00Z")
+        later = f"2026-11-05T00:{window - 1:02d}:00Z"
+        assert routine_mod.session_scan(conn, h.config, cache, later) == []
+        again = f"2026-11-05T00:{window:02d}:00Z"
+        assert [i["task_id"] for i in routine_mod.session_scan(conn, h.config, cache, again)] == [
+            "T001"
+        ]
+        cache["session_scan"] = {next(iter(cache["session_scan"])): "garbage"}
+        assert routine_mod.session_scan(conn, h.config, cache, again)
+
+
+@mark.use_case("UC-SESSION-001")
+def test_a_rename_recorded_after_the_task_moved_on(home: Home) -> None:
+    # The host renamed, then the user accepted in a terminal before the record: the record still
+    # stands, and the next check renames again rather than taking tsw's own title for the user's
+    # (T272 review r1 F3). A rename never recorded is recognised the same way.
+    h = Harness(home)
+    session = prestarted(h)
+    worker = deliver(h)
+    check = h.run(
+        "session_check", task_id="T001", attempt="a1", observed=observed(session, f"{BASE}（待命）")
+    )
+    assert check["title"] == BASE
+    h.finalize(worker, "T001")
+    h.submit(worker, "T001")
+    h.accept("T001")
+    accept_from_terminal(h)
+    late = h.run(
+        "session_record",
+        task_id="T001",
+        attempt="a1",
+        action="title",
+        title=BASE,
+        ok=True,
+        result=f'Renamed session {session} to "{BASE}".',
+    )
+    data = late["events"][0]["data"]
+    assert (data["outcome"], data["title"], data["reason"]) == ("renamed", BASE, "superseded")
+    assert rename(h, session, BASE) == f"[已验收] {BASE}"
+    # Not recorded at all: the session shows one of tsw's titles, so it is still tsw's.
+    session2 = prestarted(h, "T002", title="T002 短标题")
+    deliver(h, "T002")
+    out = h.run(
+        "session_check",
+        task_id="T002",
+        attempt="a1",
+        observed=observed(session2, "[已取消] T002 短标题"),
+    )
+    assert (out["action"], out["title"]) == ("rename", "T002 短标题")
+    other = h.run(
+        "session_check", task_id="T002", attempt="a1", observed=observed(session2, "T001 短标题")
+    )
+    assert other["outcome"] == "user_title"  # another task's title is not one of T002's
+
+
+@mark.use_case("UC-SESSION-001")
+def test_a_standby_session_kept_through_a_cancel_gets_the_prefix(home: Home) -> None:
+    # sessions.archive_on_archive false: the standby session is closed in the ledger but stays
+    # in the app, and gets "[已取消]" (T272 review r1 F1).
+    h = Harness(home, {"sessions": {"archive_on_archive": False}})
+    session = prestarted(h)
+    h.run("attempt_update", task_id="T001", attempt="a1", event="closed", evidence="保留会话")
+    assert sessions(h) == []  # closed, the task not finished: nothing to do
+    h.run("task_cancel", task_id="T001", user_source=h.source("T001", 1, "cancel"))
+    [item] = sessions(h)
+    assert (item["action"], item["title"], item["reason"]) == (
+        "title",
+        f"[已取消] {BASE}",
+        "cancelled",
+    )
+    assert rename(h, session, f"{BASE}（待命）") == f"[已取消] {BASE}"
+    assert sessions(h) == []
+    # An archived session is not renamed: get_session says so.
+    h.register("T002")
+    h.plan("T002")
+    data = h.run("attempt_start", task_id="T002", purpose="prestart", user_turn=True)["events"][0][
+        "data"
+    ]
+    h.run(
+        "attempt_reconcile",
+        task_id="T002",
+        attempt="a1",
+        generation=data["generation"],
+        outcome="created",
+        session_ref="w-T002",
+    )
+    h.run("attempt_update", task_id="T002", attempt="a1", event="closed", evidence="已归档")
+    h.run("task_cancel", task_id="T002", user_source=h.source("T002", 1, "cancel"))
+    gone = h.run(
+        "session_check",
+        task_id="T002",
+        attempt="a1",
+        observed=observed("w-T002", data["session_title"], isArchived=True),
+    )
+    assert gone["outcome"] == "missing" and sessions(h) == []

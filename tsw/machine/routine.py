@@ -886,17 +886,43 @@ def _scan_key(item: Mapping[str, Any]) -> str:
 
 
 def session_scan(
-    conn: sqlite3.Connection, config: EffectiveConfig, cache: dict[str, Any]
+    conn: sqlite3.Connection,
+    config: EffectiveConfig,
+    cache: dict[str, Any],
+    now: str,
+    *,
+    sending: bool = True,
 ) -> list[dict[str, Any]]:
     """The ``session-scan`` row (DN006 §8.9.4a): worker sessions whose title or archive has not
-    caught up, not passed on before. ``cache`` remembers what was passed on, only while it is
-    still to do; losing it passes an item on once more, and doing an item twice is harmless."""
+    caught up, not passed on lately.
+
+    ``cache`` remembers when each item still to do was passed on. An item comes again once it
+    has stayed undone for ``routine.stale_after_intervals`` intervals: the message may not have
+    arrived (the send failed, the run broke off) and nothing else would wake the orchestrator.
+    Without anyone to send to (``sending`` false) nothing is marked. Losing the cache passes an
+    item on once more; doing an item twice is harmless.
+    """
     due = session_titles.pending(conn, config)
-    keys = [_scan_key(item) for item in due]
     seen = cache.get("session_scan")
-    known = set(seen) if isinstance(seen, list) else set()
-    cache["session_scan"] = keys
-    return [item for item, key in zip(due, keys, strict=True) if key not in known]
+    sent: dict[str, Any] = dict(seen) if isinstance(seen, dict) else {}
+    again = timedelta(
+        minutes=int(config.get("routine.interval_minutes"))
+        * int(config.get("routine.stale_after_intervals"))
+    )
+    fresh: list[dict[str, Any]] = []
+    kept: dict[str, str] = {}
+    for item in due:
+        key = _scan_key(item)
+        when = sent.get(key)
+        with contextlib.suppress(ValueError):  # a damaged entry only passes the item on again
+            if isinstance(when, str) and parse_time(now) - parse_time(when) < again:
+                kept[key] = when
+                continue
+        fresh.append(item)
+        if sending:
+            kept[key] = now
+    cache["session_scan"] = kept
+    return fresh
 
 
 def session_scan_text(items: Sequence[Mapping[str, Any]]) -> str:

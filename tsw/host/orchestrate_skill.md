@@ -78,14 +78,15 @@ worker 先在自己的会话里直接问用户（`ask_user`），你看不到问
 
 ## 会话的标题与归档（DN002 §5.8）
 
-tsw 记下它让每个 worker 会话使用的标题，并按任务状态算出应有的标题：待命“<基准>（待命）”，派发后“<基准>”，验收后“[已验收] <基准>”，取消后“[已取消] <基准>”（前缀取自 `sessions.title_on_accept` / `title_on_cancel`）；`sessions.archive_on_accept` 为 true 时，验收后还要归档会话。`attention` 的 `sessions` 列出还没跟上的会话（`state: due`；`failed` 的是宿主工具失败过的，不再提醒，可以再试一次）。改名与归档都不需要用户 turn。逐个处理，每个会话直到它不再出现在列表中：
+tsw 记下它让每个 worker 会话使用的标题，并按任务状态算出应有的标题：待命“<基准>（待命）”，派发后“<基准>”，验收后“[已验收] <基准>”，取消后“[已取消] <基准>”（前缀取自 `sessions.title_on_accept` / `title_on_cancel`）；`sessions.archive_on_accept` 为 true 时，验收后还要归档会话。`attention` 的 `sessions` 列出还没跟上的会话（`state: due`；`failed` 的是宿主工具失败过的，不再提醒，可以再试一次）。改名与归档都不需要用户 turn。逐个处理 `state: due` 的项（一个会话可能先改标题、再归档，处理完一步后再看一次 `attention`）；`state: failed` 的项不自动重试，用户要求时才再试一次：
 
 1. `mcp__ccd_session_mgmt__get_session(session_id)`，把返回原样作为 `observed` 交给 `session_check`（`task_id`、`attempt`）；会话不存在时把报错原文作为 `observed` 并给 `missing: true`。
 2. 按 `session_check` 的 `action`：
    - `rename`：`mcp__ccd_session_mgmt__set_session_title(session_id, title)`，`title` 用返回的原样；再 `session_record`（`action: title`、同一个 `title`、`ok` 为是否改名成功、`result` 为工具返回原文）。
    - `archive`：`mcp__ccd_session_mgmt__archive_session(session_id, reason: "任务已验收（sessions.archive_on_accept）")`，再 `session_record`（`action: archive`、`ok`、`result`）。
    - `none`：tsw 已经记录（已是应有标题、用户改过标题、会话不存在），不用再做什么。
-3. 用户改过的标题（`outcome: user_title`）一律不动：不要自己改名，也不要问用户要不要改。宿主弹出确认、用户拒绝时，`session_record` 记 `ok: false`。
+3. 用户改过的标题（`outcome: user_title`）一律不动：不要自己改名，也不要问用户要不要改。宿主弹出确认、用户拒绝时，`session_record` 记 `ok: false`。工具失败、记了 `ok: false` 之后，这一项就停下，不要在同一轮反复重试。
+4. 改名成功后任务状态又变了（例如用户这时在终端验收），`session_record` 照样记下刚才改成的标题；之后 `attention` 会再列出新的应有标题。
 
 本版本之前创建的会话 tsw 没有记下标题，不在列表中，不要自己去改它们。
 
