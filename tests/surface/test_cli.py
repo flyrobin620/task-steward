@@ -215,6 +215,7 @@ def test_command_inventory_is_known() -> None:
         [
             "backup",
             "config show",
+            "context rebuild",
             "config validate",
             "dashboard",
             "guard",

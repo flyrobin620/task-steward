@@ -25,6 +25,9 @@ REDUCER_VERSION = 5
 # Events that keep the task's business time: an import carries the source's own times, and a
 # renumbering only moves the task to a new id.
 IMPORTS = frozenset({"import.task_imported", "task.renumbered"})
+# Events that describe a task without anything happening in it: the card's keywords and
+# summary (DN007 §5.1) do not count as activity.
+QUIET = frozenset({"task.summary_recorded"})
 KEEP_CHECKPOINTS = 3
 
 SCHEMA_SQL = """
@@ -311,6 +314,31 @@ CREATE TABLE IF NOT EXISTS imported_tasks(
     runs TEXT,
     legacy TEXT NOT NULL
 );
+-- Task cards' keywords and summaries and the user's standing preferences (DN007 §5.1, §6,
+-- §12). Only task.summary_recorded and user.preference_recorded write these tables, so a
+-- projection made before them stays valid.
+CREATE TABLE IF NOT EXISTS task_summaries(
+    task_id TEXT PRIMARY KEY,
+    keywords TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    bound_revision INTEGER NOT NULL,
+    bound_outputs TEXT NOT NULL,
+    source_seq INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_decisions(
+    ref TEXT PRIMARY KEY,
+    task_id TEXT,
+    kind TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    text TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    verified_source TEXT NOT NULL,
+    supersedes TEXT NOT NULL DEFAULT '[]',
+    superseded_by TEXT,
+    recorded_at TEXT NOT NULL,
+    source_seq INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS index_queue(
     task_id TEXT NOT NULL,
     sequence INTEGER NOT NULL,
@@ -479,7 +507,7 @@ class Projection:
             conn.execute(
                 "UPDATE tasks SET last_activity = CASE WHEN ? THEN last_activity ELSE ? END, "
                 "source_seq = ? WHERE task_id = ?",
-                (event.type in IMPORTS, event.time, event.sequence, event.task_id),
+                (event.type in IMPORTS | QUIET, event.time, event.sequence, event.task_id),
             )
             conn.execute(
                 "INSERT OR IGNORE INTO index_queue(task_id, sequence) VALUES(?, ?)",
