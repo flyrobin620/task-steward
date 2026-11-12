@@ -281,7 +281,7 @@
       const ids = value => (value || "").split(" ").filter(id => nodeById.has(id));
       const near = new Map(nodes.map(n => [n.dataset.id, new Set()]));
       for (const n of nodes) {
-        for (const other of [...ids(n.dataset.deps), ...ids(n.dataset.from)]) {
+        for (const other of [...ids(n.dataset.deps), ...ids(n.dataset.from), ...ids(n.dataset.refs)]) {
           near.get(n.dataset.id).add(other);
           near.get(other).add(n.dataset.id);
         }
@@ -352,7 +352,7 @@
       // plain paths, so the page needs no references between SVG elements.
       function edge(from, to, kind) {
         const rightward = to.offsetLeft >= from.offsetLeft + from.offsetWidth;
-        const sign = rightward ? 1 : -1; // leftward only for a cycle or an old record
+        const sign = rightward ? 1 : -1; // leftward for a reference or follow-up to a newer task, a cycle or an old record
         const x1 = rightward ? from.offsetLeft + from.offsetWidth : from.offsetLeft;
         const x2 = rightward ? to.offsetLeft : to.offsetLeft + to.offsetWidth;
         const y1 = from.offsetTop + from.offsetHeight / 2, y2 = to.offsetTop + to.offsetHeight / 2;
@@ -383,6 +383,10 @@
           for (const id of ids(n.dataset.from)) {
             const to = nodeById.get(id);
             if (shown.has(to)) paths.push(edge(n, to, "fu"));
+          }
+          for (const id of ids(n.dataset.refs)) {
+            const to = nodeById.get(id);
+            if (shown.has(to)) paths.push(edge(n, to, "ref"));
           }
         }
         svg.replaceChildren(...paths);

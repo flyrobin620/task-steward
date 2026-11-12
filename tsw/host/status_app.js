@@ -7,13 +7,15 @@
   const pending = new Set();
   const sending = new WeakSet();
 
-  /* While anything is unsent, the root carries data-hold-refresh and status.js skips reloads. */
+  /* While anything is unsent or a document is open, the root carries data-hold-refresh and
+     status.js skips reloads. */
   function hold() {
     for (const box of pending) {
       const text = box.querySelector(".reason textarea");
       if (!sending.has(box) && !(text && text.value.trim())) pending.delete(box);
     }
-    if (pending.size) document.documentElement.dataset.holdRefresh = "";
+    const open = document.documentElement.dataset.docOpen !== undefined;
+    if (pending.size || open) document.documentElement.dataset.holdRefresh = "";
     else delete document.documentElement.dataset.holdRefresh;
   }
 
@@ -21,6 +23,7 @@
     const meta = document.querySelector('meta[name="tsw-token"]');
     if (!meta) return;
     const token = meta.content;
+    documents();
     document.addEventListener("input", event => {
       const box = event.target instanceof Element ? event.target.closest(".acts") : null;
       if (box && event.target.matches(".reason textarea")) { pending.add(box); hold(); }
@@ -125,6 +128,122 @@
     if (!node) return;
     node.textContent = text;
     node.dataset.ok = ok === null ? "" : String(ok);
+  }
+
+  /* Markdown files the app serves (briefs, reports) open in a dialog on the page, rendered by the
+     app (?view=html, tsw.host.markdown), instead of as plain text (DN006 §8.10, T278). */
+  function documents() {
+    let dialog = null, title = null, raw = null, body = null;
+    // A link to a .md file of this app: same origin; a modified or middle click keeps the browser's way.
+    function documentUrl(link) {
+      if (!link || link.target === "_blank" || link.hasAttribute("download")) return null;
+      let url;
+      try { url = new URL(link.getAttribute("href") || "", link.baseURI); } catch (_) { return null; }
+      if (url.origin !== location.origin || !/\.md$/i.test(url.pathname)) return null;
+      url.search = "";
+      url.hash = "";
+      return url;
+    }
+    function build() {
+      dialog = document.createElement("dialog");
+      dialog.className = "doc";
+      dialog.setAttribute("aria-labelledby", "doc-title");
+      const bar = document.createElement("div");
+      bar.className = "doc-bar";
+      title = document.createElement("h2");
+      title.id = "doc-title";
+      raw = document.createElement("a");
+      raw.className = "ghost doc-raw";
+      raw.target = "_blank";
+      raw.rel = "noopener";
+      raw.textContent = "打开原文";
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "ghost doc-close";
+      close.textContent = "关闭";
+      close.setAttribute("aria-label", "关闭");
+      close.addEventListener("click", () => dialog.close());
+      bar.append(title, raw, close);
+      body = document.createElement("div");
+      body.className = "doc-body";
+      body.tabIndex = 0;
+      dialog.append(bar, body);
+      // A click on the backdrop lands on the dialog itself, outside its box.
+      dialog.addEventListener("click", event => {
+        if (event.target !== dialog) return;
+        const box = dialog.getBoundingClientRect();
+        const inside = event.clientX >= box.left && event.clientX <= box.right
+          && event.clientY >= box.top && event.clientY <= box.bottom;
+        if (!inside) dialog.close();
+      });
+      dialog.addEventListener("close", () => {
+        delete document.documentElement.dataset.docOpen;
+        hold();
+      });
+      body.addEventListener("click", event => {
+        const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+        if (!link || event.defaultPrevented || event.button !== 0
+          || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        const url = documentUrl(link);
+        if (url) { event.preventDefault(); open(url); }
+      });
+      document.body.append(dialog);
+    }
+    function relink(base) {
+      // The fragment's relative links are relative to the file, not to this page.
+      for (const a of body.querySelectorAll("a[href]")) {
+        const href = a.getAttribute("href");
+        if (href.startsWith("#")) { a.removeAttribute("href"); continue; }
+        let url;
+        try { url = new URL(href, base); } catch (_) { a.removeAttribute("href"); continue; }
+        a.href = url.href;
+        if (!(url.origin === location.origin && /\.md$/i.test(url.pathname))) {
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+        }
+      }
+    }
+    function message(text) {
+      const p = document.createElement("p");
+      p.className = "none";
+      p.textContent = text;
+      body.replaceChildren(p);
+    }
+    async function open(url) {
+      if (!dialog) build();
+      const path = decodeURIComponent(url.pathname).split("/").slice(-4).join("/");
+      title.textContent = path;
+      title.title = decodeURIComponent(url.pathname);
+      raw.href = url.href;
+      message("正在载入…");
+      if (!dialog.open) dialog.showModal();
+      document.documentElement.dataset.docOpen = "";
+      document.documentElement.dataset.holdRefresh = "";
+      const ask = new URL(url.href);
+      ask.searchParams.set("view", "html");
+      try {
+        const response = await fetch(ask.href, {credentials: "same-origin"});
+        if (!response.ok) throw new Error(`HTTP ${response.status}：${(await response.text()).slice(0, 200)}`);
+        const html = await response.text();
+        // The app escapes every piece of text; the page's CSP runs no script either way.
+        const parsed = new DOMParser().parseFromString(html, "text/html");
+        body.replaceChildren(...Array.from(parsed.body.childNodes));
+        relink(url.href);
+        body.scrollTop = 0;
+      } catch (error) {
+        message(`无法载入（${error.message || error}），可以打开原文查看。`);
+      }
+    }
+    document.addEventListener("click", event => {
+      if (event.defaultPrevented || event.button !== 0
+        || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (!link || (dialog && dialog.contains(link))) return;
+      const url = documentUrl(link);
+      if (!url) return;
+      event.preventDefault();
+      open(url);
+    });
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);

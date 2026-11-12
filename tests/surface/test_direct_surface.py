@@ -19,6 +19,7 @@ from tests.machine_harness import MACHINE, ORCH, Harness
 from tests.support import REPO_ROOT, child_env, run_json, run_tsw
 from tsw import lease
 from tsw.home import Home
+from tsw.host.status_assets import APP_SCRIPT
 
 mark = pytest.mark
 
@@ -393,3 +394,61 @@ def test_tsw_dashboard_serves_the_dashboard_with_its_task_flow(h: Harness, dashb
     # The same command: the same buttons, recorded on the same channel.
     status, out = dashboard.act("T001", "accept", revision=1)
     assert (status, out["event"]) == (200, "task.user_accepted")
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_the_dashboard_renders_markdown_shows_references_and_the_index_card(
+    h: Harness, dashboard: App
+) -> None:
+    for task_id in ("T001", "T002"):
+        h.register(task_id)
+        h.run("task_cancel", task_id=task_id, user_source=h.source(task_id, 1, "cancel"))
+        h.run("task_archive", task_id=task_id, user_source=h.source(task_id, 1, "archive"))
+    h.register("T003", goal="参考 T002 的结论")
+    h.plan("T003")
+    h.run("task_dispatch", task_id="T003", workdir="~/wt/T003", user_turn=True, read_set=["T001"])
+    handed_back(h)
+    dashboard.cookie = f"tsw_status_{dashboard.port}={dashboard.token}"
+    # The flow draws the references; the archived tasks referenced are context by default.
+    page = dashboard.request("GET", "/")[2].decode("utf-8")
+    node = re.search(r'<a class="fnode[^"]*" data-id="T003"[^>]*>', page)
+    assert node and 'data-refs="T001 T002"' in node.group(0)
+    for tid in ("T001", "T002"):
+        found = re.search(rf'<a class="fnode([^"]*)" data-id="{tid}"', page)
+        assert found and "no-live" not in found.group(1), tid
+    # The task view lists them, and its index card says the index is not built, without
+    # building it.
+    view = dashboard.request("GET", "/tasks/T003")[2].decode("utf-8")
+    cited = view.split("<h3>本任务引用的任务</h3>")[1].split("<h3>")[0]
+    assert '<a href="T001">T001</a>' in cited and "推荐读取集合（a1）" in cited
+    assert '<a href="T002">T002</a>' in cited and "<td>目标</td>" in cited
+    card = re.search(r'<section class="panel" id="card">.*?</section>', view, re.S)
+    assert card and "检索索引尚未建立" in card.group(0)
+    assert not (h.home.cache_dir / "context.sqlite").exists()
+    # The brief: rendered and escaped with ?view=html, still plain text without it.
+    brief = h.home.path("runs", "T003", "a1", "brief.md")
+    assert brief.is_file()
+    brief.write_text(
+        "# 任务书\n\n- [链接](javascript:alert(1))\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n"
+        "<script>alert(1)</script>\n",
+        encoding="utf-8",
+    )
+    status, headers, body = dashboard.request("GET", "/runs/T003/a1/brief.md?view=html")
+    html = body.decode("utf-8")
+    assert (status, headers["Content-Type"]) == (200, "text/html; charset=utf-8")
+    assert "script-src 'none'" in headers["Content-Security-Policy"]
+    assert html.startswith('<article class="md"><h1>任务书</h1>')
+    assert "<table>" in html and "<li>链接</li>" in html
+    assert "<script>" not in html and "&lt;script&gt;" in html and "javascript:" not in html
+    status, headers, body = dashboard.request("GET", "/runs/T003/a1/brief.md")
+    assert headers["Content-Type"] == "text/plain; charset=utf-8"
+    assert body.decode("utf-8").startswith("# 任务书")
+    # Rendering asks the same admission as the file.
+    assert (
+        dashboard.request("GET", "/runs/T003/a1/brief.md?view=html", headers={"Cookie": ""})[0]
+        == 403
+    )
+    assert dashboard.request("GET", "/runs/../tsw-home.json?view=html")[0] == 404
+    # The page's own script opens these links in a dialog; the policy is unchanged.
+    assert "connect-src 'self'" in view.replace("&#x27;", "'")
+    assert 'searchParams.set("view", "html")' in APP_SCRIPT and "showModal()" in APP_SCRIPT

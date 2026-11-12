@@ -5,7 +5,8 @@ renders the Dashboard page from the ledger's projection with the user's direct a
 a button runs :func:`tsw.direct.perform` on the ``status-app`` channel, the same implementation as
 ``tsw task accept``. Each task has its own read-only view at ``/tasks/<task>``
 (:mod:`tsw.host.task_view`). Report links on the page are served read-only from ``runs/`` and
-``legacy/``.
+``legacy/``; a Markdown file asked for with ``?view=html`` comes back rendered
+(:mod:`tsw.host.markdown`) for the page's document dialog (T278).
 
 Requests are admitted only with this run's token (DN006 §8.10, DN008 §9): it is printed in the
 terminal and put in the address the browser is opened with; the first visit trades it for an
@@ -32,11 +33,13 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from tsw import direct
 from tsw.config import load_config
+from tsw.context.index import index_path, read_card
 from tsw.errors import TswError, rejected
 from tsw.events import Event
 from tsw.home import Home
+from tsw.host.markdown import MAX_SOURCE_CHARS, render_markdown
 from tsw.host.status import AppView, Revision, render
-from tsw.host.task_view import not_found, render_task, timeline
+from tsw.host.task_view import card_state, not_found, render_task, timeline
 from tsw.ledger import Ledger
 from tsw.storage.fs import FsStorage
 
@@ -145,7 +148,16 @@ class StatusApp:
                 actions[task_id] = (found.actions, found.cancel_blocked)
             events = list(ledger.storage.read(since=0))
             view = AppView(token=self.token, actions=actions, history=history(events))
-            page = render_task(conn, task_id, view, timeline(events).get(task_id, []))
+            steps = timeline(events).get(task_id, [])
+            # The index card is read without touching the index (DN006 §8.10, T278).
+            card = card_state(
+                conn,
+                task_id,
+                read_card(index_path(self.home), task_id),
+                {e.sequence: e.checksum for e in events},
+                max((s.sequence for s in steps), default=0),
+            )
+            page = render_task(conn, task_id, view, steps, card)
             if page is None:
                 return False, not_found(task_id, view)
             return True, page
@@ -268,7 +280,7 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             if len(parts) == 3 and parts[1] == "tasks" and parts[2]:
                 self._serve_task(unquote(parts[2]))
                 return
-            self._serve_file(unquote(url.path))
+            self._serve_file(unquote(url.path), parse_qs(url.query).get("view", [""])[0])
 
         def _serve(self, produce: Callable[[], bytes], content_type: str) -> None:
             try:
@@ -287,7 +299,7 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             status = HTTPStatus.OK if found else HTTPStatus.NOT_FOUND
             self._send(status, page.encode("utf-8"), "text/html; charset=utf-8")
 
-        def _serve_file(self, path: str) -> None:
+        def _serve_file(self, path: str, view: str = "") -> None:
             parts = [p for p in path.split("/") if p]
             if not parts or parts[0] not in SERVED_DIRS or any(p in ("..", ".") for p in parts):
                 self._text(HTTPStatus.NOT_FOUND, "没有这个页面")
@@ -297,13 +309,24 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             if not target.is_relative_to(root / parts[0]) or not target.is_file():
                 self._text(HTTPStatus.NOT_FOUND, "没有这个文件")
                 return
-            # Markdown (briefs, reports' sources) is shown as text rather than downloaded.
-            plain = target.suffix.lower() in (".md", ".txt", ".log")
+            extra = {"Content-Security-Policy": SERVED_CSP}
+            markdown = target.suffix.lower() == ".md"
+            if markdown and view == "html":
+                # The page's document dialog (DN006 §8.10, T278): the file rendered, escaped.
+                source = target.read_bytes().decode("utf-8", errors="replace")
+                body = (
+                    render_markdown(source)
+                    if len(source) <= MAX_SOURCE_CHARS
+                    else f'<p class="none">文件过大（{len(source)} 个字符），请打开原文。</p>'
+                )
+                self._send(HTTPStatus.OK, body.encode("utf-8"), "text/html; charset=utf-8", extra)
+                return
+            # Markdown (briefs, reports' sources) is otherwise shown as text, not downloaded.
+            plain = markdown or target.suffix.lower() in (".txt", ".log")
             kind = "text/plain" if plain else mimetypes.guess_type(target.name)[0]
             kind = kind or "application/octet-stream"
             if kind.startswith("text/") or kind in ("application/json", "application/xml"):
                 kind += "; charset=utf-8"
-            extra = {"Content-Security-Policy": SERVED_CSP}
             self._send(HTTPStatus.OK, target.read_bytes(), kind, extra)
 
         # ------------------------------------------------------------ POST

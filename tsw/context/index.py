@@ -301,6 +301,60 @@ def timeline_row(event: Event) -> tuple[Any, ...] | None:
     )
 
 
+# ---------------------------------------------------------------------- reading a card
+
+
+INDEX_FILE = "context.sqlite"
+
+
+def index_path(home: Home) -> Path:
+    """Where the index is kept in a data directory."""
+    return home.cache_dir / INDEX_FILE
+
+
+@dataclass(frozen=True)
+class IndexedCard:
+    """A task's card as the index holds it, read without changing the index (DN006 §8.10).
+
+    ``problem`` says why there is no usable index: ``missing`` (no file, or nothing indexed yet),
+    ``version`` (another schema version) or ``unreadable`` (damaged, or locked for too long).
+    """
+
+    indexed: LedgerTail
+    card: dict[str, Any] | None
+    problem: str | None = None
+
+
+def read_card(path: Path, task_id: str, *, timeout: float = 2.0) -> IndexedCard:
+    """The task's card and the index's position, opening the file read-only.
+
+    Unlike :meth:`ContextIndex.connection` this never creates, upgrades or rebuilds the index and
+    takes no lock: a page that shows the card must not write, nor wait for an update.
+    """
+    if not path.is_file():
+        return IndexedCard(LedgerTail.empty(), None, "missing")
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=timeout)
+    except sqlite3.Error:
+        return IndexedCard(LedgerTail.empty(), None, "unreadable")
+    try:
+        conn.row_factory = sqlite3.Row
+        if not _has_table(conn, "meta") or not _has_table(conn, "cards"):
+            return IndexedCard(LedgerTail.empty(), None, "missing")
+        if _meta(conn, "version") != str(SCHEMA_VERSION):
+            return IndexedCard(LedgerTail.empty(), None, "version")
+        indexed = ContextIndex.indexed(conn)
+        if indexed.sequence == 0:
+            return IndexedCard(indexed, None, "missing")
+        row = conn.execute("SELECT card FROM cards WHERE task_id = ?", (task_id,)).fetchone()
+        card = json.loads(row["card"]) if row is not None else None
+        return IndexedCard(indexed, card if isinstance(card, dict) else None)
+    except (sqlite3.Error, ValueError):
+        return IndexedCard(LedgerTail.empty(), None, "unreadable")
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------- the index
 
 
@@ -309,7 +363,7 @@ class ContextIndex:
         self.home = home
         self.ledger = ledger
         self.storage: StorageBackend = ledger.storage
-        self.path = path or home.cache_dir / "context.sqlite"
+        self.path = path or index_path(home)
         self.tokenizer = "trigram"
         self.repo_aliases: dict[str, list[str]] = {}
         self._legacy: dict[str, Any] | None = None
