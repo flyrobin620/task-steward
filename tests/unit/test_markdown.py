@@ -185,6 +185,14 @@ def test_headings_have_unique_ids_and_anchors_point_at_them() -> None:
     # Another file's fragment is the dialog's to resolve against that file.
     assert '<a href="other.md#Section-2">文件</a>' in out
     assert anchor_id("Hello, World <x>") == "md-hello-world-x"
+    # A heading named like a numbered repeat never shares an id, in either order.
+    for source, ids in (
+        ("# A\n\n# A\n\n# A-1\n\n# A", ["md-a", "md-a-1", "md-a-1-1", "md-a-2"]),
+        ("# A-1\n\n# A\n\n# A", ["md-a-1", "md-a", "md-a-2"]),
+    ):
+        found = re.findall(r'<h1 id="([^"]+)"', md(source))
+        assert found == ids and len(set(found)) == len(found), source
+    assert '<a href="#md-a-1-1">x</a>' in md("[x](#a-1-1)\n\n# A\n\n# A\n\n# A-1")
     # The dialog keeps the fragment, scrolls to it, and only shows the latest request.
     assert "function reveal(hash)" in APP_SCRIPT and 'if (href.startsWith("#"))' in APP_SCRIPT
     assert (

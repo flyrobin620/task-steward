@@ -357,22 +357,25 @@ class _Item:
 
 
 class _Blocks:
-    def __init__(self, lines: list[str], ids: dict[str, int] | None = None) -> None:
+    def __init__(self, lines: list[str], ids: set[str] | None = None) -> None:
         self.lines = lines
         self.i = 0
         self.out: list[str] = []
-        self.ids = ids if ids is not None else {}  # shared by the whole document
+        self.ids = ids if ids is not None else set[str]()  # every id the document uses
 
     def _sub(self, lines: list[str]) -> str:
         return _Blocks(lines, self.ids).run()
 
     def _title(self, level: int, text: str) -> str:
-        """A heading with a unique id, as GitHub numbers repeated names (``-1``, ``-2``)."""
+        """A heading with an id no other heading has: a repeated name takes the first free of
+        ``-1``, ``-2``, … as GitHub numbers them, also past a heading that is itself named so."""
         body = inline(text)
         base = anchor_id(html.unescape(re.sub(r"<[^>]*>", "", body)))
-        n = self.ids.get(base, 0)
-        self.ids[base] = n + 1
-        name = base if n == 0 else f"{base}-{n}"
+        name, n = base, 0
+        while name in self.ids:
+            n += 1
+            name = f"{base}-{n}"
+        self.ids.add(name)
         return f'<h{level} id="{_e(name)}">{body}</h{level}>'
 
     def run(self) -> str:
