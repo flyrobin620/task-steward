@@ -400,7 +400,7 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 
 **验收后归档**：`sessions.archive_on_accept` 为 `true` 时，任务为 `accepted`、标题已处理完（任何结果）的会话随后归档；成功记 `attempt.closed`（工具回执，附 `disposition: archived`），失败（例如宿主拒绝归档正在工作或显示在屏幕上的会话）记 `attempt.session_updated`（`action: archive`，`outcome: failed`），会话不存在时同样记 `attempt.closed`（附原因）。用户改过标题不影响归档：归档是用户自己打开的配置。取消的任务不在这里归档（待命会话按 `sessions.archive_on_archive` 在取消前处置，§5.6）。
 
-**事件**：`attempt.session_updated`（主会话，经工具记录），`action` 为 `title` 或 `archive`，`outcome` 如上（另有 `asked`：检查返回改名时记下要改成的标题），附应有的标题、当时读到的标题、原因（`standby`、`dispatch`、`accepted`、`cancelled`）与工具结果原文。它不改变任务状态与 attempt 阶段；`title` 的 `renamed` / `already` 更新 tsw 记下的标题，`user_title` 与 `missing` 让这个 attempt 不再处理。
+**事件**：`attempt.session_updated`（主会话，经工具记录），`action` 为 `title` 或 `archive`，`outcome` 如上（另有 `asked`：检查返回改名时记下要改成的标题，当时读到的标题既已认定是 tsw 的，也成为 tsw 记下的标题），附应有的标题、当时读到的标题、原因（`standby`、`dispatch`、`accepted`、`cancelled`）与工具结果原文。它不改变任务状态与 attempt 阶段；`title` 的 `renamed` / `already` 更新 tsw 记下的标题，`user_title` 与 `missing` 让这个 attempt 不再处理。
 
 **待处置清单与幂等**：`attention` 的 `sessions` 列出应有的标题与 tsw 记下的标题不同（且没有 `user_title`、`missing`，同一应有标题没有记过 `failed`），或应当归档还没有回执（同样没有记过 `failed`）的 attempt：任务、attempt、会话、动作、应有的标题与原因；记过 `failed` 的单独标明，不再提醒，主会话可以再执行一次。清单从账本算出，所以验收来自哪个渠道都一样。重复执行是安全的：每次先读当前标题，已是应有标题的只记 `already`。改名成功之后、记录回执之前任务状态变了（例如用户这时在终端验收），回执照样记下刚改成的标题（须是记为 `asked` 的那个；原因记为 `superseded`），清单随后列出新的应有标题；用户改过标题之后不再接受改名回执。
 

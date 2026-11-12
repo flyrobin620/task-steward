@@ -519,10 +519,12 @@ def attempt_session_updated(conn: sqlite3.Connection, event: Event) -> None:
             (data["title"], *key),
         )
     elif data["action"] == "title" and outcome == "asked":
-        # A rename the main session was told to make; recorded once it is done or failed.
+        # A rename the main session was told to make; recorded once it is done or failed. The
+        # title it read then was found to be tsw's: it becomes the title tsw knows.
         conn.execute(
-            "UPDATE session_titles SET asked = ? WHERE task_id = ? AND attempt = ?",
-            (data["title"], *key),
+            "UPDATE session_titles SET asked = ?, known = COALESCE(?, known) "
+            "WHERE task_id = ? AND attempt = ?",
+            (data["title"], data.get("observed"), *key),
         )
     elif data["action"] == "title" and outcome == "user_title":
         conn.execute(

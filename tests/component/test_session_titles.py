@@ -554,6 +554,28 @@ def test_a_rename_recorded_after_the_task_moved_on(home: Home) -> None:
         "session_check", task_id="T002", attempt="a1", observed=observed(session2, "T002 短标题")
     )
     assert (done["action"], done["outcome"]) == ("none", "already")
+    # The earlier rename went through without a record, the task moved on, and the next rename
+    # broke off before the host ran it: the session still shows a title of tsw's (r3 F6).
+    session4 = prestarted(h, "T004", title="T004 短标题")
+    worker4 = deliver(h, "T004")
+    h.run(
+        "session_check",
+        task_id="T004",
+        attempt="a1",
+        observed=observed(session4, "T004 短标题（待命）"),
+    )  # asked "T004 短标题"; renamed by the host, never recorded
+    h.finalize(worker4, "T004")
+    h.submit(worker4, "T004")
+    h.accept("T004")
+    accept_from_terminal(h, "T004")
+    for _ in range(2):  # the second check comes after the first rename broke off
+        again = h.run(
+            "session_check",
+            task_id="T004",
+            attempt="a1",
+            observed=observed(session4, "T004 短标题"),
+        )
+        assert (again["action"], again["title"]) == ("rename", "[已验收] T004 短标题")
     # The user set a title that looks like one tsw would make, never asked for: it is the user's.
     session3 = prestarted(h, "T003", title="T003 短标题")
     deliver(h, "T003")
@@ -564,7 +586,9 @@ def test_a_rename_recorded_after_the_task_moved_on(home: Home) -> None:
         observed=observed(session3, "[已取消] T003 短标题"),
     )
     assert (looks["action"], looks["outcome"]) == ("none", "user_title")
-    assert [i["task_id"] for i in sessions(h)] == []
+    assert [i["task_id"] for i in sessions(h)] == [
+        "T004"
+    ]  # still to be prefixed; T003 is the user's
 
 
 @mark.use_case("UC-SESSION-001")
