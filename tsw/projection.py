@@ -291,6 +291,7 @@ CREATE TABLE IF NOT EXISTS session_titles(
     attempt TEXT NOT NULL,
     base TEXT NOT NULL,
     known TEXT NOT NULL,
+    asked TEXT,
     user_title TEXT,
     missing INTEGER NOT NULL DEFAULT 0,
     failed_title TEXT,

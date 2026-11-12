@@ -134,3 +134,14 @@ def test_the_session_scan_message() -> None:
     assert text.startswith("TaskSteward 例行项 session-scan")
     assert "T001 a1，worker 会话 w-1：改标题为“[已验收] T001 x”（任务已验收）" in text
     assert "T002 a2，worker 会话 w-2：按 sessions.archive_on_accept 归档（任务已验收）" in text
+
+
+def test_titles_that_count_as_tsws() -> None:
+    # Only the title tsw last knew and the one it last asked for: a title that merely looks like
+    # one tsw would make is the user's (T272 review r2).
+    assert titles.tsw_titles(row(asked=None)) == {"T001 短标题"}
+    assert titles.tsw_titles(row(asked="[已验收] T001 短标题")) == {
+        "T001 短标题",
+        "[已验收] T001 短标题",
+    }
+    assert "[已取消] T001 短标题" not in titles.tsw_titles(row(asked=None))

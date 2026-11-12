@@ -514,8 +514,14 @@ def attempt_session_updated(conn: sqlite3.Connection, event: Event) -> None:
     outcome = data["outcome"]
     if data["action"] == "title" and outcome in ("renamed", "already"):
         conn.execute(
-            "UPDATE session_titles SET known = ?, failed_title = NULL "
+            "UPDATE session_titles SET known = ?, failed_title = NULL, asked = NULL "
             "WHERE task_id = ? AND attempt = ?",
+            (data["title"], *key),
+        )
+    elif data["action"] == "title" and outcome == "asked":
+        # A rename the main session was told to make; recorded once it is done or failed.
+        conn.execute(
+            "UPDATE session_titles SET asked = ? WHERE task_id = ? AND attempt = ?",
             (data["title"], *key),
         )
     elif data["action"] == "title" and outcome == "user_title":
@@ -525,7 +531,8 @@ def attempt_session_updated(conn: sqlite3.Connection, event: Event) -> None:
         )
     elif data["action"] == "title" and outcome == "failed":
         conn.execute(
-            "UPDATE session_titles SET failed_title = ? WHERE task_id = ? AND attempt = ?",
+            "UPDATE session_titles SET failed_title = ?, asked = NULL "
+            "WHERE task_id = ? AND attempt = ?",
             (data["title"], *key),
         )
     elif outcome == "missing":

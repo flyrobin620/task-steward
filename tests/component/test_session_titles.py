@@ -200,7 +200,7 @@ def test_titles_follow_the_task_from_standby_to_acceptance(home: Home) -> None:
     # Neither changed the task: no business time, no state.
     assert h.status("T001") == "accepted"
     types = [e.type for e in h.ledger.storage.read(since=0) if e.task_id == "T001"]
-    assert types.count("attempt.session_updated") == 2
+    assert types.count("attempt.session_updated") == 4  # asked and renamed, twice
 
 
 @mark.use_case("UC-SESSION-001")
@@ -512,7 +512,8 @@ def test_session_scan_passes_an_item_on_again_when_it_stays_undone(home: Home) -
 def test_a_rename_recorded_after_the_task_moved_on(home: Home) -> None:
     # The host renamed, then the user accepted in a terminal before the record: the record still
     # stands, and the next check renames again rather than taking tsw's own title for the user's
-    # (T272 review r1 F3). A rename never recorded is recognised the same way.
+    # (T272 review r1 F3). A rename never recorded is recognised the same way: tsw remembers
+    # the rename it asked for. A title that only looks like one of tsw's is the user's (r2 F5).
     h = Harness(home)
     session = prestarted(h)
     worker = deliver(h)
@@ -520,6 +521,8 @@ def test_a_rename_recorded_after_the_task_moved_on(home: Home) -> None:
         "session_check", task_id="T001", attempt="a1", observed=observed(session, f"{BASE}（待命）")
     )
     assert check["title"] == BASE
+    asked = check["events"][0]["data"]
+    assert (asked["outcome"], asked["title"]) == ("asked", BASE)
     h.finalize(worker, "T001")
     h.submit(worker, "T001")
     h.accept("T001")
@@ -536,20 +539,32 @@ def test_a_rename_recorded_after_the_task_moved_on(home: Home) -> None:
     data = late["events"][0]["data"]
     assert (data["outcome"], data["title"], data["reason"]) == ("renamed", BASE, "superseded")
     assert rename(h, session, BASE) == f"[已验收] {BASE}"
-    # Not recorded at all: the session shows one of tsw's titles, so it is still tsw's.
+    # Not recorded at all (the session stopped after the rename): it shows the title tsw asked
+    # for, so it is still tsw's and the next check finds it done.
     session2 = prestarted(h, "T002", title="T002 短标题")
     deliver(h, "T002")
-    out = h.run(
+    first_ask = h.run(
         "session_check",
         task_id="T002",
         attempt="a1",
-        observed=observed(session2, "[已取消] T002 短标题"),
+        observed=observed(session2, "T002 短标题（待命）"),
     )
-    assert (out["action"], out["title"]) == ("rename", "T002 短标题")
-    other = h.run(
-        "session_check", task_id="T002", attempt="a1", observed=observed(session2, "T001 短标题")
+    assert first_ask["action"] == "rename"
+    done = h.run(
+        "session_check", task_id="T002", attempt="a1", observed=observed(session2, "T002 短标题")
     )
-    assert other["outcome"] == "user_title"  # another task's title is not one of T002's
+    assert (done["action"], done["outcome"]) == ("none", "already")
+    # The user set a title that looks like one tsw would make, never asked for: it is the user's.
+    session3 = prestarted(h, "T003", title="T003 短标题")
+    deliver(h, "T003")
+    looks = h.run(
+        "session_check",
+        task_id="T003",
+        attempt="a1",
+        observed=observed(session3, "[已取消] T003 短标题"),
+    )
+    assert (looks["action"], looks["outcome"]) == ("none", "user_title")
+    assert [i["task_id"] for i in sessions(h)] == []
 
 
 @mark.use_case("UC-SESSION-001")

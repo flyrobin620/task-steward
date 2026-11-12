@@ -68,16 +68,12 @@ def wanted(status: str, phase: str, base: str, config: EffectiveConfig) -> tuple
     return base, "dispatch"
 
 
-def own_titles(base: str, config: EffectiveConfig) -> set[str]:
-    """Every title tsw may have given a session with this base. A session showing one of them
-    still has a title of tsw's, even when the last rename was not recorded (a crash, or the task
-    moved on between the rename and its record); only another title is the user's."""
-    return {
-        base,
-        creation_title(base, "prestart"),
-        _prefixed(config.get("sessions.title_on_accept"), base),
-        _prefixed(config.get("sessions.title_on_cancel"), base),
-    }
+def tsw_titles(row: Mapping[str, Any]) -> set[str]:
+    """The titles this session may show as tsw left it: the one tsw last knew it to have, and the
+    one tsw last asked the main session to set (``asked``), whose rename may have happened
+    without a record (a crash, or the task moved on before the record). Any other title is the
+    user's, including one that merely looks like a title tsw would make (T272 review r2)."""
+    return {str(t) for t in (row["known"], row["asked"]) if t}
 
 
 def _rows(conn: sqlite3.Connection, where: str = "", args: tuple[Any, ...] = ()) -> list[Any]:
@@ -260,9 +256,19 @@ def session_check(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         if current == title:
             outcome = "already"
             output.update(action="none", outcome=outcome, title=title)
-        elif current == row["known"] or current in own_titles(str(row["base"]), env.config):
+        elif current in tsw_titles(row):
             output.update(action="rename", session_id=row["session_ref"], title=title)
-            return []
+            # Remember what was asked for: its rename may happen without a record.
+            return [
+                _event(
+                    row,
+                    action="title",
+                    outcome="asked",
+                    title=title,
+                    observed=current,
+                    reason=item["reason"],
+                )
+            ]
         else:
             # Someone else, the user as a rule, chose this title: leave it and never ask.
             outcome = "user_title"
@@ -306,7 +312,7 @@ def session_record(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         if action == "title":
             title = text(inp, "title")
             ours = row["user_title"] is None and title != row["known"]
-            if ok and ours and title in own_titles(str(row["base"]), env.config):
+            if ok and ours and title == row["asked"]:
                 # A rename that happened is recorded even when the task moved on before its
                 # record (accepted in a terminal meanwhile): tsw then knows the title it left,
                 # and the next check renames again instead of taking it for the user's.
