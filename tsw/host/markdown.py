@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import html
 import re
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import unquote
@@ -97,30 +97,17 @@ class _Scan:
     def __init__(self, text: str) -> None:
         self.text = text
         n = len(text)
-        # Backtick runs; an opener closes at the next run of the same length. A backslash does not
-        # escape inside code, so every run counts, but one after a backslash opens nothing.
-        runs: list[tuple[int, int]] = []
+        # Backtick runs by length. Which run opens a code span depends on where parsing is (an
+        # escaped backtick or one inside a link target opens nothing), so an opener's closer is
+        # looked up when the parser reaches it: the next run of the same length.
+        self._runs: dict[int, list[int]] = {}
         i = text.find("`")
         while i >= 0:
             width = _run(text, i, "`")
-            runs.append((i, width))
+            self._runs.setdefault(width, []).append(i)
             i = text.find("`", i + width)
-        following: list[int | None] = [None] * len(runs)
-        last: dict[int, int] = {}
-        for k in range(len(runs) - 1, -1, -1):
-            following[k] = last.get(runs[k][1])
-            last[runs[k][1]] = k
-        self.code: dict[int, int] = {}  # opener start -> closer start
-        k = 0
-        while k < len(runs):
-            m = following[k]
-            start = runs[k][0]
-            if m is None or (start > 0 and text[start - 1] == "\\"):
-                k += 1
-                continue
-            self.code[runs[k][0]] = runs[m][0]
-            k = m + 1
-        # Brackets outside code spans; an unmatched one has no entry.
+        # Brackets outside code spans, read the way the parser reads (escapes, code spans);
+        # an unmatched one has no entry.
         self.bracket: dict[int, int] = {}
         stack: list[int] = []
         i = 0
@@ -131,7 +118,7 @@ class _Scan:
                 continue
             if ch == "`":
                 width = _run(text, i, "`")
-                close = self.code.get(i)
+                close = self.code_close(i, width)
                 i = close + width if close is not None else i + width
                 continue
             if ch == "[":
@@ -142,6 +129,13 @@ class _Scan:
         self._stops: dict[str, list[int]] = {}
         self._closers: dict[str, list[int]] = {}
         self._parens: list[int] | None = None
+
+    def code_close(self, start: int, width: int) -> int | None:
+        """Where the code span opened by ``width`` backticks at ``start`` ends: the next run of
+        exactly that many; None when there is none and the backticks are text."""
+        runs = self._runs.get(width, [])
+        k = bisect_right(runs, start)
+        return runs[k] if k < len(runs) else None
 
     def depth(self, start: int, end: int) -> int:
         """Unclosed ``(`` in ``text[start:end]``: how many ``)`` a link target still owns."""
@@ -198,7 +192,7 @@ def _link_end(scan: _Scan, start: int) -> tuple[str, int] | None:
         close = scan.next_of(">", i)
         if close >= n or scan.next_of("newline", i) < close:
             return None
-        target = text[i + 1 : close]
+        target = (i + 1, close)
         i = close + 1
     else:
         # Up to the first space or ``)``, past ``)`` that close a ``(`` of the target itself
@@ -208,7 +202,7 @@ def _link_end(scan: _Scan, start: int) -> tuple[str, int] | None:
             if end >= n or text[end] != ")" or scan.depth(i, end) <= 0:
                 break
             end = scan.next_of("target", end + 1)
-        target = text[i:end]
+        target = (i, end)
         i = end
     while i < n and text[i] in " \t":
         i += 1
@@ -221,7 +215,8 @@ def _link_end(scan: _Scan, start: int) -> tuple[str, int] | None:
             i += 1
     if i >= n or text[i] != ")":
         return None
-    return target, i + 1
+    # Only a link that is one is copied out: a failed opener must not copy the rest.
+    return text[target[0] : target[1]], i + 1
 
 
 def inline(text: str, *, links: bool = True) -> str:
@@ -252,7 +247,7 @@ def inline(text: str, *, links: bool = True) -> str:
             continue
         if ch == "`":
             run = _run(text, i, "`")
-            close = scan.code.get(i)
+            close = scan.code_close(i, run)
             if close is not None:
                 flush(i)
                 code = text[i + run : close].replace("\n", " ")
