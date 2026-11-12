@@ -500,12 +500,12 @@ def card_notes(
 
 # Attention tiles: (label, colour, filter on click: statuses, flag).
 ATTENTION = (
-    ("占用名额", "#2563eb", ",".join(s for s in ORDER if s in OCCUPYING), ""),
     ("待启动", "#0d9488", "", "tostart"),
     ("待判断", "#7c3aed", "", ""),
     ("待用户答复", "#e11d48", "", "asking"),
-    ("待处理 follow-up", "#0891b2", "", "followups"),
 )
+# The tasks taking a worker slot (DN002 G-SLOT), shown as the "运行中" pick (T273 revision 3).
+RUNNING = tuple(s for s in ORDER if s in OCCUPYING)
 
 
 def _tile(label: str, n: int, color: str, *, st: str = "", flag: str = "", extra: str = "") -> str:
@@ -521,11 +521,9 @@ def _tile(label: str, n: int, color: str, *, st: str = "", flag: str = "", extra
 
 def tiles(
     *,
-    occupying: int,
     to_start: int,
     judgments: int,
     pending: int,
-    follow_ups: int,
     statuses: list[tuple[str, int]],
     archived: int,
 ) -> str:
@@ -533,12 +531,13 @@ def tiles(
 
     A tile whose count is zero is not shown. The status tiles are the statuses actually on the
     board, with the counts of the bar and the picks below; the last one counts the archived
-    tasks and opens them in the task flow.
+    tasks and opens them in the task flow. The running tasks and the tasks with open
+    follow-ups are not tiles but picks below the kinds (:func:`quick_picks`).
     """
     attention = [
         _tile(label, n, color, st=st, flag=flag)
         for (label, color, st, flag), n in zip(
-            ATTENTION, (occupying, to_start, judgments, pending, follow_ups), strict=True
+            ATTENTION, (to_start, judgments, pending), strict=True
         )
         if n
     ]
@@ -562,6 +561,30 @@ def tiles(
     if states:
         out += f'<div class="tile-group states" aria-label="状态">{"".join(states)}</div>'
     return out
+
+
+def quick_picks(running: int, with_follow_ups: int) -> str:
+    """Two short picks after the kinds (T273 revision 3); a pick with no task is hidden.
+
+    「运行中」 selects the statuses that take a worker slot; 「follow-up」 the tasks that have
+    open follow-ups, counted as tasks, not items.
+    """
+    picks = (
+        (
+            "running",
+            "运行中",
+            running,
+            "#2563eb",
+            "占用 worker 名额的任务：派发中、执行中、等待用户、主控核验",
+        ),
+        ("followups", "follow-up", with_follow_ups, "#0891b2", "有未处理 follow-up 的任务"),
+    )
+    return '<span class="lbl">快捷</span>' + "".join(
+        f'<button type="button" class="pick quick" style="--c:{color}" data-quick="{key}" '
+        f'data-n="{n}" aria-pressed="false" title="{_e(title)}"{"" if n else " hidden"}>'
+        f"{_e(label)}<small>{n}</small></button>"
+        for key, label, n, color, title in picks
+    )
 
 
 def pending_asks(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
@@ -670,11 +693,9 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
         s for s in counts if s not in ORDER and s != "archived"
     )
     tiles_html = tiles(
-        occupying=occupying,
         to_start=to_start,
         judgments=judgments,
         pending=pending,
-        follow_ups=sum(c.follow_ups for c in cards),
         statuses=[(s, counts[s]) for s in present],
         archived=archived,
     )
@@ -806,14 +827,16 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
 <option value="kind">按类型</option><option value="none">不分组</option></select></label></div>
 <div class="row"><span class="lbl">状态</span>{status_picks}<span class="lbl">类型</span>{
         kind_picks
-    }
+    }{quick_picks(occupying, sum(1 for c in cards if c.follow_ups))}
 <span class="sep"></span><span class="count" id="count" role="status" aria-live="polite"></span>
 <button type="button" class="ghost board-only" id="open-all">展开分组</button>
 <button type="button" class="ghost board-only" id="close-all">折叠分组</button>
 <button type="button" class="ghost board-only" id="cards-open">展开详情</button>
 <button type="button" class="ghost board-only" id="cards-close">收起详情</button>
 <button type="button" class="ghost" id="clear">清除筛选</button></div></section>
-<div id="board" data-order="{_e(order)}" data-kinds="{_e(" ".join(KINDS))}">{"".join(groups)}</div>
+<div id="board" data-order="{_e(order)}" data-kinds="{_e(" ".join(KINDS))}" data-running="{
+        " ".join(RUNNING)
+    }">{"".join(groups)}</div>
 {flow}
 <p class="empty" id="empty" hidden>没有符合筛选条件的任务。<button type="button" class="ghost" id="clear-empty">清除筛选</button></p>
 {"" if cards else '<p class="empty">没有任务</p>'}
