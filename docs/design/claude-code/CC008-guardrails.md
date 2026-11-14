@@ -1,6 +1,6 @@
 # CC008 Claude Code 上的护栏
 
-- 状态：设计草案（T242 r2；T243 增加例行会话的规则；T251 Worker Merge 规则覆盖仓库 worktree；T276 §6 worker 会话的 prompt 以 worker 说明开头，Worker Dispatch 规则随之更新；T272 CC-S4 提醒处置 worker 会话的标题与归档，主会话允许 `set_session_title`；T279 §6 Worker Merge 认可 `gh-account` skill 规定的单个环境变量前缀，§3 命令替换的分词；T282 §5.7 主会话自我更新：经用户明确确认在会话中运行 `tsw host render`，CC-S6 同时记下用户这一轮的原话）
+- 状态：设计草案（T242 r2；T243 增加例行会话的规则；T251 Worker Merge 规则覆盖仓库 worktree；T276 §6 worker 会话的 prompt 以 worker 说明开头，Worker Dispatch 规则随之更新；T272 CC-S4 提醒处置 worker 会话的标题与归档，主会话允许 `set_session_title`；T279 §6 Worker Merge 认可 `gh-account` skill 规定的单个环境变量前缀，§3 命令替换的分词；T282 §5.7 主会话自我更新：在会话中运行 `tsw host render`，其他会话仍拒绝）
 - 日期：2026-11-08
 - 实现：[DN008 校验原则](../DN008-guardrails.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC006 Claude Code 插件](CC006-plugins.md)
@@ -61,7 +61,7 @@
 | CC-S3 | UserPromptSubmit（worker） | 检测 `[report]` 并提示回传 | 保留 |
 | CC-S4 | Stop（主会话） | 本会话可以持有租约（没有被另一个主会话的有效租约排除、没有让出过租约）时：有未处理的回传、到期未转交的问题、失效的例行会话（`attention` 的 `routine` 为 `stale`，提示给它发消息重新设定）或待处置的 worker 会话标题与归档（`attention` 的 `sessions`，DN002 §5.8，提示按 orchestrate skill 处理；T272）时阻止结束一次；这一轮是用户的 turn（CC-S6）且 `attention` 的 `needs_prestart` 非空或例行会话需要启动（`missing`）时也阻止一次，提示为列出的任务预启动（DN002 §5.6）、启动例行会话（DN006 §8.9.2）。几条原因合在一条提示里，`stop_hook_active` 时不再阻止 | 保留；预启动提醒为 T244 新增，例行会话提醒为 T243 新增 |
 | CC-S5 | Stop（worker） | 评审进行中时阻止结束一次；记录 `worker.turn_ended` | 保留 |
-| CC-S6 | UserPromptSubmit（主会话） | 记下这一轮是不是用户本人的 turn：按 CC-S2 的同一规则判断（去掉前置 `<system-reminder>` 后为空或以注入标记开头的不是），写入数据目录 `cache/turns/<会话>.json`；用户本人的 turn 同时记下这一轮消息的原文（去掉前置 reminder，T282，供 §5.7 核对确认）；Stop 读取后即删除，hook 没有看到开头的一轮（没有 `UserPromptSubmit`）因此不算用户的 turn | T244 新增；T282 记原文 |
+| CC-S6 | UserPromptSubmit（主会话） | 记下这一轮是不是用户本人的 turn：按 CC-S2 的同一规则判断（去掉前置 `<system-reminder>` 后为空或以注入标记开头的不是），写入数据目录 `cache/turns/<会话>.json`；Stop 读取后即删除，hook 没有看到开头的一轮（没有 `UserPromptSubmit`）因此不算用户的 turn | T244 新增 |
 | CC-S7 | SessionStart（例行会话） | 注入例行会话指令（CC006 §6） | T243 新增 |
 
 **CC-S4 预启动提醒的背景与 escape**：只有用户本人的 turn 能创建会话（CC001 §4）。2026-11-07 主会话登记了等待依赖的任务后，没有在之后的用户 turn 里为它预启动，用户提醒后才补上；之后要等用户再发消息才能创建，依赖链因此停住。Stop hook 本身不知道这一轮由谁触发，所以由 CC-S6 在一轮开始时记下。提醒只在用户的 turn、本会话没有被另一个主会话的有效租约排除（另一个会话持有租约时本会话不能预启动）、列表非空时出现，每轮最多一次。escape：用户要求先不开始、或预启动确实不合适时，主会话说明原因后直接结束（第二次 Stop 带 `stop_hook_active`，不再阻止）；用户也可以关闭预启动（`scheduling.prestart.enabled`）。标记只是缓存：写入失败时这一轮不提醒，不影响其他行为（DN008 §8 第 2 条）。
@@ -98,7 +98,7 @@
 | --- | --- | --- |
 | 按 `CLAUDE_CODE_HOST_SESSION_ID` 解析角色：worker、已撤销（不回落为主会话）、主会话、待绑定、其他 | 保留 | 每个会话拿到正确的角色、工具与上下文；措辞从“防冒充”改为这一点 |
 | 会话目录只作一致性检查 | 保留 | — |
-| 已登记会话中 CLI 只开放 `HOST_CLI_COMMANDS`，其他命令以 `host_session_cli` 拒绝 | 保留 | tsw 自己的接口：用 `tsw tool run --role …` 代替 MCP 会让角色、租约由参数声明（走错步骤）；拒绝信息指向 MCP 工具。例外：`host render` 在主会话中经用户明确确认后可以运行，在其他任何会话中都拒绝（§5.7，T282） |
+| 已登记会话中 CLI 只开放 `HOST_CLI_COMMANDS`，其他命令以 `host_session_cli` 拒绝 | 保留 | tsw 自己的接口：用 `tsw tool run --role …` 代替 MCP 会让角色、租约由参数声明（走错步骤）；拒绝信息指向 MCP 工具。例外：`host render` 主会话可以运行（用户确认由 skill 约束），其他任何会话都拒绝（§5.7，T282） |
 | 租约记录机器标识 | 保留 | 状态漂移 |
 | 不在 prompt 中放 token | 保留 | 理由改为“没有必要：会话 ID 已足够区分角色” |
 
@@ -144,37 +144,24 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 
 用户 2026-11-15 决定（长期偏好 P-1）：**主会话可以自我更新**。用户明确确认时，主会话可以自己运行 `tsw host render`（重新生成数据目录的 `CLAUDE.md`、skill、worker 说明与设置，并更新插件副本，DN006 §6.2、CC006 §2）。此前它与 `restore`、`quiesce` 一样只由用户在终端运行（DN006 §9.7），产品更新后主会话只能请用户切到终端。
 
-**允许与拒绝**
+**允许与拒绝**：CLI 按会话角色决定，不看参数。
 
 | 调用者 | `tsw host render` |
 | --- | --- |
-| 会话外的终端（没有 `CLAUDE_CODE_HOST_SESSION_ID`、`CLAUDECODE`） | 照旧运行，不需要确认参数 |
-| 主会话：在数据目录打开、角色为 orchestrator，没有让出调度租约，租约也不由另一个会话有效持有（与 CC-S4 判断能否预启动相同） | 带 `--user-confirm "<用户原话>"` 且原话在本会话当前这一轮的用户消息中时运行；否则拒绝 |
-| worker、例行会话、已撤销、待绑定 | 拒绝（`host_session_cli`），请主会话或用户运行 |
-| 其他目录中的 Claude 会话（角色 none），以及只有 `CLAUDECODE`、没有会话 ID 的会话 | 拒绝（`host_session_cli`）：tsw 无法确认它是主会话，请用户在终端运行。此前 CLI 守卫不管无关会话，它们可以运行 render；T282 起收紧 |
+| 会话外的终端（没有 `CLAUDE_CODE_HOST_SESSION_ID`、`CLAUDECODE`） | 照旧运行 |
+| 主会话：在数据目录打开、角色为 orchestrator（不论是否持有租约：render 不写账本） | 运行 |
+| worker、例行会话、已撤销、待绑定 | 拒绝（`host_session_cli`），拒绝信息写明只有主会话可以运行，请主会话或用户运行 |
+| 其他目录中的 Claude 会话（角色 none），以及只有 `CLAUDECODE`、没有会话 ID 的会话 | 拒绝（`host_session_cli`）：tsw 无法确认它是主会话，请用户在终端运行或交给主会话。此前 CLI 守卫不管无关会话，它们可以运行 render；T282 起收紧 |
 
 其他命令不变：`task accept` / `reject` / `cancel`、`dashboard` / `status serve` 与不带 `--user-source` 的 `lease takeover` 在任何会话中都拒绝（§5.5，用户本人的操作）；`restore`、`quiesce` / `resume-writes` 仍由用户在终端运行；`tool run --role` 等写入口仍以 `host_session_cli` 拒绝（§5.2）。
 
-**“明确确认”**：用户在主会话中、针对这一次 render 说的话。例如回答主会话的提问时说“可以，执行 host render”，或者这一轮的消息本身就要求运行（“更新一下 tsw，跑 host render”）。主会话自己的判断、worker 与例行会话的消息、定时提示、其他会话转来的话都不算。
+**角色怎样判断**（与其他命令相同，§5.2）：Claude Code 给每个会话的进程（包括 Bash 中运行的命令）设置 `CLAUDE_CODE_HOST_SESSION_ID`。`tsw` 命令行看到它，就按账本解析这个会话 ID：绑定过 attempt 的是 worker（attempt 结束后为已撤销），绑定例行会话代次的是例行会话，在数据目录打开、没有绑定的是主会话。会话 ID 由宿主给出，不由命令行参数声明，所以 worker 不能在命令中声称自己是主会话。另有一层 hook：PreToolUse 对已登记会话的 Bash 命令分词，识别其中的 `tsw host render`（含 `python -m tsw`、启动器写法），worker、已撤销、待绑定会话直接拒绝，例行会话的 Bash 已由 CC-B11 整体拒绝；主会话不拦。无关会话不经 tsw hooks，由 CLI 拒绝。两层都防误认（worker 以为自己该更新宿主），不防同一用户下故意去掉环境变量的进程（DN008 §2）。
 
-**核对**
+**“明确确认”由主会话负责，tsw 不核对**：用户明确确认是用户在主会话中、针对这一次 render 说的话，例如回答主会话的提问时说“可以，执行 host render”，或者这一轮的消息本身就要求运行；主会话自己的判断、worker 与例行会话的消息、定时提示都不算。orchestrate skill 与插件不一致的 SessionStart 提示要求主会话先向用户说明 render 要做的事并请用户确认，得到确认后再运行。tsw 不加确认参数：用户 2026-11-15 决定（T282），引用用户原话的参数只能证明主会话引用了用户这一轮的某段话，不能证明这段话是确认，核对增加了步骤却不能真正验证；render 只改可重建的文件与插件副本，误运行的代价是重新加载一次。不记账本事件：render 不改变账本事实，用户在终端运行时同样不记。
 
-1. CC-S6 的 UserPromptSubmit hook 记下“这一轮是不是用户本人的 turn”时，用户本人的 turn 同时记下这一轮消息的原文（去掉前置的 `<system-reminder>`；注入消息不是用户的 turn，不记原文），写在 `cache/turns/<会话>.json`。Stop 读取后连同标记一起删除。
-2. `tsw host render --user-confirm TEXT` 在会话中运行时，CLI 按会话 ID 解析角色，检查租约，再读这个文件：这一轮必须是用户本人的 turn；`TEXT` 去掉首尾空白后不能为空，并且必须原样出现在这一轮的用户消息中（两边连续的空白都按一个空格比较）。
-3. 不满足时拒绝，不写任何文件。缺少 `--user-confirm` 为 `user_confirmation_required`；不是用户本人的 turn、或者原话不在这一轮的消息中为 `user_confirmation_unverified`。拒绝信息写明做法：先向用户说明 render 要做的事并请用户确认；用户回复后，在用户的那一轮带 `--user-confirm` 引用用户原话运行。
-4. 输出增加 `confirmation`（会话 ID 与引用的原话）与 `restart`（见下文）。不记账本事件：render 只重新生成数据目录中可重建的文件并更新插件副本，不改变账本事实，用户在终端运行时同样不记；确认所引用的原话保留在会话记录的命令中。
+**auto 模式与允许规则**：不新增。主会话在用户确认后运行，确认就在对话中，分类器按用户意图判断，应当放行；`default` 模式下宿主还会弹一次权限确认，这是宿主自己的保护。tsw 不为它生成 `Bash` 允许规则：render 会改写数据目录的 `.claude/settings.json`，tsw 不预先放行改写权限设置的命令。live 中若出现误拦，按 §6 的原则在 install hint 中加一条只描述“主会话在用户确认后运行单独的 `tsw host render`”的规则。
 
-**取舍**
-
-- **引用 hook 记下的用户原话（采用）**：与 worker 引用 hook 记录的用户消息登记答复与需求变更（DN002 §5.1a、DN006 §8.1a）同一思路，确定性，不依赖模型。只认当前这一轮：确认要针对这一次 render，几轮之前的“可以”不能沿用。worker 与例行会话的消息、定时提示到达主会话时是注入消息，CC-S6 不把它们算作用户的 turn，因此不能被引用。它防的是误认（主会话自己判断“该更新了”、把 worker 的请求当成用户的话），不防同一用户下的恶意进程（DN008 §2）：主会话可以引用用户这一轮消息中的任何片段，这段话是否真的是确认由主会话按 skill 判断，tsw 只保证引用的是用户本人这一轮说的话。原文只记在缓存中，不进账本：主会话的用户消息此前从不入账，为一次可重建文件的更新把每条消息都记入账本没有必要；缓存写入失败时 render 被拒绝，用户仍可在终端运行（DN008 §8 第 2 条：缓存失效只让便利失效）。
-- **只靠 auto 模式规则（不采用）**：分类器是宿主的保护，不是 tsw 的护栏（§2）。它在 `default` 等权限模式下不运行，`bypassPermissions` 下不存在；规则只能描述“主会话在用户确认后运行”，有没有确认仍由模型判断；而且要用户手工更新用户设置。
-- **AskUserQuestion 的回答（不能作为确认）**：回答是工具结果，不经 UserPromptSubmit，hook 看不到。主会话在回复中提问并结束这一轮（Claude app 中用 `wrap_up` 的提问与按钮，按钮的文字作为用户消息发出），在用户回复的那一轮运行。
-
-**hooks 一侧**：PreToolUse 对主会话 Bash 中的 `tsw host render` 不拦，由 CLI 核对；对 worker、已撤销、待绑定会话以“只有主会话经用户明确确认后可以运行”拒绝（例行会话的 Bash 已由 CC-B11 拒绝）。无关会话不经 tsw hooks，由 CLI 拒绝。
-
-**auto 模式与允许规则**：不新增。主会话运行 render 时，用户的确认就在对话中，分类器按用户意图判断，应当放行；`default` 模式下宿主还会弹一次权限确认，这是宿主自己的保护。tsw 不为它生成 `Bash` 允许规则：render 会改写数据目录的 `.claude/settings.json`，tsw 不预先放行改写权限设置的命令。live 中若出现误拦，按 §6 的原则在 install hint 中加一条只描述“主会话运行单独的 `tsw host render --user-confirm …`”的规则。
-
-**render 之后**：Claude Code 在会话开始时加载 `CLAUDE.md`、skill、插件的 hooks 与 MCP server，MCP server 载入的是当时的 tsw 运行时（CC006 §2），所以已在运行的会话看不到 render 的结果。会话不能重启自己：render 的输出 `restart` 写明这一点，主会话据此告诉用户：本会话之后仍按旧的说明与运行时工作，请用户方便时重启 Claude 会话（插件副本有更新时 `plugin.next` 给出同样的提示）。worker 说明 `roles/worker.md` 已在磁盘上更新：之后创建的 worker 直接使用，已有 worker 由 hook 在下一轮提示重读（DN006 §6.2）。插件不一致的 SessionStart 提示（CC006 §2）与 orchestrate skill 都按上面的流程写：向用户说明并请用户确认，确认后由主会话运行，再请用户重启会话。
+**render 之后**：Claude Code 在会话开始时加载 `CLAUDE.md`、skill、插件的 hooks 与 MCP server，MCP server 载入的是当时的 tsw 运行时（CC006 §2），所以已在运行的会话看不到 render 的结果。会话不能重启自己：render 的输出带 `restart` 写明这一点，主会话据此告诉用户：本会话之后仍按旧的说明与运行时工作，请用户方便时重启 Claude 会话（插件副本有更新时 `plugin.next` 给出同样的提示）。worker 说明 `roles/worker.md` 已在磁盘上更新：之后创建的 worker 直接使用，已有 worker 由 hook 在下一轮提示重读（DN006 §6.2）。
 
 ## 6. 允许规则与 auto 模式规则
 
