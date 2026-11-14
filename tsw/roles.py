@@ -28,7 +28,10 @@ SOURCE_DIR = Path(__file__).resolve().parent.parent / "plugin" / "roles"
 # Where tsw puts them in the data directory (DN006 §9.2): written only by tsw.
 RENDERED_DIR = "roles"
 WORKER = "worker.md"
-RENDER_HINT = "运行 tsw host render（产品仓库更新后都要运行）"
+RENDER_HINT = (
+    "运行 tsw host render（产品仓库更新后都要运行；主会话向用户说明并经用户确认后可以自己运行，"
+    "之后请用户重启 Claude 会话）"
+)
 # Which version of the instructions each worker session was given (cache: rebuildable).
 GIVEN_DIR = Path("cache") / "worker-instructions"
 

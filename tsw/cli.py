@@ -32,9 +32,10 @@ from tsw.home import (
 )
 from tsw.host.claude_code import install_hint, render_instructions
 from tsw.host.guard import run as run_guard
-from tsw.host.identity import HOST_CLI_COMMANDS, SESSION_ENV
+from tsw.host.identity import HOST_CLI_COMMANDS, MAIN_SESSION_CLI_COMMANDS, SESSION_ENV, Identity
 from tsw.host.identity import resolve as resolve_identity
 from tsw.host.mcp import serve
+from tsw.host.plugin_copy import RENDER_RESTART
 from tsw.host.plugin_copy import update as update_plugin
 from tsw.host.status_app import serve_status
 from tsw.importer import renumber
@@ -382,7 +383,11 @@ def _cmd_host_render(args: argparse.Namespace) -> dict[str, Any]:
         written = render_instructions(home)
     # Keeping the host current is part of rendering for it: the plugin is Claude Code's cached
     # copy, which only Claude Code's own update replaces (T247; idempotent).
-    return {"written": [str(p) for p in written], "plugin": update_plugin(os.environ)}
+    return {
+        "written": [str(p) for p in written],
+        "plugin": update_plugin(os.environ),
+        "restart": RENDER_RESTART,
+    }
 
 
 def _cmd_host_install_hint(args: argparse.Namespace) -> dict[str, Any]:
@@ -640,6 +645,43 @@ def command_path(args: argparse.Namespace) -> str:
     return f"{args.command} {sub}" if sub else str(args.command)
 
 
+def _session_identity(args: argparse.Namespace) -> Identity | None:
+    """The calling session's TaskSteward identity, or None without a data directory to resolve it
+    against."""
+    try:
+        root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)
+    except TswError:
+        return None
+    if not (root / "tsw-home.json").is_file():
+        return None
+    home = open_home(root)
+    with Ledger(home).view() as conn:
+        return resolve_identity(conn, home, os.environ, Path.cwd())
+
+
+def _check_main_session_command(args: argparse.Namespace) -> None:
+    """``host render`` inside a session: the main session only (T282, CC008 §5.7).
+
+    The role comes from the session ID the host sets, never from the command line. Any other
+    session (a worker, the routine session, one opened outside the data directory) is refused, and
+    so is a process that is in a session without saying which one.
+    """
+    if not direct.in_host_session(os.environ):
+        return
+    who = _session_identity(args) if os.environ.get(SESSION_ENV) else None
+    if who is not None and who.role == "orchestrator":
+        return
+    command = command_path(args)
+    raise TswError(
+        ErrorCode.REJECTED,
+        f"只有主会话（在数据目录打开的 TaskSteward 会话）可以在会话中运行 tsw {command}："
+        "请交给主会话（它会先请用户确认），或请用户在会话外的终端运行",
+        reason="host_session_cli",
+        command=command,
+        role=who.role if who is not None else "unknown",
+    )
+
+
 def _check_host_session(args: argparse.Namespace) -> None:
     """Inside a TaskSteward session the caller is the session: no ``--role`` on the command line.
 
@@ -648,6 +690,9 @@ def _check_host_session(args: argparse.Namespace) -> None:
     claim any of them, so such sessions only get the commands that resolve the caller
     themselves or only read (DN001 §7.1). Unrelated Claude sessions are not affected.
     """
+    if command_path(args) in MAIN_SESSION_CLI_COMMANDS:
+        _check_main_session_command(args)
+        return
     if not os.environ.get(SESSION_ENV) or command_path(args) in HOST_CLI_COMMANDS:
         return
     root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)

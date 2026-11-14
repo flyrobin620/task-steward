@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="e27676fdfb60acf58d42cc235552fe662ba5e944ee7036e31d3b3f45b6c1d4d1">
+<meta name="tsw-source-sha256" content="e9bc27f4c67cb679dd67310e6031cfa002e12e5b4bb1fa8a89021b2089b31731">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -65,12 +65,13 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 tsw init --home &lt;数据目录&gt; --remember</code></pre>
 <p>第一行把 <code>tsw</code> 装进 Python 的 <code>Scripts</code> 目录（Windows 的 PowerShell、cmd 与 Git Bash 都能直接运行 <code>tsw</code>）。这是可编辑安装，运行的就是本仓库当前的代码，<code>git pull</code> 后不用重装；请保留 <code>-e</code>：<code>host render</code> 等宿主命令要用仓库中的 <code>plugin/</code>，它不在 Python 包里。第二行初始化（或打开已有的）数据目录，并把它记在本仓库的 <code>.local/tsw-home</code> 中，之后终端不需要设置 <code>TSW_HOME</code>。不想安装时，在仓库根目录用 <code>python -m tsw</code> 代替 <code>tsw</code>。</p>
 <h3 id="哪些命令在哪里运行">哪些命令在哪里运行</h3>
-<ul><li><strong>运行时</strong>（tsw 的代码）在本仓库：安装后 <code>tsw</code> 在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw，不需要这一步。</li><li><strong>数据目录</strong>（账本、任务书、报告）按顺序定位：当前目录所在的、声明了 <code>claim_sessions</code> 的数据目录（只用于 live 测试隔离）→ 环境变量 <code>TSW_HOME</code> → 本仓库的 <code>.local/tsw-home</code> → <code>~/.tsw</code>。<code>tsw home</code> 显示找到的目录和依据。</li><li><strong>当前目录</strong>只影响两件事：上面的 <code>claim_sessions</code>，以及 <code>tsw review run</code>（在 worker 的 worktree 中评审当前 HEAD）。其他命令在哪个目录运行都一样；<code>backup</code>、<code>restore</code> 的相对路径按当前目录解析。</li><li>这些命令由你在<strong>会话外的终端</strong>中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 Dashboard 应用在任何会话中都会被拒绝，以免会话替你做决定（<a href="docs/design/DN006-plugin-layer.html">DN006 §8.10</a>）。</li></ul>
+<ul><li><strong>运行时</strong>（tsw 的代码）在本仓库：安装后 <code>tsw</code> 在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw，不需要这一步。</li><li><strong>数据目录</strong>（账本、任务书、报告）按顺序定位：当前目录所在的、声明了 <code>claim_sessions</code> 的数据目录（只用于 live 测试隔离）→ 环境变量 <code>TSW_HOME</code> → 本仓库的 <code>.local/tsw-home</code> → <code>~/.tsw</code>。<code>tsw home</code> 显示找到的目录和依据。</li><li><strong>当前目录</strong>只影响两件事：上面的 <code>claim_sessions</code>，以及 <code>tsw review run</code>（在 worker 的 worktree 中评审当前 HEAD）。其他命令在哪个目录运行都一样；<code>backup</code>、<code>restore</code> 的相对路径按当前目录解析。</li><li>这些命令由你在<strong>会话外的终端</strong>中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 Dashboard 应用在任何会话中都会被拒绝，以免会话替你做决定（<a href="docs/design/DN006-plugin-layer.html">DN006 §8.10</a>）。例外是 <code>tsw host render</code>：主会话可以自我更新，它先向你说明并请你确认，确认后自己运行，再请你重启 Claude 会话；其他会话运行会被拒绝（<a href="docs/design/DN006-plugin-layer.html">DN006 §9.7</a>）。</li></ul>
 <h3 id="需要你运行的命令">需要你运行的命令</h3>
 <pre><code class="lang-text">tsw home                                     显示数据目录与定位依据
 tsw init --home &lt;目录&gt; --remember            初始化数据目录并记为本仓库的数据目录
 tsw host install-hint                        显示 Claude Code 插件的安装步骤
-tsw host render                              更新主会话的 CLAUDE.md、skill、worker 说明与插件副本（产品更新后）
+tsw host render                              更新主会话的 CLAUDE.md、skill、worker 说明与插件副本（产品更新后；
+                                             主会话经你确认后也可以运行）
 tsw dashboard                                打开 TaskSteward Dashboard：浏览器中查看任务，一键验收、退回、取消
                                              （与 tsw status serve 相同）
 tsw task accept T255 [--note &quot;看过报告&quot;]     验收待验收的任务（先显示任务并要求确认；--yes 跳过）

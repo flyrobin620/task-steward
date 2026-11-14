@@ -77,7 +77,7 @@ tsw init --home <数据目录> --remember
 - **运行时**（tsw 的代码）在本仓库：安装后 `tsw` 在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw，不需要这一步。
 - **数据目录**（账本、任务书、报告）按顺序定位：当前目录所在的、声明了 `claim_sessions` 的数据目录（只用于 live 测试隔离）→ 环境变量 `TSW_HOME` → 本仓库的 `.local/tsw-home` → `~/.tsw`。`tsw home` 显示找到的目录和依据。
 - **当前目录**只影响两件事：上面的 `claim_sessions`，以及 `tsw review run`（在 worker 的 worktree 中评审当前 HEAD）。其他命令在哪个目录运行都一样；`backup`、`restore` 的相对路径按当前目录解析。
-- 这些命令由你在**会话外的终端**中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 Dashboard 应用在任何会话中都会被拒绝，以免会话替你做决定（[DN006 §8.10](docs/design/DN006-plugin-layer.md)）。
+- 这些命令由你在**会话外的终端**中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 Dashboard 应用在任何会话中都会被拒绝，以免会话替你做决定（[DN006 §8.10](docs/design/DN006-plugin-layer.md)）。例外是 `tsw host render`：主会话可以自我更新，它先向你说明并请你确认，确认后自己运行，再请你重启 Claude 会话；其他会话运行会被拒绝（[DN006 §9.7](docs/design/DN006-plugin-layer.md)）。
 
 ### 需要你运行的命令
 
@@ -85,7 +85,8 @@ tsw init --home <数据目录> --remember
 tsw home                                     显示数据目录与定位依据
 tsw init --home <目录> --remember            初始化数据目录并记为本仓库的数据目录
 tsw host install-hint                        显示 Claude Code 插件的安装步骤
-tsw host render                              更新主会话的 CLAUDE.md、skill、worker 说明与插件副本（产品更新后）
+tsw host render                              更新主会话的 CLAUDE.md、skill、worker 说明与插件副本（产品更新后；
+                                             主会话经你确认后也可以运行）
 tsw dashboard                                打开 TaskSteward Dashboard：浏览器中查看任务，一键验收、退回、取消
                                              （与 tsw status serve 相同）
 tsw task accept T255 [--note "看过报告"]     验收待验收的任务（先显示任务并要求确认；--yes 跳过）

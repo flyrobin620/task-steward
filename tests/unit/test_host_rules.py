@@ -269,3 +269,37 @@ def test_the_worker_start_text_is_only_about_the_session(tmp_path: Path) -> None
     assert "待命中" in worker_start_text(replace(who, phase="standby"), home)
     waiting = worker_start_text(replace(who, brief_path=None), home)
     assert "还没有任务书" in waiting and "不要开始工作" in waiting
+
+
+@pytest.mark.use_case("UC-HOST-008")
+@pytest.mark.parametrize(
+    ("command", "orchestrator", "worker", "expected"),
+    [
+        ("tsw host render", True, False, None),
+        ("python -m tsw host render", True, False, None),
+        ("tsw --home h host render --json", True, False, None),
+        ("tsw host render", False, True, "只有主会话"),
+        ("python -m tsw host render", False, True, "只有主会话"),
+        ("tsw host render", False, False, "只有主会话"),  # revoked or pending
+        ("tsw task accept T001 --yes", True, False, "task accept"),
+        ("tsw dashboard", True, False, "dashboard"),
+        ("tsw restore backup", True, False, "restore"),
+        ("tsw tool run x --role orchestrator --input {}", True, False, "tool run"),
+    ],
+)
+def test_only_the_main_session_may_run_host_render(
+    tmp_path: Path, command: str, orchestrator: bool, worker: bool, expected: str | None
+) -> None:
+    home = Home(tmp_path / "home")
+    problem = bash_problem(
+        command,
+        home=home,
+        push_allowed=True,
+        pr_allowed=True,
+        worker=worker,
+        orchestrator=orchestrator,
+    )
+    if expected is None:
+        assert problem is None
+    else:
+        assert problem is not None and expected in problem

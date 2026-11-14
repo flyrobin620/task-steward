@@ -2,8 +2,9 @@
 
 The user decided (2026-11-06) which host-side commands the orchestrator may run: backups, the
 ledger audit, a projection rebuild and import dry runs; a real import needs the user's own words
-and a dry run with the same arguments. ``restore``, ``quiesce`` / ``resume-writes`` and
-``host render`` stay with the user on the command line.
+and a dry run with the same arguments. ``restore`` and ``quiesce`` / ``resume-writes`` stay with
+the user on the command line. ``host render`` is not a tool either: the main session runs the
+command itself once the user confirms (T282, DN006 §9.7).
 """
 
 from __future__ import annotations

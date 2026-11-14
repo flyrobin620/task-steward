@@ -40,6 +40,11 @@ HOST_CLI_COMMANDS = frozenset(
         "ledger audit",
     }
 )
+# The main session updates itself (T282, CC008 §5.7): inside a session only the orchestrator role
+# may run these on the command line, once the user confirmed in the conversation (the orchestrate
+# skill asks; tsw cannot tell a confirmation from other words). Every other session, including
+# one opened outside the data directory, is refused.
+MAIN_SESSION_CLI_COMMANDS = frozenset({"host render"})
 
 
 def _norm(path: Path) -> str:

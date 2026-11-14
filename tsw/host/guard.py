@@ -25,7 +25,13 @@ from tsw.events import EventDraft, utc_now
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
 from tsw.host import shell
-from tsw.host.identity import HOST_CLI_COMMANDS, Identity, resolve, within
+from tsw.host.identity import (
+    HOST_CLI_COMMANDS,
+    MAIN_SESSION_CLI_COMMANDS,
+    Identity,
+    resolve,
+    within,
+)
 from tsw.host.plugin_copy import session_hint
 from tsw.ledger import Ledger
 from tsw.machine import routine as routine_mod
@@ -161,8 +167,8 @@ def owned_reason(top: str) -> str:
         return "数据目录的 config/ 只由 tsw 写入：主会话用 config_change / config_revert 修改配置"
     if top == "roles":
         return (
-            "数据目录的 roles/ 由 tsw host render 从产品仓库的 plugin/roles/ 生成：改来源后由用户"
-            "重新运行 tsw host render"
+            "数据目录的 roles/ 由 tsw host render 从产品仓库的 plugin/roles/ 生成：改来源后重新运行"
+            " tsw host render（主会话经用户确认后运行，或用户在终端运行）"
         )
     return f"数据目录的 {top}/ 只由 tsw 写入，请使用 tsw 工具"
 
@@ -241,8 +247,13 @@ def bash_problem(
     worker: bool,
     cwd: Path | None = None,
     writable_roots: Sequence[Path] | None = None,
+    orchestrator: bool = False,
 ) -> str | None:
-    """Why a shell command is refused, or None (best effort: see :mod:`tsw.host.shell`)."""
+    """Why a shell command is refused, or None (best effort: see :mod:`tsw.host.shell`).
+
+    ``orchestrator``: the main session, which may also run the commands that update the host
+    (``host render``, T282); the user's confirmation is the orchestrate skill's business.
+    """
     if _HASH.search(command) and _EXECUTABLE.search(command):
         return "不对可执行文件求哈希（policies.executable_hashing），除非账本中有用户批准记录"
     facts = shell.analyze(command, cwd or home.root)
@@ -264,7 +275,13 @@ def bash_problem(
             # Hooks are run by the host, never from a session's shell: a hook records the user's
             # own words (DN006 §8.1a), so running it by hand would let a session invent them.
             return "hook 入口只由宿主调用，会话中不能运行 tsw guard"
-        if cli is not None and cli not in HOST_CLI_COMMANDS:
+        if cli in MAIN_SESSION_CLI_COMMANDS:
+            if not orchestrator:
+                return (
+                    f"只有主会话可以在会话中运行 tsw {cli}：请交给主会话（它会先请用户确认），"
+                    "或请用户在会话外的终端运行"
+                )
+        elif cli is not None and cli not in HOST_CLI_COMMANDS:
             return f"宿主会话中不能运行 tsw {cli}；写操作请使用 tsw MCP 工具"
         if program.name in _PYTHONS and _IMPORTS_TSW.search(python_code(program, command)):
             return "宿主会话中不能直接导入 tsw 包；请使用 tsw MCP 工具"
@@ -646,6 +663,7 @@ class Guard:
                 merge_repository=merge_repository,
                 merge_host=merge_host,
                 worker=who.role == "worker",
+                orchestrator=who.role == "orchestrator",
                 cwd=self.cwd,
                 writable_roots=who.writable_roots if who.role == "worker" else None,
             )
