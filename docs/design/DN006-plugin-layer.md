@@ -1,6 +1,6 @@
 # DN006 插件层：宿主集成、会话、人类渠道与数据存储
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/；T272 §8.9.4a 默认例行项 session-scan；T279 §6.3 claude-code 生成的 skill 清单）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/；T272 §8.9.4a 默认例行项 session-scan；T279 §6.3 claude-code 生成的 skill 清单，§8.1a 每一轮结束都 `wrap_up`）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN008 校验原则](DN008-guardrails.md) · 实现：[CC006 Claude Code 插件](claude-code/CC006-plugins.md)
 
@@ -277,7 +277,7 @@ interactive 动作（`create`、`deliver_brief`、`send`、`stop`、`observe`、
 
 用户回复了但还没有回答问题（例如“让我想想”）时，worker 在会话中继续与用户交流；问题不会因超时转交。
 
-在 Claude app 中，worker 提问后以 `wrap_up` 结束这一轮：问题写在 `ask`，每个选项一个按钮，`blocked: true` 让 app 把会话标为等待用户。用户点按钮等于在 worker 会话中发出按钮上的文字，经 `UserPromptSubmit` 记录，与打字回答相同；app 的选择卡片（AskUserQuestion）的回答是工具结果，不经过 hook，不能作为答复来源，所以不用。
+在 Claude app 中，worker 提问后以 `wrap_up` 结束这一轮：问题写在 `ask`，每个选项一个按钮，`blocked: true` 让 app 把会话标为等待用户。用户点按钮等于在 worker 会话中发出按钮上的文字，经 `UserPromptSubmit` 记录，与打字回答相同；app 的选择卡片（AskUserQuestion）的回答是工具结果，不经过 hook，不能作为答复来源，所以不用。app 的提问框与等待标记一直保留到这个会话下一次 `wrap_up`：问题由主会话代答、经 Teams 等渠道答复或已被取代后，worker 在下一轮结束时调用 `wrap_up`（不带 `ask`、不设 `blocked`）替换它；worker 每一轮结束都调用 `wrap_up`，使 app 中的等待状态与账本一致（T279：Q-T279-2 经 Teams 答复后，worker 之后几轮没有调用 `wrap_up`，提问框一直挂着）。
 
 ### 8.1b 超时转交主会话
 

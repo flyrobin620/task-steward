@@ -259,6 +259,11 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     # The plugin is enabled at user scope, so a skill in it would reach every session in any
     # directory. The orchestrator's skill is rendered into the data directory instead.
     assert not (PLUGIN / "skills").exists()
+    worker = (PLUGIN / "roles" / "worker.md").read_text(encoding="utf-8")
+    # T279: merges may carry the gh-account skill's one account prefix, nothing joined; every
+    # turn ends with wrap_up, without ask once a question no longer waits on the user.
+    assert "`gh-account` skill" in worker and "|| echo none" in worker
+    assert "每一轮结束都调用 `wrap_up`" in worker and "不带 `ask`、不设 `blocked`" in worker
     market = json.loads(
         (REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
     )
