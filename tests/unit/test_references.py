@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from tests.support import flow_layouts
 from tsw.context.index import IndexedCard, outputs_digest
 from tsw.host.flow import FIRST_COLUMN, FlowTask, place
 from tsw.host.relations import find_references, label, mentions, references
@@ -155,20 +156,17 @@ def test_the_flow_draws_references_and_keeps_referenced_archived_tasks_as_contex
     assert 'data-refs="T005"' in _node(flow, "T006")
     # Archived tasks joined to a board task by a reference, either way, are in the default
     # layout, like those joined by a dependency or a follow-up; an unrelated one is not.
-    for tid in ("T001", "T002", "T006"):
-        assert "no-live" not in _node(flow, tid), tid
-    assert "no-live" in _node(flow, "T003")
+    live = flow_layouts(page)["live:dep,fu,ref"]["cells"]
+    assert {"T001", "T002", "T006"} <= set(live) and "T003" not in live
     # A reference puts the referencing task left of the one it references (revision 3).
-    gc = {
-        tid: int(re.search(r"--gc:(\d+)", _node(flow, tid)).group(1))  # type: ignore[union-attr]
-        for tid in ("T001", "T002", "T004", "T005", "T006")
-    }
+    gc = {tid: live[tid][0] for tid in ("T001", "T002", "T004", "T005", "T006")}
     assert gc["T006"] < gc["T005"] < gc["T004"] and gc["T005"] < gc["T001"]
     assert gc["T002"] < gc["T004"]
     # The legend tells the three lines apart; the script draws and highlights references.
     assert "A 依赖 B" in flow and "follow-up 转来" in flow and "A 引用 B" in flow
     assert 'class="lg ref"' in flow
-    assert "ids(n.dataset.refs)" in SCRIPT and 'edge(n, to, "ref")' in SCRIPT
+    assert 'const ATTR = {dep: "deps", fu: "from", ref: "refs"};' in SCRIPT
+    assert "paths.push(edge(n, to, kind))" in SCRIPT
     assert ".edge.ref .line{stroke-dasharray" in CSS and ".lg.ref{" in CSS
 
 
@@ -520,18 +518,17 @@ def test_the_page_carries_the_tracks_of_both_layouts_and_the_script_follows_them
     _referring_board(conn)
     # T006 references T005 next to it and T004 two columns away: a track over T005's column.
     conn.execute("UPDATE tasks SET goal = '后续见 T005 与 T004' WHERE task_id = 'T006'")
-    flow = render(conn).split('id="flow"')[1]
-    tracks = re.findall(
-        r'<div class="ftrack" data-src="(\w+)" data-layout="(\w+)" data-dir="\w+" '
-        r'style="([^"]*)" hidden>',
-        flow,
-    )
-    assert {(src, name) for src, name, _ in tracks} >= {("T006", "live"), ("T006", "all")}
-    for _, _, style in tracks:
-        assert re.fullmatch(r"--c0:\d+;--c1:\d+;--r:\d+", style)
+    layouts = flow_layouts(render(conn))
+    for key in ("live:dep,fu,ref", "all:dep,fu,ref"):
+        mine = [tr for tr in layouts[key]["tracks"] if tr[0] == "T006"]
+        assert mine and not mine[0][4], key  # running right
+        cells = layouts[key]["cells"]
+        assert mine[0][1] == cells["T006"][0] + 1 and mine[0][2] == cells["T004"][0]
+    # Without the references shown, T006 has no line and so no track (T280).
+    assert not [tr for tr in layouts["live:dep,fu"]["tracks"] if tr[0] == "T006"]
     assert "function routed(from, to, kind, track, y1, y2, sign)" in SCRIPT
-    assert 'data-dir="on"' in flow
-    assert "t.dataset.layout !== layout || !shown.has(nodeById.get(t.dataset.src))" in SCRIPT
+    assert 't.dataset.dir = back ? "back" : "on";' in SCRIPT
+    assert "t.hidden = !shown.has(nodeById.get(t.dataset.src))" in SCRIPT
     assert re.search(r"\.ftrack\{grid-column:var\(--c0\)/var\(--c1\);grid-row:var\(--r\)", CSS)
 
 

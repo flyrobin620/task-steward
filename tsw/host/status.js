@@ -64,6 +64,9 @@
     const q = $("q"), repo = $("repo"), flag = $("flag"), sort = $("sort"), group = $("group");
     const DEFAULT_CLOSED = {status: ["accepted", "cancelled"]};
     const VIEWS = ["board", "flow"];
+    // The task flow's relations (T280): the legend hides any of them, a display choice the
+    // filters' reset and the tiles keep.
+    const RELATIONS = ["dep", "fu", "ref"];
     let state;
 
     function parse(raw) {
@@ -71,7 +74,7 @@
       const list = key => (p.get(key) || "").split(",").filter(Boolean);
       return {q: p.get("q") || "", st: list("st"), kind: list("kind"), repo: p.get("repo") || "",
         flag: p.get("flag") || "", sort: p.get("sort") || "status", group: p.get("group") || "status",
-        view: p.get("view") || "board", arch: p.get("arch") === "1"};
+        view: p.get("view") || "board", arch: p.get("arch") === "1", hide: list("hide")};
     }
     function serialize(s) {
       const p = new URLSearchParams();
@@ -84,6 +87,7 @@
       if (s.group !== "status") p.set("group", s.group);
       if (s.view !== "board") p.set("view", s.view);
       if (s.arch) p.set("arch", "1");
+      if (s.hide.length) p.set("hide", s.hide.join(","));
       return p.toString();
     }
     function initial() {
@@ -181,6 +185,7 @@
       if (!VIEWS.includes(state.view)) state.view = "board";
       state.st = state.st.filter(v => v in statusLabels);
       state.kind = state.kind.filter(v => v in kindLabels);
+      state.hide = RELATIONS.filter(r => state.hide.includes(r));
     }
     // The quick picks after the kinds (T273 revision 3): the running statuses, and the flag.
     function running() {
@@ -190,7 +195,8 @@
       return state.group === "none" && state.sort === "activity";
     }
     function reset() {
-      state = {...parse(""), sort: state.sort, group: state.group, view: state.view, arch: state.arch};
+      state = {...parse(""), sort: state.sort, group: state.group, view: state.view, arch: state.arch,
+        hide: state.hide};
     }
     function words() {
       return state.q.toLowerCase().split(/\s+/).filter(Boolean);
@@ -272,37 +278,91 @@
 
     /* The task flow: nodes placed by tsw (DN006 §8.10); shown by the filters, arrows drawn here. */
     const flow = (() => {
-      const pane = $("flow"), grid = $("flow-grid"), svg = $("flow-edges");
+      const pane = $("flow"), grid = $("flow-grid"), svg = $("flow-edges"), data = $("flow-layouts");
       const scroller = $("flow-scroll"), sizer = $("flow-size");
-      if (!pane || !grid || !svg || !scroller || !sizer) return null;
+      if (!pane || !grid || !svg || !scroller || !sizer || !data) return null;
       const SVG = "http://www.w3.org/2000/svg";
       const nodes = Array.from(grid.querySelectorAll(".fnode"));
       const nodeById = new Map(nodes.map(n => [n.dataset.id, n]));
       const ids = value => (value || "").split(" ").filter(id => nodeById.has(id));
-      const near = new Map(nodes.map(n => [n.dataset.id, new Set()]));
+      // The tasks each relation joins a task to, both ways.
+      const ATTR = {dep: "deps", fu: "from", ref: "refs"};
+      const joined = Object.fromEntries(RELATIONS.map(r => [r, new Map(nodes.map(n => [n.dataset.id, new Set()]))]));
       for (const n of nodes) {
-        for (const other of [...ids(n.dataset.deps), ...ids(n.dataset.from), ...ids(n.dataset.refs)]) {
-          near.get(n.dataset.id).add(other);
-          near.get(other).add(n.dataset.id);
+        for (const r of RELATIONS) {
+          for (const other of ids(n.dataset[ATTR[r]])) {
+            joined[r].get(n.dataset.id).add(other);
+            joined[r].get(other).add(n.dataset.id);
+          }
         }
       }
+      // The tasks joined to each task by the relations shown (set by render).
+      let near = new Map();
       // Search reads a task's card where it has one, so both views select the same tasks.
       const haystack = new Map(nodes.map(n => {
         const card = byId.get("task-" + n.dataset.id);
         return [n, card ? text.get(card) : (n.title || "").toLowerCase()];
       }));
       const lanes = Array.from(grid.querySelectorAll(".lane, .lane-name"));
-      // Each task's lines spanning columns run on its track (T278 revision 4), one per layout.
-      const tracks = Array.from(grid.querySelectorAll(".ftrack"));
-      const trackOf = new Map(tracks.map(t => [`${t.dataset.layout}:${t.dataset.src}:${t.dataset.dir}`, t]));
+      // The layouts tsw computed for every choice of relations, with and without the archived
+      // tasks (T280); equal ones are written once. Each task's lines spanning columns run on its
+      // track (T278 revision 4).
+      const layouts = JSON.parse(data.textContent);
+      const order = layouts.ids.map(id => nodeById.get(id));
+      let tracks = [], trackOf = new Map(), placed = "";
       const ZOOMS = [0.3, 0.4, 0.5, 0.6, 0.75, 0.9, 1, 1.15, 1.3, 1.5];
       let zoom = Number(store.get("zoom")) || 1;
       let shown = new Set();
 
-      function inLayout(n) { return state.arch || !n.classList.contains("no-live"); }
+      const showing = () => RELATIONS.filter(r => !state.hide.includes(r));
+      // Places the nodes, the lanes and the tracks by the layout of the current choice.
+      function arrange() {
+        const key = (state.arch ? "all" : "live") + ":" + showing().join(",");
+        if (key === placed) return;
+        placed = key;
+        const set = layouts.sets[layouts.pick[key]];
+        grid.style.setProperty("--cols", String(set.cols));
+        order.forEach((n, i) => {
+          const cell = set.cells[i];
+          n.classList.toggle("out", !cell);
+          if (cell) {
+            n.style.setProperty("--gc", String(cell[0]));
+            n.style.setProperty("--gr", String(cell[1]));
+          }
+        });
+        const rows = new Map(layouts.repos.map((repo, i) => [repo, set.lanes[i]]));
+        for (const lane of lanes) {
+          const r = rows.get(lane.dataset.repo);
+          lane.classList.toggle("out", !r);
+          if (r) {
+            lane.style.setProperty("--r0", String(r[0]));
+            lane.style.setProperty("--r1", String(r[1]));
+          }
+        }
+        for (const t of tracks) t.remove();
+        tracks = set.tracks.map(([i, c0, c1, r, back]) => {
+          const t = document.createElement("div");
+          t.className = "ftrack";
+          t.dataset.src = layouts.ids[i];
+          t.dataset.dir = back ? "back" : "on";
+          t.style.setProperty("--c0", String(c0));
+          t.style.setProperty("--c1", String(c1));
+          t.style.setProperty("--r", String(r));
+          t.hidden = true;
+          return t;
+        });
+        grid.append(...tracks);
+        trackOf = new Map(tracks.map(t => [`${t.dataset.src}:${t.dataset.dir}`, t]));
+      }
+      function inLayout(n) { return !n.classList.contains("out"); }
       function render() {
-        grid.classList.toggle("all", state.arch);
+        arrange();
         $("flow-archived").checked = state.arch;
+        for (const box of $("flow-legend").querySelectorAll("input[data-rel]")) {
+          box.checked = !state.hide.includes(box.dataset.rel);
+        }
+        const kinds = showing();
+        near = new Map(nodes.map(n => [n.dataset.id, new Set(kinds.flatMap(r => [...joined[r].get(n.dataset.id)]))]));
         const w = words();
         const matched = new Set(nodes.filter(n => inLayout(n)
           && (n.dataset.status !== "archived" || (state.arch && !state.st.length))
@@ -321,10 +381,9 @@
           n.classList.toggle("ctx", context.has(n));
           if (shown.has(n)) repos.add(n.dataset.repo);
         }
-        for (const lane of lanes) lane.hidden = !repos.has(lane.dataset.repo) || !inLayout(lane);
-        // A track keeps its row open only while its task is shown in the current layout.
-        const layout = state.arch ? "all" : "live";
-        for (const t of tracks) t.hidden = t.dataset.layout !== layout || !shown.has(nodeById.get(t.dataset.src));
+        for (const lane of lanes) lane.hidden = !repos.has(lane.dataset.repo) || lane.classList.contains("out");
+        // A track keeps its row open only while its task is shown.
+        for (const t of tracks) t.hidden = !shown.has(nodeById.get(t.dataset.src));
         headings();
         const pool = nodes.filter(n => inLayout(n) && (state.arch || n.dataset.status !== "archived")).length;
         $("count").textContent = `显示 ${matched.size} / ${pool} 个任务`
@@ -334,7 +393,7 @@
         draw();
       }
       function column(n) {
-        return Number(n.style.getPropertyValue(state.arch ? "--agc" : "--gc")) || 0;
+        return Number(n.style.getPropertyValue("--gc")) || 0;
       }
       function headings() {
         for (const h of grid.querySelectorAll(".col-h")) h.remove();
@@ -360,7 +419,7 @@
         const y1 = from.offsetTop + from.offsetHeight / 2, y2 = to.offsetTop + to.offsetHeight / 2;
         const span = column(to) - column(from);
         const dir = span >= 2 ? "on" : span <= -2 ? "back" : "";
-        const track = dir ? trackOf.get(`${state.arch ? "all" : "live"}:${from.dataset.id}:${dir}`) : null;
+        const track = dir ? trackOf.get(`${from.dataset.id}:${dir}`) : null;
         if (track && !track.hidden) return routed(from, to, kind, track, y1, y2, dir === "on" ? 1 : -1);
         let x1, x2, c1, c2, sign;
         const sameColumn = to.offsetLeft < from.offsetLeft + from.offsetWidth
@@ -420,18 +479,13 @@
         svg.setAttribute("width", String(grid.offsetWidth));
         svg.setAttribute("height", String(grid.offsetHeight));
         const paths = [];
+        const kinds = showing();
         for (const n of shown) {
-          for (const id of ids(n.dataset.deps)) {
-            const to = nodeById.get(id);
-            if (shown.has(to)) paths.push(edge(n, to, "dep"));
-          }
-          for (const id of ids(n.dataset.from)) {
-            const to = nodeById.get(id);
-            if (shown.has(to)) paths.push(edge(n, to, "fu"));
-          }
-          for (const id of ids(n.dataset.refs)) {
-            const to = nodeById.get(id);
-            if (shown.has(to)) paths.push(edge(n, to, "ref"));
+          for (const kind of kinds) {
+            for (const id of ids(n.dataset[ATTR[kind]])) {
+              const to = nodeById.get(id);
+              if (shown.has(to)) paths.push(edge(n, to, kind));
+            }
           }
         }
         svg.replaceChildren(...paths);
@@ -473,6 +527,12 @@
         applyZoom();
       });
       $("flow-archived").addEventListener("change", event => { state.arch = event.target.checked; renderAll(); });
+      $("flow-legend").addEventListener("change", event => {
+        const rel = event.target.dataset?.rel;
+        if (!rel) return;
+        state.hide = event.target.checked ? state.hide.filter(r => r !== rel) : [...state.hide, rel];
+        renderAll();
+      });
       window.addEventListener("resize", () => draw());
       return {
         render,
@@ -519,10 +579,11 @@
     for (const tile of document.querySelectorAll("button.tile")) {
       tile.addEventListener("click", () => {
         if (tile.dataset.tileArchived) {
-          state = {...parse(""), sort: state.sort, group: state.group, view: "flow", arch: true};
+          state = {...parse(""), sort: state.sort, group: state.group, view: "flow", arch: true,
+            hide: state.hide};
         } else {
           state = {...parse(""), sort: state.sort, group: state.group, view: state.view, arch: state.arch,
-            st: (tile.dataset.tileSt || "").split(",").filter(Boolean), flag: tile.dataset.tileFlag || ""};
+            hide: state.hide, st: (tile.dataset.tileSt || "").split(",").filter(Boolean), flag: tile.dataset.tileFlag || ""};
         }
         render();
         tools.scrollIntoView({block: "start"});

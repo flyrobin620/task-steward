@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from tests.machine_harness import MACHINE, ORCH, Harness
-from tests.support import REPO_ROOT, child_env, run_json, run_tsw
+from tests.support import REPO_ROOT, child_env, flow_layouts, run_json, run_tsw
 from tsw import lease
 from tsw.home import Home
 from tsw.host.status_assets import APP_SCRIPT
@@ -413,9 +413,9 @@ def test_the_dashboard_renders_markdown_shows_references_and_the_index_card(
     page = dashboard.request("GET", "/")[2].decode("utf-8")
     node = re.search(r'<a class="fnode[^"]*" data-id="T003"[^>]*>', page)
     assert node and 'data-refs="T001 T002"' in node.group(0)
+    cells = flow_layouts(page)["live:dep,fu,ref"]["cells"]
     for tid in ("T001", "T002"):
-        found = re.search(rf'<a class="fnode([^"]*)" data-id="{tid}"', page)
-        assert found and "no-live" not in found.group(1), tid
+        assert re.search(rf'<a class="fnode[^"]*" data-id="{tid}"', page) and tid in cells, tid
     # The task view lists them, and its index card says the index is not built, without
     # building it.
     view = dashboard.request("GET", "/tasks/T003")[2].decode("utf-8")

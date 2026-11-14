@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -62,3 +63,33 @@ def run_json(*args: str, env: dict[str, str] | None = None) -> tuple[int, dict[s
     proc = run_tsw(*args, "--json", env=env)
     stream = proc.stdout if proc.returncode == 0 else proc.stderr
     return proc.returncode, json.loads(stream.strip().splitlines()[-1])
+
+
+def flow_layouts(page: str) -> dict[str, dict[str, Any]]:
+    """The task flow's layouts in a Dashboard page by key (``live:dep,fu,ref`` and so on).
+
+    Each has the grid ``cells`` by task, the ``lanes`` (first row, end row) by repository, the
+    number of ``cols`` and the ``tracks`` as (source, first column, end column, row, back).
+    """
+    found = re.search(
+        r'<script type="application/json" id="flow-layouts">(.*?)</script>', page, re.S
+    )
+    assert found, "no task flow layouts in the page"
+    data = json.loads(found.group(1))
+    ids, repos = data["ids"], data["repos"]
+    layouts: dict[str, dict[str, Any]] = {}
+    for key, at in data["pick"].items():
+        chosen = data["sets"][at]
+        layouts[key] = {
+            "set": at,
+            "cols": chosen["cols"],
+            "cells": {t: tuple(c) for t, c in zip(ids, chosen["cells"], strict=True) if c},
+            "lanes": {
+                r: tuple(rows) for r, rows in zip(repos, chosen["lanes"], strict=True) if rows
+            },
+            "tracks": [
+                (ids[i], first, end, row, bool(back))
+                for i, first, end, row, back in chosen["tracks"]
+            ],
+        }
+    return layouts

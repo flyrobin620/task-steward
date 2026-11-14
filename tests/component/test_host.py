@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from tests.machine_harness import ORCH, Harness
+from tests.support import flow_layouts
 from tsw.cli import main as cli_main
 from tsw.commands import Command
 from tsw.errors import TswError
@@ -574,11 +575,8 @@ def test_the_dashboard_draws_planned_dependencies_after_each_commit(h: Harness) 
     assert "<title>TaskSteward Dashboard</title>" in page
     node = re.search(r'<a class="fnode[^"]*" data-id="T002"[^>]*>', page)
     assert node and 'data-deps="T001"' in node.group(0)
-    gc = {
-        tid: int(m.group(1))
-        for tid in ("T001", "T002")
-        if (m := re.search(rf'data-id="{tid}"[^>]*style="--agc:\d+;--agr:\d+;--gc:(\d+)', page))
-    }
+    cells = flow_layouts(page)["live:dep,fu,ref"]["cells"]
+    gc = {tid: cells[tid][0] for tid in ("T001", "T002")}
     assert gc["T002"] < gc["T001"]  # the dependency is to the right
     tiles = page.split('<section class="tiles">')[1].split("</section>")[0]
     assert "<b>0</b>" not in tiles
