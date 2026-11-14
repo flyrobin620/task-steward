@@ -117,6 +117,10 @@ def _gh_account(
     entry = cast("dict[str, Any]", found)
     entry_provider = str(entry.get("provider") or "").lower()
     name = str(entry.get("account") or "")
+    if entry_provider and entry_provider != "github":
+        # The account names the provider explicitly: the repository is not on GitHub, whatever
+        # its owner/name looks like.
+        return None, False
     if entry_provider != "github" or not name:
         return None, github
     host = str(entry.get("host") or repo.get("host") or "github.com")

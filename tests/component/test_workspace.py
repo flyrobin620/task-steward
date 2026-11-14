@@ -421,6 +421,12 @@ GH_LINE = "- gh 账号："
             True,
             None,
         ),
+        (  # no provider on the repository, but its account is Azure DevOps (review r8)
+            {"repository": "org/proj/demo", "auth_profile": "ado"},
+            {"ado": {"provider": "azure-devops", "host": "dev.azure.com", "account": "me"}},
+            True,
+            None,
+        ),
         ({}, {}, True, None),  # no owner/name: not known to be on GitHub
     ],
 )
