@@ -377,21 +377,47 @@ def test_only_tasks_referencing_each_other_share_a_column() -> None:
 
 
 @mark.use_case("UC-DIRECT-005")
-def test_a_group_moves_right_together_and_spills_only_when_too_large() -> None:
+def test_a_group_moves_together_and_never_splits() -> None:
     # The group's member T001 must be right of T003 (which references it): T002 follows it.
     col = _columns(
         [_t(1), _t(2), _t(3)], {}, {"T003": ["T001"], "T001": ["T002"], "T002": ["T001"]}
     )
     assert col["T003"] < col["T001"] == col["T002"]
-    # A lane holds ``capacity`` tasks of a column; a larger group spills right.
-    tasks = [_t(n) for n in range(1, 5)]
+    # Seven tasks of one repository all referencing each other: one column, a taller lane.
+    tasks = [_t(n) for n in range(1, 8)]
     everyone = {t.task_id: [o.task_id for o in tasks if o is not t] for t in tasks}
-    col = _columns(tasks, {}, everyone, capacity=3)
-    assert sorted(col.values()) == [0, 0, 0, 1]
+    layout = place(tasks, {}, references=everyone)
+    assert len({c for c, _ in layout.cells.values()}) == 1
+    assert len({r for _, r in layout.cells.values()}) == 7
+    # A task placed after it in the same column goes right: that lane is full there.
+    col = _columns([*tasks, _t(8, "a")], {}, everyone)
+    assert col["T008"] < col["T001"]
+    col = _columns([_t(0, "a"), *tasks], {}, everyone)
+    assert col["T000"] > col["T001"]
     # Members in other lanes keep the group's column when theirs has room.
     tasks = [_t(1, "x"), _t(2, "y"), _t(3, "x")]
     col = _columns(tasks, {}, {"T001": ["T002"], "T002": ["T001"]}, capacity=1)
     assert col["T001"] == col["T002"]
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_dependencies_win_over_references() -> None:
+    # T003 depends on T001, and T003 <-> T002 <-> T001 reference each other: T003 stays left
+    # of T001, so it does not join the group of T001 and T002.
+    tasks = [_t(1), _t(2), _t(3)]
+    mutual = {"T003": ["T002"], "T002": ["T003", "T001"], "T001": ["T002"]}
+    col = _columns(tasks, {"T003": ["T001"]}, mutual)
+    assert col["T003"] < col["T001"] == col["T002"]
+    # A cycle of a dependency and references gives up a reference, never the dependency.
+    col = _columns(tasks, {"T001": ["T003"]}, {"T003": ["T002"], "T002": ["T001"]})
+    assert col["T001"] < col["T003"]
+    # A dependency through a task outside the pair keeps the pair apart too.
+    col = _columns(
+        [_t(1), _t(2), _t(3)],
+        {"T002": ["T003"], "T003": ["T001"]},
+        {"T001": ["T002"], "T002": ["T001"]},
+    )
+    assert col["T002"] < col["T003"] < col["T001"]
 
 
 @mark.use_case("UC-DIRECT-005")

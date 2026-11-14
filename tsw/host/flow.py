@@ -15,7 +15,6 @@ nodes by the filters and draws the arrows between the nodes that are shown.
 
 from __future__ import annotations
 
-import heapq
 import html
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -85,24 +84,36 @@ def place(
     """Lay the tasks out: newest left, every task right of the tasks depending on or referencing it.
 
     A dependency and a reference both put the task they point to further right (DN006 §8.10,
-    T278 revision 3); tasks that reference each other share a column instead, and so does every
-    task joined to them by mutual references. Such a group is placed as one: newest registration
-    first, but never before every task left of any member has been placed (a task registered
-    after the one pointing to it waits for it). A group goes to the current column, or further
-    right when a task pointing to a member is there or beyond, or when a member's repository
-    already has ``capacity`` tasks in that column; the current column only moves right, so older
-    tasks never come left of newer ones. A group with more than ``capacity`` members in one
-    repository spills its extra members further right. Within its lane a task takes the free
-    row nearest to the tasks pointing to it, which keeps the arrows short and straight.
-    Relations to tasks outside ``tasks`` are ignored; a cycle is broken by registration order.
+    T278 revision 3). Tasks that reference each other share a column instead, and so does every
+    task joined to them by mutual references, unless a dependency joins two of them (directly
+    or through other tasks): dependencies always keep their order, so such tasks stay apart.
+
+    Such a group is placed as one: newest registration first, but never before every task left
+    of any member has been placed. Where the relations form a cycle, the newest group with no
+    dependency still waiting goes first: only a reference ever points left, never a dependency.
+    A group goes to the current column, or further right when a task pointing to a member is
+    there or beyond, or when a member's repository already has ``capacity`` tasks in that
+    column; the current column only moves right, so older tasks never come left of newer ones.
+    A group with more than ``capacity`` members in one repository takes a column where that
+    lane is empty and makes the lane taller there. Within its lane a task takes the free row
+    nearest to the tasks pointing to it, which keeps the arrows short and straight. Relations to
+    tasks outside ``tasks`` are ignored.
     """
     by_id = {t.task_id: t for t in tasks}
+    deps = {
+        tid: sorted({d for d in depends_on.get(tid, ()) if d in by_id and d != tid})
+        for tid in by_id
+    }
     refs = {
         tid: {r for r in (references or {}).get(tid, ()) if r in by_id and r != tid}
         for tid in by_id
     }
-    # Groups: tasks joined by mutual references, transitively.
+
+    # Groups: tasks joined by mutual references, transitively, as long as no dependency path
+    # runs between two groups being joined (through other tasks and groups too), so that the
+    # groups' dependencies stay without a cycle.
     parent = {tid: tid for tid in by_id}
+    mates: dict[str, list[str]] = {tid: [tid] for tid in by_id}
 
     def root(tid: str) -> str:
         while parent[tid] != tid:
@@ -110,53 +121,67 @@ def place(
             tid = parent[tid]
         return tid
 
-    for a, rs in refs.items():
-        for b in rs:
-            if a in refs[b]:
-                ra, rb = root(a), root(b)
-                if ra != rb:
-                    parent[max(ra, rb)] = min(ra, rb)
+    def reaches(source: str, target: str) -> bool:
+        """A dependency path from group ``source`` to group ``target`` among the groups."""
+        seen = {source}
+        todo = [source]
+        while todo:
+            for tid in mates[todo.pop()]:
+                for d in deps[tid]:
+                    g = root(d)
+                    if g == target:
+                        return True
+                    if g not in seen:
+                        seen.add(g)
+                        todo.append(g)
+        return False
+
+    mutual = sorted({(a, b) for a, rs in refs.items() for b in rs if a < b and a in refs[b]})
+    for a, b in mutual:
+        ra, rb = root(a), root(b)
+        if ra == rb or reaches(ra, rb) or reaches(rb, ra):
+            continue
+        keep, gone = min(ra, rb), max(ra, rb)
+        parent[gone] = keep
+        mates[keep] += mates.pop(gone)
     group = {tid: root(tid) for tid in by_id}
-    members: dict[str, list[str]] = {}
-    for tid in sorted(by_id, key=lambda t: (-by_id[t].seq, t)):
-        members.setdefault(group[tid], []).append(tid)
+    members = {
+        g: sorted(ts, key=lambda t: (-by_id[t].seq, t)) for g, ts in mates.items() if root(g) == g
+    }
     newest = {g: by_id[ms[0]].seq for g, ms in members.items()}
 
-    # ``points[x]``: the tasks that must be right of x (its dependencies and references outside
-    # its group); ``pointed[x]``: the tasks that must be left of it.
-    points: dict[str, set[str]] = {tid: set() for tid in by_id}
-    for tid in by_id:
-        for other in {*depends_on.get(tid, ()), *refs[tid]}:
-            if other in by_id and other != tid and group[other] != group[tid]:
-                points[tid].add(other)
+    # ``points[x]``: the tasks that must be right of x (dependencies are hard, references soft);
+    # ``pointed[x]``: the tasks that must be left of it.
+    hard: dict[str, set[str]] = {g: set() for g in members}  # groups right of a group
+    soft: dict[str, set[str]] = {g: set() for g in members}
     pointed: dict[str, list[str]] = {tid: [] for tid in by_id}
-    for tid, others in points.items():
-        for other in sorted(others):
+    for tid in sorted(by_id):
+        for other in sorted({*deps[tid], *refs[tid]}):
+            if group[other] == group[tid]:
+                continue
             pointed[other].append(tid)
-    after: dict[str, set[str]] = {g: set() for g in members}  # groups right of a group
-    for tid, others in points.items():
-        after[group[tid]] |= {group[o] for o in others}
-    waiting = {g: 0 for g in members}
-    for right in after.values():
-        for r in right:
-            waiting[r] += 1
-    ready = [(-newest[g], g) for g, n in waiting.items() if n == 0]
-    heapq.heapify(ready)
+            (hard if other in deps[tid] else soft)[group[tid]].add(group[other])
+    waiting_hard = {g: 0 for g in members}
+    waiting_all = {g: 0 for g in members}
+    for g in members:
+        for r in hard[g]:
+            waiting_hard[r] += 1
+        for r in hard[g] | soft[g]:
+            waiting_all[r] += 1
     order: list[str] = []
     done: set[str] = set()
     while len(order) < len(members):
-        if not ready:  # a cycle: take the newest group left
-            g = max((g for g in members if g not in done), key=lambda g: (newest[g], g))
-            heapq.heappush(ready, (-newest[g], g))
-        _, g = heapq.heappop(ready)
-        if g in done:
-            continue
+        left = [g for g in members if g not in done]
+        free = [g for g in left if waiting_all[g] == 0]
+        # A cycle: give up a reference first; a dependency only for an old record's cycle.
+        free = free or [g for g in left if waiting_hard[g] == 0] or left
+        g = max(free, key=lambda g: (newest[g], g))
         done.add(g)
         order.append(g)
-        for r in sorted(after[g]):
-            waiting[r] -= 1
-            if waiting[r] == 0 and r not in done:
-                heapq.heappush(ready, (-newest[r], r))
+        for r in hard[g]:
+            waiting_hard[r] -= 1
+        for r in hard[g] | soft[g]:
+            waiting_all[r] -= 1
 
     column: dict[str, int] = {}
     slot: dict[str, int] = {}
@@ -164,29 +189,31 @@ def place(
     current = 0
     for g in order:
         tids = members[g]
-        left = [m for tid in tids for m in pointed[tid] if m in column]
-        col = max([current] + [column[m] + 1 for m in left])
+        before = [m for tid in tids for m in pointed[tid] if m in column]
+        col = max([current] + [column[m] + 1 for m in before])
         need: dict[str, int] = {}
         for tid in tids:
             need[by_id[tid].repo] = need.get(by_id[tid].repo, 0) + 1
-        # The whole group in one column where every member's lane has room for it.
-        while any(
-            len(used.get((col, repo), ())) + min(n, capacity) > capacity for repo, n in need.items()
-        ):
+
+        def fits(c: int, need: dict[str, int] = need) -> bool:
+            for repo, n in need.items():
+                taken = len(used.get((c, repo), ()))
+                if taken + n > capacity and (taken or n <= capacity):
+                    return False
+            return True
+
+        while not fits(col):
             col += 1
         current = col
         for tid in tids:
             task = by_id[tid]
-            own = col
-            while len(used.get((own, task.repo), ())) >= capacity:  # only a too large group
-                own += 1
-            taken = used.setdefault((own, task.repo), set())
+            taken = used.setdefault((col, task.repo), set())
             near = [slot[m] for m in pointed[tid] if m in column and by_id[m].repo == task.repo]
             want = round(sum(near) / len(near)) if near else 0
-            free = [r for r in range(capacity) if r not in taken]
-            row = min(free, key=lambda r: (abs(r - want), r))
+            rows = range(max(capacity, len(taken) + 1))  # a large group makes its lane taller
+            row = min((r for r in rows if r not in taken), key=lambda r: (abs(r - want), r))
             taken.add(row)
-            column[tid] = own
+            column[tid] = col
             slot[tid] = row
 
     layout = Layout(columns=(max(column.values()) + 1) if column else 0)
