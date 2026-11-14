@@ -351,19 +351,39 @@
       // An arrow from a task to what it depends on (or came from): a curve and its head, both
       // plain paths, so the page needs no references between SVG elements.
       function edge(from, to, kind) {
-        const rightward = to.offsetLeft >= from.offsetLeft + from.offsetWidth;
-        const sign = rightward ? 1 : -1; // leftward for a reference or follow-up to a newer task, a cycle or an old record
-        const x1 = rightward ? from.offsetLeft + from.offsetWidth : from.offsetLeft;
-        const x2 = rightward ? to.offsetLeft : to.offsetLeft + to.offsetWidth;
         const y1 = from.offsetTop + from.offsetHeight / 2, y2 = to.offsetTop + to.offsetHeight / 2;
-        const dx = sign * Math.max(30, Math.abs(x2 - x1) / 2), tip = x2 - sign * 8;
+        let x1, x2, c1, c2, sign;
+        const sameColumn = to.offsetLeft < from.offsetLeft + from.offsetWidth
+          && from.offsetLeft < to.offsetLeft + to.offsetWidth;
+        if (sameColumn) {
+          // Tasks that reference each other share a column (T278 revision 3): the arrow goes
+          // round the side, downward ones on the left and upward ones on the right, so the
+          // two directions never overlap.
+          // The curve stays within the nodes' 14px side margin, clear of the lane names on the
+          // first column and of the grid's edge on the last.
+          const left = y2 >= y1;
+          sign = left ? 1 : -1;
+          x1 = left ? from.offsetLeft : from.offsetLeft + from.offsetWidth;
+          x2 = left ? to.offsetLeft : to.offsetLeft + to.offsetWidth;
+          c1 = x1 - sign * 12;
+          c2 = x2 - sign * 12;
+        } else {
+          const rightward = to.offsetLeft >= from.offsetLeft + from.offsetWidth;
+          sign = rightward ? 1 : -1; // leftward only for a follow-up to a newer task, a cycle or an old record
+          x1 = rightward ? from.offsetLeft + from.offsetWidth : from.offsetLeft;
+          x2 = rightward ? to.offsetLeft : to.offsetLeft + to.offsetWidth;
+          const dx = sign * Math.max(30, Math.abs(x2 - x1) / 2);
+          c1 = x1 + dx;
+          c2 = x2 - sign * 8 - dx;
+        }
+        const tip = x2 - sign * 8;
         const g = document.createElementNS(SVG, "g");
         g.setAttribute("class", `edge ${kind}` + (from.classList.contains("ctx") || to.classList.contains("ctx") ? " ctx" : ""));
         g.dataset.a = from.dataset.id;
         g.dataset.b = to.dataset.id;
         const line = document.createElementNS(SVG, "path");
         line.setAttribute("class", "line");
-        line.setAttribute("d", `M${x1},${y1} C${x1 + dx},${y1} ${tip - dx},${y2} ${tip},${y2}`);
+        line.setAttribute("d", `M${x1},${y1} C${c1},${y1} ${c2},${y2} ${tip},${y2}`);
         const head = document.createElementNS(SVG, "path");
         head.setAttribute("class", "head");
         head.setAttribute("d", `M${tip},${y2 - 4.5} L${x2},${y2} L${tip},${y2 + 4.5} Z`);

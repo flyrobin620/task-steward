@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from tsw.context.index import IndexedCard, outputs_digest
+from tsw.host.flow import FIRST_COLUMN, FlowTask, place
 from tsw.host.relations import find_references, label, mentions, references
 from tsw.host.status import AppView, render
 from tsw.host.status_assets import CSS, SCRIPT
@@ -157,12 +158,13 @@ def test_the_flow_draws_references_and_keeps_referenced_archived_tasks_as_contex
     for tid in ("T001", "T002", "T006"):
         assert "no-live" not in _node(flow, tid), tid
     assert "no-live" in _node(flow, "T003")
-    # A reference does not move a task: T005 and T004 stay where registration puts them.
+    # A reference puts the referencing task left of the one it references (revision 3).
     gc = {
         tid: int(re.search(r"--gc:(\d+)", _node(flow, tid)).group(1))  # type: ignore[union-attr]
-        for tid in ("T004", "T005")
+        for tid in ("T001", "T002", "T004", "T005", "T006")
     }
-    assert gc["T005"] == gc["T004"]
+    assert gc["T006"] < gc["T005"] < gc["T004"] and gc["T005"] < gc["T001"]
+    assert gc["T002"] < gc["T004"]
     # The legend tells the three lines apart; the script draws and highlights references.
     assert "A 依赖 B" in flow and "follow-up 转来" in flow and "A 引用 B" in flow
     assert 'class="lg ref"' in flow
@@ -323,3 +325,123 @@ def test_no_card_for_an_unknown_task_and_none_read(conn: sqlite3.Connection) -> 
     assert card_state(conn, "T404", found, {1: "c1"}, 0) is None
     _task(conn, "T001", "intake", 1)
     assert "没有读取检索索引" in _section(render_task(conn, "T001", APP, []) or "", "card")
+
+
+# ---------------------------------------------------------------------- the layout
+
+
+def _t(n: int, repo: str = "a") -> FlowTask:
+    return FlowTask(f"T{n:03d}", f"t{n}", repo, "code", "in_progress", n, f"2026-11-{n:02d}")
+
+
+def _columns(
+    tasks: list[FlowTask], deps: dict[str, list[str]], refs: dict[str, list[str]], **kw: Any
+) -> dict[str, int]:
+    layout = place(tasks, deps, references=refs, **kw)
+    return {tid: cell[0] - FIRST_COLUMN for tid, cell in layout.cells.items()}
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_a_referencing_task_is_left_of_what_it_references() -> None:
+    # T001 (older) references T003 (newer): T003 moves right of it, like a dependency would.
+    col = _columns([_t(1), _t(2), _t(3)], {}, {"T001": ["T003"], "T003": ["T002"]})
+    assert col["T001"] < col["T003"] < col["T002"]
+    # Across repositories as well, and together with dependencies.
+    col = _columns(
+        [_t(1, "x"), _t(2, "y"), _t(3, "x"), _t(4, "y")],
+        {"T004": ["T003"]},
+        {"T003": ["T002"], "T002": ["T001"]},
+    )
+    assert col["T004"] < col["T003"] < col["T002"] < col["T001"]
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_only_tasks_referencing_each_other_share_a_column() -> None:
+    tasks = [_t(n) for n in range(1, 6)]
+    # T005 <-> T004 mutual; T004 -> T003 one way; T002 <-> T001 mutual and T003 -> T002.
+    refs = {
+        "T005": ["T004"],
+        "T004": ["T005", "T003"],
+        "T003": ["T002"],
+        "T002": ["T001"],
+        "T001": ["T002"],
+    }
+    col = _columns(tasks, {}, refs)
+    assert col["T005"] == col["T004"] < col["T003"] < col["T002"] == col["T001"]
+    # A chain of mutual references is one group: one column.
+    col = _columns(tasks[:3], {}, {"T001": ["T002"], "T002": ["T001", "T003"], "T003": ["T002"]})
+    assert col["T001"] == col["T002"] == col["T003"]
+    # A one-way reference alone never shares a column, even between unrelated neighbours.
+    col = _columns(tasks[:2], {}, {"T002": ["T001"]})
+    assert col["T002"] < col["T001"]
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_a_group_moves_together_and_never_splits() -> None:
+    # The group's member T001 must be right of T003 (which references it): T002 follows it.
+    col = _columns(
+        [_t(1), _t(2), _t(3)], {}, {"T003": ["T001"], "T001": ["T002"], "T002": ["T001"]}
+    )
+    assert col["T003"] < col["T001"] == col["T002"]
+    # Seven tasks of one repository all referencing each other: one column, a taller lane.
+    tasks = [_t(n) for n in range(1, 8)]
+    everyone = {t.task_id: [o.task_id for o in tasks if o is not t] for t in tasks}
+    layout = place(tasks, {}, references=everyone)
+    assert len({c for c, _ in layout.cells.values()}) == 1
+    assert len({r for _, r in layout.cells.values()}) == 7
+    # A task placed after it in the same column goes right: that lane is full there.
+    col = _columns([*tasks, _t(8, "a")], {}, everyone)
+    assert col["T008"] < col["T001"]
+    col = _columns([_t(0, "a"), *tasks], {}, everyone)
+    assert col["T000"] > col["T001"]
+    # Members in other lanes keep the group's column when theirs has room.
+    tasks = [_t(1, "x"), _t(2, "y"), _t(3, "x")]
+    col = _columns(tasks, {}, {"T001": ["T002"], "T002": ["T001"]}, capacity=1)
+    assert col["T001"] == col["T002"]
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_dependencies_win_over_references() -> None:
+    # T003 depends on T001, and T003 <-> T002 <-> T001 reference each other: T003 stays left
+    # of T001, so it does not join the group of T001 and T002.
+    tasks = [_t(1), _t(2), _t(3)]
+    mutual = {"T003": ["T002"], "T002": ["T003", "T001"], "T001": ["T002"]}
+    col = _columns(tasks, {"T003": ["T001"]}, mutual)
+    assert col["T003"] < col["T001"] == col["T002"]
+    # A cycle of a dependency and references gives up a reference, never the dependency.
+    col = _columns(tasks, {"T001": ["T003"]}, {"T003": ["T002"], "T002": ["T001"]})
+    assert col["T001"] < col["T003"]
+    # A dependency through a task outside the pair keeps the pair apart too.
+    col = _columns(
+        [_t(1), _t(2), _t(3)],
+        {"T002": ["T003"], "T003": ["T001"]},
+        {"T001": ["T002"], "T002": ["T001"]},
+    )
+    assert col["T002"] < col["T003"] < col["T001"]
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_a_reference_cycle_is_broken_by_registration_order() -> None:
+    # T001 -> T002 -> T003 -> T001 (none mutual): every task placed, the newest leftmost.
+    col = _columns(
+        [_t(1), _t(2), _t(3)], {}, {"T001": ["T002"], "T002": ["T003"], "T003": ["T001"]}
+    )
+    assert set(col) == {"T001", "T002", "T003"}
+    assert col["T003"] < col["T001"] < col["T002"]
+    # The same column arrows go round the side, so the script checks for it.
+    assert "const sameColumn =" in SCRIPT
+    # Same-column arrows bulge no further than the nodes' side margin (14px).
+    assert "c1 = x1 - sign * 12;" in SCRIPT and "margin:7px 14px" in CSS
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_a_large_unrelated_history_is_laid_out_in_order() -> None:
+    # Ordering uses heaps: thousands of tasks, with and without relations, place quickly and
+    # newest first.
+    tasks = [
+        FlowTask(f"T{n:05d}", "t", f"r{n % 7}", "code", "accepted", n, "x") for n in range(4000)
+    ]
+    refs = {f"T{n:05d}": [f"T{n - 3:05d}"] for n in range(3, 4000, 5)}
+    col = _columns(tasks, {}, refs)
+    assert len(col) == 4000
+    assert all(col[f"T{n:05d}"] < col[f"T{n - 3:05d}"] for n in range(3, 4000, 5))
