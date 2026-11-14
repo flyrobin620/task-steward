@@ -293,13 +293,7 @@ DN002 §5.8 在 Claude app 上的做法（T272）。
    | A（推荐）`GH_TOKEN` | `GH_TOKEN="$(…)" gh <命令> …`（完整写法见表下） | 不需要准备，任何会话、任何目录都能用；令牌只在这一条命令的子进程环境中，不进入命令行参数与输出；账号未登录时以 401 失败 | 命令里有一次取令牌的命令替换；`gh auth status` 看到的是环境令牌而不是账号；GitHub Enterprise Server 主机要用 `GH_ENTERPRISE_TOKEN` |
    | B `GH_CONFIG_DIR` | `GH_CONFIG_DIR="<目录>" gh <命令> …` | 命令里不取令牌；对应 DN003 已有的 `accounts.<名>.auth.config_dir` | 需要用户事先准备每个账号的 gh 配置目录（复制 `config.yml` 与 `hosts.yml`，把该主机的 `user` 改为该账号；令牌仍在系统钥匙串中），目录在数据目录之外、worker 的可写范围之外；令牌以明文存放在 `hosts.yml` 的机器上复制会多一份凭据；登录状态变化后副本可能过时 |
 
-   A 的完整写法：
-
-   ```bash
-   GH_TOKEN="$(gh auth token --hostname <host> --user <账号> || echo none)" gh <命令> …
-   ```
-
-   选定 A 为推荐做法：它不要求任何准备，也不在执行目录或数据目录写入任何文件（用户 2026-11-14：“用 gh token 然后配 env 然后执行”）；账号配置中写了 `auth.config_dir` 时可以用 B。命令替换必须放在双引号里。`|| echo none` 不能省（T279 评审 F1，实测）：账号没有登录时 `gh auth token` 失败、替换为空，gh 把空的 `GH_TOKEN` 当作没有设置，回退到活动账号执行；有了它，gh 以无效令牌请求，401 失败。每条需要该账号的 gh 命令各自带前缀，不 `export`。写操作之前先核对一次：带同样前缀的 `gh api --hostname <host> user --jq .login` 必须恰好是该账号，否则停下、请用户自己登录该账号。
+   A 的完整写法：`GH_TOKEN="$(gh auth token --hostname <host> --user <账号> || echo none)" gh <命令> …`。选定 A 为推荐做法：它不要求任何准备，也不在执行目录或数据目录写入任何文件（用户 2026-11-14：“用 gh token 然后配 env 然后执行”）；账号配置中写了 `auth.config_dir` 时可以用 B。命令替换必须放在双引号里。`|| echo none` 不能省（T279 评审 F1，实测）：账号没有登录时 `gh auth token` 失败、替换为空，gh 把空的 `GH_TOKEN` 当作没有设置，回退到活动账号执行；有了它，gh 以无效令牌请求，401 失败。每条需要该账号的 gh 命令各自带前缀，不 `export`。写操作之前先核对一次：带同样前缀的 `gh api --hostname <host> user --jq .login` 必须恰好是该账号，否则停下、请用户自己登录该账号。
 4. **git push 用哪个账号**：git 不经 gh 认证，而是用自己的凭据助手（本机为 Git Credential Manager，github.com 上存有多个账号时按用户名选择）。推送时用 `git -c credential.username=<账号> push …` 只对这一条命令指定账号；远端 URL 已带用户名时以它为准。凭据助手是 `gh auth git-credential` 时，同样用做法 A 的前缀。推送被拒并显示别的账号名时，就是账号不对。T279 实测：同一条 `git push --dry-run`，`credential.username=flyrobin620` 时通过，`credential.username` 为企业托管账号时被拒（“Permission … denied to <企业账号>”，403）；`GH_TOKEN` 前缀下 `gh api user` 返回 flyrobin620，不加前缀时返回活动账号。
 5. **禁止**：
    - `gh auth switch`、`gh auth login` / `logout`、`gh config set`（全局，影响并行会话）；`git config --global` 改凭据设置，或把用户名、令牌写进远端 URL；
