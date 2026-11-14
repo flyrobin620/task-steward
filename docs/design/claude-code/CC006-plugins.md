@@ -285,21 +285,21 @@ DN002 §5.8 在 Claude app 上的做法（T272）。
 **内容**：
 
 1. **确定仓库的账号**，按顺序取第一个有的：任务书写明的账号；配置 `repositories.<仓库>.auth_profile` 指向的 `accounts.<名>`（`host`、`account`，DN003 §3.4；主会话用 `config_show` 查看）；仓库 `owner` 与某个已登录账号同名时取该账号。都没有时问用户，不猜。
-2. **核对当前账号**：`gh auth status --hostname <host>`（只看 `Active account`，不加 `--show-token`）；必要时 `gh api user --jq .login` 看某条命令实际用的账号。当前活动账号就是仓库账号时，直接运行，不加前缀。
+2. **核对当前账号**：`gh auth status --hostname <host>`（只看 `Active account`，不加 `--show-token`）；必要时 `gh api --hostname <host> user --jq .login` 看某条命令实际用的账号（`gh api` 不带 `--hostname` 时总是问 github.com）。当前活动账号就是仓库账号时，直接运行，不加前缀。
 3. **只对一条命令生效的两种做法**：
 
    | 做法 | 写法 | 优点 | 缺点 |
    | --- | --- | --- | --- |
-   | A（推荐）`GH_TOKEN` | `GH_TOKEN="$(gh auth token --hostname <host> --user <账号>)" gh <命令> …` | 不需要准备，任何会话、任何目录都能用；令牌只在这一条命令的子进程环境中，不进入命令行参数与输出；账号未登录时立即失败 | 命令里有一次取令牌的命令替换；`gh auth status` 看到的是环境令牌而不是账号；GitHub Enterprise Server 主机要用 `GH_ENTERPRISE_TOKEN` |
+   | A（推荐）`GH_TOKEN` | `GH_TOKEN="$(gh auth token --hostname <host> --user <账号> \|\| echo none)" gh <命令> …` | 不需要准备，任何会话、任何目录都能用；令牌只在这一条命令的子进程环境中，不进入命令行参数与输出；账号未登录时以 401 失败 | 命令里有一次取令牌的命令替换；`gh auth status` 看到的是环境令牌而不是账号；GitHub Enterprise Server 主机要用 `GH_ENTERPRISE_TOKEN` |
    | B `GH_CONFIG_DIR` | `GH_CONFIG_DIR="<目录>" gh <命令> …` | 命令里不取令牌；对应 DN003 已有的 `accounts.<名>.auth.config_dir` | 需要用户事先准备每个账号的 gh 配置目录（复制 `config.yml` 与 `hosts.yml`，把该主机的 `user` 改为该账号；令牌仍在系统钥匙串中），目录在数据目录之外、worker 的可写范围之外；令牌以明文存放在 `hosts.yml` 的机器上复制会多一份凭据；登录状态变化后副本可能过时 |
 
-   选定 A 为推荐做法：它不要求任何准备，也不在执行目录或数据目录写入任何文件（用户 2026-11-14：“用 gh token 然后配 env 然后执行”）；账号配置中写了 `auth.config_dir` 时可以用 B。命令替换必须放在双引号里（不加引号时 hooks 的分词把它拆开，见 CC008 §3）。每条需要该账号的 gh 命令各自带前缀，不 `export`。
+   选定 A 为推荐做法：它不要求任何准备，也不在执行目录或数据目录写入任何文件（用户 2026-11-14：“用 gh token 然后配 env 然后执行”）；账号配置中写了 `auth.config_dir` 时可以用 B。命令替换必须放在双引号里。`|| echo none` 不能省（T279 评审 F1，实测）：账号没有登录时 `gh auth token` 失败、替换为空，gh 把空的 `GH_TOKEN` 当作没有设置，回退到活动账号执行；有了它，gh 以无效令牌请求，401 失败。每条需要该账号的 gh 命令各自带前缀，不 `export`。写操作之前先核对一次：带同样前缀的 `gh api --hostname <host> user --jq .login` 必须恰好是该账号，否则停下、请用户自己登录该账号。
 4. **git push 用哪个账号**：git 不经 gh 认证，而是用自己的凭据助手（本机为 Git Credential Manager，github.com 上存有多个账号时按用户名选择）。推送时用 `git -c credential.username=<账号> push …` 只对这一条命令指定账号；远端 URL 已带用户名时以它为准。凭据助手是 `gh auth git-credential` 时，同样用做法 A 的前缀。推送被拒并显示别的账号名时，就是账号不对。T279 实测：同一条 `git push --dry-run`，`credential.username=flyrobin620` 时通过，`credential.username` 为企业托管账号时被拒（“Permission … denied to <企业账号>”，403）；`GH_TOKEN` 前缀下 `gh api user` 返回 flyrobin620，不加前缀时返回活动账号。
 5. **禁止**：
    - `gh auth switch`、`gh auth login` / `logout`、`gh config set`（全局，影响并行会话）；`git config --global` 改凭据设置，或把用户名、令牌写进远端 URL；
    - 输出、记录或保存令牌：`gh auth token` 单独运行、`--show-token`、`echo $GH_TOKEN`、`export GH_TOKEN`、把令牌写进文件、命令行参数（如 `-H "Authorization: …"`）、URL、报告或提交；
    - 在执行目录或 worktree 写 `.claude/settings*.json`、`.env` 一类设置或环境文件来固定账号（app 会对每个新任务再要求信任，CC001 §3、CC008 §6）。
-6. **合并**：`GH_TOKEN="$(gh auth token --hostname github.com --user <账号>)" gh pr merge <编号> -R github.com/<owner>/<name> --squash` 单独运行，不与其他命令用 `;`、`&&`、`|` 连接，不加 `cd` 前缀；这是 worker 说明与 auto 模式规则“TaskSteward Worker Merge”认可的唯一前缀（CC008 §6）。
+6. **合并**：`GH_TOKEN="$(gh auth token --hostname github.com --user <账号> || echo none)" gh pr merge <编号> -R github.com/<owner>/<name> --squash` 单独运行，不与其他命令用 `;`、`&&`、`|` 连接，不加 `cd` 前缀；这是 worker 说明与 auto 模式规则“TaskSteward Worker Merge”认可的唯一前缀（CC008 §6）。
 
 **账号配置**：给仓库写 `auth_profile` 是权限类配置（DN003 §7.2），由主会话按用户原话 `config_change`；skill 只读取，不修改配置。
 

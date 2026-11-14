@@ -148,6 +148,18 @@ def test_writes_into_the_ledger_through_the_shell_are_refused(tmp_path: Path) ->
             True,
         ),
         ("GH_TOKEN=$(gh auth token --user me) gh pr merge 3 -R github.com/example/demo", True),
+        # The skill's fail-closed form: the || inside the substitution joins no other command.
+        (
+            'GH_TOKEN="$(gh auth token --hostname github.com --user me || echo none)" '
+            "gh pr merge 3 -R github.com/example/demo --squash",
+            True,
+        ),
+        (
+            "GH_TOKEN=$(gh auth token --user me || echo none) "
+            "gh pr merge 3 -R github.com/example/demo --squash",
+            True,
+        ),
+        ('GH_TOKEN="$(gh auth token --user me || echo none)" gh pr merge 3 --squash', False),
         ("GH_TOKEN=$(gh auth token --user me) gh pr merge 3 --squash", False),
         ("GH_TOKEN=$(gh auth token --user me) gh pr merge 3 -R example/other", False),
         ('GH_CONFIG_DIR="/u/gh/me" gh pr merge 3 -R github.com/example/demo --squash', True),
@@ -184,6 +196,17 @@ def test_a_worker_merges_only_its_own_repository_with_the_authorization(
         ("gh pr merge 3 -R ghe.example.org/example/demo", True),
         ("gh pr merge https://ghe.example.org/example/demo/pull/3", True),
         ("gh pr merge https://github.com/example/demo/pull/3", False),
+        # A GitHub Enterprise Server host's account prefix (gh-account skill, T279).
+        (
+            'GH_ENTERPRISE_TOKEN="$(gh auth token --hostname ghe.example.org --user me '
+            '|| echo none)" gh pr merge 3 -R ghe.example.org/example/demo --squash',
+            True,
+        ),
+        (
+            'GH_ENTERPRISE_TOKEN="$(gh auth token --hostname ghe.example.org --user me '
+            '|| echo none)" gh pr merge 3 -R example/demo --squash',
+            False,
+        ),
     ],
 )
 def test_a_repository_on_another_host_must_be_named_with_its_host(

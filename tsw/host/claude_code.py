@@ -189,11 +189,13 @@ AUTO_MODE_WORKER_MERGE = (
     "Merge Without Review or Self-Approval. The command may start with exactly one environment "
     "assignment that selects the GitHub account owning the repository, as TaskSteward's "
     'gh-account skill prescribes: GH_TOKEN="$(gh auth token --hostname <host> --user '
-    '<account>)" (the token goes to that one gh process and is never printed) or '
-    "GH_CONFIG_DIR=<that account's gh configuration directory>; it chooses the account, not the "
-    "target or the authorization. It does not cover --admin, bypassing checks or branch "
-    "protection, merging any other pull request, a cd or any other prefix, or a merge joined "
-    "with other commands by ;, && or |."
+    '<account> || echo none)" (GH_ENTERPRISE_TOKEN in the same form for a GitHub Enterprise '
+    "Server host; the token goes to that one gh process and is never printed, and the "
+    "|| echo none inside the substitution makes a missing token fail instead of falling back to "
+    "another account) or GH_CONFIG_DIR=<that account's gh configuration directory>; it chooses "
+    "the account, not the target or the authorization. It does not cover --admin, bypassing "
+    "checks or branch protection, merging any other pull request, a cd or any other prefix, or "
+    "a merge joined with other commands by ;, && or |."
 )
 
 AUTO_MODE_WORKER_DISPATCH = (

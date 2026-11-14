@@ -155,7 +155,7 @@ auto 模式分类器另有自己的规则（`autoMode.allow` / `soft_deny`），
 
 Claude Code 对复合命令（`;`、`&&`、管道）逐段核对允许规则，有一段不在规则内就交给权限模式与分类器判断。live 中单独的 `gh pr merge … -R …` 直接执行，而后面接了 `git fetch` 等命令的同一合并被分类器以“Merge Without Review”拒绝；worker 指令因此要求合并命令单独运行，auto 模式规则也只描述单独的合并命令。
 
-仓库账号不是 gh 当前活动账号时（本机 github.com 的活动账号是企业托管账号，不能访问个人仓库，F-T278-1），合并命令需要只对这一条命令生效的账号选择，而 `gh auth switch` 改全局活动账号、会影响并行会话。用户 2026-11-14 决定（T279）：worker 说明与“TaskSteward Worker Merge”认可 `gh-account` skill（CC006 §10.1）规定的一个前缀：`GH_TOKEN="$(gh auth token --hostname <host> --user <账号>)"`（推荐）或 `GH_CONFIG_DIR=<该账号的 gh 配置目录>`，后面仍是单独的 `gh pr merge <编号> -R <host>/<owner>/<name> …`；其他前缀（`cd`、别的环境变量）与 `;`、`&&`、`|` 连接仍不认可。前缀只选择账号，不改变合并的目标与授权：hooks 跳过赋值后照常执行 CC-B6、CC-B7（§3）。用户设置中的旧规则需按 `tsw host install-hint` 更新这一条；没有更新时带前缀的合并由分类器自行判断（T275、T276 带 `GH_TOKEN` 前缀的合并没有被拦）。
+仓库账号不是 gh 当前活动账号时（本机 github.com 的活动账号是企业托管账号，不能访问个人仓库，F-T278-1），合并命令需要只对这一条命令生效的账号选择，而 `gh auth switch` 改全局活动账号、会影响并行会话。用户 2026-11-14 决定（T279）：worker 说明与“TaskSteward Worker Merge”认可 `gh-account` skill（CC006 §10.1）规定的一个前缀：`GH_TOKEN="$(gh auth token --hostname <host> --user <账号> || echo none)"`（推荐；GitHub Enterprise Server 主机为同样写法的 `GH_ENTERPRISE_TOKEN`；替换中的 `|| echo none` 让取不到令牌时以 401 失败，而不是回退到活动账号）或 `GH_CONFIG_DIR=<该账号的 gh 配置目录>`，后面仍是单独的 `gh pr merge <编号> -R <host>/<owner>/<name> …`；其他前缀（`cd`、别的环境变量）与 `;`、`&&`、`|` 连接仍不认可。前缀只选择账号，不改变合并的目标与授权：hooks 跳过赋值后照常执行 CC-B6、CC-B7（§3）。用户设置中的旧规则需按 `tsw host install-hint` 更新这一条；没有更新时带前缀的合并由分类器自行判断（T275、T276 带 `GH_TOKEN` 前缀的合并没有被拦）。
 
 worker 能写自己的执行目录，所以 CC-B2 拦下编辑类工具对执行目录与数据目录中 `.claude/settings*.json` 的修改：遇到权限拒绝时不自行添加允许规则，而是告诉用户；在执行目录中写规则还会让下一次在该目录打开会话时要求信任，数据目录中的文件会被 tsw 重新生成覆盖。允许规则只放行动作本身；动作的授权仍由账本、配置与用户来源决定，主会话代答也仍然不是用户批准（DN006 §8.1b）。
 

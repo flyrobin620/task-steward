@@ -329,7 +329,11 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert account.startswith("---\nname: gh-account\ndescription: ")
     # One command at a time: the token prefix (recommended), the config directory, git push's
     # own account, and what is never done.
-    assert 'GH_TOKEN="$(gh auth token --hostname <host> --user <账号>)" gh' in account
+    assert 'GH_TOKEN="$(gh auth token --hostname <host> --user <账号> || echo none)" gh' in account
+    # A missing token fails instead of falling back to the active account; the check names
+    # the host (review F1, F2).
+    assert "gh api --hostname <host> user --jq .login" in account
+    assert "GH_ENTERPRISE_TOKEN" in account
     assert "GH_CONFIG_DIR=" in account and "auth_profile" in account
     assert "git -c credential.username=<账号> push" in account
     assert "gh auth switch" in account and "--show-token" in account
@@ -365,6 +369,7 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert "--admin" in rules[1]
     # Worker Merge accepts the gh-account skill's one account prefix, nothing joined (T279).
     assert "GH_TOKEN" in rules[1] and "GH_CONFIG_DIR" in rules[1] and "gh-account" in rules[1]
+    assert "|| echo none" in rules[1] and "GH_ENTERPRISE_TOKEN" in rules[1]
     assert "joined" in rules[1]
     # The routine session reads Teams with WorkIQ (T253).
     assert "mcp__workiq__fetch" in rules[2] and "ListChatMessages" not in rules[2]
