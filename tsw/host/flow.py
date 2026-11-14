@@ -57,13 +57,30 @@ def _no_lanes() -> list[Lane]:
     return []
 
 
+@dataclass(frozen=True)
+class Track:
+    """The row a task's lines that span columns run on, over grid columns [first, end)."""
+
+    source: str
+    repo: str
+    first: int
+    end: int
+    row: int
+
+
+def _no_tracks() -> list[Track]:
+    return []
+
+
 @dataclass
 class Layout:
-    """Grid cells (column, row) of the nodes, and the rows of each repository's lane."""
+    """Grid cells (column, row) of the nodes, the rows of each repository's lane, and the rows
+    the lines spanning columns run on (T278 revision 4)."""
 
     cells: dict[str, tuple[int, int]] = field(default_factory=_no_cells)
     lanes: list[Lane] = field(default_factory=_no_lanes)
     columns: int = 0
+    tracks: list[Track] = field(default_factory=_no_tracks)
 
 
 def lane_order(tasks: Iterable[FlowTask]) -> list[str]:
@@ -81,6 +98,7 @@ def place(
     depends_on: Mapping[str, Iterable[str]],
     capacity: int = LANE_CAPACITY,
     references: Mapping[str, Iterable[str]] | None = None,
+    follow_ups: Mapping[str, Iterable[str]] | None = None,
 ) -> Layout:
     """Lay the tasks out: newest left, every task right of the tasks depending on or referencing it.
 
@@ -96,9 +114,17 @@ def place(
     there or beyond, or when a member's repository already has ``capacity`` tasks in that
     column; the current column only moves right, so older tasks never come left of newer ones.
     A group with more than ``capacity`` members in one repository takes a column where that
-    lane is empty and makes the lane taller there. Within its lane a task takes the free row
-    nearest to the tasks pointing to it, which keeps the arrows short and straight. Relations to
-    tasks outside ``tasks`` are ignored.
+    lane is empty and makes the lane taller there. Relations to tasks outside ``tasks`` are
+    ignored.
+
+    Rows keep lines off the cards (T278 revision 4): the lines of a task that reach two or more
+    columns to its right (dependencies, references and the follow-ups it came from, ``lines``)
+    share one track, a row of the task's lane held in every column they pass. Columns are taken
+    left to right: first each card of the column (newest first) takes, among the rows of its lane
+    no track holds there, the one nearest to the tasks pointing to it (the top one when none
+    is placed), which keeps the arrows between neighbouring columns straight; then each of these
+    cards with such lines takes, for its track, the lowest row free in all the columns it
+    passes. A card further right gives way to the tracks already there.
     """
     by_id = {t.task_id: t for t in tasks}
     deps = {
@@ -224,19 +250,47 @@ def place(
         current = col
         for tid in tids:
             task = by_id[tid]
-            taken = used.setdefault((col, task.repo), set())
-            near = [slot[m] for m in pointed[tid] if m in column and by_id[m].repo == task.repo]
+            taken = used.setdefault((col, task.repo), set())  # counts the column's cards
+            taken.add(len(taken))
+            column[tid] = col
+
+    # Rows: cards first, then the tracks of the lines leaving them, column by column.
+    lines = {
+        tid: {o for o in {*deps[tid], *refs[tid], *(follow_ups or {}).get(tid, ())} if o in by_id}
+        for tid in by_id
+    }
+    slot: dict[str, int] = {}
+    held: dict[tuple[int, str], set[int]] = {}
+    found: list[tuple[str, str, int, int, int]] = []
+    for c in sorted(set(column.values())):
+        here = sorted((t for t in by_id if column[t] == c), key=lambda t: (-by_id[t].seq, t))
+        for tid in here:
+            repo = by_id[tid].repo
+            taken = held.setdefault((c, repo), set())
+            near = [slot[m] for m in pointed[tid] if m in slot and by_id[m].repo == repo]
             want = round(sum(near) / len(near)) if near else 0
-            rows = range(max(capacity, len(taken) + 1))  # a large group makes its lane taller
+            rows = range(want + len(taken) + 1)
             row = min((r for r in rows if r not in taken), key=lambda r: (abs(r - want), r))
             taken.add(row)
-            column[tid] = col
             slot[tid] = row
+        for tid in here:
+            far = max([column[o] for o in lines[tid]] + [c])
+            if far - c < 2:
+                continue
+            repo = by_id[tid].repo
+            row = 0
+            while any(row in held.get((k, repo), ()) for k in range(c + 1, far)):
+                row += 1
+            for k in range(c + 1, far):
+                held.setdefault((k, repo), set()).add(row)
+            found.append((tid, repo, c + 1, far, row))
 
     layout = Layout(columns=(max(column.values()) + 1) if column else 0)
     row_at = FIRST_ROW
     for repo in lane_order(tasks):
-        height = 1 + max(slot[t.task_id] for t in tasks if t.repo == repo)
+        rows = [slot[t.task_id] for t in tasks if t.repo == repo]
+        rows += [row for _, r, _, _, row in found if r == repo]
+        height = 1 + max(rows)
         layout.lanes.append(Lane(repo, row_at, row_at + height))
         for t in tasks:
             if t.repo == repo:
@@ -244,6 +298,11 @@ def place(
                     FIRST_COLUMN + column[t.task_id],
                     row_at + slot[t.task_id],
                 )
+        layout.tracks += [
+            Track(src, r, FIRST_COLUMN + first, FIRST_COLUMN + end, row_at + row)
+            for src, r, first, end, row in found
+            if r == repo
+        ]
         row_at += height
     return layout
 
@@ -285,8 +344,10 @@ def render_flow(
                 related[other].add(tid)
     live_ids = {t.task_id for t in tasks if t.status != "archived"}
     live_ids |= {o for tid in list(live_ids) for o in related[tid]}
-    live = place([t for t in tasks if t.task_id in live_ids], deps, references=refs)
-    every = place(tasks, deps, references=refs)
+    live = place(
+        [t for t in tasks if t.task_id in live_ids], deps, references=refs, follow_ups=sources
+    )
+    every = place(tasks, deps, references=refs, follow_ups=sources)
 
     lanes: list[str] = []
     every_lanes = {lane.repo: lane for lane in every.lanes}
@@ -337,6 +398,14 @@ def render_flow(
             f'<a {attrs} href="{_e(href)}">{inner}</a>' if href else f"<span {attrs}>{inner}</span>"
         )
 
+    # A track holds its row open (an empty row collapses) and tells the script where the lines
+    # spanning columns run: one element per track for each of the two layouts.
+    tracks = [
+        f'<div class="ftrack" data-src="{_e(tr.source)}" data-layout="{name}" '
+        f'style="--c0:{tr.first};--c1:{tr.end};--r:{tr.row}" hidden></div>'
+        for name, layout in (("live", live), ("all", every))
+        for tr in layout.tracks
+    ]
     arrow = (
         '<svg width="34" height="10" aria-hidden="true"><line x1="1" y1="5" x2="27" y2="5" '
         'class="lg {}"/><path d="M27 1 L33 5 L27 9 Z" class="lg-h"/></svg>'
@@ -362,7 +431,7 @@ def render_flow(
         f'<div class="flow-grid" id="flow-grid" style="--cols:{max(live.columns, 1)};'
         f'--acols:{max(every.columns, 1)}">'
         '<svg class="flow-edges" id="flow-edges" aria-hidden="true"></svg>'
-        f"{''.join(lanes)}{''.join(nodes)}</div></div></div>"
+        f"{''.join(lanes)}{''.join(tracks)}{''.join(nodes)}</div></div></div>"
         '<p class="empty" id="flow-empty" hidden>没有符合筛选条件的任务。</p>'
         "</section>"
     )

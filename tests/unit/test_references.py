@@ -445,3 +445,88 @@ def test_a_large_unrelated_history_is_laid_out_in_order() -> None:
     col = _columns(tasks, {}, refs)
     assert len(col) == 4000
     assert all(col[f"T{n:05d}"] < col[f"T{n - 3:05d}"] for n in range(3, 4000, 5))
+
+
+# ---------------------------------------------------------------------- tracks (revision 4)
+
+
+def _cells_of_tracks(layout: Any) -> set[tuple[str, int, int]]:
+    """(lane, grid column, grid row) of every cell a track holds."""
+    return {(tr.repo, col, tr.row) for tr in layout.tracks for col in range(tr.first, tr.end)}
+
+
+def _card_cells(layout: Any, tasks: list[FlowTask]) -> set[tuple[str, int, int]]:
+    repo = {t.task_id: t.repo for t in tasks}
+    return {(repo[tid], col, row) for tid, (col, row) in layout.cells.items()}
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_a_line_spanning_columns_runs_on_a_row_no_card_holds() -> None:
+    # T003 references T001 two columns to its right; T002 sits between them.
+    tasks = [_t(1), _t(2), _t(3)]
+    layout = place(tasks, {}, references={"T003": ["T002", "T001"], "T002": ["T001"]})
+    col = {tid: c - FIRST_COLUMN for tid, (c, _) in layout.cells.items()}
+    assert col == {"T003": 0, "T002": 1, "T001": 2}
+    [track] = layout.tracks
+    assert (track.source, track.first - FIRST_COLUMN, track.end - FIRST_COLUMN) == ("T003", 1, 2)
+    # The card in the column it passes gives way: the track holds the top row there.
+    assert layout.cells["T002"][1] != track.row
+    assert not _cells_of_tracks(layout) & _card_cells(layout, tasks)
+    # Neighbouring columns need no track; the lane is as tall as cards and tracks need.
+    assert place(tasks[:2], {}, references={"T002": ["T001"]}).tracks == []
+    lane = layout.lanes[0]
+    assert lane.end_row - lane.first_row == 2
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_the_screenshot_lane_keeps_every_line_off_the_cards() -> None:
+    # T279–T272 as on the user's Dashboard (2026-11-14), with T274 in another lane and an older
+    # task T262 to the right that T278 and T277 reference.
+    ids = [279, 278, 277, 276, 275, 274, 273, 272, 262]
+    tasks = [
+        FlowTask(
+            f"T{n}", "t", "workdeck" if n == 274 else "task-steward", "code", "accepted", n, "x"
+        )
+        for n in ids
+    ]
+    refs = {
+        "T279": ["T278", "T276", "T275"],
+        "T278": ["T277", "T276", "T275", "T273", "T272", "T262"],
+        "T277": ["T276", "T262"],
+        "T276": ["T275", "T272", "T274"],
+        "T275": ["T273", "T272", "T274"],
+        "T273": ["T272"],
+    }
+    layout = place(tasks, {"T272": ["T262"]}, references=refs)
+    assert not _cells_of_tracks(layout) & _card_cells(layout, tasks)
+    sources = {tr.source for tr in layout.tracks}
+    assert {"T279", "T278", "T277", "T276", "T275"} <= sources and "T273" not in sources
+    # A track ends before the column of its farthest target and starts right of its task.
+    col = {tid: c for tid, (c, _) in layout.cells.items()}
+    for tr in layout.tracks:
+        assert tr.first == col[tr.source] + 1 and tr.repo == "task-steward"
+    t278 = next(tr for tr in layout.tracks if tr.source == "T278")
+    assert t278.end == col["T262"]
+    # Follow-ups take a track too (they do not move cards; the references set the columns).
+    chain = {"T279": ["T278"], "T278": ["T277"]}
+    layout = place(tasks[:3], {}, references=chain, follow_ups={"T279": ["T277"]})
+    assert [tr.source for tr in layout.tracks] == ["T279"]
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_the_page_carries_the_tracks_of_both_layouts_and_the_script_follows_them(
+    conn: sqlite3.Connection,
+) -> None:
+    _referring_board(conn)
+    # T006 references T005 next to it and T004 two columns away: a track over T005's column.
+    conn.execute("UPDATE tasks SET goal = '后续见 T005 与 T004' WHERE task_id = 'T006'")
+    flow = render(conn).split('id="flow"')[1]
+    tracks = re.findall(
+        r'<div class="ftrack" data-src="(\w+)" data-layout="(\w+)" style="([^"]*)" hidden>', flow
+    )
+    assert {(src, name) for src, name, _ in tracks} >= {("T006", "live"), ("T006", "all")}
+    for _, _, style in tracks:
+        assert re.fullmatch(r"--c0:\d+;--c1:\d+;--r:\d+", style)
+    assert "function routed(from, to, kind, track, y1, y2)" in SCRIPT
+    assert "t.dataset.layout !== layout || !shown.has(nodeById.get(t.dataset.src))" in SCRIPT
+    assert re.search(r"\.ftrack\{grid-column:var\(--c0\)/var\(--c1\);grid-row:var\(--r\)", CSS)

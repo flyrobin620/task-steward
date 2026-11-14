@@ -292,6 +292,9 @@
         return [n, card ? text.get(card) : (n.title || "").toLowerCase()];
       }));
       const lanes = Array.from(grid.querySelectorAll(".lane, .lane-name"));
+      // Each task's lines spanning columns run on its track (T278 revision 4), one per layout.
+      const tracks = Array.from(grid.querySelectorAll(".ftrack"));
+      const trackOf = new Map(tracks.map(t => [`${t.dataset.layout}:${t.dataset.src}`, t]));
       const ZOOMS = [0.3, 0.4, 0.5, 0.6, 0.75, 0.9, 1, 1.15, 1.3, 1.5];
       let zoom = Number(store.get("zoom")) || 1;
       let shown = new Set();
@@ -319,6 +322,9 @@
           if (shown.has(n)) repos.add(n.dataset.repo);
         }
         for (const lane of lanes) lane.hidden = !repos.has(lane.dataset.repo) || !inLayout(lane);
+        // A track keeps its row open only while its task is shown in the current layout.
+        const layout = state.arch ? "all" : "live";
+        for (const t of tracks) t.hidden = t.dataset.layout !== layout || !shown.has(nodeById.get(t.dataset.src));
         headings();
         const pool = nodes.filter(n => inLayout(n) && (state.arch || n.dataset.status !== "archived")).length;
         $("count").textContent = `显示 ${matched.size} / ${pool} 个任务`
@@ -352,6 +358,8 @@
       // plain paths, so the page needs no references between SVG elements.
       function edge(from, to, kind) {
         const y1 = from.offsetTop + from.offsetHeight / 2, y2 = to.offsetTop + to.offsetHeight / 2;
+        const track = column(to) - column(from) >= 2 ? trackOf.get(`${state.arch ? "all" : "live"}:${from.dataset.id}`) : null;
+        if (track && !track.hidden) return routed(from, to, kind, track, y1, y2);
         let x1, x2, c1, c2, sign;
         const sameColumn = to.offsetLeft < from.offsetLeft + from.offsetWidth
           && from.offsetLeft < to.offsetLeft + to.offsetWidth;
@@ -377,13 +385,26 @@
           c2 = x2 - sign * 8 - dx;
         }
         const tip = x2 - sign * 8;
+        return arrowed(from, to, kind, `M${x1},${y1} C${c1},${y1} ${c2},${y2} ${tip},${y2}`, x2, tip, y2);
+      }
+      // A line spanning columns: out of its task into the gap, along the task's track (a row no
+      // card holds in the columns between), and into its target from the gap before it.
+      function routed(from, to, kind, track, y1, y2) {
+        const yt = track.offsetTop + track.offsetHeight / 2;
+        const x1 = from.offsetLeft + from.offsetWidth, x2 = to.offsetLeft, tip = x2 - 8;
+        const g1 = x1 + 14, g2 = x2 - 14; // the middle of the gaps (the nodes' side margins)
+        const d = `M${x1},${y1} C${g1},${y1} ${g1},${yt} ${g1 + 14},${yt} L${g2 - 14},${yt} `
+          + `C${g2},${yt} ${g2},${y2} ${tip},${y2}`;
+        return arrowed(from, to, kind, d, x2, tip, y2);
+      }
+      function arrowed(from, to, kind, d, x2, tip, y2) {
         const g = document.createElementNS(SVG, "g");
         g.setAttribute("class", `edge ${kind}` + (from.classList.contains("ctx") || to.classList.contains("ctx") ? " ctx" : ""));
         g.dataset.a = from.dataset.id;
         g.dataset.b = to.dataset.id;
         const line = document.createElementNS(SVG, "path");
         line.setAttribute("class", "line");
-        line.setAttribute("d", `M${x1},${y1} C${c1},${y1} ${c2},${y2} ${tip},${y2}`);
+        line.setAttribute("d", d);
         const head = document.createElementNS(SVG, "path");
         head.setAttribute("class", "head");
         head.setAttribute("d", `M${tip},${y2 - 4.5} L${x2},${y2} L${tip},${y2 + 4.5} Z`);
