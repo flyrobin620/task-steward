@@ -4,8 +4,11 @@ A command line cannot be fully understood without running it (variables, scripts
 this module only recognises the common forms: the programs a line runs, with ``cd`` tracked
 across segments, and the paths it writes through redirections and well-known file commands
 (POSIX tools and PowerShell cmdlets). Nested ``bash -c`` / ``powershell -Command`` / ``cmd /c``
-strings are read recursively. Anything it cannot see is left to the technical acceptance check,
-which compares the worktree diff with the task's writable roots.
+strings and unquoted command substitutions ``$(…)`` are read recursively; such a substitution
+stays inside its word, so ``GH_TOKEN=$(…) gh pr merge`` is still an assignment followed by
+``gh`` (CC008 §3). A substitution inside double quotes is quoted text, as before. Anything it
+cannot see is left to the technical acceptance check, which compares the worktree diff with the
+task's writable roots.
 """
 
 from __future__ import annotations
@@ -122,6 +125,7 @@ _GIT_INIT_VALUE_OPTIONS = {
 class Segment:
     words: list[str] = field(default_factory=list[str])
     redirects: list[str] = field(default_factory=list[str])
+    substitutions: list[str] = field(default_factory=list[str])  # the commands inside ``$(…)``
 
 
 @dataclass(frozen=True)
@@ -181,6 +185,17 @@ def split(command: str, *, literal_backslash: bool = False, comments: bool = Tru
     while i < n:
         c = command[i]
         nxt = command[i + 1] if i + 1 < n else ""
+        if c == "$" and nxt == "(" and quote is None:
+            # An unquoted substitution stays in its word and its command is read too. One inside
+            # double quotes is left as quoted text (a heredoc in it may hold unbalanced quotes);
+            # so is one never closed.
+            end = _substitution_end(command, i + 2)
+            if end <= n:
+                current.substitutions.append(command[i + 2 : end - 1])
+                buf.append(command[i:end])
+                have_word = True
+                i = end
+                continue
         if quote:
             if c == quote:
                 quote = None
@@ -260,6 +275,49 @@ def split(command: str, *, literal_backslash: bool = False, comments: bool = Tru
     return segments
 
 
+def _substitution_end(command: str, i: int) -> int:
+    """The index just past the ``)`` closing a ``$(`` whose body starts at ``i`` (past the end
+    when it is never closed). Quotes, nested parentheses and heredoc bodies inside it are
+    skipped: a heredoc's text may hold any ``)`` or quote."""
+    depth, quote, n = 1, None, len(command)
+    heredocs: list[tuple[str, bool]] = []
+    while i < n:
+        c = command[i]
+        if quote:
+            if c == quote:
+                quote = None
+            elif c == "\\" and quote == '"':
+                i += 1
+        elif c in "'\"":
+            quote = c
+        elif c == "\\":
+            i += 1
+        elif c == "<" and command.startswith("<<<", i):
+            i += 3
+            continue
+        elif c == "<" and command.startswith("<<", i):
+            i += 2
+            strip_tabs = i < n and command[i] == "-"
+            i += 1 if strip_tabs else 0
+            while i < n and command[i] in " \t":
+                i += 1
+            delimiter, i = _heredoc_word(command, i)
+            heredocs.append((delimiter, strip_tabs))
+            continue
+        elif c == "\n" and heredocs:
+            i = _skip_heredocs(command, i + 1, heredocs)
+            heredocs.clear()
+            continue
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n + 1
+
+
 def _heredoc_word(command: str, i: int) -> tuple[str, int]:
     """The heredoc delimiter at ``i`` after quote removal (``'EOF'``, ``\\EOF``, ``E"O"F``)."""
     out: list[str] = []
@@ -334,6 +392,17 @@ def analyze(
     here = cwd
     for segment in split(command, literal_backslash=literal_backslash, comments=comments):
         _redirects(facts, segment.redirects, here)
+        for inner in segment.substitutions:
+            nested = analyze(
+                inner,
+                here,
+                literal_backslash=literal_backslash,
+                comments=comments,
+                depth=depth + 1,
+            )
+            facts.programs.extend(nested.programs)
+            facts.writes.extend(nested.writes)
+            facts.unresolved.extend(nested.unresolved)
         words = _strip_wrappers(segment.words)
         if not words:
             continue

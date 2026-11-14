@@ -65,6 +65,8 @@ def test_prestart_creates_the_worktree_and_the_session_starts_in_it(
     h = harness(home, repo)
     skill(home, "weekly-update-email", "周报邮件")
     skill(home, "orchestrate", "主会话流程")
+    skill(home, "task-intake", "受理与写任务书")
+    skill(home, "gh-account", "按仓库选用 gh 账号")
     h.register("T001")
     h.plan("T001")
     orchestrator = Server(h.home, {SESSION_ENV: "orch-1"}, h.home.root)
@@ -96,7 +98,12 @@ def test_prestart_creates_the_worktree_and_the_session_starts_in_it(
     assert "报告中写明读了哪些" in brief
     # The data directory's skills are listed with their paths; the orchestrator's are not.
     assert "`weekly-update-email`：周报邮件" in brief and "`orchestrate`" not in brief
+    # gh-account is for every session; the intake rules are the main session's (T279).
+    assert "`gh-account`：按仓库选用 gh 账号" in brief and "`task-intake`" not in brief
     assert brief.index("## 仓库与 worktree") < brief.index("## 目标")
+    # The user's language from control.language (default zh-CN) is written into the brief (T279).
+    assert "- 语言：与用户交流（会话中的答复与提问、`ask_user` 的问题、报告）使用 简体中文" in brief
+    assert brief.index("- 语言：") < brief.index("- 交付：")
     # The worker bound to the attempt works in the worktree: its directory is consistent.
     h.run(
         "attempt_reconcile",
@@ -361,3 +368,98 @@ def test_a_redirected_worktree_path_is_refused(home: Home, tmp_path: Path) -> No
         h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
     assert refused.value.details["reason"] == "worktree_conflict"
     assert h.query("SELECT * FROM attempts WHERE task_id = 'T001'") == []
+
+
+@pytest.mark.parametrize(
+    ("language", "line"),
+    [
+        ("en-US", "使用 English（`en-US`）（配置 `control.language`）"),
+        ("fr", "使用 `fr`（配置 `control.language`）"),
+        ("", None),
+    ],
+)
+def test_the_brief_names_the_language_the_worker_talks_to_the_user_in(
+    home: Home, tmp_path: Path, language: str, line: str | None
+) -> None:
+    """DN003 §3.5a: the user's preferred language, as configured, or no line when unset."""
+    repo = checkout(tmp_path)
+    h = Harness(
+        home,
+        {"control": {"language": language}, "repositories": {"demo": {"path": str(repo)}}},
+    )
+    h.register("T001")
+    h.plan("T001")
+    orchestrator = Server(h.home, {SESSION_ENV: "orch-1"}, h.home.root)
+    orchestrator.machine = "m1"
+    orchestrator.call(
+        "attempt_start", {"task_id": "T001", "purpose": "prestart", "user_turn": True}
+    )
+    brief = (h.home.root / "runs" / "T001" / "a1" / "brief.md").read_text(encoding="utf-8")
+    if line is None:
+        assert "- 语言：" not in brief
+    else:
+        assert line in brief
+
+
+GH_LINE = "- gh 账号："
+
+
+@pytest.mark.parametrize(
+    ("repo_extra", "accounts", "rendered", "expected"),
+    [
+        (
+            {"repository": "octo/demo", "auth_profile": "gh-octo"},
+            {"gh-octo": {"provider": "github", "host": "github.com", "account": "octo"}},
+            True,
+            "仓库账号为 `octo`（github.com，配置 `repositories.demo.auth_profile` 为 `gh-octo`）",
+        ),
+        ({"repository": "octo/demo"}, {}, True, "配置中没有为仓库 demo 指定账号"),
+        ({"repository": "octo/demo"}, {}, False, "先确定仓库账号"),
+        (
+            {"provider": "azure-devops", "repository": "org/proj/demo", "auth_profile": "ado"},
+            {"ado": {"provider": "azure-devops", "host": "dev.azure.com", "account": "me"}},
+            True,
+            None,
+        ),
+        (  # no provider on the repository, but its account is Azure DevOps (review r8)
+            {"repository": "org/proj/demo", "auth_profile": "ado"},
+            {"ado": {"provider": "azure-devops", "host": "dev.azure.com", "account": "me"}},
+            True,
+            None,
+        ),
+        ({}, {}, True, None),  # no owner/name: not known to be on GitHub
+    ],
+)
+def test_the_brief_names_the_repository_gh_account(  # noqa: PLR0917 - one per table column
+    home: Home,
+    tmp_path: Path,
+    repo_extra: dict[str, str],
+    accounts: dict[str, object],
+    rendered: bool,
+    expected: str | None,
+) -> None:
+    """CC006 §8.3 (T279, F-T279-1): the account from auth_profile, or how to find it, with the
+    gh-account skill's path once the host integration rendered it."""
+    repo = checkout(tmp_path)
+    skill_path = home.root / ".claude" / "skills" / "gh-account" / "SKILL.md"
+    if rendered:
+        skill(home, "gh-account", "按仓库选用 gh 账号")
+    h = Harness(
+        home,
+        {"accounts": accounts, "repositories": {"demo": {"path": str(repo), **repo_extra}}},
+    )
+    h.register("T001")
+    h.plan("T001")
+    orchestrator = Server(h.home, {SESSION_ENV: "orch-1"}, h.home.root)
+    orchestrator.machine = "m1"
+    orchestrator.call(
+        "attempt_start", {"task_id": "T001", "purpose": "prestart", "user_turn": True}
+    )
+    brief = (h.home.root / "runs" / "T001" / "a1" / "brief.md").read_text(encoding="utf-8")
+    if expected is None:
+        assert GH_LINE not in brief
+        return
+    line = next(x for x in brief.splitlines() if x.startswith(GH_LINE))
+    assert expected in line and "不用 `gh auth switch`" in line
+    assert (f"`{skill_path}`" in line) is rendered
+    assert brief.index(GH_LINE) < brief.index("## 目标")

@@ -259,6 +259,11 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     # The plugin is enabled at user scope, so a skill in it would reach every session in any
     # directory. The orchestrator's skill is rendered into the data directory instead.
     assert not (PLUGIN / "skills").exists()
+    worker = (PLUGIN / "roles" / "worker.md").read_text(encoding="utf-8")
+    # T279: merges may carry the gh-account skill's one account prefix, nothing joined; every
+    # turn ends with wrap_up, without ask once a question no longer waits on the user.
+    assert "`gh-account` skill" in worker and "|| echo none" in worker
+    assert "每一轮结束都调用 `wrap_up`" in worker and "不带 `ask`、不设 `blocked`" in worker
     market = json.loads(
         (REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
     )
@@ -275,10 +280,14 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert code == 0
     handle_input = home / ".claude" / "skills" / "handle-input" / "SKILL.md"
     teams_chat = home / ".claude" / "skills" / "teams-chat" / "SKILL.md"
+    task_intake = home / ".claude" / "skills" / "task-intake" / "SKILL.md"
+    gh_account = home / ".claude" / "skills" / "gh-account" / "SKILL.md"
     assert [Path(p) for p in out["written"]] == [
         home / "CLAUDE.md",
         skill,
         handle_input,
+        task_intake,
+        gh_account,
         teams_chat,
         settings,
         home / "roles" / "worker.md",
@@ -300,6 +309,45 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert '"contentType": "html"' in channel and "card_html" in channel
     assert "from.user.id" in channel and "mcp__teams__SendMessageToSelf" not in channel
     assert '"channel": "teams-chat"' in channel and "mcp__workiq__fetch" in channel
+    # The intake rules and the gh account skill are the product's sources, byte for byte (T279).
+    sources = REPO_ROOT / "tsw" / "host"
+    assert task_intake.read_bytes() == (sources / "task_intake_skill.md").read_bytes()
+    assert gh_account.read_bytes() == (sources / "gh_account_skill.md").read_bytes()
+    intake = task_intake.read_text(encoding="utf-8")
+    assert intake.startswith("---\nname: task-intake\ndescription: ")
+    # Retrieval, goals that open with the user's words, checkable acceptance, the read set,
+    # intake keywords, and for code tasks the line that points the worker at gh-account.
+    for words in (
+        "## 检索历史",
+        "## 目标的写法",
+        "context_catalog",
+        "用户原话",
+        "背景（主会话核实）",
+        "逐项核对",
+        "read_set",
+    ):
+        assert words in intake, words
+    assert "`stage: intake`" in intake and "4–8 个具体关键词" in intake
+    # The gh account line is tsw's, in the brief; the intake rules say not to repeat it.
+    assert "注意 gh 当前账号是否与仓库账号一致" in intake and "你不用在目标里再写" in intake
+    assert "`control.language`" in intake  # the user's language, written into briefs by tsw
+    account = gh_account.read_text(encoding="utf-8")
+    assert account.startswith("---\nname: gh-account\ndescription: ")
+    # One command at a time: the token prefix (recommended), the config directory, git push's
+    # own account, and what is never done.
+    assert 'GH_TOKEN="$(gh auth token --hostname <host> --user <账号> || echo none)" gh' in account
+    # A missing token fails instead of falling back to the active account; the check names
+    # the host (review F1, F2).
+    assert "gh api --hostname <host> user --jq .login" in account
+    assert "GH_ENTERPRISE_TOKEN" in account
+    assert "GH_CONFIG_DIR=" in account and "auth_profile" in account
+    assert "git -c credential.username=<账号> push" in account
+    assert "gh auth switch" in account and "--show-token" in account
+    assert "settings*.json" in account
+    # The orchestrator's skill points at the intake rules instead of repeating them.
+    orchestrate = skill.read_text(encoding="utf-8")
+    assert "`task-intake` skill" in orchestrate
+    assert "## 检索历史" not in orchestrate and "## 目标的写法" not in orchestrate
     # The actions tsw guards itself are allowed; what the user had there is kept (DN006 §6.3).
     written = json.loads(settings.read_text(encoding="utf-8"))
     assert written["env"] == {"X": "1"}
@@ -310,7 +358,10 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert run_json("host", "render")[0] == 0
     again = json.loads(settings.read_text(encoding="utf-8"))["permissions"]["allow"]
     assert again == allow
-    assert (home / "CLAUDE.md").read_text(encoding="utf-8").startswith("# TaskSteward 数据目录")
+    claude_md = (home / "CLAUDE.md").read_text(encoding="utf-8")
+    assert claude_md.startswith("# TaskSteward 数据目录")
+    # Replies follow control.language (default zh-CN), not a fixed language (T279).
+    assert "- 回复用户使用简体中文（`zh-CN`）（配置 `control.language`）。" in claude_md
     text = skill.read_text(encoding="utf-8")
     assert text.startswith("---\nname: orchestrate\ndescription: ")
     assert "\n---\n\n# TaskSteward 主会话\n" in text
@@ -325,6 +376,10 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
         "TaskSteward Routine",
     ]
     assert "--admin" in rules[1]
+    # Worker Merge accepts the gh-account skill's one account prefix, nothing joined (T279).
+    assert "GH_TOKEN" in rules[1] and "GH_CONFIG_DIR" in rules[1] and "gh-account" in rules[1]
+    assert "|| echo none" in rules[1] and "GH_ENTERPRISE_TOKEN" in rules[1]
+    assert "joined" in rules[1]
     # The routine session reads Teams with WorkIQ (T253).
     assert "mcp__workiq__fetch" in rules[2] and "ListChatMessages" not in rules[2]
 
@@ -591,3 +646,16 @@ def test_render_reports_a_copy_the_update_did_not_replace(home: Path, tmp_path: 
     env = child_env(CLAUDE_CODE_PLUGIN_CACHE_DIR=str(plugins), PATH=str(empty))
     code, out = run_json("host", "render", env=env)
     assert code == 0 and out["plugin"]["update"]["ran"] is False
+
+
+@pytest.mark.use_case("UC-HOST-004")
+def test_the_data_directory_claude_md_replies_in_the_configured_language(home: Path) -> None:
+    """DN003 §3.5a: tsw host render writes the user's language from control.language."""
+    config = home / "config" / "task-steward.json"
+    loaded = json.loads(config.read_text(encoding="utf-8"))
+    loaded["control"] = {"language": "en-US"}
+    config.write_text(json.dumps(loaded), encoding="utf-8")
+    assert run_json("host", "render")[0] == 0
+    text = (home / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "- 回复用户使用English（`en-US`）（配置 `control.language`）。" in text
+    assert "回复用户使用中文" not in text

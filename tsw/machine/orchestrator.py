@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from tsw.commands import Command, CommitContext
-from tsw.config import EffectiveConfig, resolve_repository
+from tsw.config import EffectiveConfig, language_shown, resolve_repository
 from tsw.errors import rejected
 from tsw.events import EventDraft, digest
 from tsw.home import Home, same_dir, workdir_path
@@ -43,7 +43,7 @@ from tsw.machine.model import (
 )
 from tsw.roles import record_given, worker_instructions, worker_prompt
 from tsw.tasks import TaskSpec, register, render_spec, validate_spec
-from tsw.workspace import brief_section, ensure, home_skills, plan
+from tsw.workspace import GH_ACCOUNT_SKILL, brief_section, ensure, home_skills, plan
 
 
 def _cmd(env: ToolEnv, op: str, inp: Mapping[str, Any], build: Any) -> Command:
@@ -496,6 +496,18 @@ def _delivery_line(config: EffectiveConfig, row: Mapping[str, Any]) -> str:
     )
 
 
+def _language_line(config: EffectiveConfig) -> str:
+    """The language the worker talks to the user in: the user's preference, ``control.language``
+    (DN003 §3.5a). Empty when it is not set."""
+    tag = str(config.get("control.language", "") or "").strip()
+    if not tag:
+        return ""
+    return (
+        "- 语言：与用户交流（会话中的答复与提问、`ask_user` 的问题、报告）使用 "
+        f"{language_shown(tag)}（配置 `control.language`）\n"
+    )
+
+
 def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
     ctx: CommitContext,
     row: Mapping[str, Any],
@@ -506,13 +518,22 @@ def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
 ) -> str:
     acceptance = "\n".join(f"- {item}" for item in loads(row["acceptance"], []))
     ws = plan(ctx.home, config, row, attempt_id, workdir)
+    gh_skill = ctx.home.root / GH_ACCOUNT_SKILL
     repository = (
-        brief_section(ws, home_skills(ctx.home) if ws.worktree else [], workdir) if ws else ""
+        brief_section(
+            ws,
+            home_skills(ctx.home) if ws.worktree else [],
+            workdir,
+            gh_skill=gh_skill if gh_skill.is_file() else None,
+        )
+        if ws
+        else ""
     )
     return (
         f"# 任务书 {row['task_id']} {attempt_id}\n\n"
         f"- 标题：{row['title']}\n- 仓库：{row['repo']}\n- revision：{row['revision']}\n"
         f"- 执行目录：{workdir}\n- 授权读取集合：{', '.join(read_set)}\n"
+        + _language_line(config)
         + _delivery_line(config, row)
         + "\n"
         + repository

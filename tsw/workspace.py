@@ -22,7 +22,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from tsw.config import EffectiveConfig, resolve_path, resolve_repository
 from tsw.errors import rejected
@@ -32,7 +32,10 @@ DEFAULT_INSTRUCTIONS = ("AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.
 # Where the work starts when the repository names no base_ref (the first that resolves).
 BASE_CANDIDATES = ("{remote}/HEAD", "{remote}/main", "{remote}/master", "main", "master", "HEAD")
 # The data directory's skills for the main session only (tsw host render writes them).
-ORCHESTRATOR_SKILLS = ("orchestrate", "handle-input", "teams-chat")
+ORCHESTRATOR_SKILLS = ("orchestrate", "handle-input", "task-intake", "teams-chat")
+# Where the host integration may render the skill on choosing a repository's gh account, relative
+# to the data directory (Claude Code, CC006 §10.1). The brief points at it when it is there.
+GH_ACCOUNT_SKILL = Path(".claude") / "skills" / "gh-account" / "SKILL.md"
 GIT_TIMEOUT = 60
 
 
@@ -48,6 +51,11 @@ class Workspace:
     remote: str
     base_ref: str | None  # as configured; None: the first of BASE_CANDIDATES that resolves
     missing: str | None  # why there is no worktree
+    # The repository's GitHub account (DN003 §3.4, ``auth_profile`` → ``accounts``):
+    # (account, host, profile) when configured; ``github`` says whether the repository is on
+    # GitHub at all, so that a brief can still say how to find the account.
+    gh_account: tuple[str, str, str] | None = None
+    github: bool = False
 
 
 def plan(
@@ -84,9 +92,39 @@ def plan(
         missing = f"仓库路径 {checkout} 不是 git 仓库"
     elif _git(checkout, "check-ref-format", "--branch", branch)[0] != 0 or branch.startswith("-"):
         missing = f"分支名 {branch!r}（worktrees.branch_pattern）不是合法的分支名"
+    account, github = _gh_account(config, repo)
     if missing is not None:
-        return Workspace(repo_id, instructions, None, None, None, remote, base_ref, missing)
-    return Workspace(repo_id, instructions, checkout, worktree, branch, remote, base_ref, None)
+        return Workspace(
+            repo_id, instructions, None, None, None, remote, base_ref, missing, account, github
+        )
+    return Workspace(
+        repo_id, instructions, checkout, worktree, branch, remote, base_ref, None, account, github
+    )
+
+
+def _gh_account(
+    config: EffectiveConfig, repo: dict[str, Any]
+) -> tuple[tuple[str, str, str] | None, bool]:
+    """The repository's GitHub account from its ``auth_profile``, and whether it is on GitHub
+    (``provider: github``, or no provider but an ``owner/name``)."""
+    provider = str(repo.get("provider") or "").lower()
+    github = provider == "github" or (not provider and bool(repo.get("repository")))
+    profile = str(repo.get("auth_profile") or "")
+    accounts: dict[str, Any] = config.get("accounts", {}) or {}
+    found: Any = accounts.get(profile) if profile else None
+    if not isinstance(found, dict):
+        return None, github
+    entry = cast("dict[str, Any]", found)
+    entry_provider = str(entry.get("provider") or "").lower()
+    name = str(entry.get("account") or "")
+    if entry_provider and entry_provider != "github":
+        # The account names the provider explicitly: the repository is not on GitHub, whatever
+        # its owner/name looks like.
+        return None, False
+    if entry_provider != "github" or not name:
+        return None, github
+    host = str(entry.get("host") or repo.get("host") or "github.com")
+    return (name, host, profile), True
 
 
 def _plain_name(name: str) -> bool:
@@ -245,8 +283,14 @@ def _frontmatter(path: Path) -> tuple[str, str]:
     return fields.get("name", ""), fields.get("description", "")
 
 
-def brief_section(ws: Workspace, skills: list[tuple[str, str, Path]], workdir: str) -> str:
-    """The brief's "仓库与 worktree" section."""
+def brief_section(
+    ws: Workspace,
+    skills: list[tuple[str, str, Path]],
+    workdir: str,
+    *,
+    gh_skill: Path | None = None,
+) -> str:
+    """The brief's "仓库与 worktree" section; ``gh_skill`` is the rendered gh-account skill."""
     files = "、".join(f"`{p}`" for p in ws.instructions)
     lines = ["## 仓库与 worktree", ""]
     if ws.worktree is not None:
@@ -266,6 +310,9 @@ def brief_section(ws: Workspace, skills: list[tuple[str, str, Path]], workdir: s
         f"- 仓库指令文件：开始工作前完整阅读并遵守仓库根目录中的 {files}（不存在的跳过）；改动某个"
         "子目录前，也读该子目录中的同名文件。宿主不会自动加载 AGENTS.md。报告中写明读了哪些。",
     ]
+    account_line = _account_line(ws, gh_skill)
+    if account_line:
+        lines.append(account_line)
     if ws.worktree is not None and skills:
         lines.append(
             "- 数据目录的 skill：会话目录在 git 仓库中时，宿主不加载数据目录 `.claude/skills/` 中的"
@@ -273,3 +320,32 @@ def brief_section(ws: Workspace, skills: list[tuple[str, str, Path]], workdir: s
         )
         lines += [f"  - `{name}`：{desc}（`{path}`）" for name, desc, path in skills]
     return "\n".join(lines) + "\n\n"
+
+
+def _account_line(ws: Workspace, gh_skill: Path | None) -> str:
+    """The brief's line on the repository's gh account (CC006 §10.1, T279); empty off GitHub."""
+    if not ws.github:
+        return ""
+    how = (
+        f"按 `gh-account` skill（`{gh_skill}`）只对一条命令选择账号"
+        if gh_skill is not None
+        else "只对一条命令选择账号（`GH_TOKEN` 前缀等）"
+    )
+    if ws.gh_account is not None:
+        name, host, profile = ws.gh_account
+        return (
+            f"- gh 账号：仓库账号为 `{name}`（{host}，配置 `repositories.{ws.repo_id}.auth_profile`"
+            f" 为 `{profile}`）。用 gh 建 PR、合并、查看 CI 或用 git 推送之前，核对 gh 当前账号是否"
+            f"就是它；不一致时{how}，不用 `gh auth switch`。"
+        )
+    find = (
+        f"按 `gh-account` skill（`{gh_skill}`）第 1 节确定仓库账号"
+        if gh_skill is not None
+        else "先确定仓库账号（仓库 owner 对应的已登录账号；确定不了时问用户）"
+    )
+    return (
+        f"- gh 账号：配置中没有为仓库 {ws.repo_id} 指定账号"
+        f"（`repositories.{ws.repo_id}.auth_profile`）。"
+        f"用 gh 建 PR、合并、查看 CI 或用 git 推送之前，{find}并核对 gh 当前账号；不一致时只对一条"
+        "命令选择账号，不用 `gh auth switch`。"
+    )
