@@ -1,6 +1,6 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T279 §10 gh 账号 skill 与受理与写任务书 skill）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -28,7 +28,7 @@
 
 ## 2. 宿主集成 `claude-code`
 
-`claude-code` 的插件按用户级启用，任何目录的会话（主会话、`work/<任务>/<attempt>` 或其中仓库 worktree 中的 worker、无关会话）都会加载它，所以插件只携带每个会话都需要的 MCP 注册与 hooks。主会话的流程说明不放进插件：`render_instructions` 把 `CLAUDE.md` 和 `orchestrate` skill 写进数据目录，后者是 Claude Code 的项目 skill（`<cwd>/.claude/skills/`）。Claude Code 也从上级目录加载 `CLAUDE.md` 与项目 skill（skill 的查找在 git 仓库根停下，§8），执行目录在数据目录之下的例行会话与 worker 同样会看到二者（仓库 worktree 中的 worker 只看到 `CLAUDE.md`），所以二者都写明：`whoami` 的角色不是 orchestrator 时忽略。skill 的来源在产品代码中（`tsw/host/orchestrate_skill.md`），产品更新后重新运行 `tsw host render`。
+`claude-code` 的插件按用户级启用，任何目录的会话（主会话、`work/<任务>/<attempt>` 或其中仓库 worktree 中的 worker、无关会话）都会加载它，所以插件只携带每个会话都需要的 MCP 注册与 hooks。主会话的流程说明不放进插件：`render_instructions` 把 `CLAUDE.md` 和 `orchestrate` skill 写进数据目录，后者是 Claude Code 的项目 skill（`<cwd>/.claude/skills/`）。Claude Code 也从上级目录加载 `CLAUDE.md` 与项目 skill（skill 的查找在 git 仓库根停下，§8），执行目录在数据目录之下的例行会话与 worker 同样会看到二者（仓库 worktree 中的 worker 只看到 `CLAUDE.md`），所以二者都写明：`whoami` 的角色不是 orchestrator 时忽略。skill 的来源在产品代码中（`tsw/host/orchestrate_skill.md`），产品更新后重新运行 `tsw host render`。同样生成的还有主会话的 `handle-input`（§6.4）、`task-intake`（受理与写任务书，§10.2）、渠道 skill（§7），以及主会话与 worker 都用的 `gh-account`（§10.1）。
 
 worker 的说明不是 skill，也不在插件里加载（Claude Code 不加载插件的 `roles/` 目录）：`render_instructions` 把 `plugin/roles/worker.md` 复制到数据目录的 `roles/worker.md`，`attempt_start` 生成的 worker 会话 prompt 以它的全文开头（DN006 §6.2，CC001 §3）。这样仓库 worktree 中看不到数据目录 skill 的 worker 也能拿到同一份说明；SessionStart hook 只指向提示语开头的说明与副本路径（CC001 §6）。`host render` 的输出 `written` 列出这份文件；产品更新后没有重新 render 时，副本与 `plugin/roles/worker.md` 不一致，`attempt_start` 被拒绝并提示运行 `tsw host render`；render 改变了说明时，已有 worker 会话由 hook 在下一轮提示重读副本。
 
@@ -230,7 +230,7 @@ T251 依据实测与官方文档（[skills](https://code.claude.com/docs/en/skil
 - **任务书的“仓库与 worktree”一节**（仓库已配置时生成）：
   - 会话目录与分支（或没有 worktree 的原因），不要另建 worktree 或 clone；报告写在执行目录。
   - 仓库指令文件：`repositories.<id>.instructions`（相对仓库根的路径列表），未配置时默认 `AGENTS.md`、`CLAUDE.md`、`.github/copilot-instructions.md`；worker 开始前完整阅读并遵守，改动子目录前也读该子目录中的同名文件，报告写明读了哪些。各仓库的列表由主会话经 `config_change` 维护。
-  - 有 worktree 时列出数据目录的 skill（`orchestrate`、`handle-input`、`teams-chat` 只用于主会话，不列）。
+  - 有 worktree 时列出数据目录的 skill（`orchestrate`、`handle-input`、`task-intake`、`teams-chat` 只用于主会话，不列；`gh-account` 列出，§10.1）。
 - **评审**：`review_run` 在 worktree 中评审，按其中的提交确定范围。
 - 数据目录的 `CLAUDE.md` 不变，不为 `AGENTS.md` 原生加载改写它（用户决定）。
 - `worktrees.root` 在 `claude-code` 宿主中不使用（字段保留）；`worktrees.work_dir` 仍是执行目录的默认位置。
@@ -271,3 +271,61 @@ DN002 §5.8 在 Claude app 上的做法（T272）。
 | 编号 | 假设 | 不成立时 |
 | --- | --- | --- |
 | R6 | auto 模式下主会话按 `sessions.archive_on_accept` 归档它启动的、已验收任务的会话不被分类器拦下（工具说明：auto 模式“may approve without asking”；会话正在工作或显示在屏幕上时 app 拒绝） | 拒绝记为 `failed`，`attention` 中标明，由用户决定；必要时在 install hint 的 “TaskSteward Worker Dispatch” 规则中加入按配置归档已验收任务的会话 |
+
+## 10. gh 账号 skill 与受理与写任务书 skill（T279）
+
+用户 2026-11-14 的要求：不包装成 tsw 命令，把“用哪个 gh 账号、怎样只对一条命令生效”直接写进一个只用于 Claude Code、由 `tsw host render` 安装到数据目录的 skill；同时把主会话写任务书的规则从 `orchestrate` 拆成单独的 skill，并在其中要求 code 任务的任务书写明 gh 账号的注意事项。
+
+### 10.1 `gh-account`
+
+**问题**：本机 gh 在同一主机上登录了多个账号（例如 github.com 上的企业托管账号与个人账号），活动账号只有一个，而且是全局的。gh 没有按单条命令指定账号的参数（2.104.0 核实）。T275、T276、T278 的 worker 在个人仓库上建 PR、合并时被企业托管账号拒绝；`gh auth switch` 能绕过，但它改的是全局活动账号，并行的其他会话会在不知情时换了账号（F-T278-1）。
+
+**来源与安装**：来源 `tsw/host/gh_account_skill.md`，`render_instructions` 写到数据目录 `.claude/skills/gh-account/SKILL.md`。主会话、例行会话与不在 git 仓库中的 worker 由宿主加载；仓库 worktree 中的 worker 看不到数据目录 skill（§8.1），由任务书“仓库与 worktree”一节按路径列出（它不在只给主会话的名单中），worker 直接读取。只有 Claude Code 宿主生成它。
+
+**内容**：
+
+1. **确定仓库的账号**，按顺序取第一个有的：任务书写明的账号；配置 `repositories.<仓库>.auth_profile` 指向的 `accounts.<名>`（`host`、`account`，DN003 §3.4；主会话用 `config_show` 查看）；仓库 `owner` 与某个已登录账号同名时取该账号。都没有时问用户，不猜。
+2. **核对当前账号**：`gh auth status --hostname <host>`（只看 `Active account`，不加 `--show-token`）；必要时 `gh api user --jq .login` 看某条命令实际用的账号。当前活动账号就是仓库账号时，直接运行，不加前缀。
+3. **只对一条命令生效的两种做法**：
+
+   | 做法 | 写法 | 优点 | 缺点 |
+   | --- | --- | --- | --- |
+   | A（推荐）`GH_TOKEN` | `GH_TOKEN="$(gh auth token --hostname <host> --user <账号>)" gh <命令> …` | 不需要准备，任何会话、任何目录都能用；令牌只在这一条命令的子进程环境中，不进入命令行参数与输出；账号未登录时立即失败 | 命令里有一次取令牌的命令替换；`gh auth status` 看到的是环境令牌而不是账号；GitHub Enterprise Server 主机要用 `GH_ENTERPRISE_TOKEN` |
+   | B `GH_CONFIG_DIR` | `GH_CONFIG_DIR="<目录>" gh <命令> …` | 命令里不取令牌；对应 DN003 已有的 `accounts.<名>.auth.config_dir` | 需要用户事先准备每个账号的 gh 配置目录（复制 `config.yml` 与 `hosts.yml`，把该主机的 `user` 改为该账号；令牌仍在系统钥匙串中），目录在数据目录之外、worker 的可写范围之外；令牌以明文存放在 `hosts.yml` 的机器上复制会多一份凭据；登录状态变化后副本可能过时 |
+
+   选定 A 为推荐做法：它不要求任何准备，也不在执行目录或数据目录写入任何文件（用户 2026-11-14：“用 gh token 然后配 env 然后执行”）；账号配置中写了 `auth.config_dir` 时可以用 B。命令替换必须放在双引号里（不加引号时 hooks 的分词把它拆开，见 CC008 §3）。每条需要该账号的 gh 命令各自带前缀，不 `export`。
+4. **git push 用哪个账号**：git 不经 gh 认证，而是用自己的凭据助手（本机为 Git Credential Manager，github.com 上存有多个账号时按用户名选择）。推送时用 `git -c credential.username=<账号> push …` 只对这一条命令指定账号；远端 URL 已带用户名时以它为准。凭据助手是 `gh auth git-credential` 时，同样用做法 A 的前缀。推送被拒并显示别的账号名时，就是账号不对。T279 实测：同一条 `git push --dry-run`，`credential.username=flyrobin620` 时通过，`credential.username` 为企业托管账号时被拒（“Permission … denied to <企业账号>”，403）；`GH_TOKEN` 前缀下 `gh api user` 返回 flyrobin620，不加前缀时返回活动账号。
+5. **禁止**：
+   - `gh auth switch`、`gh auth login` / `logout`、`gh config set`（全局，影响并行会话）；`git config --global` 改凭据设置，或把用户名、令牌写进远端 URL；
+   - 输出、记录或保存令牌：`gh auth token` 单独运行、`--show-token`、`echo $GH_TOKEN`、`export GH_TOKEN`、把令牌写进文件、命令行参数（如 `-H "Authorization: …"`）、URL、报告或提交；
+   - 在执行目录或 worktree 写 `.claude/settings*.json`、`.env` 一类设置或环境文件来固定账号（app 会对每个新任务再要求信任，CC001 §3、CC008 §6）。
+6. **合并**：`GH_TOKEN="$(gh auth token --hostname github.com --user <账号>)" gh pr merge <编号> -R github.com/<owner>/<name> --squash` 单独运行，不与其他命令用 `;`、`&&`、`|` 连接，不加 `cd` 前缀；这是 worker 说明与 auto 模式规则“TaskSteward Worker Merge”认可的唯一前缀（CC008 §6）。
+
+**账号配置**：给仓库写 `auth_profile` 是权限类配置（DN003 §7.2），由主会话按用户原话 `config_change`；skill 只读取，不修改配置。
+
+### 10.2 `task-intake`（受理与写任务书）
+
+**来源与安装**：来源 `tsw/host/task_intake_skill.md`，`render_instructions` 写到数据目录 `.claude/skills/task-intake/SKILL.md`；只用于主会话，任务书不列出它（§8.3）。
+
+**为什么单独成 skill**：任务书由两部分组成：tsw 生成的标题、仓库、交付、live、“仓库与 worktree”与 resume 资料，以及主会话写的目标与验收。后者是任务唯一可靠的记录，原来散在 `orchestrate` 的“检索历史”“受理与规划”里，主会话实际遵循的约定（目标以用户原话开头等）没有写下来。拆出后 `orchestrate` 只保留调度流程，在受理、写目标与验收、写回需求变更时引用它，不重复内容。
+
+**为什么仍放在 Claude Code 宿主中渲染**：规则本身只涉及 tsw 工具，与宿主无关；但主会话的说明是按宿主分发的（Claude Code 读项目 skill），与 `orchestrate` 一样由宿主集成生成。其中引用 `gh-account` 的一条只在 Claude Code 上成立。以后增加别的宿主时，由该宿主的集成以自己的方式分发同一份来源，并换掉宿主专有的引用。
+
+**内容**：
+
+1. 检索历史（原 `orchestrate`“检索历史”全文）与受理前的查重、依赖、既有决定。
+2. 登记：`task_register` 的标题（`[仓库或项目简称] 摘要`）、类型、目标与验收；随后 `task_summary`（`stage: intake`）写 4–8 个具体关键词（模块、接口、现象、方案名，不写泛词）；有疑问时 `intake_question`。
+3. 目标的写法：
+   - 以用户原话开头：日期、在哪个会话，按顺序逐条引用；主会话的答复与用户对它的回应也按顺序写入。
+   - “背景（主会话核实）”：主会话核实过的事实、相关任务与出处、既有决定、约束。
+   - “要做的”：编号的工作项。
+   - “并行”：同时执行、可能改到相同文件或资源的任务，没有时写“无”。
+   - 设计确认：会改变已定义行为、需要先改设计的，写明“设计按仓库规则需用户确认后再实现与合并”。
+   - 用户授权：只写用户说过的授权，附原话与范围（例如“用户授权过夜进行，期间设计与合并无需再确认”）；不代为授权。
+4. 验收：每条可以逐项核对（有对象、有证据），不写“质量好”一类无法核对的话；交付方式与 live 规则由 tsw 写在任务书开头，不重复。
+5. 推荐读取集合：检索中入围、worker 需要参考的任务，在 `task_dispatch` / `attempt_continue` 的 `read_set` 中给出，并在背景中写明理由（DN007 §7.2）。
+6. 写回：之后的决定影响已登记、尚未完成的任务时，立即 `task_update`（附用户来源），已有会话时告诉它重读任务书（原 `orchestrate` 的两条）。
+7. 按任务类型的附加说明：
+   - code：写明涉及的仓库规则（需要用户确认的改动、live 场景）；需要用 gh 命令行建 PR、合并、查看 CI 等时，在任务书中写明“注意 gh 当前账号是否与仓库账号（<账号>）一致，不一致时按 `gh-account` skill（`<数据目录>/.claude/skills/gh-account/SKILL.md`）执行”，账号按 §10.1 第 1 条确定，写不出时写明“由 worker 按 skill 确定”。
+   - design：产出的设计文档位置、需要用户确认的范围。
+   - research：结论的形式、来源要求，不改代码。

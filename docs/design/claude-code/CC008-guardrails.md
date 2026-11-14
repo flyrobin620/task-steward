@@ -1,6 +1,6 @@
 # CC008 Claude Code 上的护栏
 
-- 状态：设计草案（T242 r2；T243 增加例行会话的规则；T251 Worker Merge 规则覆盖仓库 worktree；T276 §6 worker 会话的 prompt 以 worker 说明开头，Worker Dispatch 规则随之更新；T272 CC-S4 提醒处置 worker 会话的标题与归档，主会话允许 `set_session_title`）
+- 状态：设计草案（T242 r2；T243 增加例行会话的规则；T251 Worker Merge 规则覆盖仓库 worktree；T276 §6 worker 会话的 prompt 以 worker 说明开头，Worker Dispatch 规则随之更新；T272 CC-S4 提醒处置 worker 会话的标题与归档，主会话允许 `set_session_title`；T279 §6 Worker Merge 认可 `gh-account` skill 规定的单个环境变量前缀，§3 命令替换的分词）
 - 日期：2026-11-08
 - 实现：[DN008 校验原则](../DN008-guardrails.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC006 Claude Code 插件](CC006-plugins.md)
@@ -25,7 +25,7 @@
 
 ## 3. block list
 
-所有规则只在已登记的会话（主会话、worker、例行会话、已撤销、待绑定）中生效，无关会话不受影响。规则只看工具名、目标路径前缀、命令中的程序与子命令（分词，不解析路径、重定向、变量与脚本）。
+所有规则只在已登记的会话（主会话、worker、例行会话、已撤销、待绑定）中生效，无关会话不受影响。规则只看工具名、目标路径前缀、命令中的程序与子命令（分词，不解析路径、重定向、变量与脚本）。命令开头的环境变量赋值（`GH_TOKEN="$(…)" gh …`）不算程序；命令替换 `$(…)` 不论是否在引号中都作为一个词的一部分，其中的命令也按同样的规则读取（T279：不加引号的替换此前被拆成几个词，赋值后面的 `gh pr merge` 因此不被识别，CC-B6、CC-B7 落空）。
 
 | 编号 | 会话 | 触发 | 防的错误 | 拒绝信息中的正确做法 |
 | --- | --- | --- | --- | --- |
@@ -154,6 +154,8 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 auto 模式分类器另有自己的规则（`autoMode.allow` / `soft_deny`），其中“Merge Without Review”把 worker 合并自己的 PR 判为未经评审的合并（live 中即使命中允许规则的合并也出现过被拒）。Claude Code 只从用户设置、命令行设置与托管设置读取 `autoMode`，项目设置与本地设置中的一律忽略（Claude Code 2.1.302 中核实），所以 tsw 不能把它与允许规则一起生成：`tsw host install-hint` 给出三条规则，由用户加入自己的用户设置（用户 2026-11-08 决定：凡是 tsw 已把关、分类器仍会误拦的动作，都用 auto 模式规则在策略层放行）：“TaskSteward Worker Dispatch”（主会话以 `attempt_start` 返回的会话名与 `cwd`、`attempt_start` 返回的 prompt（worker 说明加指向任务书的短指令，T276 起；此前为只指向任务书的短指令）创建 worker 会话；用户设置中的旧规则需按 `tsw host install-hint` 更新；live 中同样的短指令创建曾被分类器以“Blocked by classifier”拒绝一次，用户重试后通过）与“TaskSteward Worker Merge”（限 worker 会话、本任务的 PR、单独的 `gh pr merge … -R …`，不含 `--admin` 与绕过检查；不看任务类型），以及“TaskSteward Routine”（限例行会话：按 `routine_board` 的返回设定、续期自己的定时任务，用 WorkIQ `fetch` 读取 tsw 指定的 Teams chat（T253 前为 Teams MCP 的 `ListChatMessages`），把 tsw 生成的消息发给主会话，清空自己的上下文；T243）。worker 的 tsw 工具与发给主会话的消息没有对应的规则：分类器本来就不拦它们（上表）；如果 live 中出现误拦，再按同一原则在 install hint 中加一条覆盖它们的规则。`attempt_start` 同时返回执行目录在磁盘上的实际写法 `cwd`：app 拒绝大小写不同的同一目录。
 
 Claude Code 对复合命令（`;`、`&&`、管道）逐段核对允许规则，有一段不在规则内就交给权限模式与分类器判断。live 中单独的 `gh pr merge … -R …` 直接执行，而后面接了 `git fetch` 等命令的同一合并被分类器以“Merge Without Review”拒绝；worker 指令因此要求合并命令单独运行，auto 模式规则也只描述单独的合并命令。
+
+仓库账号不是 gh 当前活动账号时（本机 github.com 的活动账号是企业托管账号，不能访问个人仓库，F-T278-1），合并命令需要只对这一条命令生效的账号选择，而 `gh auth switch` 改全局活动账号、会影响并行会话。用户 2026-11-14 决定（T279）：worker 说明与“TaskSteward Worker Merge”认可 `gh-account` skill（CC006 §10.1）规定的一个前缀：`GH_TOKEN="$(gh auth token --hostname <host> --user <账号>)"`（推荐）或 `GH_CONFIG_DIR=<该账号的 gh 配置目录>`，后面仍是单独的 `gh pr merge <编号> -R <host>/<owner>/<name> …`；其他前缀（`cd`、别的环境变量）与 `;`、`&&`、`|` 连接仍不认可。前缀只选择账号，不改变合并的目标与授权：hooks 跳过赋值后照常执行 CC-B6、CC-B7（§3）。用户设置中的旧规则需按 `tsw host install-hint` 更新这一条；没有更新时带前缀的合并由分类器自行判断（T275、T276 带 `GH_TOKEN` 前缀的合并没有被拦）。
 
 worker 能写自己的执行目录，所以 CC-B2 拦下编辑类工具对执行目录与数据目录中 `.claude/settings*.json` 的修改：遇到权限拒绝时不自行添加允许规则，而是告诉用户；在执行目录中写规则还会让下一次在该目录打开会话时要求信任，数据目录中的文件会被 tsw 重新生成覆盖。允许规则只放行动作本身；动作的授权仍由账本、配置与用户来源决定，主会话代答也仍然不是用户批准（DN006 §8.1b）。
 
