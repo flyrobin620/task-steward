@@ -359,12 +359,14 @@
           // Tasks that reference each other share a column (T278 revision 3): the arrow goes
           // round the side, downward ones on the left and upward ones on the right, so the
           // two directions never overlap.
+          // The curve stays within the nodes' 14px side margin, clear of the lane names on the
+          // first column and of the grid's edge on the last.
           const left = y2 >= y1;
           sign = left ? 1 : -1;
           x1 = left ? from.offsetLeft : from.offsetLeft + from.offsetWidth;
           x2 = left ? to.offsetLeft : to.offsetLeft + to.offsetWidth;
-          c1 = x1 - sign * 34;
-          c2 = x2 - sign * 42;
+          c1 = x1 - sign * 12;
+          c2 = x2 - sign * 12;
         } else {
           const rightward = to.offsetLeft >= from.offsetLeft + from.offsetWidth;
           sign = rightward ? 1 : -1; // leftward only for a follow-up to a newer task, a cycle or an old record

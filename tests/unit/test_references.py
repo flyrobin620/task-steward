@@ -430,3 +430,18 @@ def test_a_reference_cycle_is_broken_by_registration_order() -> None:
     assert col["T003"] < col["T001"] < col["T002"]
     # The same column arrows go round the side, so the script checks for it.
     assert "const sameColumn =" in SCRIPT
+    # Same-column arrows bulge no further than the nodes' side margin (14px).
+    assert "c1 = x1 - sign * 12;" in SCRIPT and "margin:7px 14px" in CSS
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_a_large_unrelated_history_is_laid_out_in_order() -> None:
+    # Ordering uses heaps: thousands of tasks, with and without relations, place quickly and
+    # newest first.
+    tasks = [
+        FlowTask(f"T{n:05d}", "t", f"r{n % 7}", "code", "accepted", n, "x") for n in range(4000)
+    ]
+    refs = {f"T{n:05d}": [f"T{n - 3:05d}"] for n in range(3, 4000, 5)}
+    col = _columns(tasks, {}, refs)
+    assert len(col) == 4000
+    assert all(col[f"T{n:05d}"] < col[f"T{n - 3:05d}"] for n in range(3, 4000, 5))

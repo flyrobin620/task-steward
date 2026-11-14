@@ -15,6 +15,7 @@ nodes by the filters and draws the arrows between the nodes that are shown.
 
 from __future__ import annotations
 
+import heapq
 import html
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -168,20 +169,36 @@ def place(
             waiting_hard[r] += 1
         for r in hard[g] | soft[g]:
             waiting_all[r] += 1
+    # Newest first among the groups with nothing left to wait for. When a cycle leaves none, the
+    # newest group with no dependency waiting goes next (a reference is given up), and only for
+    # an old record's dependency cycle the newest of all. Counts only fall, so a group stays in
+    # a heap once it qualifies; groups already placed are skipped when they come up.
+    ready_all = [(-newest[g], g) for g in members if waiting_all[g] == 0]
+    ready_hard = [(-newest[g], g) for g in members if waiting_hard[g] == 0]
+    remaining = [(-newest[g], g) for g in members]
+    for heap in (ready_all, ready_hard, remaining):
+        heapq.heapify(heap)
     order: list[str] = []
     done: set[str] = set()
     while len(order) < len(members):
-        left = [g for g in members if g not in done]
-        free = [g for g in left if waiting_all[g] == 0]
-        # A cycle: give up a reference first; a dependency only for an old record's cycle.
-        free = free or [g for g in left if waiting_hard[g] == 0] or left
-        g = max(free, key=lambda g: (newest[g], g))
+        for heap in (ready_all, ready_hard, remaining):
+            while heap and heap[0][1] in done:
+                heapq.heappop(heap)
+            if heap:
+                _, g = heapq.heappop(heap)
+                break
+        else:  # pragma: no cover - every group is in ``remaining`` until placed
+            break
         done.add(g)
         order.append(g)
         for r in hard[g]:
             waiting_hard[r] -= 1
+            if waiting_hard[r] == 0:
+                heapq.heappush(ready_hard, (-newest[r], r))
         for r in hard[g] | soft[g]:
             waiting_all[r] -= 1
+            if waiting_all[r] == 0:
+                heapq.heappush(ready_all, (-newest[r], r))
 
     column: dict[str, int] = {}
     slot: dict[str, int] = {}
