@@ -74,6 +74,17 @@ def test_the_main_session_runs_host_render(home: tuple[Path, Path]) -> None:
     assert (root / "CLAUDE.md").is_file()
     assert str(root / "roles" / "worker.md") in out["written"]
     assert "不能重启" in out["restart"]
+    # Without tsw on PATH the skill runs the plugin's launcher, still from the data directory.
+    proc = launch(
+        LAUNCHER,
+        "host",
+        "render",
+        "--json",
+        env=child_env(CLAUDE_CODE_HOST_SESSION_ID="orch-1"),
+        cwd=root,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "restart" in json.loads(proc.stdout.strip().splitlines()[-1])
 
 
 def test_other_sessions_are_refused_with_the_reason(

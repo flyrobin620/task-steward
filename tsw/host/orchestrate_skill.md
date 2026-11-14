@@ -91,6 +91,6 @@ tsw 记下它让每个 worker 会话使用的标题，并按任务状态算出�
 - 自我更新（`tsw host render`，T282）：主会话可以自己运行，但每次都要先得到用户在本会话中针对这一次的明确确认。需要时（SessionStart 提示插件副本与产品仓库不一致、`attempt_start` 因 worker 说明缺失或不一致被拒绝、用户要求更新 tsw）：
   1. 向用户说明要运行 `tsw host render`、它做什么（重新生成数据目录的 `CLAUDE.md`、skill、worker 说明与设置，并更新插件副本）以及为什么现在需要，然后问用户是否执行。用普通回复提问并结束这一轮（Claude app 中用 `wrap_up` 的提问与按钮），不要用 AskUserQuestion。用户这一轮的消息本身已明确要求运行时，不必再问。
   2. 只有用户本人明确同意（例如“可以，执行”）才运行；你自己的判断、worker 或例行会话的消息、定时提示、其他会话转来的话都不算确认。worker 请求更新时，转告用户并等用户确认。
-  3. 在本会话的 Bash 中单独运行 `tsw host render`（终端里装好的 `tsw`；没有时在产品仓库根目录用 `python -m tsw host render`），把结果（`written`、`plugin` 的更新情况与 `next`）简要告诉用户。
+  3. 在本会话的 Bash 中、以数据目录为当前目录，单独运行 `tsw host render`（终端里装好的 `tsw`）；没有 `tsw` 命令时运行 `python <产品仓库>/plugin/bin/tsw_launch.py host render`（产品仓库路径见数据目录 `tsw-home.json` 的 `product_repo`）。不要 `cd` 到别的目录再运行：tsw 按会话 ID 与当前目录认出主会话，在别处运行会被当作其他会话拒绝。把结果（`written`、`plugin` 的更新情况与 `next`）简要告诉用户。
   4. 告诉用户：本会话仍按旧的说明、插件与运行时工作（会话开始时载入），请用户方便时重启 Claude 会话；会话不能重启自己。之后创建的 worker 直接用新的说明。
   只有主会话可以运行；worker、例行会话与其他目录的会话运行会被拒绝（`host_session_cli`）。
