@@ -1,6 +1,6 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T279 §10 gh 账号 skill 与受理与写任务书 skill）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -37,7 +37,7 @@ worker 的说明不是 skill，也不在插件里加载（Claude Code 不加载�
 缓存副本只在插件的版本变化时才被替换（Claude Code 按 `plugin.json` 的 `version`、市场条目的 `version`、来源的提交 SHA 的顺序计算版本）。开发期 `plugin.json` 不写版本，版本取提交，产品仓库更新后 `claude plugin update task-steward@task-steward` 就会换上新副本；固定的版本字符串会让副本一直停在第一次安装时（T247 实测：app 运行的副本停在 2026-11-06 的 hooks 与启动器）。
 
 - `tsw host render`（DN006 §6.2 的 `update_plugin`）在写完数据目录的文件后运行 `claude plugin update task-steward@task-steward`，幂等：副本已是最新时不变。它按 Claude Code 的安装记录（`installed_plugins.json`）比较更新前后每个 task-steward 安装与 `plugin/` 的文件，输出带 `plugin`：更新前（`before`）与更新后（`installed`）每个安装是否一致、不一致的文件、更新命令的输出，以及之后要做的事（重启会话；更新后仍不一致时先卸载再安装）。没有安装记录时不运行（安装由用户按 install-hint 做），找不到 `claude` 命令时只报告。
-- 主会话的 SessionStart 比较 Claude Code 给 hooks 的 `CLAUDE_PLUGIN_ROOT` 与产品仓库的 `plugin/`，内容不一致时在注入的上下文中写明不一致的文件，并让主会话告诉用户运行 `tsw host render`；原地加载（二者是同一目录）或一致时不提示。只读。
+- 主会话的 SessionStart 比较 Claude Code 给 hooks 的 `CLAUDE_PLUGIN_ROOT` 与产品仓库的 `plugin/`，内容不一致时在注入的上下文中写明不一致的文件，并让主会话向用户说明、请用户确认运行 `tsw host render`：用户确认后由主会话引用用户原话运行（CC008 §5.7，T282；此前让用户在终端运行），之后请用户重启 Claude 会话（会话不能重启自己）；原地加载（二者是同一目录）或一致时不提示。只读。
 
 已在运行的会话重启后才用上新副本与新的 tsw 运行时（MCP server 在会话开始时载入）。
 

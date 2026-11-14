@@ -1,6 +1,6 @@
 # DN006 插件层：宿主集成、会话、人类渠道与数据存储
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/；T272 §8.9.4a 默认例行项 session-scan；T279 §6.3 claude-code 生成的 skill 清单，§8.1a 每一轮结束都 `wrap_up`）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/；T272 §8.9.4a 默认例行项 session-scan；T279 §6.3 claude-code 生成的 skill 清单，§8.1a 每一轮结束都 `wrap_up`；T282 §9.7 主会话自我更新：经用户明确确认运行 `host render`）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN008 校验原则](DN008-guardrails.md) · 实现：[CC006 Claude Code 插件](claude-code/CC006-plugins.md)
 
@@ -730,9 +730,15 @@ class StorageBackend(Protocol):
 
 正式导入的授权检查（演练、原话是否用过）在导入锁内、任何导入写入之前进行，并以 `import_authorized` 记账；导入的每一次提交都在提交锁内重新检查调用者的租约；导入在提交之外直接写的文件（事件卷、legacy 文件、导入报告）也在持有提交锁、检查租约之后才写，写入期间其他主会话无法领取租约。租约在导入途中被他人领取时，之后的写入一律拒绝。备份与重建不改变账本事实，只在开始前检查租约。
 
-`restore`、`quiesce` / `resume-writes` 与 `host render` 不开放：恢复要求先停止会话，静止会挡住主会话自己的写入，`host render` 改写数据目录的 `CLAUDE.md` 与 skill。它们仍由用户在终端运行。
+`restore`、`quiesce` / `resume-writes` 不开放：恢复要求先停止会话，静止会挡住主会话自己的写入。它们仍由用户在终端运行。
 
-由用户在终端运行的命令（安装与定位见 §9.1；README 给出示例）：`init`（`--remember`）、`home`、`host render` / `install-hint`、`lease show` / `takeover` / `release`、`backup` / `restore`、`quiesce` / `resume-writes`、`ledger audit` / `rebuild`、`context rebuild`、`config show` / `validate`，以及用户直接操作 `task accept` / `reject` / `cancel` 与 `status serve`（§8.10）。tsw 在会话中请用户运行命令时（租约被占、插件副本过期、需要 `host render`）给出的就是这些简短形式。用户自己运行 `lease takeover` 时，运行命令本身就是确认原主会话已停止的来源：`--user-source` 可省略，tsw 记为渠道 `user-cli`（§8.10）。
+**主会话可以自我更新**（用户 2026-11-15 决定，T282；此前 `host render` 与上面两项一样不开放）：用户明确确认时，主会话可以在会话中运行 `tsw host render`，重新生成数据目录的说明与设置并更新插件副本（§6.2）。规则：
+
+- 只有主会话（在数据目录打开、角色为 orchestrator、没有被另一个会话的有效租约排除）可以运行；worker、例行会话、已撤销与待绑定的会话，以及其他目录中的会话仍被拒绝，由主会话或用户运行。用户本人的操作（`task accept` / `reject` / `cancel`、Dashboard、不带 `--user-source` 的 `lease takeover`，§8.10）在任何会话中仍被拒绝。
+- “明确确认”是用户在主会话中、针对这一次 render 说的话；主会话自己的判断、worker 与例行会话的消息、定时提示都不算。运行时引用用户这一轮的原话，tsw 核对它是用户本人在当前这一轮说的话，缺少或核对不上时拒绝并说明原因。各宿主的核对方式在实现文档中（Claude Code：CC008 §5.7）。
+- render 只改可重建的文件，不记账本事件。已在运行的会话要重启后才加载新的说明、插件与运行时；会话不能重启自己，主会话在 render 后告诉用户重启。
+
+由用户在终端运行的命令（安装与定位见 §9.1；README 给出示例）：`init`（`--remember`）、`home`、`host render` / `install-hint`、`lease show` / `takeover` / `release`、`backup` / `restore`、`quiesce` / `resume-writes`、`ledger audit` / `rebuild`、`context rebuild`、`config show` / `validate`，以及用户直接操作 `task accept` / `reject` / `cancel` 与 `status serve`（§8.10）。tsw 在会话中请用户运行命令时（租约被占等）给出的就是这些简短形式；插件副本过期、需要 `host render` 时，主会话先请用户确认，确认后自己运行（上文），用户也可以在终端运行。用户自己运行 `lease takeover` 时，运行命令本身就是确认原主会话已停止的来源：`--user-source` 可省略，tsw 记为渠道 `user-cli`（§8.10）。
 
 ## 10. 组合示例
 
