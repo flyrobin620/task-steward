@@ -67,6 +67,17 @@ def test_tsw_owned_paths(tmp_path: Path) -> None:
             "推送",
         ),
         ("echo $(unclosed && git push", False, False, True, "推送授权"),
+        # A heredoc in an unquoted substitution may hold any ) or quote (PR #45 review).
+        (
+            "body=$(cat <<'EOF'\n1) Don't change the target.\nEOF\n)\ngit push origin HEAD",
+            False,
+            False,
+            True,
+            "推送授权",
+        ),
+        ("x=$(cat <<-EOF\n\t(a\n\tEOF\n) git push origin HEAD", False, False, True, "推送授权"),
+        ("x=$(cat <<< ')') ; git push origin HEAD", False, False, True, "推送授权"),
+        ("body=$(cat <<'EOF'\nonly text)\nEOF\n)\ngit status", False, False, True, None),
         ("git -c credential.username=me push origin HEAD", False, False, True, "推送授权"),
         ("git log --grep push", False, False, True, None),
         ("Get-FileHash C:/tools/app.exe", True, True, False, "哈希"),

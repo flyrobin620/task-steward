@@ -277,8 +277,10 @@ def split(command: str, *, literal_backslash: bool = False, comments: bool = Tru
 
 def _substitution_end(command: str, i: int) -> int:
     """The index just past the ``)`` closing a ``$(`` whose body starts at ``i`` (past the end
-    when it is never closed). Quotes and nested parentheses inside the body are skipped."""
+    when it is never closed). Quotes, nested parentheses and heredoc bodies inside it are
+    skipped: a heredoc's text may hold any ``)`` or quote."""
     depth, quote, n = 1, None, len(command)
+    heredocs: list[tuple[str, bool]] = []
     while i < n:
         c = command[i]
         if quote:
@@ -290,6 +292,22 @@ def _substitution_end(command: str, i: int) -> int:
             quote = c
         elif c == "\\":
             i += 1
+        elif c == "<" and command.startswith("<<<", i):
+            i += 3
+            continue
+        elif c == "<" and command.startswith("<<", i):
+            i += 2
+            strip_tabs = i < n and command[i] == "-"
+            i += 1 if strip_tabs else 0
+            while i < n and command[i] in " \t":
+                i += 1
+            delimiter, i = _heredoc_word(command, i)
+            heredocs.append((delimiter, strip_tabs))
+            continue
+        elif c == "\n" and heredocs:
+            i = _skip_heredocs(command, i + 1, heredocs)
+            heredocs.clear()
+            continue
         elif c == "(":
             depth += 1
         elif c == ")":
