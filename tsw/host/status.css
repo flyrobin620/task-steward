@@ -248,6 +248,9 @@ a.fnode:hover{border-color:var(--c)}
 .fnode .ftitle{grid-column:1/-1;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .fnode.ctx{opacity:.5;border-style:dashed;box-shadow:none}
 .fnode.st-archived{background:var(--chip)}
+/* A track (T278 revision 4): an empty row a task's lines spanning columns run on; as tall as a
+   card, so the line runs at the height of a card's middle. */
+.ftrack{grid-column:var(--c0)/var(--c1);grid-row:var(--r);height:61px;margin:7px 0;pointer-events:none}
 .flow-edges{position:absolute;left:0;top:0;z-index:1;pointer-events:none;overflow:visible}
 .edge{--e:color-mix(in srgb,var(--muted) 75%,transparent)}
 .edge.fu{--e:#0891b2}
