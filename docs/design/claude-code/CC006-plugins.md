@@ -230,6 +230,7 @@ T251 依据实测与官方文档（[skills](https://code.claude.com/docs/en/skil
 - **任务书的“仓库与 worktree”一节**（仓库已配置时生成）：
   - 会话目录与分支（或没有 worktree 的原因），不要另建 worktree 或 clone；报告写在执行目录。
   - 仓库指令文件：`repositories.<id>.instructions`（相对仓库根的路径列表），未配置时默认 `AGENTS.md`、`CLAUDE.md`、`.github/copilot-instructions.md`；worker 开始前完整阅读并遵守，改动子目录前也读该子目录中的同名文件，报告写明读了哪些。各仓库的列表由主会话经 `config_change` 维护。
+  - gh 账号（T279，F-T279-1）：仓库在 GitHub 上（`provider: github`，或没有 `provider` 但写了 `repository`）时写一行。配置了 `auth_profile`、指向 `provider: github` 的 `accounts` 条目时，写出账号、主机与配置项，要求用 gh 建 PR、合并、查看 CI 或推送之前核对 gh 当前账号，不一致时按 `gh-account` skill 只对一条命令选择账号（skill 已渲染到数据目录时附它的绝对路径）；没有配置时写明按该 skill 第 1 节确定账号。都写“不用 `gh auth switch`”。其他提供方（如 Azure DevOps）不写。
   - 有 worktree 时列出数据目录的 skill（`orchestrate`、`handle-input`、`task-intake`、`teams-chat` 只用于主会话，不列；`gh-account` 列出，§10.1）。
 - **评审**：`review_run` 在 worktree 中评审，按其中的提交确定范围。
 - 数据目录的 `CLAUDE.md` 不变，不为 `AGENTS.md` 原生加载改写它（用户决定）。
@@ -327,6 +328,6 @@ DN002 §5.8 在 Claude app 上的做法（T272）。
 6. 推荐读取集合：检索中入围、worker 需要参考的任务，在 `task_dispatch` / `attempt_continue` 的 `read_set` 中给出，并在背景中写明理由（DN007 §7.2）。
 7. 写回：之后的决定影响已登记、尚未完成的任务时，立即 `task_update`（附用户来源），已有会话时告诉它重读任务书（原 `orchestrate` 的两条）。
 8. 按任务类型的附加说明：
-   - code：写明涉及的仓库规则（需要用户确认的改动、live 场景）；需要用 gh 命令行建 PR、合并、查看 CI 等时，在任务书中写明“注意 gh 当前账号是否与仓库账号（<账号>）一致，不一致时按 `gh-account` skill（`<数据目录>/.claude/skills/gh-account/SKILL.md`）执行”，账号按 §10.1 第 1 条确定，写不出时写明“由 worker 按 skill 确定”。
+   - code：写明涉及的仓库规则（需要用户确认的改动、live 场景）。gh 账号的注意事项由 tsw 写在任务书的“仓库与 worktree”一节（§8.3，按 `auth_profile`），主会话不再手写；仓库没有配置 `auth_profile` 时，把建议的账号配置告诉用户，按用户原话 `config_change`。
    - design：产出的设计文档位置、需要用户确认的范围。
    - research：结论的形式、来源要求，不改代码。

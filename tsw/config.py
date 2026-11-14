@@ -410,6 +410,28 @@ def get(values: dict[str, Any], dotted: str, default: Any = None) -> Any:
     return current
 
 
+# How a few common language tags (``control.language``, DN003 §3.5a) read in generated text; any
+# other tag is shown as configured.
+LANGUAGE_NAMES = {
+    "zh": "中文",
+    "zh-cn": "简体中文",
+    "zh-hans": "简体中文",
+    "zh-tw": "繁體中文",
+    "zh-hant": "繁體中文",
+    "en": "English",
+    "en-us": "English",
+    "en-gb": "English",
+    "ja": "日本語",
+    "ja-jp": "日本語",
+}
+
+
+def language_shown(tag: str) -> str:
+    """``简体中文（`zh-CN`）`` for a known tag, the tag in backticks otherwise."""
+    name = LANGUAGE_NAMES.get(tag.lower())
+    return f"{name}（`{tag}`）" if name else f"`{tag}`"
+
+
 def normalize_model_id(model: str) -> str:
     """Drop a context suffix such as ``[1m]`` that hosts append to receipts (DN003 §1)."""
     return re.sub(r"\[[^\]]*\]$", "", model.strip())

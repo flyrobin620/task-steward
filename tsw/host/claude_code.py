@@ -27,6 +27,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, cast
 
+from tsw.config import DEFAULTS, language_shown, load_config
 from tsw.home import Home
 from tsw.roles import render_roles
 from tsw.storage.fs import atomic_write
@@ -83,15 +84,26 @@ orchestrator 时，忽略二者：worker 按任务书工作，例行会话按会
 - 所有状态变更都经 `tsw` MCP 工具写入账本。不要直接编辑 `ledger/`、`runs/`、
   `todo/`、`config/`、`views/` 等目录（hooks 会拒绝）。
 - 只对任务启动、任务完成或需要用户补充与决定的事项汇报；普通进度留在账本。
-- 回复用户使用中文。
+- 回复用户使用{language}。
 """
+
+
+def claude_md_text(home: Home) -> str:
+    """The data directory's ``CLAUDE.md``: replies in the user's language, ``control.language``
+    (DN003 §3.5a); the default when the configuration cannot be read, 中文 when it is unset."""
+    try:
+        tag = str(load_config(home).get("control.language", "") or "").strip()
+    except (OSError, ValueError):
+        tag = str(DEFAULTS["control"]["language"])
+    language = f"{language_shown(tag)}（配置 `control.language`）" if tag else "中文"
+    return CLAUDE_MD.format(language=language)
 
 
 def render_instructions(home: Home) -> list[Path]:
     """Write the orchestrator's CLAUDE.md, its ``orchestrate`` skill and its permission rules,
     and the worker instructions every brief starts with, into the data directory."""
     claude_md = home.root / "CLAUDE.md"
-    atomic_write(claude_md, CLAUDE_MD.encode("utf-8"))
+    atomic_write(claude_md, claude_md_text(home).encode("utf-8"))
     skill = home.root / SKILL_PATH
     atomic_write(skill, ORCHESTRATE_SKILL.read_bytes())
     handle_input = home.root / HANDLE_INPUT_PATH

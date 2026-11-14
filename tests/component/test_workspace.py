@@ -399,3 +399,61 @@ def test_the_brief_names_the_language_the_worker_talks_to_the_user_in(
         assert "- 语言：" not in brief
     else:
         assert line in brief
+
+
+GH_LINE = "- gh 账号："
+
+
+@pytest.mark.parametrize(
+    ("repo_extra", "accounts", "rendered", "expected"),
+    [
+        (
+            {"repository": "octo/demo", "auth_profile": "gh-octo"},
+            {"gh-octo": {"provider": "github", "host": "github.com", "account": "octo"}},
+            True,
+            "仓库账号为 `octo`（github.com，配置 `repositories.demo.auth_profile` 为 `gh-octo`）",
+        ),
+        ({"repository": "octo/demo"}, {}, True, "配置中没有为仓库 demo 指定账号"),
+        ({"repository": "octo/demo"}, {}, False, "先确定仓库账号"),
+        (
+            {"provider": "azure-devops", "repository": "org/proj/demo", "auth_profile": "ado"},
+            {"ado": {"provider": "azure-devops", "host": "dev.azure.com", "account": "me"}},
+            True,
+            None,
+        ),
+        ({}, {}, True, None),  # no owner/name: not known to be on GitHub
+    ],
+)
+def test_the_brief_names_the_repository_gh_account(  # noqa: PLR0917 - one per table column
+    home: Home,
+    tmp_path: Path,
+    repo_extra: dict[str, str],
+    accounts: dict[str, object],
+    rendered: bool,
+    expected: str | None,
+) -> None:
+    """CC006 §8.3 (T279, F-T279-1): the account from auth_profile, or how to find it, with the
+    gh-account skill's path once the host integration rendered it."""
+    repo = checkout(tmp_path)
+    skill_path = home.root / ".claude" / "skills" / "gh-account" / "SKILL.md"
+    if rendered:
+        skill(home, "gh-account", "按仓库选用 gh 账号")
+    h = Harness(
+        home,
+        {"accounts": accounts, "repositories": {"demo": {"path": str(repo), **repo_extra}}},
+    )
+    h.register("T001")
+    h.plan("T001")
+    orchestrator = Server(h.home, {SESSION_ENV: "orch-1"}, h.home.root)
+    orchestrator.machine = "m1"
+    orchestrator.call(
+        "attempt_start", {"task_id": "T001", "purpose": "prestart", "user_turn": True}
+    )
+    brief = (h.home.root / "runs" / "T001" / "a1" / "brief.md").read_text(encoding="utf-8")
+    if expected is None:
+        assert GH_LINE not in brief
+        return
+    line = next(x for x in brief.splitlines() if x.startswith(GH_LINE))
+    assert expected in line and "不用 `gh auth switch`" in line
+    assert (f"`{skill_path}`" in line) is rendered
+    assert brief.index(GH_LINE) < brief.index("## 目标")

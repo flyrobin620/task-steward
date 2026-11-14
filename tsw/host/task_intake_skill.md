@@ -74,8 +74,8 @@ description: "TaskSteward 主会话的受理与写任务书：检索历史与查
 **code**
 
 - 写明涉及的仓库规则：哪些改动按仓库规则需要用户确认才能合并、需要运行哪些 live 场景、合并后要核对什么。
-- 需要用 gh 命令行建 PR、合并、查看 CI 等时，在目标中写明：“注意 gh 当前账号是否与仓库账号（<账号>）一致，不一致时按 `gh-account` skill（`<数据目录>/.claude/skills/gh-account/SKILL.md`）执行，不用 `gh auth switch`。”账号按该 skill 第 1 节确定（配置 `repositories.<仓库>.auth_profile` → `accounts.<名>.account`，或仓库 owner 对应的已登录账号）；确定不了时写“账号由 worker 按 skill 确定”。`<数据目录>` 写实际的绝对路径。
-- 仓库在配置中没有 `auth_profile` 时，把建议的账号配置告诉用户；写入配置是权限类改动，按用户原话用 `config_change`。
+- gh 账号：tsw 生成任务书时，在“仓库与 worktree”一节为 GitHub 上的仓库写一行“注意 gh 当前账号是否与仓库账号一致，不一致时按 `gh-account` skill 执行，不用 `gh auth switch`”。配置了 `repositories.<仓库>.auth_profile` 时，这一行写出账号；没有配置时，写明按 skill 确定账号。你不用在目标里再写。只有本任务要用与配置不同的账号时，才在目标里写明账号。
+- 仓库在配置中没有 `auth_profile` 时，把建议的账号配置告诉用户（`accounts.<名>`：`provider`、`host`、`account`、`auth.kind: gh`；仓库的 `auth_profile`）。写入配置是权限类改动，按用户原话用 `config_change`。
 
 **design**
 

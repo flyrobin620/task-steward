@@ -328,7 +328,8 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     ):
         assert words in intake, words
     assert "`stage: intake`" in intake and "4–8 个具体关键词" in intake
-    assert "注意 gh 当前账号是否与仓库账号" in intake and "gh-account/SKILL.md" in intake
+    # The gh account line is tsw's, in the brief; the intake rules say not to repeat it.
+    assert "注意 gh 当前账号是否与仓库账号一致" in intake and "你不用在目标里再写" in intake
     assert "`control.language`" in intake  # the user's language, written into briefs by tsw
     account = gh_account.read_text(encoding="utf-8")
     assert account.startswith("---\nname: gh-account\ndescription: ")
@@ -357,7 +358,10 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert run_json("host", "render")[0] == 0
     again = json.loads(settings.read_text(encoding="utf-8"))["permissions"]["allow"]
     assert again == allow
-    assert (home / "CLAUDE.md").read_text(encoding="utf-8").startswith("# TaskSteward 数据目录")
+    claude_md = (home / "CLAUDE.md").read_text(encoding="utf-8")
+    assert claude_md.startswith("# TaskSteward 数据目录")
+    # Replies follow control.language (default zh-CN), not a fixed language (T279).
+    assert "- 回复用户使用简体中文（`zh-CN`）（配置 `control.language`）。" in claude_md
     text = skill.read_text(encoding="utf-8")
     assert text.startswith("---\nname: orchestrate\ndescription: ")
     assert "\n---\n\n# TaskSteward 主会话\n" in text
@@ -642,3 +646,16 @@ def test_render_reports_a_copy_the_update_did_not_replace(home: Path, tmp_path: 
     env = child_env(CLAUDE_CODE_PLUGIN_CACHE_DIR=str(plugins), PATH=str(empty))
     code, out = run_json("host", "render", env=env)
     assert code == 0 and out["plugin"]["update"]["ran"] is False
+
+
+@pytest.mark.use_case("UC-HOST-004")
+def test_the_data_directory_claude_md_replies_in_the_configured_language(home: Path) -> None:
+    """DN003 §3.5a: tsw host render writes the user's language from control.language."""
+    config = home / "config" / "task-steward.json"
+    loaded = json.loads(config.read_text(encoding="utf-8"))
+    loaded["control"] = {"language": "en-US"}
+    config.write_text(json.dumps(loaded), encoding="utf-8")
+    assert run_json("host", "render")[0] == 0
+    text = (home / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "- 回复用户使用English（`en-US`）（配置 `control.language`）。" in text
+    assert "回复用户使用中文" not in text
