@@ -8,18 +8,21 @@ references are always to its right, except that tasks referencing each other sha
 (T278 revision 3); vertically each repository has its own lane.
 
 The layout is computed here, when the page is generated, so it is tested like any other logic:
-each node carries its grid column and row, once for the board's tasks (with the archived tasks
-they are directly related to) and once for every task. The page's script only shows and hides
-nodes by the filters and draws the arrows between the nodes that are shown.
+one layout for the board's tasks (with the archived tasks they are directly related to) and one
+for every task, each for every choice of the relations shown (T280: the legend's checkboxes),
+carried by the page as data. The page's script only takes the layout of the current choice,
+shows and hides nodes by the filters and draws the arrows between the nodes that are shown.
 """
 
 from __future__ import annotations
 
 import heapq
 import html
+import json
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import combinations
 from typing import Any
 from urllib.parse import quote
 
@@ -30,6 +33,8 @@ LANE_CAPACITY = 6
 # Grid row 1 holds the column headings and grid column 1 the lane names.
 FIRST_ROW = 2
 FIRST_COLUMN = 2
+# The relations the legend can show or hide (T280), in the order of the layout keys.
+RELATIONS = ("dep", "fu", "ref")
 
 
 @dataclass(frozen=True)
@@ -363,6 +368,92 @@ def place(
     return layout
 
 
+def relation_choices() -> list[tuple[str, ...]]:
+    """Every choice of the relations shown, all three first and none last (T280)."""
+    return [c for n in range(len(RELATIONS), -1, -1) for c in combinations(RELATIONS, n)]
+
+
+def layout_key(everything: bool, shown: Iterable[str]) -> str:
+    """The key of a layout in the page: ``live`` or ``all``, then the relations shown."""
+    chosen = set(shown)
+    return ("all" if everything else "live") + ":" + ",".join(r for r in RELATIONS if r in chosen)
+
+
+def flow_layouts(
+    tasks: Sequence[FlowTask],
+    depends_on: Mapping[str, Iterable[str]],
+    follow_up_of: Mapping[str, Iterable[str]],
+    references: Mapping[str, Iterable[str]],
+) -> dict[str, Layout]:
+    """The layouts of the task flow by :func:`layout_key`, for every choice of the relations.
+
+    A relation not shown is left out as if it did not exist (DN006 §8.10, T280): it neither
+    moves a card nor holds a track, and it does not make an archived task context. The layout
+    without the archived tasks (``live``) has the tasks not archived and the archived tasks a
+    relation shown joins to one of them directly; the other (``all``) has every task.
+    """
+    relation: dict[str, Mapping[str, Iterable[str]]] = {
+        "dep": depends_on,
+        "fu": follow_up_of,
+        "ref": references,
+    }
+    found: dict[str, Layout] = {}
+    for chosen in relation_choices():
+        shown = {r: relation[r] for r in chosen}
+        empty: dict[str, list[str]] = {}
+        deps = shown.get("dep", empty)
+        refs = shown.get("ref", empty)
+        sources = shown.get("fu", empty)
+        related: dict[str, set[str]] = {t.task_id: set() for t in tasks}
+        for pairs in shown.values():
+            for tid, others in pairs.items():
+                if tid not in related:
+                    continue
+                for other in others:
+                    if other in related:
+                        related[tid].add(other)
+                        related[other].add(tid)
+        live_ids = {t.task_id for t in tasks if t.status != "archived"}
+        live_ids |= {o for tid in list(live_ids) for o in related[tid]}
+        found[layout_key(False, chosen)] = place(
+            [t for t in tasks if t.task_id in live_ids],
+            deps,
+            references=refs,
+            follow_ups=sources,
+        )
+        found[layout_key(True, chosen)] = place(tasks, deps, references=refs, follow_ups=sources)
+    return found
+
+
+def _layout_data(
+    layouts: Mapping[str, Layout], ids: Sequence[str], repos: Sequence[str]
+) -> dict[str, Any]:
+    """The page's copy of the layouts: equal ones once, cells and lanes in the page's order."""
+    index = {tid: i for i, tid in enumerate(ids)}
+    sets: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
+    pick: dict[str, int] = {}
+    for key, layout in layouts.items():
+        lanes = {lane.repo: lane for lane in layout.lanes}
+        data = {
+            "cols": max(layout.columns, 1),
+            "cells": [list(layout.cells[t]) if t in layout.cells else None for t in ids],
+            "lanes": [
+                [lanes[r].first_row, lanes[r].end_row] if r in lanes else None for r in repos
+            ],
+            "tracks": [
+                [index[tr.source], tr.first, tr.end, tr.row, 1 if tr.back else 0]
+                for tr in layout.tracks
+            ],
+        }
+        text = json.dumps(data, sort_keys=True)
+        if text not in seen:
+            seen[text] = len(sets)
+            sets.append(data)
+        pick[key] = seen[text]
+    return {"ids": list(ids), "repos": list(repos), "pick": pick, "sets": sets}
+
+
 def _e(value: Any) -> str:
     return html.escape("" if value is None else str(value))
 
@@ -383,60 +474,42 @@ def render_flow(
     ``depends_on`` maps a task to the tasks it depends on, ``follow_up_of`` a task to the tasks
     it was made from by a follow-up and ``references`` a task to the tasks it references. The
     three relations are alike for the context: an archived task joined to a board task by any of
-    them is in the layout without the archived tasks. ``flags`` are the board card's attention
-    flags, so the filters select the same tasks here as on the board.
+    the relations shown is in the layout without the archived tasks. ``flags`` are the board
+    card's attention flags, so the filters select the same tasks here as on the board.
+
+    The nodes carry no position: the layouts of :func:`flow_layouts` are in a data block (JSON,
+    never run) that the script reads to place the nodes, the lanes and the tracks for the
+    relations the legend shows and whether the archived tasks are in (T280).
     """
     known = {t.task_id for t in tasks}
     deps = {tid: sorted(d for d in ds if d in known) for tid, ds in depends_on.items()}
     sources = {tid: sorted(s for s in ss if s in known) for tid, ss in follow_up_of.items()}
     refs = {tid: sorted(r for r in rs if r in known) for tid, rs in (references or {}).items()}
-    related: dict[str, set[str]] = {t.task_id: set() for t in tasks}
-    for relation in (deps, sources, refs):
-        for tid, others in relation.items():
-            if tid not in related:
-                continue
-            for other in others:
-                related[tid].add(other)
-                related[other].add(tid)
-    live_ids = {t.task_id for t in tasks if t.status != "archived"}
-    live_ids |= {o for tid in list(live_ids) for o in related[tid]}
-    live = place(
-        [t for t in tasks if t.task_id in live_ids], deps, references=refs, follow_ups=sources
-    )
-    every = place(tasks, deps, references=refs, follow_ups=sources)
+    layouts = flow_layouts(tasks, deps, sources, refs)
+    ordered = sorted(tasks, key=lambda t: -t.seq)
+    repos = lane_order(tasks)
+    data = _layout_data(layouts, [t.task_id for t in ordered], repos)
 
     lanes: list[str] = []
-    every_lanes = {lane.repo: lane for lane in every.lanes}
-    live_lanes = {lane.repo: lane for lane in live.lanes}
-    for repo in lane_order(tasks):
-        a = every_lanes[repo]
-        style = f"--h:{repo_hue(repo)};--ar0:{a.first_row};--ar1:{a.end_row}"
-        lv = live_lanes.get(repo)
-        if lv:
-            style += f";--r0:{lv.first_row};--r1:{lv.end_row}"
-        hide = "" if lv else " no-live"
+    for repo in repos:
+        style = f"--h:{repo_hue(repo)}"
         lanes.append(
-            f'<div class="lane{hide}" data-repo="{_e(repo)}" style="{style}"></div>'
-            f'<div class="lane-name{hide}" data-repo="{_e(repo)}" style="{style}" '
+            f'<div class="lane" data-repo="{_e(repo)}" style="{style}"></div>'
+            f'<div class="lane-name" data-repo="{_e(repo)}" style="{style}" '
             f'title="{_e(repo)}">{_e(repo)}</div>'
         )
 
     nodes: list[str] = []
-    for t in sorted(tasks, key=lambda t: -t.seq):
-        ac, ar = every.cells[t.task_id]
-        style = f"--agc:{ac};--agr:{ar}"
-        cell = live.cells.get(t.task_id)
-        if cell:
-            style += f";--gc:{cell[0]};--gr:{cell[1]}"
+    for t in ordered:
         status = STATUS_LABELS.get(t.status, t.status)
         attrs = (
-            f'class="fnode st-{_e(t.status)}{"" if cell else " no-live"}" '
+            f'class="fnode st-{_e(t.status)}" '
             f'data-id="{_e(t.task_id)}" data-repo="{_e(t.repo)}" data-kind="{_e(t.kind)}" '
             f'data-status="{_e(t.status)}" data-seq="{t.seq}" '
             f'data-flags="{_e(flags.get(t.task_id, ""))}" '
             f'data-deps="{_e(" ".join(deps.get(t.task_id, [])))}" '
             f'data-from="{_e(" ".join(sources.get(t.task_id, [])))}" '
-            f'data-refs="{_e(" ".join(refs.get(t.task_id, [])))}" style="{style}" '
+            f'data-refs="{_e(" ".join(refs.get(t.task_id, [])))}" '
             f'title="{_e(t.task_id)} · {_e(t.title)} · {_e(status)} · '
             f'{_e(KINDS.get(t.kind, t.kind))} · {_e(t.repo)}"'
         )
@@ -454,24 +527,30 @@ def render_flow(
             f'<a {attrs} href="{_e(href)}">{inner}</a>' if href else f"<span {attrs}>{inner}</span>"
         )
 
-    # A track holds its row open (an empty row collapses) and tells the script where the lines
-    # spanning columns run: one element per track for each of the two layouts.
-    tracks = [
-        f'<div class="ftrack" data-src="{_e(tr.source)}" data-layout="{name}" '
-        f'data-dir="{"back" if tr.back else "on"}" '
-        f'style="--c0:{tr.first};--c1:{tr.end};--r:{tr.row}" hidden></div>'
-        for name, layout in (("live", live), ("all", every))
-        for tr in layout.tracks
-    ]
     arrow = (
         '<svg width="34" height="10" aria-hidden="true"><line x1="1" y1="5" x2="27" y2="5" '
         'class="lg {}"/><path d="M27 1 L33 5 L27 9 Z" class="lg-h"/></svg>'
     )
+    # Each relation's legend entry is its checkbox (T280): unticked, the relation is left out.
+    legend = "".join(
+        f'<label class="lg-rel" title="{_e(hint)}"><input type="checkbox" data-rel="{rel}" '
+        f"checked>{arrow.format(rel)}{_e(label)}</label>"
+        for rel, label, hint in (
+            ("dep", "A 依赖 B（A 在左，B 在右）", "显示依赖关系，并按它排列"),
+            ("fu", "由 B 的 follow-up 转来", "显示 follow-up 关系，并按它排列"),
+            ("ref", "A 引用 B", "显示引用关系，并按它排列"),
+        )
+    )
     legend = (
-        f'<span class="legend">{arrow.format("dep")}A 依赖 B（A 在左，B 在右）'
-        f"{arrow.format('fu')}由 B 的 follow-up 转来"
-        f"{arrow.format('ref')}A 引用 B"
-        '<i class="lg-ctx"></i>与筛选结果直接相连的上下文</span>'
+        f'<span class="legend" id="flow-legend">{legend}'
+        '<span class="lg-item"><i class="lg-ctx"></i>与筛选结果直接相连的上下文</span></span>'
+    )
+    # The data block is never run; "<", ">" and "&" are escaped so no text can end it.
+    payload = (
+        json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
     )
     return (
         '<section class="flow" id="flow" hidden aria-label="任务流">'
@@ -484,11 +563,11 @@ def render_flow(
         '<button type="button" class="ghost" id="zoom-fit" title="缩放到区域宽度">适应宽度</button>'
         '<span class="zoom" id="zoom-level"></span>'
         f"{legend}</div>"
+        f'<script type="application/json" id="flow-layouts">{payload}</script>'
         '<div class="flow-scroll" id="flow-scroll"><div class="flow-size" id="flow-size">'
-        f'<div class="flow-grid" id="flow-grid" style="--cols:{max(live.columns, 1)};'
-        f'--acols:{max(every.columns, 1)}">'
+        '<div class="flow-grid" id="flow-grid">'
         '<svg class="flow-edges" id="flow-edges" aria-hidden="true"></svg>'
-        f"{''.join(lanes)}{''.join(tracks)}{''.join(nodes)}</div></div></div>"
+        f"{''.join(lanes)}{''.join(nodes)}</div></div></div>"
         '<p class="empty" id="flow-empty" hidden>没有符合筛选条件的任务。</p>'
         "</section>"
     )

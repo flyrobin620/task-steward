@@ -9,7 +9,19 @@ from typing import Any
 
 import pytest
 
-from tsw.host.flow import FIRST_COLUMN, FIRST_ROW, LANE_CAPACITY, FlowTask, lane_order, place
+from tests.support import flow_layouts
+from tsw.host.flow import (
+    FIRST_COLUMN,
+    FIRST_ROW,
+    LANE_CAPACITY,
+    RELATIONS,
+    FlowTask,
+    lane_order,
+    layout_key,
+    place,
+    relation_choices,
+)
+from tsw.host.flow import flow_layouts as flow_layouts_of
 from tsw.host.status import TITLE, AppView, render
 from tsw.host.status_assets import CSS, SCRIPT
 from tsw.projection import SCHEMA_SQL
@@ -157,12 +169,6 @@ def _node(page: str, task_id: str) -> str:
     return found.group(0)
 
 
-def _style(node: str) -> dict[str, int]:
-    style = re.search(r'style="([^"]*)"', node)
-    assert style
-    return {k: int(v) for k, v in re.findall(r"--(\w+):(\d+)", style.group(1))}
-
-
 def _board(db: sqlite3.Connection) -> None:
     _task(db, "T001", "archived", 1, repo="alpha")  # depended on by a board task: context
     _task(db, "T002", "archived", 2, repo="beta")  # unrelated: only with the archived ones
@@ -188,24 +194,23 @@ def test_the_flow_has_a_node_per_task_with_its_relations_and_two_layouts(
     t4 = _node(flow, "T004")
     assert 'data-deps="T003"' in t4 and 'data-from="T003"' in t4 and 'data-repo="beta"' in t4
     assert "&lt;b&gt;flow&lt;/b&gt;" in flow and "<b>flow</b>" not in flow
+    # The nodes carry no position: the page's layouts do (T280), one per choice of relations.
+    assert "style=" not in t4
+    layouts = flow_layouts(page)
+    live, every = layouts["live:dep,fu,ref"], layouts["all:dep,fu,ref"]
     # The board's tasks and the archived one they depend on are in the default layout ...
-    for tid in ("T001", "T003", "T004"):
-        assert "no-live" not in _node(flow, tid), tid
-        assert {"gc", "gr", "agc", "agr"} <= set(_style(_node(flow, tid))), tid
+    assert set(live["cells"]) == {"T001", "T003", "T004"}
     # ... an unrelated archived task only in the layout with every task.
-    t2 = _node(flow, "T002")
-    assert "no-live" in t2 and set(_style(t2)) == {"agc", "agr"}
+    assert set(every["cells"]) == {"T001", "T002", "T003", "T004"}
     # Dependencies are right of their dependents, across repositories too.
-    gc = {tid: _style(_node(flow, tid))["gc"] for tid in ("T001", "T003", "T004")}
+    gc = {tid: live["cells"][tid][0] for tid in ("T001", "T003", "T004")}
     assert gc["T004"] < gc["T003"] < gc["T001"]
     # The static page links a board task to its card; an archived one has no card to go to.
     assert t4.startswith("<a ") and 'href="#task-T004"' in t4
     assert _node(flow, "T001").startswith("<span ")
     # Lanes: one per repository, alpha (no newer activity) after beta by name.
-    assert re.findall(r'<div class="lane(?: no-live)?" data-repo="(\w+)"', flow) == [
-        "alpha",
-        "beta",
-    ]
+    assert re.findall(r'<div class="lane" data-repo="(\w+)"', flow) == ["alpha", "beta"]
+    assert set(live["lanes"]) == set(every["lanes"]) == {"alpha", "beta"}
     assert "A 依赖 B" in flow and "follow-up 转来" in flow
 
 
@@ -307,3 +312,105 @@ def test_the_lane_names_stick_to_the_scrolling_area() -> None:
     # overflow:hidden on the box inside the scroller would capture the sticky lane names.
     assert ".flow-size{position:relative;overflow:clip}" in CSS
     assert re.search(r"\.flow-grid>\.lane-name\{[^}]*position:sticky;left:0", CSS)
+
+
+# ---------------------------------------------------------------------- the relations shown (T280)
+
+Relation = dict[str, list[str]]
+
+
+def _relations_board() -> tuple[list[FlowTask], Relation, Relation, Relation]:
+    tasks = [task(1, status="archived"), task(2, status="archived"), task(3, status="archived")]
+    tasks += [task(n) for n in range(4, 11)]
+    deps = {"T004": ["T001"], "T007": ["T009"]}  # T009 is newer than T007
+    follow_ups = {"T005": ["T002"]}
+    refs = {"T006": ["T003"], "T008": ["T010"]}  # T010 is newer than T008
+    return tasks, deps, follow_ups, refs
+
+
+@mark.use_case("UC-DIRECT-004")
+@pytest.mark.parametrize("chosen", relation_choices(), ids=lambda c: ",".join(c) or "none")
+def test_a_relation_not_shown_neither_moves_cards_nor_makes_context(
+    chosen: tuple[str, ...],
+) -> None:
+    tasks, deps, follow_ups, refs = _relations_board()
+    layouts = flow_layouts_of(tasks, deps, follow_ups, refs)
+    live = layouts[layout_key(False, chosen)]
+    every = layouts[layout_key(True, chosen)]
+    assert set(every.cells) == {t.task_id for t in tasks}
+    # The archived tasks are context only through the relations shown.
+    expected = {f"T{n:03d}" for n in range(4, 11)}
+    expected |= {
+        tid for rel, tid in (("dep", "T001"), ("fu", "T002"), ("ref", "T003")) if rel in chosen
+    }
+    assert set(live.cells) == expected
+    for layout in (live, every):
+        col = {tid: c for tid, (c, _) in layout.cells.items()}
+        # A dependency or a reference shown puts its target right, even a newer task; hidden,
+        # the newer task keeps its place by registration (left or in the same column).
+        assert (col["T009"] > col["T007"]) is ("dep" in chosen)
+        assert (col["T010"] > col["T008"]) is ("ref" in chosen)
+    if not chosen:
+        assert not live.tracks and not every.tracks
+        assert {c for c, _ in every.cells.values()} == {FIRST_COLUMN, FIRST_COLUMN + 1}
+
+
+@mark.use_case("UC-DIRECT-004")
+def test_tracks_and_shared_columns_follow_the_relations_shown() -> None:
+    tasks = [task(n) for n in (101, 102, 103)]
+    refs = {"T103": ["T102"], "T102": ["T101"]}
+    fus = {"T103": ["T101"]}  # two columns away while the references set the columns
+    layouts = flow_layouts_of(tasks, {}, fus, refs)
+    tracks = {
+        c: [tr.source for tr in layouts[layout_key(False, c)].tracks] for c in relation_choices()
+    }
+    assert tracks[("dep", "fu", "ref")] == tracks[("fu", "ref")] == ["T103"]
+    assert tracks[("dep", "ref")] == []  # the follow-up's line is not drawn, so holds no row
+    assert tracks[("dep", "fu")] == []  # without the references the three share a column
+    full = layouts[layout_key(False, ("fu", "ref"))]
+    bare = layouts[layout_key(False, ("ref",))]
+    assert full.lanes[0].end_row > bare.lanes[0].end_row  # the track's row
+    # A dependency keeps tasks referencing each other apart only while it is shown.
+    pair = [task(301), task(302)]
+    mutual = {"T301": ["T302"], "T302": ["T301"]}
+    layouts = flow_layouts_of(pair, {"T301": ["T302"]}, {}, mutual)
+    apart = layouts[layout_key(False, RELATIONS)].cells
+    together = layouts[layout_key(False, ("ref",))].cells
+    assert apart["T301"][0] < apart["T302"][0]
+    assert together["T301"][0] == together["T302"][0]
+
+
+@mark.use_case("UC-DIRECT-004")
+def test_the_page_carries_every_layout_once_and_the_legend_ticks_the_relations(
+    conn: sqlite3.Connection,
+) -> None:
+    _board(conn)  # dependencies and a follow-up, no reference
+    page = render(conn)
+    layouts = flow_layouts(page)
+    assert set(layouts) == {
+        layout_key(everything, c) for everything in (False, True) for c in relation_choices()
+    }
+    # With no reference on the board, showing references or not gives the same layout: once.
+    assert layouts["live:dep,fu,ref"]["set"] == layouts["live:dep,fu"]["set"]
+    assert layouts["live:dep,fu,ref"]["set"] != layouts["live:"]["set"]
+    # Unticking the dependencies and the follow-ups leaves the archived T001 out.
+    assert "T001" not in layouts["live:ref"]["cells"] and "T001" in layouts["all:ref"]["cells"]
+    legend = page.split('id="flow-legend"')[1].split('id="flow-layouts"')[0]
+    boxes = re.findall(r'<input type="checkbox" data-rel="(\w+)" checked>', legend)
+    assert boxes == list(RELATIONS)
+    assert "与筛选结果直接相连的上下文" in legend
+    # The choice is kept with the filters, so a reload keeps it; reset and tiles keep it too.
+    assert 'if (s.hide.length) p.set("hide", s.hide.join(","));' in SCRIPT
+    assert 'hide: list("hide")' in SCRIPT
+    assert SCRIPT.count("hide: state.hide") == 3
+    assert 'const key = (state.arch ? "all" : "live") + ":" + showing().join(",");' in SCRIPT
+    assert ".flow-grid>.out{display:none}" in CSS
+
+
+@mark.use_case("UC-DIRECT-004")
+def test_the_layout_data_cannot_end_its_block(conn: sqlite3.Connection) -> None:
+    _task(conn, "T001", "in_progress", 1, repo="</script><b>x</b>")
+    page = render(conn)
+    block = page.split('id="flow-layouts">')[1].split("</script>")[0]
+    assert "<" not in block and ">" not in block
+    assert flow_layouts(page)["live:dep,fu,ref"]["lanes"] == {"</script><b>x</b>": (2, 3)}
