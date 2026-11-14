@@ -1,9 +1,10 @@
 """The Dashboard app's view of one task: ``/tasks/<task>`` (DN006 §8.10).
 
-A read-only page with more than a card holds: the requirement and its revisions, every attempt
-with its session, the submission and the review rounds, the outputs, dependencies and resources,
-the questions and judgments, the follow-ups (DN002 §5.7), the progress notes and the task's
-ledger events. Its links are
+A read-only page with more than a card holds: the task's card in the retrieval index (DN007
+§5.1, read without touching the index), the requirement and its revisions, every attempt with its
+session, the submission and the review rounds, the outputs, dependencies, references
+(:mod:`tsw.host.relations`) and resources, the questions and judgments, the follow-ups (DN002
+§5.7), the progress notes and the task's ledger events. Its links are
 relative (``../`` back to the board, ``<task>`` to a dependency, ``../runs/...`` to a report), so
 the page keeps working under a path prefix (DN006 §8.10). It shares the board's head: the same
 Content-Security-Policy, token and scripts, so the accept, reject and cancel buttons behave as on
@@ -18,7 +19,10 @@ from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import quote
 
+from tsw.context.index import IndexedCard, outputs_digest, task_facts
+from tsw.context.service import fallback_card
 from tsw.events import Event
+from tsw.host.relations import label, references
 from tsw.host.status import (
     OUTPUT_TYPES,
     PR_TYPES,
@@ -50,6 +54,22 @@ REQUEST_STATUS = {"pending": "待答", "resolved": "已答", "superseded": "已�
 FOLLOW_UP_STATUS = {"open": "待处理", "converted": "已转为任务", "dismissed": "已驳回"}
 FOLLOW_UP_KINDS = {"remaining": "未完成", "out_of_scope": "范围外发现", "idea": "建议"}
 SEVERITY = {"high": "高", "medium": "中", "low": "低"}
+KEYWORD_SOURCES = {
+    "recorded": "主会话记录",
+    "legacy": "导入的旧关键词记录",
+    "generated": "由标题与任务书生成的初版",
+    "missing": "缺失",
+}
+SUMMARY_SOURCES = {"recorded": "主会话记录", "goal": "以任务目标开头代替", "missing": "缺失"}
+INDEX_PROBLEMS = {
+    "missing": "检索索引尚未建立",
+    "version": "检索索引是其他版本，需要重建",
+    "unreadable": "检索索引暂时无法读取（损坏或正在更新）",
+    "foreign": "检索索引与当前账本的历史不符，需要重建",
+}
+REBUILD_HINT = (
+    "下次检索（context_catalog 等工具）时会自动建立或更新，也可以在终端运行 tsw context rebuild。"
+)
 
 
 @dataclass(frozen=True)
@@ -366,16 +386,177 @@ def _relations(conn: sqlite3.Connection, row: Mapping[str, Any]) -> str:
             "SELECT repo, status FROM integrations WHERE task_id = ? ORDER BY repo", (task_id,)
         )
     ]
+    found = references(conn)
+    titles = {
+        str(r["task_id"]): (str(r["title"]), str(r["status"]))
+        for r in conn.execute("SELECT task_id, title, status FROM tasks")
+    }
+
+    def ref_rows(pairs: list[tuple[str, list[str]]]) -> list[list[str]]:
+        rows: list[list[str]] = []
+        for other, via in pairs:
+            title, status = titles.get(other, ("", ""))
+            rows.append(
+                [
+                    _task_link(other),
+                    escape(title),
+                    escape(STATUS_LABELS.get(status, status)),
+                    escape("、".join(label(v) for v in via)),
+                ]
+            )
+        return rows
+
+    cited = sorted(found.get(task_id, {}).items())
+    citing = sorted((a, refs[task_id]) for a, refs in found.items() if task_id in refs)
+    head = ("任务", "标题", "状态", "来源")
     return (
         "<h3>依赖</h3>"
         + _table(("任务", "类型", "绑定的 revision", "理由"), deps)
         + "<h3>依赖本任务的任务</h3>"
         + _table(("任务", "类型", "绑定的 revision"), users)
+        + "<h3>本任务引用的任务</h3>"
+        + _table(head, ref_rows(cited))
+        + "<h3>引用本任务的任务</h3>"
+        + _table(head, ref_rows(citing))
         + "<h3>资源</h3>"
         + _table(("资源", "占用"), resources)
         + "<h3>集成</h3>"
         + _table(("仓库", "状态"), integrations)
     )
+
+
+@dataclass(frozen=True)
+class CardState:
+    """The task's index card as the view shows it, and how current it is (DN006 §8.10, T278)."""
+
+    card: dict[str, Any]
+    problem: str | None  # why the index cannot be used (INDEX_PROBLEMS); None when it can
+    lagging: bool
+    indexed_seq: int
+    task_seq: int
+
+
+def card_state(
+    conn: sqlite3.Connection,
+    task_id: str,
+    found: IndexedCard,
+    checksums: Mapping[int, str],
+    task_seq: int,
+) -> CardState | None:
+    """The card to show for the task, or None when the projection has no such task.
+
+    The index is used when it belongs to this ledger: the event at its position has the checksum
+    it recorded (so the position is not past the ledger either). When the task has events after
+    that position, or no card yet, the structured fields come from the projection and the
+    keywords and summary stay as indexed, as the retrieval tools do (DN007 §5.4); the card is
+    then stale when the revision or the outputs it was bound to are no longer the task's.
+    """
+    facts = task_facts(conn, task_id)
+    if facts is None:
+        return None
+    problem = found.problem
+    indexed = found.indexed.sequence
+    if problem is None and checksums.get(indexed) != found.indexed.checksum:
+        problem = "foreign"
+    if problem is not None:
+        return CardState(fallback_card(facts, None), problem, False, indexed, task_seq)
+    if found.card is None or task_seq > indexed:
+        card = fallback_card(facts, found.card)
+        bound = _mapping(card.get("card_revision"))
+        if bound and not bound.get("stale"):
+            outputs = outputs_digest(facts.outputs)[: len(str(bound.get("outputs") or ""))]
+            if bound.get("task_revision") != facts.task["revision"] or (
+                bound.get("outputs") is not None and bound.get("outputs") != outputs
+            ):
+                card["card_revision"] = {**bound, "stale": True}
+        return CardState(card, None, True, indexed, task_seq)
+    return CardState(found.card, None, False, indexed, task_seq)
+
+
+def _stale_reason(card: Mapping[str, Any], revision: int) -> str:
+    bound = _mapping(card.get("card_revision"))
+    if card.get("keyword_source") == "generated":
+        return "关键词是由标题与任务书生成的初版，等主会话记录"
+    if bound.get("task_revision") not in (None, revision):
+        return f"卡片记录于 revision {bound['task_revision']}，任务现在是 revision {revision}"
+    return "卡片记录后任务的 revision 或产出有变化"
+
+
+def _strings(value: Any) -> list[str]:
+    return [str(x) for x in cast("list[Any]", value)] if isinstance(value, list) else []
+
+
+def _card(state: CardState | None, revision: int) -> str:
+    if state is None:
+        return '<p class="none">没有读取检索索引</p>'
+    card = state.card
+    if state.problem:
+        status = (
+            f'<p class="note warn"><b>{escape(INDEX_PROBLEMS.get(state.problem, state.problem))}'
+            f"</b>：{escape(REBUILD_HINT)}以下只有由账本当前状态生成的结构字段。</p>"
+        )
+    elif state.lagging:
+        status = (
+            f'<p class="note warn"><b>索引落后</b>：索引到账本序号 {state.indexed_seq}，'
+            f"本任务最近记录序号 {state.task_seq}。结构字段取账本当前状态，关键词与摘要沿用索引中的"
+            f"版本；{escape(REBUILD_HINT)}</p>"
+        )
+    else:
+        status = f'<p class="meta">索引到账本序号 {state.indexed_seq}，含本任务的最新记录。</p>'
+    keywords = _strings(card.get("keywords"))
+    chips = "".join(f'<span class="chip kw">{escape(k)}</span>' for k in keywords) or "—"
+    source = str(card.get("keyword_source") or "missing")
+    summary_source = str(card.get("summary_source") or "missing")
+    bound = _mapping(card.get("card_revision"))
+    stale = bool(bound.get("stale"))
+    outcomes = [
+        _link(o.get("ref"), o.get("label") or o.get("ref"))
+        for o in (_mapping(x) for x in _list(card.get("outcomes")))
+    ]
+    coverage = card.get("keyword_coverage")
+    if isinstance(coverage, dict):
+        coverage = "；".join(f"{k}：{v}" for k, v in _mapping(coverage).items())
+    deps = _strings(card.get("dependencies"))
+    hard = set(_strings(card.get("hard_dependencies")))
+    summary = str(card.get("summary") or "")
+    items = [
+        ("关键词", f'<span class="kws">{chips}</span>'),
+        ("关键词来源", escape(KEYWORD_SOURCES.get(source, source))),
+        ("关键词覆盖", escape(coverage or "")),
+        ("摘要", f'<span class="clip">{escape(summary)}</span>' if summary else "—"),
+        ("摘要来源", escape(SUMMARY_SOURCES.get(summary_source, summary_source))),
+        ("标签", escape("、".join(_strings(card.get("tags"))))),
+        ("项目", escape("、".join(_strings(card.get("project_ids"))))),
+        (
+            "stale",
+            f"是：{escape(_stale_reason(card, revision))}"
+            if stale
+            else "否"
+            if bound
+            else "未知（索引中还没有这张卡片）",
+        ),
+        (
+            "卡片绑定",
+            escape(
+                f"revision {bound.get('task_revision')} · 产出摘要 {bound.get('outputs') or '—'}"
+            )
+            if bound
+            else "",
+        ),
+        (
+            "依赖",
+            " ".join(
+                _task_link(d) + ("" if d in hard else " <small>（推断）</small>") for d in deps
+            ),
+        ),
+        ("产出", "<br>".join(outcomes)),
+        ("只读的导入任务", "是" if card.get("imported") and not card.get("resumable") else ""),
+    ]
+    return status + _facts(items)
+
+
+def _list(value: Any) -> list[Any]:
+    return cast("list[Any]", value) if isinstance(value, list) else []
 
 
 def _follow_up_source(item: Mapping[str, Any]) -> str:
@@ -586,9 +767,17 @@ def _timeline(steps: list[Step]) -> str:
 
 
 def render_task(
-    conn: sqlite3.Connection, task_id: str, app: AppView, steps: list[Step]
+    conn: sqlite3.Connection,
+    task_id: str,
+    app: AppView,
+    steps: list[Step],
+    indexed: CardState | None = None,
 ) -> str | None:
-    """The task's own page, or None when the projection has no such task."""
+    """The task's own page, or None when the projection has no such task.
+
+    ``indexed`` is the task's index card (:func:`card_state`); without it the section says that
+    the index was not read.
+    """
     found = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
     if found is None:
         return None
@@ -626,6 +815,7 @@ def render_task(
     session = session_link(task_id, current)
     sections = [
         _section("overview", "概况", _overview(row, dict(imported) if imported else None)),
+        _section("card", "检索卡片", _card(indexed, int(row["revision"]))),
         _section(
             "requirement",
             "需求",
@@ -636,7 +826,7 @@ def render_task(
         _section("attempts", "attempt", _attempts(task_id, attempts), len(attempts)),
         _section("submission", "提交与评审", _submission(row) + reviews, n_rounds),
         _section("outputs", "产出", outputs, n_outputs),
-        _section("relations", "依赖与资源", _relations(conn, row)),
+        _section("relations", "关系与资源", _relations(conn, row)),
         _section(
             "questions",
             "问题与判断" + (f"（待答 {n_pending}）" if n_pending else ""),

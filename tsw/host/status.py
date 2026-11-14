@@ -25,6 +25,7 @@ from urllib.parse import quote
 
 from tsw.commands import CommitContext
 from tsw.host.flow import FlowTask, render_flow
+from tsw.host.relations import references
 from tsw.host.status_assets import (
     APP_CSP,
     APP_SCRIPT,
@@ -779,6 +780,7 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
         app=app is not None,
         on_board=on_board,
         repo_hue=repo_hue,
+        references={a: list(found) for a, found in references(conn).items()},
     )
     lease_text = (
         f"调度租约：{_e(lease['holder_session'])}（{_e(lease['machine'])}，到期 {_e(lease['expires_at'])}）"

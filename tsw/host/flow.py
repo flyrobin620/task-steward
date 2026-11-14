@@ -1,7 +1,8 @@
 """The task flow view of the Dashboard: tasks laid out by their relations (DN006 §8.10, T273).
 
 Every task is a node; a dependency is an arrow from the task that depends to the one it depends
-on, and a task made from a follow-up points, dashed, to the task the follow-up came from.
+on, a task made from a follow-up points, dashed, to the task the follow-up came from, and a task
+points, dotted, to the tasks it references (:mod:`tsw.host.relations`, T278).
 Horizontally the newest registered task is on the left and a task's dependencies are always to
 its right; vertically each repository has its own lane.
 
@@ -166,18 +167,22 @@ def render_flow(
     app: bool,
     on_board: frozenset[str],
     repo_hue: Callable[[str], int],
+    references: Mapping[str, Iterable[str]] | None = None,
 ) -> str:
     """The task flow section: its controls, lanes and nodes (the script draws the arrows).
 
-    ``depends_on`` maps a task to the tasks it depends on and ``follow_up_of`` a task to the
-    tasks it was made from by a follow-up. ``flags`` are the board card's attention flags, so
-    the filters select the same tasks here as on the board.
+    ``depends_on`` maps a task to the tasks it depends on, ``follow_up_of`` a task to the tasks
+    it was made from by a follow-up and ``references`` a task to the tasks it references. The
+    three relations are alike for the context: an archived task joined to a board task by any of
+    them is in the layout without the archived tasks. ``flags`` are the board card's attention
+    flags, so the filters select the same tasks here as on the board.
     """
     known = {t.task_id for t in tasks}
     deps = {tid: sorted(d for d in ds if d in known) for tid, ds in depends_on.items()}
     sources = {tid: sorted(s for s in ss if s in known) for tid, ss in follow_up_of.items()}
+    refs = {tid: sorted(r for r in rs if r in known) for tid, rs in (references or {}).items()}
     related: dict[str, set[str]] = {t.task_id: set() for t in tasks}
-    for relation in (deps, sources):
+    for relation in (deps, sources, refs):
         for tid, others in relation.items():
             if tid not in related:
                 continue
@@ -219,7 +224,8 @@ def render_flow(
             f'data-status="{_e(t.status)}" data-seq="{t.seq}" '
             f'data-flags="{_e(flags.get(t.task_id, ""))}" '
             f'data-deps="{_e(" ".join(deps.get(t.task_id, [])))}" '
-            f'data-from="{_e(" ".join(sources.get(t.task_id, [])))}" style="{style}" '
+            f'data-from="{_e(" ".join(sources.get(t.task_id, [])))}" '
+            f'data-refs="{_e(" ".join(refs.get(t.task_id, [])))}" style="{style}" '
             f'title="{_e(t.task_id)} · {_e(t.title)} · {_e(status)} · '
             f'{_e(KINDS.get(t.kind, t.kind))} · {_e(t.repo)}"'
         )
@@ -244,6 +250,7 @@ def render_flow(
     legend = (
         f'<span class="legend">{arrow.format("dep")}A 依赖 B（A 在左，B 在右）'
         f"{arrow.format('fu')}由 B 的 follow-up 转来"
+        f"{arrow.format('ref')}A 引用 B"
         '<i class="lg-ctx"></i>与筛选结果直接相连的上下文</span>'
     )
     return (
