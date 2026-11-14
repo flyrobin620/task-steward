@@ -66,6 +66,7 @@ class Track:
     first: int
     end: int
     row: int
+    back: bool = False  # the lines run left (a broken cycle, a follow-up to a newer task)
 
 
 def _no_tracks() -> list[Track]:
@@ -124,7 +125,9 @@ def place(
     no track holds there, the one nearest to the tasks pointing to it (the top one when none
     is placed), which keeps the arrows between neighbouring columns straight; then each of these
     cards with such lines takes, for its track, the lowest row free in all the columns it
-    passes. A card further right gives way to the tracks already there.
+    passes. A card further right gives way to the tracks already there. Lines reaching two or
+    more columns to the left (a reference given up in a cycle, a follow-up to a newer task) get
+    a track of their own the same way, over the columns between, already placed.
     """
     by_id = {t.task_id: t for t in tasks}
     deps = {
@@ -261,9 +264,23 @@ def place(
     }
     slot: dict[str, int] = {}
     held: dict[tuple[int, str], set[int]] = {}
-    found: list[tuple[str, str, int, int, int]] = []
-    for c in sorted(set(column.values())):
-        here = sorted((t for t in by_id if column[t] == c), key=lambda t: (-by_id[t].seq, t))
+    found: list[Track] = []
+    buckets: dict[int, list[str]] = {}
+    for tid in by_id:
+        buckets.setdefault(column[tid], []).append(tid)
+
+    def hold(tid: str, first: int, end: int, back: bool) -> None:
+        """A row of ``tid``'s lane free in columns [first, end), held for its lines."""
+        repo = by_id[tid].repo
+        row = 0
+        while any(row in held.get((k, repo), ()) for k in range(first, end)):
+            row += 1
+        for k in range(first, end):
+            held.setdefault((k, repo), set()).add(row)
+        found.append(Track(tid, repo, first, end, row, back))
+
+    for c in sorted(buckets):
+        here = sorted(buckets[c], key=lambda t: (-by_id[t].seq, t))
         for tid in here:
             repo = by_id[tid].repo
             taken = held.setdefault((c, repo), set())
@@ -274,22 +291,18 @@ def place(
             taken.add(row)
             slot[tid] = row
         for tid in here:
-            far = max([column[o] for o in lines[tid]] + [c])
-            if far - c < 2:
-                continue
-            repo = by_id[tid].repo
-            row = 0
-            while any(row in held.get((k, repo), ()) for k in range(c + 1, far)):
-                row += 1
-            for k in range(c + 1, far):
-                held.setdefault((k, repo), set()).add(row)
-            found.append((tid, repo, c + 1, far, row))
+            reach = [column[o] for o in lines[tid]]
+            far, near = max([*reach, c]), min([*reach, c])
+            if far - c >= 2:
+                hold(tid, c + 1, far, False)
+            if c - near >= 2:
+                hold(tid, near + 1, c, True)
 
     layout = Layout(columns=(max(column.values()) + 1) if column else 0)
     row_at = FIRST_ROW
     for repo in lane_order(tasks):
         rows = [slot[t.task_id] for t in tasks if t.repo == repo]
-        rows += [row for _, r, _, _, row in found if r == repo]
+        rows += [tr.row for tr in found if tr.repo == repo]
         height = 1 + max(rows)
         layout.lanes.append(Lane(repo, row_at, row_at + height))
         for t in tasks:
@@ -299,9 +312,16 @@ def place(
                     row_at + slot[t.task_id],
                 )
         layout.tracks += [
-            Track(src, r, FIRST_COLUMN + first, FIRST_COLUMN + end, row_at + row)
-            for src, r, first, end, row in found
-            if r == repo
+            Track(
+                tr.source,
+                repo,
+                FIRST_COLUMN + tr.first,
+                FIRST_COLUMN + tr.end,
+                row_at + tr.row,
+                tr.back,
+            )
+            for tr in found
+            if tr.repo == repo
         ]
         row_at += height
     return layout
@@ -402,6 +422,7 @@ def render_flow(
     # spanning columns run: one element per track for each of the two layouts.
     tracks = [
         f'<div class="ftrack" data-src="{_e(tr.source)}" data-layout="{name}" '
+        f'data-dir="{"back" if tr.back else "on"}" '
         f'style="--c0:{tr.first};--c1:{tr.end};--r:{tr.row}" hidden></div>'
         for name, layout in (("live", live), ("all", every))
         for tr in layout.tracks

@@ -294,7 +294,7 @@
       const lanes = Array.from(grid.querySelectorAll(".lane, .lane-name"));
       // Each task's lines spanning columns run on its track (T278 revision 4), one per layout.
       const tracks = Array.from(grid.querySelectorAll(".ftrack"));
-      const trackOf = new Map(tracks.map(t => [`${t.dataset.layout}:${t.dataset.src}`, t]));
+      const trackOf = new Map(tracks.map(t => [`${t.dataset.layout}:${t.dataset.src}:${t.dataset.dir}`, t]));
       const ZOOMS = [0.3, 0.4, 0.5, 0.6, 0.75, 0.9, 1, 1.15, 1.3, 1.5];
       let zoom = Number(store.get("zoom")) || 1;
       let shown = new Set();
@@ -358,8 +358,10 @@
       // plain paths, so the page needs no references between SVG elements.
       function edge(from, to, kind) {
         const y1 = from.offsetTop + from.offsetHeight / 2, y2 = to.offsetTop + to.offsetHeight / 2;
-        const track = column(to) - column(from) >= 2 ? trackOf.get(`${state.arch ? "all" : "live"}:${from.dataset.id}`) : null;
-        if (track && !track.hidden) return routed(from, to, kind, track, y1, y2);
+        const span = column(to) - column(from);
+        const dir = span >= 2 ? "on" : span <= -2 ? "back" : "";
+        const track = dir ? trackOf.get(`${state.arch ? "all" : "live"}:${from.dataset.id}:${dir}`) : null;
+        if (track && !track.hidden) return routed(from, to, kind, track, y1, y2, dir === "on" ? 1 : -1);
         let x1, x2, c1, c2, sign;
         const sameColumn = to.offsetLeft < from.offsetLeft + from.offsetWidth
           && from.offsetLeft < to.offsetLeft + to.offsetWidth;
@@ -388,12 +390,14 @@
         return arrowed(from, to, kind, `M${x1},${y1} C${c1},${y1} ${c2},${y2} ${tip},${y2}`, x2, tip, y2);
       }
       // A line spanning columns: out of its task into the gap, along the task's track (a row no
-      // card holds in the columns between), and into its target from the gap before it.
-      function routed(from, to, kind, track, y1, y2) {
+      // card holds in the columns between), and into its target from the gap before it. A line
+      // running left (``sign`` -1) leaves the task's left side and enters the target's right.
+      function routed(from, to, kind, track, y1, y2, sign) {
         const yt = track.offsetTop + track.offsetHeight / 2;
-        const x1 = from.offsetLeft + from.offsetWidth, x2 = to.offsetLeft, tip = x2 - 8;
-        const g1 = x1 + 14, g2 = x2 - 14; // the middle of the gaps (the nodes' side margins)
-        const d = `M${x1},${y1} C${g1},${y1} ${g1},${yt} ${g1 + 14},${yt} L${g2 - 14},${yt} `
+        const x1 = sign > 0 ? from.offsetLeft + from.offsetWidth : from.offsetLeft;
+        const x2 = sign > 0 ? to.offsetLeft : to.offsetLeft + to.offsetWidth, tip = x2 - sign * 8;
+        const g1 = x1 + sign * 14, g2 = x2 - sign * 14; // the middle of the gaps (side margins)
+        const d = `M${x1},${y1} C${g1},${y1} ${g1},${yt} ${g1 + sign * 14},${yt} L${g2 - sign * 14},${yt} `
           + `C${g2},${yt} ${g2},${y2} ${tip},${y2}`;
         return arrowed(from, to, kind, d, x2, tip, y2);
       }

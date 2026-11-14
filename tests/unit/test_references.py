@@ -522,11 +522,44 @@ def test_the_page_carries_the_tracks_of_both_layouts_and_the_script_follows_them
     conn.execute("UPDATE tasks SET goal = '后续见 T005 与 T004' WHERE task_id = 'T006'")
     flow = render(conn).split('id="flow"')[1]
     tracks = re.findall(
-        r'<div class="ftrack" data-src="(\w+)" data-layout="(\w+)" style="([^"]*)" hidden>', flow
+        r'<div class="ftrack" data-src="(\w+)" data-layout="(\w+)" data-dir="\w+" '
+        r'style="([^"]*)" hidden>',
+        flow,
     )
     assert {(src, name) for src, name, _ in tracks} >= {("T006", "live"), ("T006", "all")}
     for _, _, style in tracks:
         assert re.fullmatch(r"--c0:\d+;--c1:\d+;--r:\d+", style)
-    assert "function routed(from, to, kind, track, y1, y2)" in SCRIPT
+    assert "function routed(from, to, kind, track, y1, y2, sign)" in SCRIPT
+    assert 'data-dir="on"' in flow
     assert "t.dataset.layout !== layout || !shown.has(nodeById.get(t.dataset.src))" in SCRIPT
     assert re.search(r"\.ftrack\{grid-column:var\(--c0\)/var\(--c1\);grid-row:var\(--r\)", CSS)
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_lines_running_left_across_columns_get_a_track_too() -> None:
+    # A reference cycle T004 -> T003 -> T002 -> T001 -> T004: one reference is given up and
+    # runs left across the two columns between.
+    tasks = [_t(1), _t(2), _t(3), _t(4)]
+    cycle = {"T004": ["T003"], "T003": ["T002"], "T002": ["T001"], "T001": ["T004"]}
+    layout = place(tasks, {}, references=cycle)
+    back = [tr for tr in layout.tracks if tr.back]
+    assert len(back) == 1
+    col = {tid: c for tid, (c, _) in layout.cells.items()}
+    (tr,) = back
+    target = next(t for t in cycle[tr.source] if col[t] < col[tr.source])
+    assert (tr.first, tr.end) == (col[target] + 1, col[tr.source])
+    assert not _cells_of_tracks(layout) & _card_cells(layout, tasks)
+    # A follow-up to a newer task two columns left of it.
+    chain = {"T003": ["T002"], "T002": ["T001"]}
+    layout = place(tasks[:3], {}, references=chain, follow_ups={"T001": ["T003"]})
+    assert [(tr.source, tr.back) for tr in layout.tracks] == [("T001", True)]
+    assert not _cells_of_tracks(layout) & _card_cells(layout, tasks[:3])
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_a_long_sparse_chain_is_laid_out_in_one_pass() -> None:
+    # Rows come from per-column buckets: 8000 tasks in a chain of references place quickly.
+    tasks = [FlowTask(f"T{n:05d}", "t", "r", "code", "accepted", n, "x") for n in range(8000)]
+    chain = {f"T{n:05d}": [f"T{n - 1:05d}"] for n in range(1, 8000)}
+    layout = place(tasks, {}, references=chain)
+    assert len(layout.cells) == 8000 and layout.tracks == []
