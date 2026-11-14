@@ -563,3 +563,25 @@ def test_a_long_sparse_chain_is_laid_out_in_one_pass() -> None:
     chain = {f"T{n:05d}": [f"T{n - 1:05d}"] for n in range(1, 8000)}
     layout = place(tasks, {}, references=chain)
     assert len(layout.cells) == 8000 and layout.tracks == []
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_long_tracks_are_held_as_intervals() -> None:
+    # Each task depends on the one before and references the oldest: the tracks are long, yet
+    # each is held once (an interval per row), and no card shares a cell with a track.
+    n = 300
+    tasks = [FlowTask(f"T{k:04d}", "t", "r", "code", "accepted", k, "x") for k in range(n)]
+    deps = {f"T{k:04d}": [f"T{k - 1:04d}"] for k in range(1, n)}
+    refs = {f"T{k:04d}": ["T0000"] for k in range(2, n)}
+    layout = place(tasks, deps, references=refs)
+    assert len(layout.tracks) == n - 2
+    col = {tid: c for tid, (c, _) in layout.cells.items()}
+    assert all(tr.end == col["T0000"] for tr in layout.tracks)
+    cards = {(c, r) for c, r in layout.cells.values()}
+    for tr in layout.tracks:
+        assert not any((k, tr.row) in cards for k in range(tr.first, tr.end))
+    rows = {}
+    for tr in layout.tracks:  # tracks sharing a row never overlap
+        for other in rows.get(tr.row, []):
+            assert tr.end <= other[0] or other[1] <= tr.first
+        rows.setdefault(tr.row, []).append((tr.first, tr.end))

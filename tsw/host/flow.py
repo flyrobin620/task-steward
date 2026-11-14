@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import heapq
 import html
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -82,6 +83,35 @@ class Layout:
     lanes: list[Lane] = field(default_factory=_no_lanes)
     columns: int = 0
     tracks: list[Track] = field(default_factory=_no_tracks)
+
+
+class _Rows:
+    """The columns held in each row of a lane, as sorted disjoint intervals [start, end).
+
+    A track holds one interval however many columns it passes, so memory stays linear in the
+    cards and tracks (T278 review of PR #46).
+    """
+
+    def __init__(self) -> None:
+        self.starts: list[list[int]] = []
+        self.ends: list[list[int]] = []
+
+    def free(self, row: int, first: int, end: int) -> bool:
+        if row >= len(self.starts):
+            return True
+        starts, ends = self.starts[row], self.ends[row]
+        k = bisect_right(starts, first) - 1  # the interval starting at or before ``first``
+        if k >= 0 and ends[k] > first:
+            return False
+        return k + 1 >= len(starts) or starts[k + 1] >= end
+
+    def take(self, row: int, first: int, end: int) -> None:
+        while len(self.starts) <= row:
+            self.starts.append([])
+            self.ends.append([])
+        k = bisect_left(self.starts[row], first)
+        self.starts[row].insert(k, first)
+        self.ends[row].insert(k, end)
 
 
 def lane_order(tasks: Iterable[FlowTask]) -> list[str]:
@@ -263,7 +293,7 @@ def place(
         for tid in by_id
     }
     slot: dict[str, int] = {}
-    held: dict[tuple[int, str], set[int]] = {}
+    held: dict[str, _Rows] = {}
     found: list[Track] = []
     buckets: dict[int, list[str]] = {}
     for tid in by_id:
@@ -272,23 +302,29 @@ def place(
     def hold(tid: str, first: int, end: int, back: bool) -> None:
         """A row of ``tid``'s lane free in columns [first, end), held for its lines."""
         repo = by_id[tid].repo
+        rows = held.setdefault(repo, _Rows())
         row = 0
-        while any(row in held.get((k, repo), ()) for k in range(first, end)):
+        while not rows.free(row, first, end):
             row += 1
-        for k in range(first, end):
-            held.setdefault((k, repo), set()).add(row)
+        rows.take(row, first, end)
         found.append(Track(tid, repo, first, end, row, back))
 
     for c in sorted(buckets):
         here = sorted(buckets[c], key=lambda t: (-by_id[t].seq, t))
         for tid in here:
             repo = by_id[tid].repo
-            taken = held.setdefault((c, repo), set())
+            rows = held.setdefault(repo, _Rows())
             near = [slot[m] for m in pointed[tid] if m in slot and by_id[m].repo == repo]
             want = round(sum(near) / len(near)) if near else 0
-            rows = range(want + len(taken) + 1)
-            row = min((r for r in rows if r not in taken), key=lambda r: (abs(r - want), r))
-            taken.add(row)
+            # The free row nearest to ``want`` (the upper one on a tie).
+            row, d = -1, 0
+            while row < 0:
+                for r in (want - d, want + d):
+                    if r >= 0 and rows.free(r, c, c + 1):
+                        row = r
+                        break
+                d += 1
+            rows.take(row, c, c + 1)
             slot[tid] = row
         for tid in here:
             reach = [column[o] for o in lines[tid]]
