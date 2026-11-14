@@ -3,8 +3,9 @@
 Every task is a node; a dependency is an arrow from the task that depends to the one it depends
 on, a task made from a follow-up points, dashed, to the task the follow-up came from, and a task
 points, dotted, to the tasks it references (:mod:`tsw.host.relations`, T278).
-Horizontally the newest registered task is on the left and a task's dependencies are always to
-its right; vertically each repository has its own lane.
+Horizontally the newest registered task is on the left and the tasks a task depends on or
+references are always to its right, except that tasks referencing each other share a column
+(T278 revision 3); vertically each repository has its own lane.
 
 The layout is computed here, when the page is generated, so it is tested like any other logic:
 each node carries its grid column and row, once for the board's tasks (with the archived tasks
@@ -79,65 +80,114 @@ def place(
     tasks: Sequence[FlowTask],
     depends_on: Mapping[str, Iterable[str]],
     capacity: int = LANE_CAPACITY,
+    references: Mapping[str, Iterable[str]] | None = None,
 ) -> Layout:
-    """Lay the tasks out: newest left, every dependency right of the tasks depending on it.
+    """Lay the tasks out: newest left, every task right of the tasks depending on or referencing it.
 
-    Tasks are taken newest registration first, but never before every task depending on them
-    has been placed (a dependency registered after its dependent waits for it). Each task goes
-    to the current column, or further right when a task depending on it is there or beyond, or
-    when its repository already has ``capacity`` tasks in that column; the current column only
-    moves right, so older tasks never come left of newer ones. Within its lane a task takes the
-    free row nearest to the tasks depending on it, which keeps the arrows short and straight.
-    Relations to tasks outside ``tasks`` are ignored; a cycle (which the ledger does not allow)
-    is broken by registration order.
+    A dependency and a reference both put the task they point to further right (DN006 §8.10,
+    T278 revision 3); tasks that reference each other share a column instead, and so does every
+    task joined to them by mutual references. Such a group is placed as one: newest registration
+    first, but never before every task left of any member has been placed (a task registered
+    after the one pointing to it waits for it). A group goes to the current column, or further
+    right when a task pointing to a member is there or beyond, or when a member's repository
+    already has ``capacity`` tasks in that column; the current column only moves right, so older
+    tasks never come left of newer ones. A group with more than ``capacity`` members in one
+    repository spills its extra members further right. Within its lane a task takes the free
+    row nearest to the tasks pointing to it, which keeps the arrows short and straight.
+    Relations to tasks outside ``tasks`` are ignored; a cycle is broken by registration order.
     """
     by_id = {t.task_id: t for t in tasks}
-    deps: dict[str, list[str]] = {
-        tid: sorted({d for d in depends_on.get(tid, ()) if d in by_id and d != tid})
+    refs = {
+        tid: {r for r in (references or {}).get(tid, ()) if r in by_id and r != tid}
         for tid in by_id
     }
-    dependents: dict[str, list[str]] = {tid: [] for tid in by_id}
-    for tid, ds in deps.items():
-        for d in ds:
-            dependents[d].append(tid)
-    waiting = {tid: len(ds) for tid, ds in dependents.items()}
-    ready = [(-by_id[tid].seq, tid) for tid, n in waiting.items() if n == 0]
+    # Groups: tasks joined by mutual references, transitively.
+    parent = {tid: tid for tid in by_id}
+
+    def root(tid: str) -> str:
+        while parent[tid] != tid:
+            parent[tid] = parent[parent[tid]]
+            tid = parent[tid]
+        return tid
+
+    for a, rs in refs.items():
+        for b in rs:
+            if a in refs[b]:
+                ra, rb = root(a), root(b)
+                if ra != rb:
+                    parent[max(ra, rb)] = min(ra, rb)
+    group = {tid: root(tid) for tid in by_id}
+    members: dict[str, list[str]] = {}
+    for tid in sorted(by_id, key=lambda t: (-by_id[t].seq, t)):
+        members.setdefault(group[tid], []).append(tid)
+    newest = {g: by_id[ms[0]].seq for g, ms in members.items()}
+
+    # ``points[x]``: the tasks that must be right of x (its dependencies and references outside
+    # its group); ``pointed[x]``: the tasks that must be left of it.
+    points: dict[str, set[str]] = {tid: set() for tid in by_id}
+    for tid in by_id:
+        for other in {*depends_on.get(tid, ()), *refs[tid]}:
+            if other in by_id and other != tid and group[other] != group[tid]:
+                points[tid].add(other)
+    pointed: dict[str, list[str]] = {tid: [] for tid in by_id}
+    for tid, others in points.items():
+        for other in sorted(others):
+            pointed[other].append(tid)
+    after: dict[str, set[str]] = {g: set() for g in members}  # groups right of a group
+    for tid, others in points.items():
+        after[group[tid]] |= {group[o] for o in others}
+    waiting = {g: 0 for g in members}
+    for right in after.values():
+        for r in right:
+            waiting[r] += 1
+    ready = [(-newest[g], g) for g, n in waiting.items() if n == 0]
     heapq.heapify(ready)
     order: list[str] = []
     done: set[str] = set()
-    while len(order) < len(by_id):
-        if not ready:  # a cycle: take the newest task left
-            tid = max((t for t in by_id if t not in done), key=lambda t: (by_id[t].seq, t))
-            heapq.heappush(ready, (-by_id[tid].seq, tid))
-        _, tid = heapq.heappop(ready)
-        if tid in done:
+    while len(order) < len(members):
+        if not ready:  # a cycle: take the newest group left
+            g = max((g for g in members if g not in done), key=lambda g: (newest[g], g))
+            heapq.heappush(ready, (-newest[g], g))
+        _, g = heapq.heappop(ready)
+        if g in done:
             continue
-        done.add(tid)
-        order.append(tid)
-        for d in deps[tid]:
-            waiting[d] -= 1
-            if waiting[d] == 0 and d not in done:
-                heapq.heappush(ready, (-by_id[d].seq, d))
+        done.add(g)
+        order.append(g)
+        for r in sorted(after[g]):
+            waiting[r] -= 1
+            if waiting[r] == 0 and r not in done:
+                heapq.heappush(ready, (-newest[r], r))
 
     column: dict[str, int] = {}
     slot: dict[str, int] = {}
     used: dict[tuple[int, str], set[int]] = {}
     current = 0
-    for tid in order:
-        task = by_id[tid]
-        placed = [m for m in dependents[tid] if m in column]
-        col = max([current] + [column[m] + 1 for m in placed])
-        while len(used.get((col, task.repo), ())) >= capacity:
+    for g in order:
+        tids = members[g]
+        left = [m for tid in tids for m in pointed[tid] if m in column]
+        col = max([current] + [column[m] + 1 for m in left])
+        need: dict[str, int] = {}
+        for tid in tids:
+            need[by_id[tid].repo] = need.get(by_id[tid].repo, 0) + 1
+        # The whole group in one column where every member's lane has room for it.
+        while any(
+            len(used.get((col, repo), ())) + min(n, capacity) > capacity for repo, n in need.items()
+        ):
             col += 1
         current = col
-        taken = used.setdefault((col, task.repo), set())
-        near = [slot[m] for m in placed if by_id[m].repo == task.repo]
-        want = round(sum(near) / len(near)) if near else 0
-        free = [r for r in range(capacity) if r not in taken]
-        row = min(free, key=lambda r: (abs(r - want), r))
-        taken.add(row)
-        column[tid] = col
-        slot[tid] = row
+        for tid in tids:
+            task = by_id[tid]
+            own = col
+            while len(used.get((own, task.repo), ())) >= capacity:  # only a too large group
+                own += 1
+            taken = used.setdefault((own, task.repo), set())
+            near = [slot[m] for m in pointed[tid] if m in column and by_id[m].repo == task.repo]
+            want = round(sum(near) / len(near)) if near else 0
+            free = [r for r in range(capacity) if r not in taken]
+            row = min(free, key=lambda r: (abs(r - want), r))
+            taken.add(row)
+            column[tid] = own
+            slot[tid] = row
 
     layout = Layout(columns=(max(column.values()) + 1) if column else 0)
     row_at = FIRST_ROW
@@ -191,8 +241,8 @@ def render_flow(
                 related[other].add(tid)
     live_ids = {t.task_id for t in tasks if t.status != "archived"}
     live_ids |= {o for tid in list(live_ids) for o in related[tid]}
-    live = place([t for t in tasks if t.task_id in live_ids], deps)
-    every = place(tasks, deps)
+    live = place([t for t in tasks if t.task_id in live_ids], deps, references=refs)
+    every = place(tasks, deps, references=refs)
 
     lanes: list[str] = []
     every_lanes = {lane.repo: lane for lane in every.lanes}
