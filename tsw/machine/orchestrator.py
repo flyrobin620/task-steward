@@ -496,6 +496,35 @@ def _delivery_line(config: EffectiveConfig, row: Mapping[str, Any]) -> str:
     )
 
 
+# How a few common language tags read in the brief; any other tag is shown as configured.
+LANGUAGE_NAMES = {
+    "zh": "中文",
+    "zh-cn": "简体中文",
+    "zh-hans": "简体中文",
+    "zh-tw": "繁體中文",
+    "zh-hant": "繁體中文",
+    "en": "English",
+    "en-us": "English",
+    "en-gb": "English",
+    "ja": "日本語",
+    "ja-jp": "日本語",
+}
+
+
+def _language_line(config: EffectiveConfig) -> str:
+    """The language the worker talks to the user in: the user's preference, ``control.language``
+    (DN003 §3.5a). Empty when it is not set."""
+    tag = str(config.get("control.language", "") or "").strip()
+    if not tag:
+        return ""
+    name = LANGUAGE_NAMES.get(tag.lower())
+    shown = f"{name}（`{tag}`）" if name else f"`{tag}`"
+    return (
+        f"- 语言：与用户交流（会话中的答复与提问、`ask_user` 的问题、报告）使用 {shown}"
+        "（配置 `control.language`）\n"
+    )
+
+
 def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
     ctx: CommitContext,
     row: Mapping[str, Any],
@@ -513,6 +542,7 @@ def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
         f"# 任务书 {row['task_id']} {attempt_id}\n\n"
         f"- 标题：{row['title']}\n- 仓库：{row['repo']}\n- revision：{row['revision']}\n"
         f"- 执行目录：{workdir}\n- 授权读取集合：{', '.join(read_set)}\n"
+        + _language_line(config)
         + _delivery_line(config, row)
         + "\n"
         + repository

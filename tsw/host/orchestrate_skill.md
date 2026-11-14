@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: "TaskSteward 主会话流程：受理、规划、预启动与派发 worker 子会话、处理回传与判断、核验与验收。只用于在数据目录打开的主会话：用户要求执行、继续、恢复或调整待办时使用。worker 子会话不使用。"
+description: "TaskSteward 主会话流程：受理（细则见 task-intake）、规划、预启动与派发 worker 子会话、处理回传与判断、核验与验收。只用于在数据目录打开的主会话：用户要求执行、继续、恢复或调整待办时使用。worker 子会话不使用。"
 ---
 
 # TaskSteward 主会话
@@ -15,34 +15,17 @@ description: "TaskSteward 主会话流程：受理、规划、预启动与派发
 2. `inbox` 处理未读回传，处理完 `inbox_ack`；`attention` 查看待判断、待用户答复、需对账、需停止、stale、待启动、待预启动、待核验与暂停，以及标题或归档还没跟上的 worker 会话（`sessions`，见“会话的标题与归档”）。
 3. 只处理用户要求的事。普通解释与维护不开始执行真实待办。
 
-## 检索历史（DN007）
-
-不要凭会话记忆判断相关任务：会话上下文会丢失，`task_list` 只有标题。按层读取，读得少、找得准：
-
-1. 先完整理解当前请求（与任务书）。
-2. `context_catalog` 在同仓库（`repo`，可用别名）或项目范围检索，`query` 写模块、接口、现象、方案名等具体词；请求或任务书中提到的任务 ID 放进 `task_ids`（它们与其硬依赖总在 `pinned` 中）。卡片的 `keyword_source` 为 `generated`、或 `stale` 为 true 时关键词不可靠，结合标题与摘要判断；`next_offset` 不为空表示还有更多。
-3. `context_decisions` 按主题词查用户既有的决定与偏好：只有 `usable_as_basis` 为 `in_scope` 的长期偏好能直接作为依据；`this_task_only` 在其他任务中只能作为先例参考；`false`（已被替代、候选约定）不能作为依据。
-4. 只对入围的任务 `context_read` 需要的部分（spec / report / decisions / reviews / outputs 等），`reason` 写明为什么读；核验与验收时用 `context_task` 看本任务的完整过程。
-5. 有具体缺口时再扩大：`scope: global`（写 `reason`）或 `context_search` 全文检索（少于 3 个字的词只在卡片上匹配）。
-6. 判断、规划与验收的依据引用卡片或原文出处（任务 ID、文件、事件序号）。
-
-索引是可重建的缓存：结果带 `index_lag` 时部分任务只按标题与仓库参与；损坏或明显过期时 `context_rebuild`。
-
 ## 受理与规划
 
-- 受理新任务前先按“检索历史”在同仓库 / 项目范围查：是否与已有任务重复、相关任务与可复用的成果、可能的依赖、用户在类似问题上的既有决定；把查到的相关任务与理由告诉用户，重复或依赖由用户确认后再登记或规划。
-- 新任务：`task_register`（仓库、类型、目标、验收），随后 `task_summary`（`stage: intake`）按任务书写 4–8 个具体关键词（模块、接口、现象、方案名，不写“实现”“修复”这类泛词）。目标、范围或验收有疑问时 `intake_question`，用户答复后 `input_resolve`（附用户原话的 `user_source`，`request_id` 指向该问题）。
+- 受理新任务、写或修改目标与验收、派发前选推荐读取集合、按层检索历史（DN007）：按 `task-intake` skill。
 - 规划：`task_plan`（依赖、独占资源、理由）。依赖未满足的任务进入等待依赖；上游完成后 `sync` 会让它就绪。
-- 用户实质修改需求：`task_update`（附用户来源）。用户在 worker 会话里直接给 worker 追加或修改要求时，不用你转录：只要任务还没被用户验收（不是 `accepted`、`cancelled`、`archived`），worker 会引用 hook 记录的用户原话自己登记（`requirement_change`，revision+1，DN002 §5.1a），在同一 attempt 内继续评审并重新提交。
-- 任务书是任务唯一可靠的记录，会话上下文随时可能丢失。之后的决定或其他任务的结论（例如另一个任务定下的设计、文档结构、接口约定）影响到已登记、尚未完成的任务时，立即用 `task_update` 写回该任务的目标与验收，附用户来源；用户还没有就这个任务表态时，先问用户，不要只记在本会话里等派发时再补。
-- `task_update` 的结果带 `brief` 时，任务书已按新 revision 重新生成；其中有 `session_ref`（待命或执行中的会话）时，用消息告诉该会话：任务书已更新到 revision N（路径 `brief.path`），请重新读取。
 
 ## 预启动与派发（Claude app）
 
 只有用户本人的 turn 能在任务目录创建会话；任何 turn 都能给已有会话发消息。
 
 1. 每个用户 turn 结束前，为还没有会话的就绪任务和等待依赖任务预启动：`attention` 的 `needs_prestart` 按就绪优先、上游在前列出它们，个数不超过还空着的待命名额（`scheduling.prestart.max_standby`）。用户明确要求先不开始的任务除外。这一步不限于用户要求执行任务的 turn：登记或规划之后的下一个用户 turn 同样要做。列表非空时 Stop hook 会在用户 turn 结束前提醒一次。做法：`attempt_start`（`purpose: prestart`，`user_turn: true`，`workdir` 为会话将要创建在的执行目录，不给时为 `work/<任务>/<attempt>`；目录不存在时 `attempt_start` 会创建；之后派发要沿用同一目录。预启动时按当前 revision 写出任务书 `runs/<任务>/<attempt>/brief.md`，派发时再按最新 revision 重新生成），再调用 `mcp__ccd_session__start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为 `attempt_start` 返回的 `cwd`（执行目录，或 tsw 在其中为仓库任务创建的 worktree `<执行目录>/<仓库名>`；磁盘上的实际写法，原样使用；`attempt_start` 因 `worktree_conflict` 或 `worktree_unavailable` 被拒绝时，把原因告诉用户）、`use_worktree: false`、`name` 为返回的 `session_name`，`model` / `effort` / `permission_mode` 取配置的 `roles.worker`，`prompt` 为 `attempt_start` 返回的 `prompt`（worker 说明加待命说明，原样传入，不自己拼接或改写），`title` 为 `attempt_start` 返回的 `session_title`（原样使用；想要更短的标题时，在 `attempt_start` 中给出 `session_title`，例如“T272 验收后会话加前缀”，tsw 在预启动时加上“（待命）”）。tsw 记下这个标题：之后只在会话还用着它时自动改名，用户改过的标题不动（DN002 §5.8）。万一用了别的标题，`attempt_reconcile` 带上实际的 `session_title`。`attempt_start` 因 `worker_instructions_missing` 或 `worker_instructions_stale` 被拒绝时，告诉用户运行 `tsw host render`（产品更新后没有重新生成），之后再预启动或派发。随后 `attempt_reconcile`（`outcome: created`，`session_ref` 为返回的会话 ID），再用 `SendMessage` 告诉它“已绑定为待命会话：可以先阅读任务书 runs/<任务>/<attempt>/brief.md，但不要开始工作，等派发的消息”。不要对待命会话说“可以开始”。
-2. 任务可以派发时：`task_dispatch`。有待命会话就 `attempt_deliver`，并用消息告诉它任务书路径（`runs/<任务>/<attempt>/brief.md`）；没有待命会话且是用户的 turn，就 `attempt_start`（`purpose: dispatch`）→ `start_session` → `attempt_reconcile`（`brief_delivered: true`）。
+2. 任务可以派发时：`task_dispatch`（`read_set` 按 `task-intake` skill 的“推荐读取集合”）。有待命会话就 `attempt_deliver`，并用消息告诉它任务书路径（`runs/<任务>/<attempt>/brief.md`）；没有待命会话且是用户的 turn，就 `attempt_start`（`purpose: dispatch`）→ `start_session` → `attempt_reconcile`（`brief_delivered: true`）。
    - `start_session` 的 `prompt` 用 `attempt_start` 返回的 `prompt`，原样传入：开头是 worker 说明（数据目录 `roles/worker.md`，DN006 §6.2），末尾一句是“你是 TaskSteward 任务 <任务> 的 worker（attempt <attempt>）。先调用 whoami，再按任务书 runs/<任务>/<attempt>/brief.md 执行。”不自己拼接、删节或改写。`background` 只写任务标题、仓库与执行目录。不要把任务书正文、交付与合并方式复制进 prompt 或 background：worker 从任务书读取，交付授权由 tsw 的配置、hooks 与工具在执行时把关（DN006 §6.3）。续用已有会话（投递给待命会话、需求变更、反馈后继续）不重新创建会话，也不再发 worker 说明：它在会话的首个提示语里；说明更新后由 worker 的 hook 提示它重读。
    - 派发时新建的会话：`attempt_reconcile` 之后，用 `SendMessage` 告诉它“已完成绑定，可以开始”：会话可能在绑定之前就开始了第一轮，那时 `whoami` 还是 pending。投递给待命会话（`attempt_deliver`）时，消息写明“已派发，按任务书开始”，然后按“会话的标题与归档”去掉标题中的“（待命）”。
 3. 创建结果不明时，按会话名 `list_sessions {linked: true}` 对账，绝不再次创建；确认没有创建时 `attempt_reconcile`（`outcome: not_created`）。
@@ -70,7 +53,7 @@ worker 先在自己的会话里直接问用户（`ask_user`），你看不到问
 
 ## 核验与验收
 
-- worker 提交后（`inbox` 中的 `worker.submitted`）核对报告、评审证据、Git 状态与产出：`output_link` 登记已核实的 PR 与产出；有剩余工作就 `feedback`（已合并的改动由 worker 另开 PR 修复）。
+- worker 提交后（`inbox` 中的 `worker.submitted`）核对报告、评审证据、Git 状态与产出（`context_task` 看本任务的完整过程）：`output_link` 登记已核实的 PR 与产出；有剩余工作就 `feedback`（已合并的改动由 worker 另开 PR 修复）。
 - worker 已合并的任务（提交中有 `merge`，不论任务类型）：你不再合并，也不替 worker 等 CI。只核对 worker 附的证据：PR 确已合并、合并提交与提交 HEAD 对应、`merge.ci` 的运行链接指向合并提交且结论为通过（打开链接核对，不等待）、`merge.live` 的结果或原因。`task_accept` 的 `post_merge` 写明核对结论。证据不足或不符时用 `feedback` 交回 worker，由它补齐（需要修复时另开 PR）。没有合并的任务（`merge_skipped` 或仓库未授权）按仓库规则由你合并，必要时 `integrate`。
 - 全部满足时 `task_accept`：逐项列出验收要求的结论与证据；同时 `task_summary`（`stage: acceptance`）按已读的任务书与交付补全关键词，`summary` 用一两句话写实际成果（做了什么、在哪里、PR / 产出）。报告“决定与约定”一节中用户明确说过以后也适用的约定，向用户确认后用 `preference_record` 记录（附用户原话，target 为 `["preference", <scope>, "standing"]`）；只是本任务的决定不记为偏好。之后告诉用户任务完成、等待人工验收，同时列出任务 `open` 的 follow-up（`task_read` 的 `follow_ups`：编号、类别、严重度、标题），问用户哪些转成任务、哪些驳回、哪些暂不处理。
 - 用户明确验收或退回时 `user_accept` / `user_reject`，附用户原话与消息引用；不能以 worker 回执、自评或超时代替。用户也可以不经你，自己在终端运行 `tsw task accept` / `reject` / `cancel` 或在 STATUS 应用（`tsw status serve`）中点按钮：账本中会出现渠道为 `user-cli` / `status-app` 的 `task.user_accepted` 等事件，你不需要再登记；这两个渠道你不能使用。

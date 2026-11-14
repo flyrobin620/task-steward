@@ -54,6 +54,20 @@ def test_tsw_owned_paths(tmp_path: Path) -> None:
         ("/usr/bin/git -C repo -c a=b push", False, False, True, "推送授权"),
         ("echo done && GIT_TRACE=1 git push", False, False, True, "推送授权"),
         ("bash -c 'git push'", False, False, True, "推送授权"),
+        # An unquoted command substitution is read too, and stays in its word (T279).
+        ("echo $(git push origin HEAD)", False, False, True, "推送授权"),
+        ("x=$(git rev-parse HEAD) git push origin HEAD", False, False, True, "推送授权"),
+        ("echo $(git log -1 --format=%s (x)) done", False, False, True, None),
+        # One inside double quotes is quoted text, as before: a heredoc in it may hold quotes.
+        (
+            "git commit -m \"$(cat <<'EOF'\nit's (x\nEOF\n)\" && git push",
+            False,
+            False,
+            True,
+            "推送",
+        ),
+        ("echo $(unclosed && git push", False, False, True, "推送授权"),
+        ("git -c credential.username=me push origin HEAD", False, False, True, "推送授权"),
         ("git log --grep push", False, False, True, None),
         ("Get-FileHash C:/tools/app.exe", True, True, False, "哈希"),
         ("sha256sum report.md", True, True, True, None),
@@ -127,6 +141,17 @@ def test_writes_into_the_ledger_through_the_shell_are_refused(tmp_path: Path) ->
         ("gh api --hostname ghe.example.org -X PUT repos/example/demo/pulls/3/merge", False),
         ("gh api --hostname=github.com -X PUT repos/example/demo/pulls/3/merge", True),
         ("gh pr merge 3 -R github.com/example/demo", True),
+        # The gh-account skill's account prefix chooses the account, never the target (T279).
+        (
+            'GH_TOKEN="$(gh auth token --hostname github.com --user me)" '
+            "gh pr merge 3 -R github.com/example/demo --squash",
+            True,
+        ),
+        ("GH_TOKEN=$(gh auth token --user me) gh pr merge 3 -R github.com/example/demo", True),
+        ("GH_TOKEN=$(gh auth token --user me) gh pr merge 3 --squash", False),
+        ("GH_TOKEN=$(gh auth token --user me) gh pr merge 3 -R example/other", False),
+        ('GH_CONFIG_DIR="/u/gh/me" gh pr merge 3 -R github.com/example/demo --squash', True),
+        ("GH_TOKEN=$(gh auth token --hostname ghe.example.org) gh pr merge 3 --squash", False),
     ],
 )
 def test_a_worker_merges_only_its_own_repository_with_the_authorization(

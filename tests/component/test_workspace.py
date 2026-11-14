@@ -65,6 +65,8 @@ def test_prestart_creates_the_worktree_and_the_session_starts_in_it(
     h = harness(home, repo)
     skill(home, "weekly-update-email", "周报邮件")
     skill(home, "orchestrate", "主会话流程")
+    skill(home, "task-intake", "受理与写任务书")
+    skill(home, "gh-account", "按仓库选用 gh 账号")
     h.register("T001")
     h.plan("T001")
     orchestrator = Server(h.home, {SESSION_ENV: "orch-1"}, h.home.root)
@@ -96,7 +98,12 @@ def test_prestart_creates_the_worktree_and_the_session_starts_in_it(
     assert "报告中写明读了哪些" in brief
     # The data directory's skills are listed with their paths; the orchestrator's are not.
     assert "`weekly-update-email`：周报邮件" in brief and "`orchestrate`" not in brief
+    # gh-account is for every session; the intake rules are the main session's (T279).
+    assert "`gh-account`：按仓库选用 gh 账号" in brief and "`task-intake`" not in brief
     assert brief.index("## 仓库与 worktree") < brief.index("## 目标")
+    # The user's language from control.language (default zh-CN) is written into the brief (T279).
+    assert "- 语言：与用户交流（会话中的答复与提问、`ask_user` 的问题、报告）使用 简体中文" in brief
+    assert brief.index("- 语言：") < brief.index("- 交付：")
     # The worker bound to the attempt works in the worktree: its directory is consistent.
     h.run(
         "attempt_reconcile",
@@ -361,3 +368,34 @@ def test_a_redirected_worktree_path_is_refused(home: Home, tmp_path: Path) -> No
         h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
     assert refused.value.details["reason"] == "worktree_conflict"
     assert h.query("SELECT * FROM attempts WHERE task_id = 'T001'") == []
+
+
+@pytest.mark.parametrize(
+    ("language", "line"),
+    [
+        ("en-US", "使用 English（`en-US`）（配置 `control.language`）"),
+        ("fr", "使用 `fr`（配置 `control.language`）"),
+        ("", None),
+    ],
+)
+def test_the_brief_names_the_language_the_worker_talks_to_the_user_in(
+    home: Home, tmp_path: Path, language: str, line: str | None
+) -> None:
+    """DN003 §3.5a: the user's preferred language, as configured, or no line when unset."""
+    repo = checkout(tmp_path)
+    h = Harness(
+        home,
+        {"control": {"language": language}, "repositories": {"demo": {"path": str(repo)}}},
+    )
+    h.register("T001")
+    h.plan("T001")
+    orchestrator = Server(h.home, {SESSION_ENV: "orch-1"}, h.home.root)
+    orchestrator.machine = "m1"
+    orchestrator.call(
+        "attempt_start", {"task_id": "T001", "purpose": "prestart", "user_turn": True}
+    )
+    brief = (h.home.root / "runs" / "T001" / "a1" / "brief.md").read_text(encoding="utf-8")
+    if line is None:
+        assert "- 语言：" not in brief
+    else:
+        assert line in brief

@@ -1,6 +1,6 @@
 # DN003 统一配置
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置；T243 增加 `roles.routine` 与 `routine`；T251 §3.4 仓库任务的 worktree 与 `instructions`；T256 `plugins.human_channels` 的含义；T272 `sessions.title_on_accept` 与 `title_on_cancel`）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置；T243 增加 `roles.routine` 与 `routine`；T251 §3.4 仓库任务的 worktree 与 `instructions`；T256 `plugins.human_channels` 的含义；T272 `sessions.title_on_accept` 与 `title_on_cancel`；T279 §3.5a `control.language` 写进任务书）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN004 worker 自评审](DN004-worker-self-review.md)
 
@@ -277,6 +277,14 @@
 | `pr_default_state` | 以合并为目的的 PR 默认 ready-for-review | `pr_link` 登记校验 |
 | `user_acceptance_source_required` | 用户验收须有真实来源 | `user_accept` 门禁 |
 | `auto_archive_days` | 已验收满 7 天归档 | sync 规则 T24 |
+
+### 3.5a `control.language`
+
+用户偏好的交流语言（BCP 47 标签，默认 `zh-CN`；用户 2026-11-14 要求“主 config 里面保存用户的 preference 语言，worker 的任务书里面写明使用什么语言和用户交流”，T279）。此前这个字段只出现在示例中，没有被读取。
+
+- **任务书**：tsw 生成任务书时在开头写一行“语言：与用户交流（会话中的答复与提问、`ask_user` 的问题、报告）使用 <语言>（配置 `control.language`）”。常见标签写出语言名（如 `zh-CN` 为“简体中文”），其他标签照写；字段为空时不写这一行。任务书按派发、续用或需求变更时的配置生成，改配置后已生成的任务书不变，下次重新生成时生效。
+- **范围**：只决定与用户交流的语言。代码、标识符、commit message 等仍按各仓库自己的规则（例如本仓库代码与 PR 标题用英文）；某个任务需要别的语言时，由主会话写进该任务的目标。
+- **修改**：主会话按用户原话 `config_change`（`ops` 设 `control.language`）。它不是权限类键（§7.2）。
 
 ## 4. 校验规则
 

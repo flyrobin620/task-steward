@@ -1,21 +1,22 @@
 """The ``claude-code`` host integration (DN006 §6.3): generated files and the install hint.
 
-The plugin in ``plugin/`` carries what every session needs wherever it runs: the MCP
-registration and the hooks. It is enabled at user scope, so it carries no orchestrator skill.
-This module generates the orchestrator's instructions into the data directory: ``CLAUDE.md`` and
-the project skills ``.claude/skills/orchestrate/SKILL.md``, ``handle-input`` (questions handed
-over by the routine session, CC006 §6.4) and the human channels' skills (``teams-chat``, CC006
-§7). Sessions whose directory is under the data directory and not in a git repository (the
-routine session, a worker without a repository worktree) also discover them; a worker in a
-repository worktree does not (CC006 §8). A worker's own instructions are not a skill: they
-are copied from ``plugin/roles/worker.md`` to ``roles/worker.md`` (``tsw.roles``) and every
-worker session's prompt starts with them (CC006 §2). It also generates the permission rules
-for the actions
-tsw guards itself (CC008 §6): ``.claude/settings.json`` in the data directory for the
-orchestrator. A worker's execution directory gets no settings file:
-a folder that brings its own permission rules asks for trust again even under a trusted data
-directory, so a worker relies on the user's auto-mode rules instead (decision 0003). It
-explains how to install the plugin and never changes global settings by itself.
+The plugin in ``plugin/`` carries what every session needs wherever it runs: the MCP registration
+and the hooks. It is enabled at user scope, so it carries no orchestrator skill. This module
+generates the orchestrator's instructions into the data directory: ``CLAUDE.md`` and the project
+skills ``.claude/skills/orchestrate/SKILL.md``, ``handle-input`` (questions handed over by the
+routine session, CC006 §6.4), ``task-intake`` (intake and writing briefs, CC006 §10.2) and the
+human channels' skills (``teams-chat``, CC006 §7), and ``gh-account`` (which gh account a
+repository uses, for one command at a time; CC006 §10.1), the one of them a worker in a repository
+worktree is pointed at by its brief. Sessions whose directory is under the data directory and not
+in a git repository (the routine session, a worker without a repository worktree) also discover
+them; a worker in a repository worktree does not (CC006 §8). A worker's own instructions are not a
+skill: they are copied from ``plugin/roles/worker.md`` to ``roles/worker.md`` (``tsw.roles``) and
+every worker session's prompt starts with them (CC006 §2). It also generates the permission rules
+for the actions tsw guards itself (CC008 §6): ``.claude/settings.json`` in the data directory for
+the orchestrator. A worker's execution directory gets no settings file: a folder that brings its
+own permission rules asks for trust again even under a trusted data directory, so a worker relies
+on the user's auto-mode rules instead (decision 0003). It explains how to install the plugin and
+never changes global settings by itself.
 """
 
 from __future__ import annotations
@@ -35,6 +36,12 @@ ORCHESTRATE_SKILL = Path(__file__).resolve().parent / "orchestrate_skill.md"
 SKILL_PATH = Path(".claude") / "skills" / "orchestrate" / "SKILL.md"
 HANDLE_INPUT_SKILL = Path(__file__).resolve().parent / "handle_input_skill.md"
 HANDLE_INPUT_PATH = Path(".claude") / "skills" / "handle-input" / "SKILL.md"
+# The main session's intake rules (CC006 §10.2) and the gh account skill every session may use
+# (CC006 §10.1). Both are Claude Code only: other hosts would distribute them their own way.
+TASK_INTAKE_SKILL = Path(__file__).resolve().parent / "task_intake_skill.md"
+TASK_INTAKE_PATH = Path(".claude") / "skills" / "task-intake" / "SKILL.md"
+GH_ACCOUNT_SKILL = Path(__file__).resolve().parent / "gh_account_skill.md"
+GH_ACCOUNT_PATH = Path(".claude") / "skills" / "gh-account" / "SKILL.md"
 # The human channels' own skills (P3, CC006 §7): how the main session sends through a channel
 # and registers what comes back. handle-input names the channel; its skill has the details.
 CHANNEL_SKILLS = {"teams-chat": Path(__file__).resolve().parent / "teams_chat_skill.md"}
@@ -89,6 +96,10 @@ def render_instructions(home: Home) -> list[Path]:
     atomic_write(skill, ORCHESTRATE_SKILL.read_bytes())
     handle_input = home.root / HANDLE_INPUT_PATH
     atomic_write(handle_input, HANDLE_INPUT_SKILL.read_bytes())
+    task_intake = home.root / TASK_INTAKE_PATH
+    atomic_write(task_intake, TASK_INTAKE_SKILL.read_bytes())
+    gh_account = home.root / GH_ACCOUNT_PATH
+    atomic_write(gh_account, GH_ACCOUNT_SKILL.read_bytes())
     channels: list[Path] = []
     for name, source in CHANNEL_SKILLS.items():
         channel = home.root / ".claude" / "skills" / name / "SKILL.md"
@@ -97,7 +108,7 @@ def render_instructions(home: Home) -> list[Path]:
     settings = home.root / SETTINGS_PATH
     allow_actions(settings, ORCHESTRATOR_ALLOW)
     roles = render_roles(home.root)
-    return [claude_md, skill, handle_input, *channels, settings, *roles]
+    return [claude_md, skill, handle_input, task_intake, gh_account, *channels, settings, *roles]
 
 
 def clear_worker_settings(workdir: Path) -> bool:
@@ -175,8 +186,14 @@ AUTO_MODE_WORKER_MERGE = (
     "(TaskSteward decision 0002, repositories.<id>.delivery.merge). The pull request was "
     "reviewed by the configured independent reviewer, and tsw's PreToolUse hook refuses the "
     "merge when the task is not authorized or the target is another repository. This is not "
-    "Merge Without Review or Self-Approval. It does not cover --admin, bypassing checks or "
-    "branch protection, or merging any other pull request."
+    "Merge Without Review or Self-Approval. The command may start with exactly one environment "
+    "assignment that selects the GitHub account owning the repository, as TaskSteward's "
+    'gh-account skill prescribes: GH_TOKEN="$(gh auth token --hostname <host> --user '
+    '<account>)" (the token goes to that one gh process and is never printed) or '
+    "GH_CONFIG_DIR=<that account's gh configuration directory>; it chooses the account, not the "
+    "target or the authorization. It does not cover --admin, bypassing checks or branch "
+    "protection, merging any other pull request, a cd or any other prefix, or a merge joined "
+    "with other commands by ;, && or |."
 )
 
 AUTO_MODE_WORKER_DISPATCH = (
@@ -233,7 +250,9 @@ def install_hint(home: Home) -> str:
             f"3. 设置环境变量 TSW_HOME={home.root}（或在仓库的 .local/tsw-home 中写入该路径），",
             "   让 worktree 中的 worker 会话也能找到数据目录。",
             "4. 运行 tsw host render，在数据目录生成主会话的 CLAUDE.md 与项目 skill",
-            "   .claude/skills/orchestrate/、handle-input/、teams-chat/，以及 worker 说明",
+            "   .claude/skills/orchestrate/、handle-input/、task-intake/、teams-chat/，",
+            "   主会话与 worker 共用的 gh-account/（按仓库选 gh 账号，只对一条命令生效），",
+            "   以及 worker 说明",
             "   roles/worker.md（来自 plugin/roles/worker.md，每个 worker 会话的提示语以它开头；",
             "   产品更新后重新运行，否则创建 worker 会话会因说明缺失或不一致被拒绝）。",
             "   worker 会话中的提问不受配置影响；超时转交后需要你决定的问题怎样交给你，由配置",
@@ -249,7 +268,8 @@ def install_hint(home: Home) -> str:
             "   （带规则的目录会再次要求信任），它们的放行都来自这里。由你在用户设置",
             "   （~/.claude/settings.json，",
             "   与已有的 autoMode 合并）中加入下面的 auto 模式规则（不采用 worker 合并时可省略",
-            "   合并那一条）；",
+            "   合并那一条；它认可 gh-account skill 规定的一个账号前缀，已有的旧规则按下面的文本",
+            "   更新）；",
             "   Claude Code 不读取项目设置中的 autoMode，tsw 也不会替你修改用户设置：",
             auto_mode,
         ]
