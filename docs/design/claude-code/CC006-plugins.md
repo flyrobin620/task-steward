@@ -131,12 +131,16 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 | 例行表给出的内容 | 例行会话调用的工具 |
 | --- | --- |
 | 例行项没有 `fetch` | `routine_run`，参数为该行的 `run`（没有时为 `job_id`） |
-| 例行项的 `fetch` 为 `teams.read_chat` | `mcp__workiq__fetch`，`entityUrls` 为 `fetch.arguments` 给出的一个路径（`/me/chats/<chat>/messages?$top=10&$orderby=createdDateTime+desc&$select=id,createdDateTime,from,body`：按创建时间从新到旧，Graph 默认按最后修改时间排序，后来编辑过的旧消息会排在前面、让读取提前结束），把返回值原样（只这一页）与该行的 `run`（`job_id` 与 `chat_id`）一起交给 `routine_run`。返回值形如 `{"results": [{"data": <这一页>, "statusCode": …}]}`，这一页的 `value` 是消息（新的在前），`@odata.nextLink` 是下一页的相对路径；脚本也仍接受 `mcp__teams__ListChatMessages` 的返回（JSON 后接一行 `CorrelationId: …`） |
-| `routine_run` 返回 `next` | 按 `next.tool` 与 `next.arguments`（`entityUrls`：下一页的路径，原样）取下一页，再用 `next.run` 加上这一页调用 `routine_run`；直到不再返回 `next`。不合并页，不自行截断。`fetch.pages` 已弃用，只给本版本之前启动的例行会话用 |
+| 例行项的 `fetch` 为 `teams.read_chat`（列出） | `mcp__workiq__fetch`，`entityUrls` 为 `fetch.arguments` 给出的一个路径（`/me/chats/<chat>/messages?$top=10&$orderby=createdDateTime+desc&$select=id,createdDateTime`：只取消息 ID 与创建时间，按创建时间从新到旧；Graph 默认按最后修改时间排序，后来编辑过的旧消息会排在前面、让读取提前结束），把返回值原样（只这一页）与该行的 `run`（`job_id`、`chat_id`、`stage: list`）一起交给 `routine_run`。返回值形如 `{"results": [{"data": <这一页>, "statusCode": …}]}`，这一页的 `value` 是消息（新的在前），`@odata.count` 是条数；每条约 70 个字符，整页约 1 KB。脚本也仍接受带正文的整页与 `mcp__teams__ListChatMessages` 的返回（JSON 后接一行 `CorrelationId: …`） |
+| `routine_run` 返回 `next` | 按 `next.tool` 与 `next.arguments` 取数，再用 `next.run`（原样）加上 `fetched` 调用 `routine_run`；`fetched` 按 `next.pass` 写明的方式给出，没有 `pass` 时为取到的结果原样。直到不再返回 `next`。不合并页。`next` 有两种：**正文**（`run.stage: bodies`）的 `entityUrls` 是这一页每条候选消息一个路径 `/me/chats/<chat>/messages/<id>?$select=id,from,body`，一次取完；`pass` 要求 `fetched` 写成数组，按路径的顺序每条一项 `{"id": data.id, "sender": data.from.user.id, "content": data.body.content, "truncated": false}`，`content` 超过 `routine.teams_message_chars` 个字符时只抄开头这么多、`truncated` 为 `true`；某条的 `statusCode` 不是 200 时这一项写 `{"id": <路径中的消息 ID>, "status": <statusCode>}`。**下一页的列出**（`run.stage: list`）的路径在第一页的基础上加 `&$filter=createdDateTime+lt+<上一页最早消息的创建时间>`，由 tsw 写出，不用 Graph 的 `@odata.nextLink`（其中的 `$skiptoken` 很长，转抄容易出错）。`fetch.pages` 已弃用，只给 T243 a2 之前启动的例行会话用 |
 | `fetch` 的工具报错或返回错误 | 照样调用 `routine_run`，`fetched` 为工具返回的原文（行中的 `fetch.on_error` 也这样写）；连续失败的计数与通知由 tsw 完成（DN006 §8.9.5） |
 | `routine_run` 返回非空的 `forward` | `mcp__ccd_session_mgmt__send_message`，`session_id` 为 `forward` 中的主会话 ID，正文原样 |
 | 维护动作 `arm` | 有旧任务引用时先 `CronDelete`；再 `CronCreate`（`recurring: true`，`durable: false`，`cron` 与 `prompt` 原样）；然后 `routine_armed` 登记返回的任务引用 |
 | 维护动作 `clear_context` | 本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`：app 在这一轮结束、会话空闲后清空 |
+
+WorkIQ 的读取方式（T286 在用户的自聊上实测）：列出与单条读取都遵守 `$select`，只返回选定的字段；列出支持 `$filter=createdDateTime lt <时间>`（与 `$orderby=createdDateTime desc` 同用），`gt` 与 `lt` 用 `and` 组合时报错，所以读取窗口的起点仍由 tsw 按每页最早的消息判断；`entityUrls` 中的多个路径一次取完，结果按路径的顺序放在 `results` 中，各带自己的 `statusCode`。
+
+正文由 tsw 核对（DN006 §8.9.5 的“转抄核对”）：列出的每条消息的 ID 必须等于创建时间的毫秒数、条数等于 `@odata.count`；正文交回的 `id` 必须恰好是 `next.run.ids`。核对失败时 `routine_run` 不返回 `next`，计入连续读取失败。例行会话的 SessionStart 说明写明 `fetched` 按 `pass` 给出；本版本之前启动的例行会话仍按旧说明把正文原样交回，tsw 照样接受并自己截取。
 
 间隔 N 分钟的 cron 表达式：N 整除 60 时为 `*/N * * * *`，N 为 60 的倍数时为 `0 */(N/60) * * *`（DN003 §3.1b）。`CronCreate` 的循环任务 7 天后到期，所以 `routine.renew_after_days` 默认 6。
 
@@ -175,7 +179,8 @@ DN006 §8.6–§8.7 在 Claude Code 上的做法。发送与读取都用 WorkIQ 
 | 步骤 | 谁 | 工具 |
 | --- | --- | --- |
 | 发送问题卡片 | 主会话 | `input_relay`（`channel: teams-chat`）返回富文本卡片 `card_html`、同一内容的纯文本 `card`（不发送）与目标 chat；主会话用 `get_session` 取 worker 会话的 `link`，替换卡片中所有 `{worker_link}`；调用 `mcp__workiq__create_entity`，`parentUrl` 在目标为 `self` 时为 `/me/chats/48:notes/messages`（用户本人的自聊），否则为 `/me/chats/<chat>/messages`，`jsonBody` 为 `{"body": {"contentType": "html", "content": <card_html>}}`；再用 `channel_sent` 登记返回的消息：`chat_id` 取 `chatId`（没有时取路径中的 chat），`message_id` 取 `id`，`sender_id` 取 `from.user.id` |
-| 取出答复 | 例行会话 | Teams 例行项：`mcp__workiq__fetch` 逐页取数（§6.2），`routine_run` 运行脚本，结果转给主会话 |
+| 取出答复 | 例行会话 | Teams 例行项：`mcp__workiq__fetch` 逐页先列出、再取候选消息的正文（§6.2），`routine_run` 运行脚本，结果转给主会话 |
+| 读取全文 | 主会话 | 转来的回复标明“正文已截断”时，`mcp__workiq__fetch` 读这一条：`/me/chats/<chat>/messages/<消息 ID>?$select=id,from,body`，按全文判断，登记的原文用全文（T286） |
 | 登记答复、告诉 worker | 主会话 | `input_resolve`、`send_message` |
 
 这些做法写在渠道自己的 skill 中：`render_instructions` 生成 `.claude/skills/teams-chat/SKILL.md`（来源 `tsw/host/teams_chat_skill.md`），包括发送、回复登记（`user_source` 的字段）与读取失败的处理（主会话自己用 WorkIQ 读一次同一个 chat，区分是 chat 读不到还是例行会话的工具或权限有问题；后者让例行会话重试并告诉用户要做的事，前者告诉用户回复暂时收不回来，可以在 worker 会话里直接回答）。问题流程 skill（§6.4）只指向它；例行会话转来的 Teams 回复与读取失败通知也指向它。
