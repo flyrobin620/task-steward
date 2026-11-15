@@ -438,7 +438,7 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 | worker | `worker.progress` `worker.question` `worker.submitted` `worker.self_check_failed` `worker.turn_ended` |
 | 评审 | `review.started` `review.failed` `review.unavailable` `review.completed` `review.triaged` `review.decision` `review.budget_exhausted` `review.budget_extended` `review.defer_requested` `review.defer_approved` `review.finding_overruled` |
 | 主控 / 输入 | `orchestrator.feedback` `orchestrator.decision` `input.requested` `input.escalated` `input.resolved` `input.late_response` `input.session_message`（worker 会话中的用户消息，hook 记录） `input.handed_off` `input.relayed`（DN006 §8.1） `orchestrator.inbox_acked` `controller.lease_acquired` `controller.lease_released` `controller.lease_taken_over` `controller.lease_stood_down`（让出或被接管的会话不在会话开始时自动领回，DN001 §6.4） |
-| 上下文 / 偏好（DN007） | `task.summary_recorded` `context.read` `user.preference_recorded` `user.preference_candidate` `user.preference_confirmed` |
+| 上下文 / 偏好（DN007） | `task.summary_recorded` `context.read` `user.preference_recorded` `user.preference_revoked`（DN007 §6.2） `user.preference_candidate` `user.preference_confirmed` |
 | 集成 / 产出 | `integration.started` `integration.conflict` `integration.completed` `integration.withdrawn` `output.registered` `pr.registered` |
 | follow-up（§5.7） | `follow_up.recorded` `follow_up.updated` `follow_up.converted` `follow_up.dismissed`；不改变任务状态 |
 | 导入 | `import.started` `import.task_imported` `import.completed` `task.renumbered`（导入前给编号冲突的已结束本地任务改号，DN005 §4.4） |

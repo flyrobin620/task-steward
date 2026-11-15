@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from tests.support import REPO_ROOT, child_env, run_json, run_tsw
+from tsw.preferences import cited
 
 PLUGIN = REPO_ROOT / "plugin"
 
@@ -333,6 +334,13 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     # The gh account line is tsw's, in the brief; the intake rules say not to repeat it.
     assert "注意 gh 当前账号是否与仓库账号一致" in intake and "你不用在目标里再写" in intake
     assert "`control.language`" in intake  # the user's language, written into briefs by tsw
+    # Standing preferences (DN007 §6.1): listed in full without a topic, judged one by one and
+    # written into the goal; the preferences themselves are data, so no rendered text names one.
+    assert "`kind: standing`" in intake and "不写 `query`" in intake
+    assert "适用的用户偏好" in intake and "`next_offset`" in intake
+    for rendered in (skill, handle_input, task_intake, gh_account, update, teams_chat):
+        assert cited(rendered.read_text(encoding="utf-8")) == [], rendered
+    assert cited((home / "roles" / "worker.md").read_text(encoding="utf-8")) == []
     account = gh_account.read_text(encoding="utf-8")
     assert account.startswith("---\nname: gh-account\ndescription: ")
     # One command at a time: the token prefix (recommended), the config directory, git push's

@@ -16,7 +16,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from tsw import __version__, direct, lease
+from tsw import __version__, direct, lease, preferences
 from tsw.config import DEFAULTS, EffectiveConfig, lease_minutes, load_config
 from tsw.context import ContextService
 from tsw.errors import EXIT_CODES, ErrorCode, TswError
@@ -188,6 +188,64 @@ def _cmd_task_direct(args: argparse.Namespace) -> dict[str, Any]:
         text=text,
         revision=revision,
         reason=getattr(args, "reason", None),
+    )
+
+
+def _cmd_preference_list(args: argparse.Namespace) -> dict[str, Any]:
+    """The standing preferences (DN007 §6.2): those in force, or with ``--all`` every one; with
+    ``--repo`` / ``--project`` only those reaching that scope."""
+    where = (
+        (str(args.repo or ""), {p for p in (args.repo, args.project) if p})
+        if args.repo or args.project
+        else None
+    )
+    with _ledger(args).view() as conn:
+        found = preferences.load(conn, where)
+    shown = found if args.all else [p for p in found if preferences.in_force(p)]
+    return {"preferences": shown, "total": len(shown), "all": bool(args.all)}
+
+
+def _cmd_preference_record(args: argparse.Namespace) -> dict[str, Any]:
+    direct.require_outside_session(os.environ, "tsw preference record ")
+    ledger, config = _writer(args)
+    supersedes = list(args.supersedes or [])
+    replaces = f"，替代 {'、'.join(supersedes)}" if supersedes else ""
+    _confirm(args, f"记录长期偏好（{args.scope}{replaces}）「{args.topic}」：{args.text}？")
+    return direct.preference(
+        ledger,
+        config,
+        "record",
+        {"topic": args.topic, "text": args.text, "scope": args.scope, "supersedes": supersedes},
+        target=["preference", args.scope, "standing"],
+        channel="user-cli",
+        message_ref=_cli_ref(),
+        text=args.text,
+    )
+
+
+def _cmd_preference_revoke(args: argparse.Namespace) -> dict[str, Any]:
+    direct.require_outside_session(os.environ, "tsw preference revoke ")
+    ledger, config = _writer(args)
+    with ledger.view() as conn:
+        row = conn.execute(
+            "SELECT scope, topic, text FROM user_decisions WHERE ref = ?", (args.ref,)
+        ).fetchone()
+    if row is None:
+        raise TswError(ErrorCode.REJECTED, "偏好不存在", reason="invalid_input", ref=args.ref)
+    _confirm(
+        args,
+        f"撤销长期偏好 {args.ref}（{row['scope']}）「{row['topic']}」：{row['text']}"
+        f"，理由：{args.reason}？",
+    )
+    return direct.preference(
+        ledger,
+        config,
+        "revoke",
+        {"ref": args.ref, "reason": args.reason},
+        target=["preference", args.ref, "revoke"],
+        channel="user-cli",
+        message_ref=_cli_ref(),
+        text=args.reason,
     )
 
 
@@ -606,6 +664,28 @@ def build_parser() -> argparse.ArgumentParser:
             direct_cmd.add_argument("--reason", required=True, help="退回理由")
         else:
             direct_cmd.add_argument("--note", help="记录的用户原话（可选）")
+
+    pref = sub.add_parser("preference", help="用户的长期偏好（DN007 §6.2）").add_subparsers(
+        dest="preference_command", required=True, metavar="<preference command>"
+    )
+    plist = add(pref, "list", _cmd_preference_list, "列出长期偏好（默认只列现行的）")
+    plist.add_argument("--repo", help="只列能到达该仓库的（全局与该仓库）")
+    plist.add_argument("--project", help="只列能到达该项目的（全局与该项目）")
+    plist.add_argument("--all", action="store_true", help="包括已被替代、覆盖或撤销的")
+    prec = add(
+        pref, "record", _cmd_preference_record, "记录或替代一条长期偏好（用户本人在终端运行）"
+    )
+    prec.add_argument("--scope", required=True, help="global、repo:<仓库> 或 project:<项目>")
+    prec.add_argument("--topic", required=True, help="主题词")
+    prec.add_argument("--text", required=True, help="偏好原文")
+    prec.add_argument(
+        "--supersedes", action="append", help="被替代的偏好编号（同范围或更宽），可重复"
+    )
+    prec.add_argument("--yes", action="store_true", help="不再询问，直接执行")
+    prev = add(pref, "revoke", _cmd_preference_revoke, "撤销一条长期偏好（用户本人在终端运行）")
+    prev.add_argument("ref", help="偏好编号（P-…）")
+    prev.add_argument("--reason", required=True, help="撤销理由")
+    prev.add_argument("--yes", action="store_true", help="不再询问，直接执行")
 
     ledger = sub.add_parser("ledger", help="账本").add_subparsers(
         dest="ledger_command", required=True, metavar="<ledger command>"

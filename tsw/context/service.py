@@ -26,10 +26,12 @@ from tsw.errors import rejected
 from tsw.events import EventDraft
 from tsw.home import Home
 from tsw.ledger import Ledger
+from tsw.preferences import revocations, standing_items
 
 from .index import ContextIndex, Facts, Freshness, report_refs, resolve_material, task_facts
 from .text import contains, is_short, pieces, read_text, terms
 
+DECISION_KINDS = ("standing", "task", "one_time")
 PARTS = ("spec", "brief", "report", "reviews", "decisions", "outputs", "follow_ups", "requests")
 SCOPES = ("repo", "project", "global")
 MAX_LIMIT = 50
@@ -361,6 +363,19 @@ class ContextService:
         if scope not in ("global", "repo", "task"):
             raise rejected("scope 应为 global、repo 或 task", reason="invalid_input", field="scope")
         repo = _opt(args, "repo") or None
+        project = _opt(args, "project") or None
+        if project and scope == "global":
+            raise rejected(
+                "project 只用于 scope=repo 或 task", reason="invalid_input", field="project"
+            )
+        kind = _opt(args, "kind") or None
+        if kind is not None and kind not in DECISION_KINDS:
+            raise rejected(
+                "kind 应为 standing、task 或 one_time",
+                reason="invalid_input",
+                field="kind",
+                allowed=list(DECISION_KINDS),
+            )
         task_id = _opt(args, "task_id") or (reader.task_id if scope == "task" else None)
         limit = _limit(args, 20)
         offset = _offset(args)
@@ -377,7 +392,7 @@ class ContextService:
                 raise rejected("scope=repo 需要 repo", reason="invalid_input", field="repo")
             where = None
             if scope in ("repo", "task"):
-                projects = {str(repo)}
+                projects = {str(repo), *([project] if project else [])}
                 if scope == "task":
                     row = c2.execute(
                         "SELECT card FROM cards WHERE task_id = ?", (task_id,)
@@ -386,10 +401,15 @@ class ContextService:
                         set(json.loads(row["card"]).get("project_ids") or []) if row else set()
                     )
                 where = (str(repo), projects)
-            items = standing_items(list(l1.execute("SELECT * FROM user_decisions")), where)
-            items += [_historic(r) for r in c2.execute("SELECT * FROM decisions")]
+            items = standing_items(
+                list(l1.execute("SELECT * FROM user_decisions")), where, revocations(l1)
+            )
+            if kind != "standing":
+                items += [_historic(r) for r in c2.execute("SELECT * FROM decisions")]
         chosen: list[tuple[dict[str, Any], int]] = []
         for item in items:
+            if kind is not None and item["kind"] != kind:
+                continue
             if item["kind"] != "standing" and not _decision_in_scope(
                 item, scope, repo, task_id, repos
             ):
@@ -415,13 +435,16 @@ class ContextService:
             "repo": repo,
             "task_id": task_id,
             "query": query,
+            **({"kind": kind} if kind else {}),
+            **({"project": project} if project else {}),
             "decisions": [item for item, _ in page],
             "total": len(chosen),
             "next_offset": offset + limit if offset + limit < len(chosen) else None,
             "index": fresh.to_dict(),
             "note": "usable_as_basis：in_scope 为范围内的长期偏好；"
             "this_task_only 只在该任务内作为依据，其他任务只能作为先例参考；"
-            "this_object_only 为一次性授权；false（已被替代、候选约定）不能作为依据（DN007 §6）",
+            "this_object_only 为一次性授权；false（已被替代、被更窄范围覆盖、已撤销、候选约定）"
+            "不能作为依据（DN007 §6、§6.2）",
         }
 
     # ------------------------------------------------------------------ read
@@ -860,80 +883,6 @@ def _expand(word: str, aliases: Mapping[str, set[str]]) -> set[str]:
 def _match(forms: Sequence[str]) -> str:
     """An FTS5 query: any of the forms, each as a phrase."""
     return " OR ".join('"' + f.replace('"', '""') + '"' for f in forms)
-
-
-def applies(scope: str, where: tuple[str, set[str]] | None) -> bool:
-    """Whether a preference of ``scope`` reaches a query about ``where`` = (repo, projects)."""
-    if where is None or scope == "global":
-        return True
-    kind, _, name = scope.partition(":")
-    return (kind == "repo" and name == where[0]) or (kind == "project" and name in where[1])
-
-
-def standing_items(
-    rows: list[sqlite3.Row], where: tuple[str, set[str]] | None
-) -> list[dict[str, Any]]:
-    """The standing preferences that reach ``where`` (all of them when None), each saying whether
-    it is in force there: replaced by one of the same scope, or overridden by a narrower one that
-    reaches ``where`` too (DN007 §6)."""
-    items = [_standing(r) for r in rows]
-    by_ref = {str(i["ref"]): i for i in items}
-
-    def current(item: dict[str, Any]) -> dict[str, Any]:
-        """The preference now in force in ``item``'s scope: follow same-scope replacements."""
-        seen: set[str] = set()
-        while item.get("superseded_by") and str(item["ref"]) not in seen:
-            seen.add(str(item["ref"]))
-            item = by_ref.get(str(item["superseded_by"]), item)
-        return item
-
-    overriders: dict[str, list[dict[str, Any]]] = {}
-    for item in items:
-        for old in item["supersedes"]:
-            overriders.setdefault(str(old), []).append(item)
-    out: list[dict[str, Any]] = []
-    for item in items:
-        if not applies(str(item["scope"]), where):
-            continue
-        # A narrower override keeps holding when it is itself replaced in its own scope.
-        narrower = list(
-            {
-                str(n["ref"]): n
-                for n in (
-                    current(o)
-                    for o in overriders.get(str(item["ref"]), [])
-                    if o["scope"] != item["scope"]
-                )
-            }.values()
-        )
-        if where is None:
-            if narrower:
-                item["overridden_in"] = [{"ref": n["ref"], "scope": n["scope"]} for n in narrower]
-        else:
-            here = [n for n in narrower if applies(str(n["scope"]), where)]
-            if here:
-                item["overridden_by"] = here[0]["ref"]
-                item["usable_as_basis"] = False
-        out.append(item)
-    return out
-
-
-def _standing(row: sqlite3.Row) -> dict[str, Any]:
-    superseded = row["superseded_by"]
-    return {
-        "ref": row["ref"],
-        "kind": row["kind"],
-        "scope": row["scope"],
-        "task_id": row["task_id"],
-        "topic": row["topic"],
-        "text": row["text"],
-        "source": json.loads(row["verified_source"] or "{}"),
-        "supersedes": json.loads(row["supersedes"] or "[]"),
-        "superseded_by": superseded,
-        "time": row["recorded_at"],
-        "source_seq": row["source_seq"],
-        "usable_as_basis": False if superseded else "in_scope",
-    }
 
 
 def _historic(row: sqlite3.Row) -> dict[str, Any]:

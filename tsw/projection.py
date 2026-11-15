@@ -354,6 +354,14 @@ CREATE TABLE IF NOT EXISTS user_decisions(
     recorded_at TEXT NOT NULL,
     source_seq INTEGER NOT NULL
 );
+-- Revoked standing preferences (DN007 §6.2): only user.preference_revoked writes it.
+CREATE TABLE IF NOT EXISTS preference_revocations(
+    ref TEXT PRIMARY KEY,
+    reason TEXT NOT NULL,
+    verified_source TEXT NOT NULL,
+    revoked_at TEXT NOT NULL,
+    source_seq INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS index_queue(
     task_id TEXT NOT NULL,
     sequence INTEGER NOT NULL,

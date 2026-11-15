@@ -231,13 +231,24 @@ HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
     ),
     "context_decisions": (
         ("orchestrator", "worker"),
-        "检索用户既有决定与长期偏好（DN007 §6）：每条标出类型、范围、是否已被替代与能否作为依据",
+        "检索用户既有决定与长期偏好（DN007 §6）：每条标出类型、范围、是否已被替代或撤销与能否作为"
+        "依据；受理与派发前以 kind=standing、scope=repo、不写 query 列全能到达任务的长期偏好"
+        "（§6.1）",
         {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "主题词"},
+                "query": {"type": "string", "description": "主题词（不写时列出范围内全部）"},
+                "kind": {
+                    "enum": ["standing", "task", "one_time"],
+                    "description": "只要某一类：standing 长期偏好、task 任务决定、"
+                    "one_time 一次性授权",
+                },
                 "scope": {"enum": ["global", "repo", "task"]},
                 "repo": {"type": "string"},
+                "project": {
+                    "type": "string",
+                    "description": "scope=repo 时一并列出该项目范围的偏好",
+                },
                 "task_id": {"type": "string"},
                 "limit": {"type": "integer"},
                 "offset": {"type": "integer"},

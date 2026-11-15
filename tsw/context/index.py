@@ -244,8 +244,9 @@ def _detail(data: Mapping[str, Any]) -> str:
 
 
 def decision_docs(event: Event) -> list[dict[str, Any]]:
-    """User decisions an event carries (DN007 §12.2). Standing preferences are read from L1."""
-    if event.type == "user.preference_recorded":
+    """User decisions an event carries (DN007 §12.2). Standing preferences and their revocations
+    are read from L1."""
+    if event.type in ("user.preference_recorded", "user.preference_revoked"):
         return []
     found: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()

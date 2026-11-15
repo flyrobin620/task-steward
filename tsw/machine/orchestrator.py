@@ -41,6 +41,7 @@ from tsw.machine.model import (
     row_dict,
     task,
 )
+from tsw.preferences import brief_check
 from tsw.roles import record_given, worker_instructions, worker_prompt
 from tsw.tasks import TaskSpec, register, render_spec, validate_spec
 from tsw.workspace import GH_ACCOUNT_SKILL, brief_section, ensure, home_skills, plan
@@ -535,6 +536,9 @@ def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
         f"- 执行目录：{workdir}\n- 授权读取集合：{', '.join(read_set)}\n"
         + _language_line(config)
         + _delivery_line(config, row)
+        # Read from the ledger each time a brief is written, so a preference recorded, replaced
+        # or revoked since the goal was written shows here at once (DN007 §6.1).
+        + brief_check(ctx.conn, str(row["repo"]), str(row["goal"]))
         + "\n"
         + repository
         + f"## 目标\n\n{row['goal']}\n\n## 验收\n\n{acceptance}\n"

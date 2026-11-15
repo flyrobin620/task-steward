@@ -1,6 +1,6 @@
 # DN007 账本存储、投影与任务上下文检索
 
-- 状态：设计草案（T233 r4）；L2 第一阶段按 §12 实现（T275）；§6.1 受理与派发时使用长期偏好（T287）
+- 状态：设计草案（T233 r4）；L2 第一阶段按 §12 实现（T275）；§6.1 受理与派发时使用长期偏好、§6.2 偏好的管理（T287）
 - 日期：2026-11-05；2026-11-12 补充 §12
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN006 插件层](DN006-plugin-layer.md)
 
@@ -50,6 +50,7 @@ DN001 §8 只定义了事件格式和“JSONL 账本为唯一事实、SQLite 投
 | `decisions` | decision_id | task_id、trigger、decision、rationale、basis_refs、confidence | 验收报告、决定摘要、主会话判断 |
 | `input_requests` | request_id | task_id、status、context_binding、channels、resolved_by | T11 / T12 |
 | `user_decisions` | ref | task_id（可空）、kind、text、scope、verified_source | G-USER、偏好检索（§6）；第一阶段只由 `user.preference_recorded` 写入，其他用户决定由 L2 从事件中抽取（§12.2） |
+| `preference_revocations` | ref | reason、verified_source、revoked_at | 偏好的撤销（§6.2），只由 `user.preference_revoked` 写入 |
 | `task_summaries` | task_id | keywords、summary、stage、bound_revision、bound_outputs | 卡片的关键词与摘要（§5.1、§12.2） |
 | `outputs` / `pull_requests` | (task_id, output_id) | type、form、delivery、ref、verified_at、evidence | G-ACCEPT、目录 |
 | `resource_claims` | (resource, owner_task) | status、released_by | G-RES |
@@ -191,12 +192,29 @@ DN001 §8 只定义了事件格式和“JSONL 账本为唯一事实、SQLite 投
 - **列全，而不是搜索**：`context_decisions` 支持按类型过滤（`kind`，即上面规则中的“类型”）。受理时主会话不写主题词，用 `kind: standing`、`scope: repo`、`repo: <仓库>`（属于项目的任务再给 `project`）列出所有能到达本任务的长期偏好（全局、该仓库、该项目），按 `next_offset` 翻完。偏好变多以后仍以分页列全为准；主题词只用于列全之后查看某个主题的其他用户决定。
 - **主会话逐条判断**：只有 `usable_as_basis` 为 `in_scope` 的偏好参与判断。对每一条，看任务要做的事是否落在偏好的主题内（例如任务会产出面向用户的图、会发邮件、会开 PR）。适用的写进目标“背景”一节的“适用的用户偏好”：每条写编号、范围与原文（如“P-4（global）：……”）；没有适用的写“无”，表明已经检查过。不适用的不写；只有可能被误以为适用的（同主题、但本任务不涉及该动作或被更窄范围的偏好覆盖）才附一句理由。
 - **派发前再列一次**：受理到派发之间可能新记录或替代了偏好。派发（与 `attempt_continue` 续用）前主会话按同样的方式再列一次；有目标中没写的适用偏好时，先用 `task_update` 写回（`user_source` 用该偏好记录中的用户原话），再派发。
-- **tsw 核对目标中引用的编号**：tsw 每次生成任务书（派发、需求变更、续用）时，从投影读取目标中出现的 `P-<n>` 的当前状态。有编号已被替代、在本任务的仓库内被更窄范围的偏好覆盖、范围到不了本任务或不存在时，在任务书开头的列表中加一行“偏好核对”，写明问题与现在有效的偏好（编号、范围与原文）。worker 以现在有效的偏好为准，有疑问时用 `context_decisions` 查或问用户。核对只读投影，不写事件，不改写目标。项目范围的偏好在 L1 中无法核对任务属于哪个项目，目标引用了它即视为适用，只核对替代与覆盖。
+- **tsw 核对目标中引用的编号**：tsw 每次生成任务书（派发、需求变更、续用）时，从投影读取目标中出现的 `P-<n>` 的当前状态。有编号已被替代、在本任务的仓库内被更窄范围的偏好覆盖、范围到不了本任务、已撤销（§6.2）或不存在时，在任务书开头的列表中加一行“偏好核对”，写明问题与现在有效的偏好（编号、范围与原文）。worker 以现在有效的偏好为准，有疑问时用 `context_decisions` 查或问用户。核对只读投影，不写事件，不改写目标。项目范围的偏好在 L1 中无法核对任务属于哪个项目，目标引用了它即视为适用，只核对替代与覆盖。
 - **取舍**：
   - tsw 不自动把范围内的全部偏好写进任务书：是否适用要理解任务内容，tsw 无法判断；全局偏好会出现在每一份任务书中，数量增长后成为噪声，worker 分不清哪些真正约束本任务。适用的判断留给主会话，结果（包括“无”）留在目标中以便核对与验收。
   - 不在 `task_dispatch` 另记主会话选定的偏好编号：目标正文已经记下编号与原文（`task.registered` / `task.requirement_changed` 事件），再加一个字段是重复的契约；任务书的核对直接从目标中读取编号。
   - 不由 tsw 改写目标中过时的偏好：目标是主会话按用户来源写下的记录，由主会话按“派发前再列一次”写回；任务书的核对行保证在写回之前 worker 也看到现在有效的偏好。
   - 任务结束时搜集与记录新的偏好是另一件事（T288），不在本节。
+
+### 6.2 偏好的管理（T287）
+
+用户 2026-11-15 确认 §6.1 时追加：偏好要能被管理，增删改查都要有接口；将来在 Dashboard 中管理（另登记任务，F-T287-1）。账本只追加，修改与删除都以新的事件表达，历史保留。
+
+| 操作 | MCP（主会话，需要调度租约） | CLI（用户本人，在会话外的终端） | 事件 |
+| --- | --- | --- | --- |
+| 查询 | `context_decisions`（`kind: standing`；worker 也可用） | `tsw preference list [--repo <仓库>] [--project <项目>] [--all]` | 无（只读投影） |
+| 创建 | `preference_record` | `tsw preference record --scope <范围> --topic <主题> --text <原文>` | `user.preference_recorded` |
+| 修改 | `preference_record` 带 `supersedes`（同范围或更窄） | `tsw preference record … --supersedes <P-n>` | `user.preference_recorded` |
+| 删除 | `preference_revoke` | `tsw preference revoke <P-n> --reason <理由>` | `user.preference_revoked` |
+
+- **修改就是替代**：新偏好得到新编号，旧的标 `superseded_by`（更窄范围的标 `overridden_by`，§12.2），两条都可查；不提供原地改写，任务书与报告中引用的旧编号仍能查到当时的原文。
+- **删除就是撤销**：`user.preference_revoked` 记录编号、理由与用户来源（MCP 的 `user_source` 决定对象为 `["preference", <编号>, "revoke"]`）。只能撤销现行的偏好（未被同范围替代、未撤销）。撤销后它仍可查询，`usable_as_basis` 为 false 并带 `revoked`（时间与理由）；它对更宽范围偏好的覆盖随之解除（更宽的在该范围内重新有效）；不能再被替代；任务书核对（§6.1）把目标中引用它的写成“已撤销”。被它替代的旧偏好不会恢复，需要时由用户重新记录。
+- **CLI 是用户本人的操作**：`record` 与 `revoke` 和 `tsw task accept` 一样只在会话外的终端运行，以 `user` 调用者执行同一个工具，来源由 tsw 记录（渠道 `user-cli`，`text` 为偏好原文或撤销理由，DN006 §8.10），先显示内容并要求确认（`--yes` 跳过）；会话不能借它代用户说话。`list` 只读，默认列出现行的偏好（`--all` 包括已替代、被覆盖与已撤销的），给了 `--repo` / `--project` 时只列能到达该范围的；会话中不在命令行运行它（会话只能运行 DN001 §7.1 列出的命令），用 `context_decisions`。
+- **用户来源**：主会话的 `preference_record` / `preference_revoke` 只按用户在会话中明确说出的长期意图或撤销要求调用（附原话）；不能凭推测撤销或改写偏好。
+- 投影：撤销写入新表 `preference_revocations`（编号、理由、来源、时间、事件序号），不改变 `user_decisions` 的结构，已有投影仍然有效，不需要 `tsw ledger rebuild`。
 
 ## 7. 主会话与 worker 的读取方式
 

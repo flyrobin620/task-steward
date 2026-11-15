@@ -420,7 +420,7 @@ T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与
 | `hub-portal` | request_response，notify（Portal 通知卡片），push，direct | tsw 把请求发布到 Hub 门户（问题卡片） | Portal 用户提交答复，经认证回调写回 tsw | Portal 的 owner 认证 + 请求 ID |
 | `email-draft` | notify_only | 在邮箱生成草稿（默认不发送，沿用邮件约定） | — | — |
 
-`user-cli` 与 `status-app` 不是请求与答复的渠道：它们记录用户在会话外主动做出的验收、退回与取消（§8.10）。
+`user-cli` 与 `status-app` 不是请求与答复的渠道：它们记录用户在会话外主动做出的验收、退回与取消，以及长期偏好的记录与撤销（§8.10、DN007 §6.2）。
 
 多渠道规则：
 
@@ -559,6 +559,7 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | 入口 | 渠道 | 来源（`VerifiedSource`） |
 | --- | --- | --- |
 | `tsw task accept <任务> [--note <原话>]`、`tsw task reject <任务> --reason <理由>`、`tsw task cancel <任务>` | `user-cli` | `principal`：本机用户名与机器名；`message_ref`：`cli:<时间>:<进程号>`；`text`：`--note` / `--reason`，没有时为命令行本身；`target`：任务、命令读到的 revision（`--revision` 可指定）、决定类别 |
+| `tsw preference record --scope <范围> --topic <主题> --text <原文> [--supersedes <P-n>]`、`tsw preference revoke <P-n> --reason <理由>`（长期偏好的管理，DN007 §6.2） | `user-cli` | `principal`、`message_ref` 同上；`text`：偏好原文或撤销理由；`target`：`["preference", <范围>, "standing"]` 或 `["preference", <编号>, "revoke"]` |
 | Dashboard 应用中卡片的「验收」「退回」「取消」按钮 | `status-app` | `principal` 同上；`message_ref`：`status-app:<服务实例>:<序号>`；`text`：页面、按钮与任务，退回时附用户填写的理由；`target` 的 revision 取自页面上显示的 revision，任务在此期间已变化时 G-USER 拒绝 |
 
 为什么可以把它们当作用户本人的决定（按 DN008 §9 的模型：防的是 agent 误认来源，不是同一用户下的恶意进程）：

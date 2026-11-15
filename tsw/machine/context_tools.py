@@ -2,7 +2,8 @@
 # pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false
 # pyright: reportUnknownVariableType=false
 """The orchestrator's writes for task context (DN007 §5.1, §6, §12): a task card's keywords and
-summary (``task_summary``) and the user's standing preferences (``preference_record``).
+summary (``task_summary``) and the user's standing preferences (``preference_record``,
+``preference_revoke``; DN007 §6.2).
 
 Neither changes a task's state. Both write only tables that no earlier event writes, so a
 projection made before them stays valid.
@@ -27,6 +28,7 @@ MAX_KEYWORD_CHARS = 60
 MAX_SUMMARY_CHARS = 800
 MAX_PREFERENCE_CHARS = 2000
 PREFERENCE_TARGET = "standing"
+REVOKE_TARGET = "revoke"
 
 
 def _cmd(env: ToolEnv, op: str, inp: Mapping[str, Any], build: Any) -> Command:
@@ -121,11 +123,26 @@ def narrower_or_same(new: str, old: str) -> bool:
     return old in (new, "global")
 
 
+def _channels(env: ToolEnv) -> tuple[str, ...]:
+    """The user's own terminal commands record their source on the direct channels; a session
+    quotes the user from a conversation (DN006 §8.10)."""
+    return guards.DIRECT_CHANNELS if env.caller.role == "user" else guards.USER_CHANNELS
+
+
+def _revoked(conn: sqlite3.Connection, ref: str) -> bool:
+    return (
+        conn.execute("SELECT 1 FROM preference_revocations WHERE ref = ?", (ref,)).fetchone()
+        is not None
+    )
+
+
 @tool(
     "preference_record",
     "orchestrator",
-    description="记录用户明确说出的长期偏好（DN007 §6）：附用户原话，target 为 "
-    '["preference", <scope>, "standing"]；替代旧偏好时在 supersedes 中列出（同范围或更窄）',
+    "user",
+    description="记录用户明确说出的长期偏好（DN007 §6、§6.2）：附用户原话，target 为 "
+    '["preference", <scope>, "standing"]；修改即替代：在 supersedes 中列出被替代的'
+    "（同范围或更窄、现行的）",
 )
 def preference_record(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     topic = " ".join(text(inp, "topic").split())
@@ -139,6 +156,7 @@ def preference_record(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     source = guards.verified_source(
         mapping(inp, "user_source"),
         ["preference", scope, PREFERENCE_TARGET],
+        channels=_channels(env),
         mismatch='用户来源的决定对象应为 ["preference", <scope>, "standing"]',
     )
 
@@ -153,6 +171,8 @@ def preference_record(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 raise rejected(
                     "要替代的偏好已被替代", reason="invalid_input", ref=ref, by=old["superseded_by"]
                 )
+            if _revoked(ctx.conn, ref):
+                raise rejected("要替代的偏好已撤销", reason="invalid_input", ref=ref)
             if not narrower_or_same(scope, str(old["scope"])):
                 raise rejected(
                     "新偏好的范围须与被替代的相同或更窄",
@@ -178,6 +198,51 @@ def preference_record(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         ]
 
     return _cmd(env, "preference_record", inp, build)
+
+
+@tool(
+    "preference_revoke",
+    "orchestrator",
+    "user",
+    description="撤销用户的一条长期偏好（DN007 §6.2）：只按用户明确的撤销要求，附原话，target 为 "
+    '["preference", <编号>, "revoke"]；只能撤销现行的（未被同范围替代、未撤销）；只追加事件，'
+    "原文与历史仍可查询",
+)
+def preference_revoke(inp: Mapping[str, Any], env: ToolEnv) -> Command:
+    ref = text(inp, "ref").strip()
+    reason = " ".join(text(inp, "reason").split())
+    if len(reason) > MAX_PREFERENCE_CHARS:
+        raise rejected("理由过长", reason="invalid_input", field="reason")
+    source = guards.verified_source(
+        mapping(inp, "user_source"),
+        ["preference", ref, REVOKE_TARGET],
+        channels=_channels(env),
+        mismatch='用户来源的决定对象应为 ["preference", <编号>, "revoke"]',
+    )
+
+    def build(ctx: CommitContext) -> list[EventDraft]:
+        row = ctx.conn.execute(
+            "SELECT scope, superseded_by FROM user_decisions WHERE ref = ?", (ref,)
+        ).fetchone()
+        if row is None:
+            raise rejected("偏好不存在", reason="invalid_input", ref=ref)
+        if row["superseded_by"]:
+            raise rejected(
+                "偏好已被替代，撤销现行的那一条",
+                reason="invalid_input",
+                ref=ref,
+                by=row["superseded_by"],
+            )
+        if _revoked(ctx.conn, ref):
+            raise rejected("偏好已撤销", reason="invalid_input", ref=ref)
+        return [
+            EventDraft(
+                type="user.preference_revoked",
+                data={"ref": ref, "scope": row["scope"], "reason": reason, "source": source},
+            )
+        ]
+
+    return _cmd(env, "preference_revoke", inp, build)
 
 
 # ---------------------------------------------------------------------- reducers
@@ -232,6 +297,21 @@ def reduce_preference_recorded(conn: sqlite3.Connection, event: Event) -> None:
         )
 
 
+def reduce_preference_revoked(conn: sqlite3.Connection, event: Event) -> None:
+    data = event.data
+    conn.execute(
+        "INSERT INTO preference_revocations(ref, reason, verified_source, revoked_at, source_seq) "
+        "VALUES(?, ?, ?, ?, ?)",
+        (
+            str(data["ref"]),
+            str(data.get("reason") or ""),
+            dumps(data.get("source") or {}),
+            event.time,
+            event.sequence,
+        ),
+    )
+
+
 def reduce_context_read(conn: sqlite3.Connection, event: Event) -> None:
     """``context.read`` is an audit record of what a session read and why: nothing to project."""
 
@@ -239,6 +319,7 @@ def reduce_context_read(conn: sqlite3.Connection, event: Event) -> None:
 REDUCERS = {
     "task.summary_recorded": reduce_summary_recorded,
     "user.preference_recorded": reduce_preference_recorded,
+    "user.preference_revoked": reduce_preference_revoked,
     "context.read": reduce_context_read,
 }
 

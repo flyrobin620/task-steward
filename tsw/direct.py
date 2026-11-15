@@ -1,7 +1,8 @@
 """The user's own operations outside any session (DN006 §8.10).
 
-The terminal commands ``tsw task accept`` / ``reject`` / ``cancel`` and the buttons of the STATUS
-app (:mod:`tsw.host.status_app`) both come here. They run the state-machine tools as the ``user``
+The terminal commands ``tsw task accept`` / ``reject`` / ``cancel`` (and ``tsw preference
+record`` / ``revoke``, DN007 §6.2) and the buttons of the STATUS app (:mod:`tsw.host.status_app`)
+both come here. They run the state-machine tools as the ``user``
 caller, which no session resolves to, and record the source themselves on the ``user-cli`` or
 ``status-app`` channel. Both refuse to run inside a host session: a session that could run them
 could put words in the user's mouth (DN008 §9).
@@ -155,6 +156,46 @@ def perform(
         "action": action,
         "task_id": task_id,
         "revision": revision,
+        "event": event["type"],
+        "sequence": event["sequence"],
+        "channel": channel,
+    }
+
+
+# action -> tool (DN007 §6.2): the user's own management of standing preferences.
+PREFERENCE_TOOLS = {"record": "preference_record", "revoke": "preference_revoke"}
+
+
+def preference(
+    ledger: Ledger,
+    config: EffectiveConfig,
+    action: str,
+    payload: Mapping[str, Any],
+    *,
+    target: list[Any],
+    channel: str,
+    message_ref: str,
+    text: str,
+    machine: str | None = None,
+) -> dict[str, Any]:
+    """Record or revoke a standing preference as the ``user`` caller (DN007 §6.2)."""
+    if action not in PREFERENCE_TOOLS:
+        raise rejected("未知的操作", reason="invalid_input", action=action)
+    user_source = {
+        "channel": channel,
+        "principal": principal(),
+        "message_ref": message_ref,
+        "text": text,
+        "target": target,
+    }
+    caller = Caller(role="user", session_id=None, machine=machine or lease.this_machine())
+    result = run_tool(
+        ledger, config, caller, PREFERENCE_TOOLS[action], {**payload, "user_source": user_source}
+    )
+    event = result["events"][0]
+    return {
+        "action": action,
+        "ref": event["data"]["ref"],
         "event": event["type"],
         "sequence": event["sequence"],
         "channel": channel,

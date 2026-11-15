@@ -532,4 +532,13 @@ SCHEMAS: dict[str, dict[str, Any]] = {
             '["preference", <scope>, "standing"]',
         },
     ),
+    "preference_revoke": schema(
+        ["ref", "reason", "user_source"],
+        ref={**S, "description": "要撤销的偏好编号（P-…），须为现行的"},
+        reason={**S, "description": "撤销的理由，按用户原意写"},
+        user_source={
+            **SOURCE,
+            "description": '用户要求撤销的原话；target 为 ["preference", <编号>, "revoke"]',
+        },
+    ),
 }
