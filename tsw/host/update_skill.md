@@ -50,14 +50,14 @@ description: "TaskSteward 自我更新：拉取产品仓库、按改动决定步
 
 1. 先报告执行中的会话：`sessions.workers` 中 `live` 的 worker 可能正在进行一轮，例行会话可能正在运行；告诉用户哪些会被打断（`restart_host`）或保持旧版本（`new_session`）。
 2. 按 `mode`：
-   - `restart_host`：请用户重启 Claude app，重启后在本会话发一句话（例如“已重启”），你再做第 6 步。用 `wrap_up` 提问并设 `blocked: true`。重启会结束所有会话的 MCP 进程，各会话下一轮用新版本；例行会话的定时任务可能失效，之后 `attention` 显示 `stale` 时按 orchestrate skill 恢复。
+   - `restart_host`：先按第 7 步记一次生效前的记录（`verified: false`，`pending` 写 `reload`），再请用户重启 Claude app，重启后在本会话发一句话（例如“已重启”），你再做第 6 步。用 `wrap_up` 提问并设 `blocked: true`。重启会结束所有会话的 MCP 进程，各会话下一轮用新版本；例行会话的定时任务可能失效，之后 `attention` 显示 `stale` 时按 orchestrate skill 恢复。
    - `new_session`：创建接班主会话（CC006 §11.4）：
      1. `mcp__ccd_session__start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为数据目录（`whoami` 的 `cwd`，原样）、`use_worktree: false`、`name` 为 `tsw-main-<YYYYMMDD-HHMM>`、`title` 为“TaskSteward 主会话”，`model` / `effort` / `permission_mode` 取 `roles.orchestrator`，`prompt`：“你是接班的 TaskSteward 主会话（自我更新，前任 <你的会话 ID>）。先 whoami 与 lease_status；前任让出租约后会发消息给你，届时 lease_acquire，再按 tsw-update skill 第 6、7 步验证并记录（起点 <from>，终点 <to>）。”
      2. `mcp__ccd_session_mgmt__detach_session` 把它从你名下分离（否则归档你会连带归档它）。
      3. 先做第 7 步的记账（`verified: false`，`pending` 写 `reload`），再 `lease_release`，然后用 `mcp__ccd_session_mgmt__send_message` 告诉新会话“租约已让出，可以 lease_acquire 并继续验证”。
      4. 告诉用户之后在新会话中继续（附会话链接）；本会话只读，可以归档。
-   - `compact`（只有 `instructions`、没有 `reload` 时）：先做第 6、7 步，最后在 `wrap_up` 中请用户在本会话输入 `/compact`（你不能自己输入斜杠命令）。
-   - `clear`：先做第 6、7 步，本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`，告诉用户这一轮结束后上下文会清空、状态都在账本中。
+   - `compact`（只有 `instructions`、没有 `reload` 时）：先做第 6 步的 2–4 项，再按第 7 步记一次生效前的记录（`verified: false`，`pending` 写 `instructions`，`notes` 写“等用户 /compact”），最后在 `wrap_up` 中请用户在本会话输入 `/compact`、完成后发一句话（你不能自己输入斜杠命令）。用户回来后的那一轮：确认 `CLAUDE.md` 的新内容已在你的上下文中，再记最终记录（`verified: true`）。
+   - `clear`：同样先验证并记一次生效前的记录（`verified: false`，`notes` 写“清空后由下一轮补记”），本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`，告诉用户这一轮结束后上下文会清空、状态都在账本中，请用户之后发一句话。清空后的第一轮：用户提到更新或 `update_record` 的最近记录未验证时，确认 `CLAUDE.md` 的新内容已载入，再记最终记录（`verified: true`）。
 3. `plugin` 类别只有 `hooks.json` 改动、没有 `reload` 中的运行时文件时，可以告诉用户也能在各会话输入 `/reload-plugins` 代替重启（它不换 MCP）。
 
 ## 6. 验证
@@ -71,7 +71,7 @@ description: "TaskSteward 自我更新：拉取产品仓库、按改动决定步
 
 ## 7. 记录与汇报
 
-1. `update_record`：`from`、`to`、`categories`、`actions`（已做的动作）、`pending`（未完成的）、`user_steps`（需要用户做的事）、`verified`（第 6 步通过时为 true）、`notes`（例如重启方式、被打断的会话）。
+1. `update_record`（需要用户先做一步才能生效的方式——重启 app、`new_session`、`compact`、`clear`——按第 5 步先记一次 `verified: false`，生效后再记最终结果）：`from`、`to`、`categories`、`actions`（已做的动作）、`pending`（未完成的）、`user_steps`（需要用户做的事）、`verified`（第 6 步通过时为 true）、`notes`（例如重启方式、被打断的会话）。
 2. 告诉用户：更新到哪个提交、做了什么、验证结果，以及还需要用户做的事。
 
 只有主会话可以运行 `tsw host render` 与 `tsw dashboard restart`；worker、例行会话与其他目录的会话运行会被拒绝（`host_session_cli`）。
