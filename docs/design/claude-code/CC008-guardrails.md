@@ -1,6 +1,6 @@
 # CC008 Claude Code 上的护栏
 
-- 状态：设计草案（T242 r2；T243 增加例行会话的规则；T251 Worker Merge 规则覆盖仓库 worktree；T276 §6 worker 会话的 prompt 以 worker 说明开头，Worker Dispatch 规则随之更新；T272 CC-S4 提醒处置 worker 会话的标题与归档，主会话允许 `set_session_title`；T279 §6 Worker Merge 认可 `gh-account` skill 规定的单个环境变量前缀，§3 命令替换的分词；T282 §5.7 主会话自我更新：在会话中运行 `tsw host render`，其他会话仍拒绝）
+- 状态：设计草案（T242 r2；T243 增加例行会话的规则；T251 Worker Merge 规则覆盖仓库 worktree；T276 §6 worker 会话的 prompt 以 worker 说明开头，Worker Dispatch 规则随之更新；T272 CC-S4 提醒处置 worker 会话的标题与归档，主会话允许 `set_session_title`；T279 §6 Worker Merge 认可 `gh-account` skill 规定的单个环境变量前缀，§3 命令替换的分词；T282 §5.7 主会话自我更新：在会话中运行 `tsw host render`，其他会话仍拒绝；T283 CC-B9 对接班主会话例外、新增 CC-B12（Dashboard 令牌）、§5.7 主会话可运行 `dashboard restart`）
 - 日期：2026-11-08
 - 实现：[DN008 校验原则](../DN008-guardrails.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC006 Claude Code 插件](CC006-plugins.md)
@@ -37,9 +37,10 @@
 | CC-B6 | worker | `gh pr merge`，或 `gh api` 调用 REST 合并路径（`…/pulls/<n>/merge`）或 GraphQL `mergePullRequest`（只看这两种写法，不看评论正文等其他参数里的 “merge” 一词：现状对此误拦，本任务回复评审线程时实测）；仓库没有 `delivery.merge`（不看任务类型，T245） | 不该由 worker 合并时合并，主会话流程随之错乱 | 提交时用 `merge_skipped` 说明，由主会话合并。**不可放行**：它是 G-SUBMIT 合并授权的镜像，放行后合并记录仍会被 G-SUBMIT 拒绝；需要 worker 合并时由用户修改 `delivery.merge`（用户在会话外手工编辑，或经主会话 `config_change`），然后在原 worker 中重试：hook 与 G-SUBMIT 每次都重新读取配置，不需要重启会话 |
 | CC-B7 | worker | 有合并授权，但 `gh pr merge` 没有 `-R HOST/OWNER/NAME` 或本仓库的 PR 链接与配置的 `host`（默认 `github.com`）、`repository` 一致；或用 `gh api` 合并 | 按当前目录或遗留的 `GH_HOST` 合并了别的仓库或别的主机的 PR（目标错误） | `gh pr merge <编号> -R github.com/<owner>/<name>`，或该仓库的 PR 链接 |
 | CC-B8 | worker、主会话、例行会话 | `CronCreate` / `ScheduleWakeup` 的提示不以 `<scheduled-task>` 开头 | 定时提示到达时与用户消息无法区分：worker 的被记成用户答复（live `host-e2e` 实测，误认来源）；主会话的被当成用户本人的 turn，CC-S4 随之要求在不能创建会话的 turn 中预启动（T244） | 提示以 `<scheduled-task>` 开头、`</scheduled-task>` 结束 |
-| CC-B9 | 主会话 | `start_session` 的会话名不是已落账、代次有效的 attempt，也不是正在启动的例行会话代次 | 没有先 `attempt_start` / `routine_start` 就建会话，或重复建会话 | 先 `attempt_start`（例行会话先 `routine_start`），用返回的会话名。**不可放行**：没有落账的会话无法绑定到 attempt（DN002 §6） |
+| CC-B9 | 主会话 | `start_session` 的会话名不是已落账、代次有效的 attempt，也不是正在启动的例行会话代次；`cwd` 就是数据目录本身（接班主会话，CC006 §11.4，T283）时不拦 | 没有先 `attempt_start` / `routine_start` 就建会话，或重复建会话 | 先 `attempt_start`（例行会话先 `routine_start`），用返回的会话名。**不可放行**：没有落账的会话无法绑定到 attempt（DN002 §6） |
 | CC-B10 | 已撤销 / 待绑定 | 编辑类工具、Bash、`start_session` | 已被替换的会话继续写；绑定前就开始工作（状态漂移） | 已撤销：回到主会话；待绑定：等主会话绑定后的消息 |
 | CC-B11 | 例行会话 | 编辑类工具、Bash、`start_session` | 例行会话自己去“处理”问题（改代码、跑命令、建会话），越过“只执行例行动作、不作判断”的分工（DN006 §8.9） | 只执行例行表（`routine_board`）中的例行项；其余事项发消息交主会话 |
+| CC-B12 | 所有 | 编辑与读取类工具（Read / Edit / Write / MultiEdit / NotebookEdit / Grep / Glob）的目标路径在 Dashboard 令牌目录中，或 Bash 命令的某个词含令牌目录名 `tsw-dashboard-secret`（CC006 §12；T283） | 会话为了“帮用户打开 Dashboard”读出令牌，拿令牌替用户点验收等按钮（误认来源，DN006 §8.10） | 请用户在终端运行 `tsw dashboard open`；服务的状态用 `tsw dashboard status` |
 
 **escape**（DN008 §5 第 4 条）：每条拒绝信息以规则编号开头，写出上表的正确做法；可放行的规则还写明“动作确属任务需要时，问用户；用户同意后用 `user_answer` 登记放行这条规则”。CC-B6、CC-B9 是状态机守卫的镜像，不能放行或关闭（`waive_rules` 与 `guardrails.disabled` 中出现它们时以 `invalid_input` 拒绝），只给出状态机的路径。其余规则的做法：
 
@@ -153,7 +154,9 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 | worker、例行会话、已撤销、待绑定 | 拒绝（`host_session_cli`），拒绝信息写明只有主会话可以运行，请主会话或用户运行 |
 | 其他目录中的 Claude 会话（角色 none），以及只有 `CLAUDECODE`、没有会话 ID 的会话 | 拒绝（`host_session_cli`）：tsw 无法确认它是主会话，请用户在终端运行或交给主会话。此前 CLI 守卫不管无关会话，它们可以运行 render；T282 起收紧 |
 
-其他命令不变：`task accept` / `reject` / `cancel`、`dashboard` / `status serve` 与不带 `--user-source` 的 `lease takeover` 在任何会话中都拒绝（§5.5，用户本人的操作）；`restore`、`quiesce` / `resume-writes` 仍由用户在终端运行；`tool run --role` 等写入口仍以 `host_session_cli` 拒绝（§5.2）。
+**同样只给主会话的命令（T283）**：`tsw dashboard restart` 与 `host render` 采用同一判断（主会话与会话外的终端运行，其他会话以 `host_session_cli` 拒绝，PreToolUse 对 worker、已撤销、待绑定会话同样拦下）：它只让操作系统重启用户已安装的 Dashboard 服务，服务自己读取令牌，会话看不到令牌（CC006 §12）。只读的 `tsw host update-plan` 与 `tsw dashboard status` 任何会话都可以运行（与 `config show` 等相同）。
+
+其他命令不变：`task accept` / `reject` / `cancel`、`dashboard` / `status serve`、`dashboard install` / `uninstall` / `open` / `service` 与不带 `--user-source` 的 `lease takeover` 在任何会话中都拒绝（§5.5，用户本人的操作）；`restore`、`quiesce` / `resume-writes` 仍由用户在终端运行；`tool run --role` 等写入口仍以 `host_session_cli` 拒绝（§5.2）。
 
 **角色怎样判断**（与其他命令相同，§5.2）：Claude Code 给每个会话的进程（包括 Bash 中运行的命令）设置 `CLAUDE_CODE_HOST_SESSION_ID`。`tsw` 命令行看到它，就按账本解析这个会话 ID：绑定过 attempt 的是 worker（attempt 结束后为已撤销），绑定例行会话代次的是例行会话，在数据目录打开、没有绑定的是主会话。会话 ID 由宿主给出，不由命令行参数声明，所以 worker 不能在命令中声称自己是主会话。另有一层 hook：PreToolUse 对已登记会话的 Bash 命令分词，识别其中的 `tsw host render`（含 `python -m tsw`、启动器写法），worker、已撤销、待绑定会话直接拒绝，例行会话的 Bash 已由 CC-B11 整体拒绝；主会话不拦。无关会话不经 tsw hooks，由 CLI 拒绝。两层都防误认（worker 以为自己该更新宿主），不防同一用户下故意去掉环境变量的进程（DN008 §2）。
 

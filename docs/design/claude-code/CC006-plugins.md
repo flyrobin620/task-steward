@@ -1,6 +1,6 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`；T283 §11 自我更新的载入时机与生效方式，§12 Dashboard 常驻服务）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -331,3 +331,64 @@ DN002 §5.8 在 Claude app 上的做法（T272）。
    - code：写明涉及的仓库规则（需要用户确认的改动、live 场景）。gh 账号的注意事项由 tsw 写在任务书的“仓库与 worktree”一节（§8.3，按 `auth_profile`），主会话不再手写；仓库没有配置 `auth_profile` 时，把建议的账号配置告诉用户，按用户原话 `config_change`。
    - design：产出的设计文档位置、需要用户确认的范围。
    - research：结论的形式、来源要求，不改代码。
+
+## 11. 自我更新：载入时机与生效方式（T283）
+
+DN006 §9.8 的原则在 Claude Code（Windows 上的 Claude app）中的做法。依据是用户与主会话 2026-11-15 的实测（T282 合并后的那次更新）与官方文档（[mcp](https://code.claude.com/docs/en/mcp)、[plugins/loading](https://code.claude.com/docs/en/plugins/loading)、[plugins/cli-reference](https://code.claude.com/docs/en/plugins/cli-reference)、[skills](https://code.claude.com/docs/en/skills)、[hooks](https://code.claude.com/docs/en/hooks)、[settings](https://code.claude.com/docs/en/settings)）。
+
+### 11.1 各类内容何时载入
+
+| 内容 | 何时载入 | 拉取 / render 后怎样生效 | 依据 |
+| --- | --- | --- | --- |
+| `tsw` 命令行 | 每次新起进程，从产品仓库导入（可编辑安装，DN006 §9.1） | 拉取后立即生效 | 设计 |
+| hooks 的逻辑（`tsw guard`） | 每次 hook 新起进程，经插件副本中的启动器从产品仓库导入 | 拉取后立即生效 | 设计；实测 |
+| hooks 的事件与匹配（插件 `hooks/hooks.json`）、启动器 `bin/tsw_launch.py`、MCP 注册（`.mcp.json`） | 属于插件副本；会话启动时从它的 `CLAUDE_PLUGIN_ROOT` 读取 | render 更新副本（`claude plugin update`）后：新会话、重启 app；hooks 也可由用户输入 `/reload-plugins` | 官方 plugins/loading；实测 `/reload-plugins` 输出 “Reloaded: 2 plugins · 10 skills · 6 agents · 4 hooks · 0 plugin LSP servers” |
+| tsw MCP server | 会话启动时启动的常驻进程（`tsw_launch.py mcp`），从插件副本启动、从产品仓库导入；之后的 `git pull` 改不到它 | 只有新会话或重启 app。`/reload-plugins` 不换 MCP（输出中没有 MCP 一项，进程仍是旧版本，新工具不出现）；`/mcp` 的 Reconnect 只能由用户在交互界面操作，app 中未验证 | 实测：主会话的 MCP 曾停在 11-12 的提交而仓库已更新；重启 app 后只剩一个用新提交的 tsw MCP 进程，T272 的 `session_check` 等工具出现；不重启 app 新建的会话直接用最新安装的插件（T282 worker 的 MCP 在 render 4 分钟后启动，用的是新副本） |
+| 数据目录的 skill（`.claude/skills/*`） | 宿主监视 skill 目录，改动在会话内生效；已调用的 skill 正文留在对话中，不会重读 | render 后由主会话用 Read 重读已调用过的 SKILL.md（无影响） | 官方 skills；实测 `/reload-skills` 没有增减 |
+| 数据目录的 `CLAUDE.md` | 会话开始、`/clear`、`/compact` 时读取 | 按 `update.instructions`：`compact` / `clear`，或随重新加载 | 官方 memory、hooks（`/clear` 以 `source: clear` 触发 SessionStart） |
+| 数据目录的 `.claude/settings.json`（允许规则） | 宿主自动重新载入设置文件 | render 后即生效 | 官方 settings |
+| 用户设置中的 auto 模式规则 | 用户编辑用户设置；宿主自动重新载入（官方未单独说明 `autoMode`） | 用户按 `tsw host install-hint` 更新 | 官方 settings |
+| worker 说明 `roles/worker.md` | 新 worker 会话的 prompt 开头 | render 后新 worker 直接用；已有 worker 由 hook 在下一轮提示重读（§2） | 设计 |
+| Dashboard 常驻服务 | 服务进程启动时导入 | `tsw dashboard restart`（§12） | 设计 |
+
+### 11.2 生效方式与谁来做
+
+主会话不能输入斜杠命令（`/reload-plugins`、`/compact`、`/clear`、`/mcp` 都只能由用户在输入框中输入），也不能重启 app 或自己。
+
+| 方式（DN003 §3.6） | 主会话能做吗 | 做法 | 注意 |
+| --- | --- | --- | --- |
+| `restart_host`（重启 app） | 不能，请用户做 | 主会话先报告执行中的会话，再在 `wrap_up` 中请用户重启 app；重启后用户在主会话中发一句话，主会话继续验证 | 重启 app 结束所有会话的 MCP 进程，打断各会话正在进行的一轮（实测）；重启后会话照常存在，下一轮用新的 MCP。例行会话的定时任务可能失效，按 `stale` 恢复（DN006 §8.9.6） |
+| `new_session`（接班主会话） | 能 | §11.4 | 已有 worker 保持旧 MCP 直到结束；旧主会话只读 |
+| `compact` | 不能，请用户做 | 更新的最后一步，主会话在 `wrap_up` 中请用户在本会话输入 `/compact` | 只重新读 `CLAUDE.md`，MCP 不变 |
+| `clear` | 能 | 记账（`update_record`）之后，本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`，app 在这一轮结束后清空 | app 中会话 ID 不变（例行会话的上下文清空已依赖这一点），租约仍归本会话；清空后的第一轮主会话按 SessionStart 的摘要继续 |
+| 只换插件 hooks（`/reload-plugins`） | 不能 | `update-plan` 只有 `plugin` 类别的改动、没有 `runtime` 改动时，主会话可以告诉用户也能在各会话输入 `/reload-plugins` 代替重启 | 不换 MCP，不能用于 `runtime` 改动 |
+
+### 11.3 更新 skill 与 `update-plan`
+
+- **更新 skill**：来源 `tsw/host/update_skill.md`，`tsw host render` 安装为数据目录的 `.claude/skills/tsw-update/SKILL.md`（只用于主会话，任务书不列出）。orchestrate skill 的“自我更新”一节只写触发条件并指向它，不重复步骤。步骤：确认产品仓库干净且在主分支 → `git fetch` → 用 `gh run list --commit <目标提交>` 确认主分支 CI 成功（gh 账号按 `gh-account` skill）→ `git merge --ff-only` → **读产品仓库中新版本的 `tsw/host/update_skill.md`，按它继续** → `whoami` 取 `runtime.commit` → `tsw host update-plan --running <它>` → 先做无影响的动作 → 报告执行中的会话，按配置做有影响的动作 → 生效后再运行 `update-plan` 验证 → `update_record` 记账 → 告诉用户结果与需要用户做的事。
+- **`tsw host update-plan`**（只读，任何会话都可运行）：`--to`（默认产品仓库的 `HEAD`）、`--from`（明确的起点），或 `--running <提交>`（可重复，主会话运行时的提交）；没有 `--from` 时起点取 `--running` 与 `tsw-home.json` 的 `rendered.commit` 中最旧的一个（`git merge-base`），都没有时用插件副本的版本（Claude Code 以来源的提交作版本）。输出：起点与终点、起点的来源、改动的文件及其类别、按顺序排列的动作（每项写明影响、谁来做、宿主中的做法）、包含的任务及其报告、当前状态（render 记录、插件副本是否与 `plugin/` 一致、Dashboard 服务、用户设置中缺少或过期的 auto 模式规则）、执行中的会话（活动的 worker attempt 及其开始时间、例行会话），以及 `pending`：还没有做完的动作。验证时再运行一次，`pending` 应为空。
+- 类别规则（`tsw/host/update_plan.py`，有单元测试）：`docs/**`、`tests/**`、`tools/**`、`.github/**`、根目录的 Markdown 与 HTML → `docs`；`tsw/**`（不含 `*_skill.md`）→ `runtime` 与 `dashboard`；`tsw/host/*_skill.md`、`plugin/roles/**`、`tsw/host/claude_code.py`、`tsw/roles.py` → `rendered`；起点与终点生成的 `CLAUDE.md` 模板不同 → `instructions`；`plugin/**`（不含 `plugin/roles/**`）→ `plugin`；`pyproject.toml` → `install`；`tsw/projection.py` 中 `REDUCER_VERSION` 改变 → `projection`；`tsw/context/index.py` 中 `SCHEMA_VERSION` 改变 → `index`。`host_rules` 不看改动，直接比较用户设置（`~/.claude/settings.json`，`CLAUDE_CONFIG_DIR` 优先）中的 `autoMode.allow` 与当前 install hint 的规则文本。
+- **主会话运行时的版本**：MCP server 启动时记下产品仓库的 `HEAD` 与 `CLAUDE_PLUGIN_ROOT` 的目录名（插件副本版本），`whoami` 返回 `runtime`（DN006 §9.9）。本版本之前启动的 MCP 没有这个字段，第一次更新时起点取 render 记录或插件副本版本。
+
+### 11.4 接班主会话（`update.reload: new_session`）
+
+此前主会话为自己建接班会话（`start_session`，`cwd` 为数据目录）被 CC-B9 拒绝（实测）：会话名不是已落账的 attempt。T283 起 CC-B9 对 `cwd` 就是数据目录本身（不是其下的执行目录）的 `start_session` 例外放行（CC008 §3）：在数据目录中打开、没有绑定的会话按角色解析就是主会话，调度租约保证同一时间只有一个主会话写入（DN001 §6.4），不需要 attempt。步骤（更新 skill 中）：
+
+1. `start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为数据目录（`whoami` 的 `cwd`，磁盘上的写法）、`use_worktree: false`、`name` 为 `tsw-main-<日期时间>`、`title` 为“TaskSteward 主会话”、`model` / `effort` / `permission_mode` 取 `roles.orchestrator`，`prompt` 写明“你是接班的 TaskSteward 主会话（自我更新，前任 <会话 ID>）。先 whoami 与 lease_status；前任让出租约后会发消息给你，届时 lease_acquire，再按 tsw-update skill 的验证与记录继续”。
+2. `mcp__ccd_session_mgmt__detach_session` 把它从本会话名下分离：否则归档旧主会话会连带归档它（§6 例行会话同理）。
+3. `lease_release` 让出租约，再用 `send_message` 告诉新会话“租约已让出”。新会话的 SessionStart 发生在让出之前，只读运行；收到消息后 `lease_acquire`。
+4. 告诉用户之后在新会话中继续（附会话链接），旧会话只读、可以归档；旧主会话启动的 worker 照常把唤醒消息发给持租的新会话（DN001 §6.4）。
+
+待 live 验证：auto 模式分类器是否放行这次 `start_session`（用户在这一轮要求了更新；被拦时由用户重试，或按 CC008 §6 在 install hint 中加一条规则）。
+
+## 12. Dashboard 常驻服务（Windows，T283）
+
+DN006 §8.10“常驻服务”在 Windows 上的做法。其他操作系统暂不支持安装（`install` 报告不支持，用户照旧在终端运行 `tsw dashboard`）。
+
+- **登记**：`tsw dashboard install`（终端；会话中拒绝）用 `schtasks /Create /XML` 登记任务 `TaskSteward Dashboard (<键>)`，键为数据目录规范路径的 SHA-256 前 8 位（一台机器多个数据目录互不冲突）。任务 XML：登录触发器限当前用户（`<USERDOMAIN>\<USERNAME>`），主体 `InteractiveToken`、`LeastPrivilege`；不限运行时长（`PT0S`）、`IgnoreNew`（不重复启动）、使用电池时也运行、失败后每分钟重试最多 3 次；动作为 `pythonw.exe -m tsw --home <数据目录> dashboard service`，工作目录为产品仓库（`pythonw.exe` 取当前 Python 同目录的，没有窗口）。实测（T283，2026-11-15）：非提升权限的用户可以用这样的 XML 登记本人的登录触发任务（登记后立即删除）。登记后立即 `schtasks /Run`，等 `/healthz` 应答后输出地址，并提示运行 `tsw dashboard open`。
+- **服务**：`tsw dashboard service` 只供计划任务调用（会话中拒绝）：读令牌文件（不存在时退出并写日志），监听 `127.0.0.1:<dashboard.port>`，cookie 加 `Max-Age`（400 天），其余与终端运行的 Dashboard 相同；输出写日志 `%LOCALAPPDATA%\TaskSteward\dashboard\<键>.log`（每次启动覆盖，只记启动、端口与错误）。
+- **令牌**：安装时生成（已有则沿用，重装不使已登录的浏览器失效），存于 `%LOCALAPPDATA%\TaskSteward\tsw-dashboard-secret\<键>.json`（数据目录之外；用户配置目录的默认权限只允许用户本人与系统）。`tsw dashboard open`（终端；会话中拒绝）读取它，用浏览器打开 `http://127.0.0.1:<端口>/?token=…`；之后地址去掉令牌，PWA 从 `http://127.0.0.1:<端口>/` 安装。会话读不到：命令行在会话中拒绝 `install` / `open` / `uninstall` / `service`，CC008 CC-B12 拒绝会话的工具触及这个目录。
+- **重启**：`tsw dashboard restart`：`schtasks /End` 后 `/Run`，等 `/healthz` 报告的提交等于产品仓库 `HEAD`（最多 30 秒）。主会话与终端可以运行（与 `host render` 相同的判断，CC008 §5.7），其他会话拒绝。没有安装时报告“未安装”，不报错。
+- **状态**：`tsw dashboard status`（只读，任何会话）：是否登记（`schtasks /Query`）、`/healthz` 是否应答、端口、服务载入的提交是否等于 `HEAD`、日志路径。`/healthz` 不需要令牌，照常核对 `Host`，只返回 `{"service": "tsw-dashboard", "commit", "home_key", "started_at"}`。
+- **卸载**：`tsw dashboard uninstall`（终端）：`/End`、`/Delete /F`，删除令牌文件。
+- **测试**：任务 XML、命令行参数与令牌文件的读写有 unit / component 测试；`schtasks` 是本仓库之外的平台，测试中替换为记录参数的替身（模拟证据）；真实登记由用户在终端运行 `install` 验证（live，见报告）。

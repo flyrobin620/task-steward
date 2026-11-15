@@ -1,6 +1,6 @@
 # DN003 统一配置
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置；T243 增加 `roles.routine` 与 `routine`；T251 §3.4 仓库任务的 worktree 与 `instructions`；T256 `plugins.human_channels` 的含义；T272 `sessions.title_on_accept` 与 `title_on_cancel`；T279 §3.5a `control.language` 写进任务书）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T240 增加 §7 经 tsw 工具修改配置；T243 增加 `roles.routine` 与 `routine`；T251 §3.4 仓库任务的 worktree 与 `instructions`；T256 `plugins.human_channels` 的含义；T272 `sessions.title_on_accept` 与 `title_on_cancel`；T279 §3.5a `control.language` 写进任务书；T283 §3.6 `update` 与 `dashboard`）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN004 worker 自评审](DN004-worker-self-review.md)
 
@@ -111,6 +111,8 @@
     "branch_pattern": "tsw/{task_id_lower}-{attempt}",
     "work_dir": "work/{task_id}/{attempt}"
   },
+  "update": {"reload": "restart_host", "instructions": "compact"},
+  "dashboard": {"port": 47800},
   "reports": {
     "formats": ["md", "html"],
     "html_from_md": true,
@@ -286,6 +288,18 @@
 - **主会话**：`tsw host render` 生成的数据目录 `CLAUDE.md` 写“回复用户使用 <语言>（配置 `control.language`）”（T279，F-T279-2；此前写死为中文）；字段为空时写中文。改配置后重新运行 `tsw host render` 生效。
 - **范围**：只决定与用户交流的语言。代码、标识符、commit message 等仍按各仓库自己的规则（例如本仓库代码与 PR 标题用英文）；某个任务需要别的语言时，由主会话写进该任务的目标。
 - **修改**：主会话按用户原话 `config_change`（`ops` 设 `control.language`）。它不是权限类键（§7.2）。
+
+### 3.6 `update` 与 `dashboard`
+
+自我更新（DN006 §9.8）中有影响的步骤怎样执行，以及 Dashboard 常驻服务的端口（用户 2026-11-15 要求，T283）。
+
+| 字段 | 默认 | 取值与说明 |
+| --- | --- | --- |
+| `update.reload` | `restart_host` | 运行时、插件等需要重新加载会话的改动怎样生效：`restart_host` 请用户重启宿主应用（所有会话重新加载，会打断各会话正在进行的一轮）；`new_session` 主会话创建接班主会话并让出调度租约，用户在新会话中继续（已有 worker 保持旧运行时直到结束）。用户要求默认重启宿主 |
+| `update.instructions` | `compact` | 只有主会话说明文件（Claude Code 为 `CLAUDE.md`）改变、不需要重新加载会话时，主会话怎样重新载入它：`compact` 请用户压缩主会话上下文（用户要求“主动 /compact”：主会话不能自己输入宿主的命令，在更新结束时请用户输入）；`clear` 主会话记账后清空自己的上下文；`reload` 按 `update.reload` 处理 |
+| `dashboard.port` | `47800` | Dashboard 常驻服务监听的本机回环端口（DN006 §8.10），1024–65535；改端口后重启服务生效，已安装的 PWA 要按新地址重新安装。终端中临时运行的 `tsw dashboard` 不用它（仍由 `--port` 指定，默认任选） |
+
+各宿主中这些方式的具体做法见实现文档（Claude Code：CC006 §11）。三个键都不是权限类键（§7.2）：它们只决定更新与服务怎样执行，不扩大任何授权；主会话按用户的话用 `config_change` 修改。
 
 ## 4. 校验规则
 
