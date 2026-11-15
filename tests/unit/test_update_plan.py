@@ -251,3 +251,13 @@ def test_a_dashboard_that_is_not_installed_is_left_alone() -> None:
         up.actions({"dashboard": ["tsw/host/status.py"]}, config=DEFAULTS, state=state, to="new")
         == []
     )
+
+
+def test_a_rebuilt_projection_and_a_reinstall_are_not_pending() -> None:
+    categories = {"projection": ["tsw/projection.py"], "install": ["pyproject.toml"]}
+    state = _state(projection="readable", render={"commit": "new"}, running=["new"])
+    planned = {
+        a["action"]: a for a in up.actions(categories, config=DEFAULTS, state=state, to="new")
+    }
+    assert planned["ledger_rebuild"]["pending"] is False  # this code reads the projection
+    assert planned["reinstall"]["pending"] is False and planned["reinstall"]["manual"] is True

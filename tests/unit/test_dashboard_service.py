@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -123,3 +124,27 @@ def test_same_dir_compares_the_directory_itself(tmp_path: Path) -> None:
     assert same_dir(str(tmp_path / "home" / "work" / ".."), tmp_path / "home")
     assert not same_dir(str(tmp_path / "home" / "work"), tmp_path / "home")
     assert not same_dir("", tmp_path / "home")
+
+
+def test_the_task_names_the_data_directory_as_resolved_at_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    arguments = ds.service_arguments(Home(Path("data")))
+    assert arguments.endswith(f'--home "{(tmp_path / "data").resolve()}"')
+
+
+def test_concurrent_sign_ins_all_survive(tmp_path: Path) -> None:
+    env = {ds.STATE_ENV: str(tmp_path / "s")}
+    ds.ensure_store(env, "k", Home(tmp_path / "h"))
+    issued: list[str] = []
+    threads = [
+        threading.Thread(target=lambda: issued.append(ds.issue_token(env, "k")))
+        for _ in range(ds.MAX_TOKENS)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    admits = ds.verifier(env, "k")
+    assert len(issued) == ds.MAX_TOKENS and all(admits(t) for t in issued)

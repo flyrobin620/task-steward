@@ -22,6 +22,7 @@ import os
 import secrets
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -34,6 +35,7 @@ from tsw.errors import TswError, rejected
 from tsw.events import utc_now
 from tsw.home import Home
 from tsw.host.version import REPO_ROOT, head
+from tsw.locks import FileLock
 
 SECRET_DIR = "tsw-dashboard-secret"  # CC008 CC-B12 refuses a session's tools on this name
 MAX_TOKENS = 8  # sign-ins kept: browsers and the PWA opened with the latest `open` runs
@@ -105,33 +107,50 @@ def read_store(env: Mapping[str, str], key: str) -> dict[str, Any] | None:
 
 
 def _write_store(env: Mapping[str, str], key: str, data: Mapping[str, Any]) -> None:
+    """Replace the store atomically; each writer uses its own temporary file."""
     path = secret_path(env, key)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(dict(data)), encoding="utf-8")
-    tmp.replace(path)
+    fd, name = tempfile.mkstemp(prefix=f"{key}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(dict(data)))
+        Path(name).replace(path)
+    except BaseException:
+        Path(name).unlink(missing_ok=True)
+        raise
+
+
+def _store_lock(env: Mapping[str, str], key: str) -> FileLock:
+    """Serializes read-append-replace of one store across processes (two ``open`` at once)."""
+    path = secret_path(env, key).with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return FileLock(path)
 
 
 def ensure_store(env: Mapping[str, str], key: str, home: Home) -> bool:
     """Create the sign-in store on first install (empty); a reinstall keeps it, so browsers that
     signed in stay signed in. Returns whether it was created."""
-    if read_store(env, key) is not None:
-        return False
-    _write_store(env, key, {"home": str(home.root), "created_at": utc_now(), "hashes": []})
-    return True
+    with _store_lock(env, key):
+        if read_store(env, key) is not None:
+            return False
+        _write_store(
+            env, key, {"home": str(home.root.resolve()), "created_at": utc_now(), "hashes": []}
+        )
+        return True
 
 
 def issue_token(env: Mapping[str, str], key: str) -> str:
     """A new sign-in token: only its hash is kept (the newest ``MAX_TOKENS``)."""
-    store = read_store(env, key)
-    if store is None:
-        raise rejected(
-            "Dashboard 常驻服务没有安装：先运行 tsw dashboard install", reason="not_installed"
-        )
     token = secrets.token_urlsafe(32)
-    hashes = [h for h in cast("list[Any]", store.get("hashes") or []) if isinstance(h, str)]
-    store["hashes"] = [*hashes, digest(token)][-MAX_TOKENS:]
-    _write_store(env, key, store)
+    with _store_lock(env, key):
+        store = read_store(env, key)
+        if store is None:
+            raise rejected(
+                "Dashboard 常驻服务没有安装：先运行 tsw dashboard install", reason="not_installed"
+            )
+        hashes = [h for h in cast("list[Any]", store.get("hashes") or []) if isinstance(h, str)]
+        store["hashes"] = [*hashes, digest(token)][-MAX_TOKENS:]
+        _write_store(env, key, store)
     return token
 
 
@@ -199,7 +218,9 @@ def task_xml(*, user: str, command: str, arguments: str, workdir: str) -> str:
 
 
 def service_arguments(home: Home) -> str:
-    return f'-m tsw dashboard service --home "{home.root}"'
+    """The task's arguments: the data directory as resolved at install time, since the task runs
+    in the product repository (``--home ./data`` would mean another folder there)."""
+    return f'-m tsw dashboard service --home "{home.root.resolve()}"'
 
 
 def scheduler(env: Mapping[str, str]) -> list[str]:

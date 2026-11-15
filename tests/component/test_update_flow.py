@@ -460,3 +460,20 @@ def test_the_service_without_a_token_logs_why_and_exits(
     log = ds.log_path(os.environ, ds.home_key(home)).read_text(encoding="utf-8")
     assert "tsw dashboard install" in log
     assert "not_installed" in capsys.readouterr().out  # streams are restored afterwards
+
+
+@pytest.mark.use_case(DASHBOARD)
+def test_an_invalid_port_reads_with_the_default_and_refuses_to_act(
+    home: Home, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = home.root / "config" / "task-steward.json"
+    config.write_text(json.dumps({"version": 1, "dashboard": {"port": "oops"}}), encoding="utf-8")
+    base = ["--home", str(home.root), "--json"]
+    assert cli_main([*base[:2], "dashboard", "status", "--json"]) == 0
+    state = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert state["port"] == 47800 and state["config_problems"]
+    assert cli_main([*base[:2], "dashboard", "restart", "--json"]) == 3
+    capsys.readouterr()
+    assert cli_main([*base[:2], "host", "update-plan", "--from", "HEAD", "--json"]) == 0
+    plan = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert plan["config_problems"] and plan["pending"] is not None

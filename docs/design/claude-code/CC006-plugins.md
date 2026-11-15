@@ -361,7 +361,7 @@ DN006 §9.8 的原则在 Claude Code（Windows 上的 Claude app）中的做法�
 | `new_session`（接班主会话） | 能 | §11.4 | 已有 worker 保持旧 MCP 直到结束；旧主会话只读 |
 | `compact` | 不能，请用户做 | 更新的最后一步，主会话在 `wrap_up` 中请用户在本会话输入 `/compact` | 只重新读 `CLAUDE.md`，MCP 不变 |
 | `clear` | 能 | 记账（`update_record`）之后，本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`，app 在这一轮结束后清空 | app 中会话 ID 不变（例行会话的上下文清空已依赖这一点），租约仍归本会话；清空后的第一轮主会话按 SessionStart 的摘要继续 |
-| 只换插件 hooks（`/reload-plugins`） | 不能 | `update-plan` 只有 `plugin` 类别的改动、没有 `runtime` 改动时，主会话可以告诉用户也能在各会话输入 `/reload-plugins` 代替重启 | 不换 MCP，不能用于 `runtime` 改动 |
+| `/reload-plugins` | 不能 | 不作为生效方式：它只换 hooks 不换 MCP，`update-plan` 又以 MCP 启动时的提交核对是否已重新加载，用它之后验证无法通过（PR 评审意见）。只有用户自己想先让 hooks 生效时可以输入，之后仍按 `update.reload` 处理 | 不换 MCP |
 
 ### 11.3 更新 skill 与 `update-plan`
 

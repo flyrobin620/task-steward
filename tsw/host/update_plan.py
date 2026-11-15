@@ -220,15 +220,18 @@ def actions(
     instructions_mode = str(config_get(dict(config), "update.instructions") or "compact")
     rendered = cast("Mapping[str, Any]", state.get("render") or {})
     render_current = rendered.get("commit") == to
-    if "projection" in categories or state.get("projection") == "rebuild_required":
+    projection = state.get("projection")
+    if "projection" in categories or projection == "rebuild_required":
         out.append(
             {
                 "action": "ledger_rebuild",
                 "impact": "blocking",
                 "who": "user",
-                "how": "拉取后旧投影即被新的命令行与 hooks 拒绝：请用户在终端运行 tsw ledger "
-                "rebuild，或重新加载后由主会话调用 ledger_rebuild；先于其他动作",
-                "pending": True,
+                "how": "投影版本变了：新的命令行与 hooks 拒绝旧投影，旧的 MCP 拒绝重建后的投影。"
+                "先在旧投影可读时做生效前的记录（new_session 时先建接班会话并让出租约），再请用户"
+                "在会话外的终端运行 tsw ledger rebuild，然后重新加载会话，由新的 MCP 验证",
+                # Done once this (new) code reads the projection; unknown counts as not done.
+                "pending": projection != "readable",
             }
         )
     if "install" in categories:
@@ -238,7 +241,9 @@ def actions(
                 "impact": "user",
                 "who": "user",
                 "how": f"在产品仓库 {REPO_ROOT} 中运行 python -m pip install -e .",
-                "pending": True,
+                # No state shows a reinstall; the main session confirms it with the user.
+                "pending": False,
+                "manual": True,
             }
         )
     if {"rendered", "instructions", "plugin"} & set(categories) or not render_current:

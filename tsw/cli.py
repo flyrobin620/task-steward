@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from tsw import __version__, direct, lease
-from tsw.config import EffectiveConfig, lease_minutes, load_config
+from tsw.config import DEFAULTS, EffectiveConfig, lease_minutes, load_config
 from tsw.context import ContextService
 from tsw.errors import EXIT_CODES, ErrorCode, TswError
 from tsw.events import utc_now
@@ -197,8 +197,15 @@ def _cmd_status_serve(args: argparse.Namespace) -> dict[str, Any]:
     return {"_silent": True}
 
 
-def _dashboard_port(home: Home) -> int:
-    return int(load_config(home).get("dashboard.port", 47800) or 47800)
+def _dashboard_port(home: Home, *, strict: bool = True) -> int:
+    """The hosted Dashboard's port: commands that act require a valid configuration; read-only
+    ones fall back to the default (and report the problems elsewhere)."""
+    config = load_config(home)
+    if strict:
+        config.require_valid()
+    elif not config.valid:
+        return int(DEFAULTS["dashboard"]["port"])
+    return int(config.get("dashboard.port"))
 
 
 def _cmd_dashboard_install(args: argparse.Namespace) -> dict[str, Any]:
@@ -234,7 +241,9 @@ def _cmd_dashboard_restart(args: argparse.Namespace) -> dict[str, Any]:
 
 def _cmd_dashboard_status(args: argparse.Namespace) -> dict[str, Any]:
     home = _home(args)
-    return dashboard_service.status(home, os.environ, _dashboard_port(home))
+    config = load_config(home)
+    state = dashboard_service.status(home, os.environ, _dashboard_port(home, strict=False))
+    return state if config.valid else {**state, "config_problems": config.problems}
 
 
 def _cmd_dashboard_service(args: argparse.Namespace) -> dict[str, Any]:
@@ -474,25 +483,27 @@ def _cmd_host_update_plan(args: argparse.Namespace) -> dict[str, Any]:
     """Read-only: the self-update's categories and actions (DN006 §9.8, CC006 §11.3)."""
     home = _home(args)
     config = load_config(home)
-    port = int(config.get("dashboard.port", 47800) or 47800)
+    port = _dashboard_port(home, strict=False)
     dashboard = dashboard_service.status(home, os.environ, port)
     plan: dict[str, Any] = {
         "env": os.environ,
-        "config": config.values,
+        # An invalid configuration plans with the defaults; its problems are reported.
+        "config": config.values if config.valid else DEFAULTS,
         "to": args.to,
         "start": getattr(args, "from"),
         "running": args.running or [],
         "dashboard": dashboard,
     }
+    problems = {} if config.valid else {"config_problems": config.problems}
     try:
         with _ledger(args).view() as conn:
-            return build_update_plan(home, conn=conn, **plan)
+            return {**build_update_plan(home, conn=conn, **plan), **problems}
     except TswError as exc:
         # After pulling a new projection version the ledger cannot be read until it is rebuilt;
         # the plan says so first (DN006 §9.8, ``projection``).
         if exc.details.get("reason") != "rebuild_required":
             raise
-    return build_update_plan(home, conn=None, **plan)
+    return {**build_update_plan(home, conn=None, **plan), **problems}
 
 
 def _cmd_host_install_hint(args: argparse.Namespace) -> dict[str, Any]:

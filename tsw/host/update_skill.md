@@ -37,7 +37,7 @@ description: "TaskSteward 自我更新：拉取产品仓库、按改动决定步
 
 按 `actions` 的顺序：
 
-- `ledger_rebuild`（`blocking`）：投影版本变了，新的命令行与 hooks 已拒绝旧投影。请用户在终端运行 `tsw ledger rebuild`，或在会话生效（第 5 步）后由你调用 `ledger_rebuild`；完成之前不做其他写入。
+- `ledger_rebuild`（`blocking`）：投影版本变了。新的命令行与 hooks 已拒绝旧投影，而本会话旧的 MCP 会拒绝重建后的投影，所以按这个顺序：先在旧投影还可读时做第 5 步中需要账本的部分（第 7 步的生效前记录；`new_session` 时先建接班会话、分离并 `lease_release`）；再请用户在会话外的终端运行 `tsw ledger rebuild`；然后必须重新加载会话（按 `update.reload`），由新的 MCP 做第 6、7 步。重建之前不做其他写入。
 - `reinstall`：请用户在产品仓库运行 `python -m pip install -e .`。
 - `render`：运行 `tsw host render`（单独一条命令），把 `written` 与 `plugin` 的结果简要告诉用户。`plugin.next` 要求先卸载再安装时转告用户。
 - `reread_skills`：用 Read 重读 `skills` 中你在本会话已经调用过的 skill（`.claude/skills/<名>/SKILL.md`），之后按新的内容工作；没调用过的不用读。
@@ -58,7 +58,6 @@ description: "TaskSteward 自我更新：拉取产品仓库、按改动决定步
      4. 告诉用户之后在新会话中继续（附会话链接）；本会话只读，可以归档。
    - `compact`（只有 `instructions`、没有 `reload` 时）：先做第 6 步的 2–4 项，再按第 7 步记一次生效前的记录（`verified: false`，`pending` 写 `instructions`，`notes` 写“等用户 /compact”），最后在 `wrap_up` 中请用户在本会话输入 `/compact`、完成后发一句话（你不能自己输入斜杠命令）。用户回来后的那一轮：确认 `CLAUDE.md` 的新内容已在你的上下文中，再记最终记录（`verified: true`）。
    - `clear`：同样先验证并记一次生效前的记录（`verified: false`，`notes` 写“清空后由下一轮补记”），本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`，告诉用户这一轮结束后上下文会清空、状态都在账本中，请用户之后发一句话。清空后的第一轮：用户提到更新或 `update_record` 的最近记录未验证时，确认 `CLAUDE.md` 的新内容已载入，再记最终记录（`verified: true`）。
-3. `plugin` 类别只有 `hooks.json` 改动、没有 `reload` 中的运行时文件时，可以告诉用户也能在各会话输入 `/reload-plugins` 代替重启（它不换 MCP）。
 
 ## 6. 验证
 
