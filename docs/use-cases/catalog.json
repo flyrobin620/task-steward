@@ -884,7 +884,7 @@
       "id": "UC-HOST-008",
       "title": "主会话自我更新：会话中只有主会话可以运行 tsw host render（T282，CC008 §5.7）",
       "actor": "主会话 / worker / 例行会话 / 用户",
-      "acceptance": "在 Claude Code 会话中（CLAUDE_CODE_HOST_SESSION_ID 或 CLAUDECODE）运行 tsw host render：会话 ID 解析为主会话（数据目录中、角色 orchestrator）时照常运行，输出 written、plugin 与 restart（会话不能重启自己，请用户重启）；worker、例行会话、已撤销与待绑定会话、其他目录的会话（角色 none）以及只有 CLAUDECODE 没有会话 ID 的进程以 host_session_cli 拒绝（退出码 3，details 带 command 与 role，信息写明只有主会话可以运行、交给主会话或请用户在终端运行），拒绝时不写任何文件；会话外的终端照旧运行；tsw task accept、tsw dashboard、tool run --role 等在主会话中仍被拒绝；PreToolUse 对主会话 Bash 中的 tsw host render（含 python -m tsw 写法）放行，对 worker、已撤销、待绑定会话拒绝；插件不一致的 SessionStart 提示与 orchestrate skill 让主会话先请用户确认，确认后自己运行并请用户重启会话",
+      "acceptance": "在 Claude Code 会话中（CLAUDE_CODE_HOST_SESSION_ID 或 CLAUDECODE）运行 tsw host render：会话 ID 解析为主会话（数据目录中、角色 orchestrator）时照常运行，输出 written、plugin 与 restart（会话不能重启自己，请用户重启）；worker、例行会话、已撤销与待绑定会话、其他目录的会话（角色 none）以及只有 CLAUDECODE 没有会话 ID 的进程以 host_session_cli 拒绝（退出码 3，details 带 command 与 role，信息写明只有主会话可以运行、交给主会话或请用户在终端运行），拒绝发生在 render 写任何产出之前（不生成或改写 CLAUDE.md、skill、roles/、设置，不更新插件副本；解析身份时与其他读命令一样可能建立可重建的投影缓存与锁文件）；会话外的终端照旧运行；tsw task accept、tsw dashboard、tool run --role 等在主会话中仍被拒绝；PreToolUse 对主会话 Bash 中的 tsw host render（含 python -m tsw 写法）放行，对 worker、已撤销、待绑定会话拒绝；插件不一致的 SessionStart 提示与 orchestrate skill 让主会话先请用户确认，确认后自己运行并请用户重启会话",
       "surfaces": [
         "cli",
         "hook"
