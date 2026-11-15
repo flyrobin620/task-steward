@@ -323,3 +323,94 @@ def test_a_narrower_preference_in_the_tasks_repository_is_named_in_the_brief(hom
         f"{wide} 在仓库 demo 中被更窄范围的 {narrow}（repo:demo）：“demo 的 PR 直接 ready”覆盖"
         in brief(h, "T001")
     )
+
+
+@pytest.mark.use_case("UC-CONTEXT-006")
+def test_a_replacement_overridden_in_the_repository_is_not_called_in_force(home: Home) -> None:
+    """Review r1 F2: global P-1 replaced by global P-2, which repo:demo's P-3 overrides."""
+    h = Harness(home)
+    p1 = record(h, "global", "PR 先开 draft", topic="PR")
+    p2 = record(h, "global", "PR 先开 draft 并请求评审", topic="PR", supersedes=[p1])
+    p3 = record(h, "repo:demo", "demo 的 PR 直接 ready", topic="PR", supersedes=[p2])
+    h.register("T001", goal=f"适用的用户偏好：{p1}（global）：PR 先开 draft")
+    h.plan("T001")
+    h.dispatch("T001")
+    line = next(x for x in brief(h, "T001").splitlines() if x.startswith("- 偏好核对"))
+    assert (
+        f"{p1} 已被 {p2} 替代，{p2} 在仓库 demo 中又被更窄范围的 "
+        f"{p3}（repo:demo）：“demo 的 PR 直接 ready”覆盖"
+    ) in line
+    assert "现在有效的是" not in line
+
+
+@pytest.mark.use_case("UC-CONTEXT-006")
+def test_preferences_found_after_intake_are_added_through_the_read_set(home: Home) -> None:
+    """Review r1 F1 (the user chose this way): a preference that applies but is not in the goal
+    goes into the read set at dispatch or continuation; tsw checks it and names it in the brief,
+    without rewriting the goal."""
+    h = Harness(home)
+    h.register("T001", goal="实现功能")
+    h.register("T002")
+    h.plan("T001")
+    old = record(h, "global", "画图前先列关系", topic="图")
+    p_new = record(h, "global", "画图前先列关系并写读者", topic="图", supersedes=[old])
+    other = record(h, "repo:other", "other 的约定", topic="约定")
+    for bad, why in (("P-99", "P-99 不存在"), (old, "已被替代"), (other, "范围不包括仓库 demo")):
+        with pytest.raises(TswError) as exc:
+            h.run(
+                "task_dispatch",
+                task_id="T001",
+                workdir="~/wt/T001",
+                user_turn=True,
+                read_set=["T002", bad],
+            )
+        assert exc.value.details["reason"] == "invalid_input"
+        assert why in exc.value.details["problems"][0]
+    h.run(
+        "task_dispatch",
+        task_id="T001",
+        workdir="~/wt/T001",
+        user_turn=True,
+        read_set=["T002", p_new],
+    )
+    first = brief(h, "T001")
+    assert "- 授权读取集合：T001, T002\n" in first
+    assert (
+        "- 派发时补充的适用偏好（主会话选定，DN007 §6.1）："
+        f"{p_new}（global）：“画图前先列关系并写读者”" in first
+    )
+    assert h.task("T001")["goal"] == "实现功能"  # the goal is the user's record: not rewritten
+    started = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
+    data = started["events"][0]["data"]
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt=data["attempt"],
+        generation=data["generation"],
+        outcome="created",
+        session_ref="w-1",
+        brief_delivered=True,
+        receipt={"model": "claude-opus-5-5[1m]"},
+    )
+    # A preference recorded while the worker is at work: added on continuation, the brief is
+    # rewritten at once at the same revision.
+    later = record(h, "repo:demo", "demo 的报告附截图", topic="报告")
+    out = h.run("attempt_continue", task_id="T001", read_set=[later])
+    rewritten = out["events"][0]["data"]["brief_rewritten"]
+    assert rewritten == {"path": "runs/T001/a1/brief.md", "preferences": [later]}
+    second = brief(h, "T001")
+    assert f"{later}（repo:demo）：“demo 的报告附截图”" in second and "- revision：1\n" in second
+    # Replaced after it was added: the next brief says which one is in force now.
+    newest = record(h, "global", "画图只出 SVG", topic="图", supersedes=[p_new])
+    h.run(
+        "task_update",
+        task_id="T001",
+        goal="实现功能，补充",
+        acceptance=["功能可用"],
+        user_source=h.source("T001", 1, "change", "补充"),
+    )
+    third = brief(h, "T001")
+    assert f"{p_new} 已被替代，现在有效的是 {newest}（global）：“画图只出 SVG”" in third
+    # Adding nothing new does not rewrite the brief.
+    again = h.run("attempt_continue", task_id="T001", read_set=["T002"])
+    assert "brief_rewritten" not in again["events"][0]["data"]

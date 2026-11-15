@@ -315,7 +315,7 @@ DN002 §5.8 在 Claude app 上的做法（T272）。
 **内容**：
 
 1. 检索历史（原 `orchestrate`“检索历史”全文）与受理前的查重、依赖、既有决定。
-   长期偏好不靠主题词搜索（DN007 §6.1）：受理时 `context_decisions` 以 `kind: standing`、`scope: repo`（项目任务加 `project`）、不写 `query` 列全能到达本任务的偏好并翻完分页，逐条判断；派发与续用前再列一次，目标中没写的适用偏好用 `task_update` 写回（来源为该偏好记录中的用户原话）。skill 只写这些步骤，不写任何具体的偏好；偏好从账本读取，记录后下一次受理即可用，不需要重新 render。偏好的管理（记录、替代、撤销与 `tsw preference` 命令，DN007 §6.2）写在 `orchestrate` 的“配置与维护”，task-intake 只引用。
+   长期偏好不靠主题词搜索（DN007 §6.1）：受理时 `context_decisions` 以 `kind: standing`、`scope: repo`（项目任务加 `project`）、不写 `query` 列全能到达本任务的偏好并翻完分页，逐条判断；派发与续用前再列一次，目标中没写的适用偏好把编号放进 `read_set`，由 tsw 校验后写进任务书开头的“派发时补充的适用偏好”（不用 `task_update` 改目标）。skill 只写这些步骤，不写任何具体的偏好；偏好从账本读取，记录后下一次受理即可用，不需要重新 render。偏好的管理（记录、替代、撤销与 `tsw preference` 命令，DN007 §6.2）写在 `orchestrate` 的“配置与维护”，task-intake 只引用。
 2. 登记：`task_register` 的标题（`[仓库或项目简称] 摘要`）、类型、目标与验收；随后 `task_summary`（`stage: intake`）写 4–8 个具体关键词（模块、接口、现象、方案名，不写泛词）；有疑问时 `intake_question`。
 3. 目标的写法：
    - 以用户原话开头：日期、在哪个会话，按顺序逐条引用；主会话的答复与用户对它的回应也按顺序写入。

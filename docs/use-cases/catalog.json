@@ -1168,7 +1168,7 @@
       "id": "UC-CONTEXT-006",
       "title": "长期偏好的管理与使用：撤销、终端命令与任务书的偏好核对（DN007 §6.1、§6.2）",
       "actor": "主会话 / 用户",
-      "acceptance": "preference_revoke（主会话需要租约，或 user 调用者）须附 target 为 [preference, <编号>, revoke] 的用户原话，只能撤销现行的（未被同范围替代、未撤销），记 user.preference_revoked 并写入 preference_revocations；撤销后该偏好 usable_as_basis 为 false 并带 revoked，它对更宽范围偏好的覆盖解除，不能再被替代；主会话只能用会话渠道、user 调用者只能用 user-cli / status-app；tsw preference list（默认现行，--all 全部，--repo / --project 限定范围）、record（--supersedes 替代）、revoke 以 user 调用者运行，来源记为 user-cli，非交互须 --yes，在任何宿主会话中拒绝；tsw 每次生成任务书时核对目标中引用的 P-<n>：已被替代（写出现在有效的编号、范围与原文）、在任务仓库内被更窄范围覆盖、范围不包括该仓库、已撤销或不存在时在任务书开头加“偏好核对”一行，项目范围的引用视为适用；偏好记录后不更新产品即在下一次检索与任务书中生效",
+      "acceptance": "preference_revoke（主会话需要租约，或 user 调用者）须附 target 为 [preference, <编号>, revoke] 的用户原话，只能撤销现行的（未被同范围替代、未撤销），记 user.preference_revoked 并写入 preference_revocations；撤销后该偏好 usable_as_basis 为 false 并带 revoked，它对更宽范围偏好的覆盖解除，不能再被替代；主会话只能用会话渠道、user 调用者只能用 user-cli / status-app；tsw preference list（默认现行，--all 全部，--repo / --project 限定范围）、record（--supersedes 替代）、revoke 以 user 调用者运行，来源记为 user-cli，非交互须 --yes，在任何宿主会话中拒绝；tsw 每次生成任务书时核对目标中引用的 P-<n>：已被替代（写出现在有效的编号、范围与原文）、在任务仓库内被更窄范围覆盖、范围不包括该仓库、已撤销或不存在时在任务书开头加“偏好核对”一行，项目范围的引用视为适用；task_dispatch / attempt_continue 的 read_set 可补充偏好编号（须存在、现行并能到达任务仓库，否则拒绝），任务书开头写“派发时补充的适用偏好”（编号、范围、原文），授权读取集合只列任务，续用时补充偏好立即重写任务书（attempt.continued 记 brief_rewritten），目标不改写；偏好记录后不更新产品即在下一次检索与任务书中生效",
       "surfaces": [
         "mcp",
         "cli"

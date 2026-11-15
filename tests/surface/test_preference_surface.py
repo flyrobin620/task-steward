@@ -87,7 +87,14 @@ def test_a_preference_recorded_over_mcp_reaches_the_next_brief_without_updating_
             user_source=said("global", "m-2"),
         ),
         call(4, "context_decisions", kind="standing", scope="repo", repo="demo"),
-        call(5, "task_dispatch", task_id="T002", workdir=str(workdir / "t2"), user_turn=True),
+        call(
+            5,
+            "task_dispatch",
+            task_id="T002",
+            workdir=str(workdir / "t2"),
+            user_turn=True,
+            read_set=["P-2"],  # found after intake: added for the worker, the goal unchanged
+        ),
         call(
             6,
             "preference_revoke",
@@ -114,6 +121,8 @@ def test_a_preference_recorded_over_mcp_reaches_the_next_brief_without_updating_
     assert (
         "P-1 已被替代，现在有效的是 P-2（global）：“画图前先列出要表达的关系，并写明读者”" in brief
     )
+    assert "- 派发时补充的适用偏好（主会话选定，DN007 §6.1）：P-2（global）" in brief
+    assert "- 授权读取集合：T002\n" in brief
     assert errored(second[6])  # a replaced one cannot be revoked
     assert result(second[7])["events"][0]["type"] == "user.preference_revoked"
     gone = {d["ref"]: d for d in result(second[8])["decisions"]}

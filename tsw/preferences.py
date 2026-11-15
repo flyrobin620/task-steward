@@ -6,8 +6,8 @@ projection when asked, so a preference recorded, replaced or revoked takes effec
 retrieval or brief without touching the product: no skill, role text or code names a preference.
 
 - :func:`standing_items`: the preferences that reach a scope and whether each is in force there;
-- :func:`brief_check`: the line a brief gets when its goal cites a preference that is no longer
-  the one in force for the task (§6.1).
+- :func:`brief_lines`: the preferences the orchestrator added at dispatch, and the check of every
+  cited one that is no longer the one in force for the task (§6.1).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 # A preference number as the goal cites it: ``P-4``, not part of a longer word or number.
@@ -141,16 +141,20 @@ def cited(goal: str) -> list[str]:
     return list(dict.fromkeys(m.group(0) for m in REF.finditer(goal)))
 
 
-def brief_check(conn: sqlite3.Connection, repo: str, goal: str) -> str:
-    """The brief's "偏好核对" line (DN007 §6.1), empty when every preference the goal cites is
-    the one in force for a task of ``repo``.
+def is_ref(name: str) -> bool:
+    """Whether a read-set entry is a preference number rather than a task (DN007 §6.1)."""
+    return REF.fullmatch(name) is not None
 
-    A project preference the goal cites is taken to reach the task: the projection does not know
-    a task's projects (they live on the L2 card), so only replacement and override are checked.
+
+Views = tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]
+
+
+def _views(conn: sqlite3.Connection, repo: str, refs: Sequence[str]) -> Views:
+    """Every preference as recorded, and those reaching a task of ``repo`` with their state there.
+
+    A project preference that is cited is taken to reach the task: the projection does not know a
+    task's projects (they live on the L2 card), so only replacement and override are checked.
     """
-    refs = cited(goal)
-    if not refs:
-        return ""
     rows = list(conn.execute("SELECT * FROM user_decisions ORDER BY source_seq"))
     gone = revocations(conn)
     every = {str(i["ref"]): i for i in standing_items(rows, None, gone)}
@@ -160,14 +164,46 @@ def brief_check(conn: sqlite3.Connection, repo: str, goal: str) -> str:
         if kind == "project":
             projects.add(name)
     here = {str(i["ref"]): i for i in standing_items(rows, (repo, projects), gone)}
-    notes = [note for ref in refs if (note := _note(ref, every, here, repo))]
-    if not notes:
+    return every, here
+
+
+def supplied_problems(conn: sqlite3.Connection, repo: str, refs: Sequence[str]) -> list[str]:
+    """Why preferences the orchestrator adds at dispatch cannot be added: each must exist and be
+    in force for a task of ``repo`` (DN007 §6.1). Empty when all can."""
+    if not refs:
+        return []
+    every, here = _views(conn, repo, refs)
+    return [note for ref in refs if (note := _note(ref, every, here, repo))]
+
+
+def brief_lines(
+    conn: sqlite3.Connection, repo: str, goal: str, supplied: Sequence[str] = ()
+) -> str:
+    """The brief's preference lines (DN007 §6.1), read from the ledger each time a brief is
+    written:
+
+    - "派发时补充的适用偏好": the preferences the orchestrator added to the read set at dispatch
+      or continuation (the goal is not rewritten for them), with their recorded words;
+    - "偏好核对": cited preferences, in the goal or added, that are not the one in force for a
+      task of ``repo`` any more (replaced, overridden, out of scope, revoked or unknown).
+    """
+    added = list(dict.fromkeys(supplied))
+    refs = list(dict.fromkeys([*cited(goal), *added]))
+    if not refs:
         return ""
-    return (
-        "- 偏好核对（tsw 按账本当前状态核对目标中引用的长期偏好，DN007 §6.1）："
-        + "；".join(notes)
-        + "。以现在有效的偏好为准，有疑问时用 `context_decisions` 查或问用户\n"
-    )
+    every, here = _views(conn, repo, refs)
+    out = ""
+    if added:
+        shown = [_shown(every[r]) if r in every else f"{r}（不存在）" for r in added]
+        out += "- 派发时补充的适用偏好（主会话选定，DN007 §6.1）：" + "；".join(shown) + "\n"
+    notes = [note for ref in refs if (note := _note(ref, every, here, repo))]
+    if notes:
+        out += (
+            "- 偏好核对（tsw 按账本当前状态核对目标中引用与派发时补充的长期偏好，DN007 §6.1）："
+            + "；".join(notes)
+            + "。以现在有效的偏好为准，有疑问时用 `context_decisions` 查或问用户\n"
+        )
+    return out
 
 
 def _shown(item: Mapping[str, Any]) -> str:
@@ -187,16 +223,22 @@ def _note(
         return f"{ref}（{item['scope']}）的范围不包括仓库 {repo}"
     if item.get("revoked"):
         return f"{ref} 已撤销（理由：{item['revoked']['reason']}）"
-    if item.get("superseded_by"):
-        now = item
-        seen: set[str] = set()
-        while now.get("superseded_by") and str(now["ref"]) not in seen:
-            seen.add(str(now["ref"]))
-            now = every.get(str(now["superseded_by"]), now)
-        if now.get("revoked"):
-            return f"{ref} 已被 {now['ref']} 替代，{now['ref']} 又已撤销"
+    # Follow same-scope replacements to the one now in that scope, then see whether a narrower
+    # preference overrides that one for this repository (review r1 F2).
+    now = item
+    seen: set[str] = set()
+    while now.get("superseded_by") and str(now["ref"]) not in seen:
+        seen.add(str(now["ref"]))
+        now = every.get(str(now["superseded_by"]), now)
+    replaced = now is not item
+    if now.get("revoked"):
+        return f"{ref} 已被 {now['ref']} 替代，{now['ref']} 又已撤销"
+    overridden = (here.get(str(now["ref"])) or {}).get("overridden_by")
+    narrower = f"被更窄范围的 {_shown(every[str(overridden)])}覆盖" if overridden else ""
+    if replaced and narrower:
+        return f"{ref} 已被 {now['ref']} 替代，{now['ref']} 在仓库 {repo} 中又{narrower}"
+    if replaced:
         return f"{ref} 已被替代，现在有效的是 {_shown(now)}"
-    overridden = here[ref].get("overridden_by")
-    if overridden:
-        return f"{ref} 在仓库 {repo} 中被更窄范围的 {_shown(every[str(overridden)])}覆盖"
+    if narrower:
+        return f"{ref} 在仓库 {repo} 中{narrower}"
     return ""

@@ -41,7 +41,7 @@ from tsw.machine.model import (
     row_dict,
     task,
 )
-from tsw.preferences import brief_check
+from tsw.preferences import brief_lines, is_ref, supplied_problems
 from tsw.roles import record_given, worker_instructions, worker_prompt
 from tsw.tasks import TaskSpec, register, render_spec, validate_spec
 from tsw.workspace import GH_ACCOUNT_SKILL, brief_section, ensure, home_skills, plan
@@ -518,6 +518,8 @@ def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
     config: EffectiveConfig,
 ) -> str:
     acceptance = "\n".join(f"- {item}" for item in loads(row["acceptance"], []))
+    tasks = [name for name in read_set if not is_ref(name)]
+    preferences = [name for name in read_set if is_ref(name)]
     ws = plan(ctx.home, config, row, attempt_id, workdir)
     gh_skill = ctx.home.root / GH_ACCOUNT_SKILL
     repository = (
@@ -533,12 +535,12 @@ def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
     return (
         f"# 任务书 {row['task_id']} {attempt_id}\n\n"
         f"- 标题：{row['title']}\n- 仓库：{row['repo']}\n- revision：{row['revision']}\n"
-        f"- 执行目录：{workdir}\n- 授权读取集合：{', '.join(read_set)}\n"
+        f"- 执行目录：{workdir}\n- 授权读取集合：{', '.join(tasks)}\n"
         + _language_line(config)
         + _delivery_line(config, row)
         # Read from the ledger each time a brief is written, so a preference recorded, replaced
         # or revoked since the goal was written shows here at once (DN007 §6.1).
-        + brief_check(ctx.conn, str(row["repo"]), str(row["goal"]))
+        + brief_lines(ctx.conn, str(row["repo"]), str(row["goal"]), preferences)
         + "\n"
         + repository
         + f"## 目标\n\n{row['goal']}\n\n## 验收\n\n{acceptance}\n"
@@ -549,8 +551,24 @@ def _brief_path(task_id: str, attempt_id: str) -> str:
     return f"runs/{task_id}/{attempt_id}/brief.md"
 
 
+def _check_preference_reads(
+    conn: sqlite3.Connection, row: Mapping[str, Any], extra: Sequence[str]
+) -> None:
+    """Preference numbers in the read set (DN007 §6.1) must exist and be in force for the task's
+    repository: the brief names them as applying to the task."""
+    problems = supplied_problems(conn, str(row["repo"]), [n for n in extra if is_ref(n)])
+    if problems:
+        raise rejected(
+            "read_set 中的偏好不能补充给本任务",
+            reason="invalid_input",
+            field="read_set",
+            problems=problems,
+        )
+
+
 def _read_set(conn: sqlite3.Connection, task_id: str, extra: Sequence[str] = ()) -> list[str]:
-    """The task itself, its dependencies and any extra tasks the orchestrator adds."""
+    """The task itself, its dependencies and any extra tasks or preferences the orchestrator
+    adds (DN007 §6.1, §7.2)."""
     deps = [
         str(r["dep_id"])
         for r in conn.execute("SELECT dep_id FROM dependencies WHERE task_id = ?", (task_id,))
@@ -601,6 +619,7 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             raise rejected("未知的 attempt 阶段", reason="invalid_attempt", phase=previous["phase"])
         if mode in ("new", "reuse_planned"):
             guards.g_window(env.config, user_turn)
+        _check_preference_reads(ctx.conn, row, extra_reads)
         read_set = _read_set(ctx.conn, task_id, extra_reads)
         brief_path = _brief_path(task_id, attempt_id)
         ctx.storage.put_artifact(
@@ -951,8 +970,19 @@ def attempt_continue(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             or not guards.controllable(current, env.caller.session_id, ctx.conn)
         ):
             raise rejected("没有由当前主会话控制的原会话", reason="attempt_uncontrollable")
-        read_set = sorted({*loads(current["read_set"], []), *extra_reads})
+        before = loads(current["read_set"], [])
+        added = [n for n in dict.fromkeys(extra_reads) if is_ref(n) and n not in before]
+        _check_preference_reads(ctx.conn, row, added)
+        read_set = sorted({*before, *extra_reads})
         data: dict[str, Any] = {"attempt": current["attempt"], "read_set": read_set}
+        if added and current["brief_path"]:
+            # Preferences added for a session already at work go into its brief at once (the
+            # orchestrator tells it to reread), at the brief's own revision (DN007 §6.1).
+            workdir = str(current["workdir"] or f"work/{task_id}/{current['attempt']}")
+            path = str(current["brief_path"])
+            brief = _brief(ctx, row, str(current["attempt"]), workdir, read_set, env.config)
+            ctx.storage.put_artifact(path, brief.encode("utf-8"))
+            data["brief_rewritten"] = {"path": path, "preferences": added}
         if row["status"] == "dispatching":
             _require_current_brief(row, current)
             data["transition"] = "T08"
