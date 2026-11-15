@@ -414,3 +414,48 @@ def test_preferences_found_after_intake_are_added_through_the_read_set(home: Hom
     # Adding nothing new does not rewrite the brief.
     again = h.run("attempt_continue", task_id="T001", read_set=["T002"])
     assert "brief_rewritten" not in again["events"][0]["data"]
+
+
+@pytest.mark.use_case("UC-CONTEXT-006")
+def test_continuing_brings_the_brief_up_to_a_revoked_preference(home: Home) -> None:
+    """Review r2 F3: the only added preference is revoked; continuing with nothing new still
+    rewrites the brief so the worker sees it."""
+    h = Harness(home)
+    h.register("T001")
+    h.plan("T001")
+    only = record(h, "global", "报告附截图", topic="报告")
+    h.run("task_dispatch", task_id="T001", workdir="~/wt/T001", user_turn=True, read_set=[only])
+    started = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
+    data = started["events"][0]["data"]
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt=data["attempt"],
+        generation=data["generation"],
+        outcome="created",
+        session_ref="w-1",
+        brief_delivered=True,
+        receipt={"model": "claude-opus-5-5[1m]"},
+    )
+    unchanged = h.run("attempt_continue", task_id="T001")
+    assert "brief_rewritten" not in unchanged["events"][0]["data"]
+    h.run("preference_revoke", ref=only, reason="不需要了", user_source=revoke_said(only, "m-r"))
+    out = h.run("attempt_continue", task_id="T001")
+    assert out["events"][0]["data"]["brief_rewritten"] == {
+        "path": "runs/T001/a1/brief.md",
+        "preferences": [],
+    }
+    assert f"{only} 已撤销（理由：不需要了）" in brief(h, "T001")
+
+
+@pytest.mark.use_case("UC-CONTEXT-006")
+def test_a_refused_continuation_leaves_the_brief_alone(home: Home) -> None:
+    """Review r2 F4: every check that can refuse comes before the brief is written."""
+    h = Harness(home)
+    worker = h.complete("T001")
+    assert worker is not None
+    before = brief(h, "T001")
+    added = record(h, "global", "报告附截图", topic="报告")
+    assert reason_of(h, "attempt_continue", task_id="T001", read_set=[added]) == "invalid_state"
+    assert brief(h, "T001") == before
+    assert [e for e in h.ledger.storage.read(since=0) if e.type == "attempt.continued"] == []

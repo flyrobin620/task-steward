@@ -956,6 +956,40 @@ def attempt_deliver(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return _cmd(env, "attempt_deliver", inp, build)
 
 
+PREFERENCE_LINES = ("- 派发时补充的适用偏好", "- 偏好核对")
+
+
+def _refresh_preferences(
+    ctx: CommitContext,
+    row: Mapping[str, Any],
+    current: Mapping[str, Any],
+    read_set: list[str],
+    config: EffectiveConfig,
+) -> str | None:
+    """On continuation, bring the session's brief up to the preferences' state now (DN007
+    §6.1): preferences just added, or cited ones replaced or revoked since the brief was written
+    (review r2 F3). The brief is rewritten at its own revision only when its preference lines
+    change; returns its path then."""
+    path = current["brief_path"]
+    if not path or int(current["brief_revision"] or 0) != int(row["revision"]):
+        return None
+    attempt_id = str(current["attempt"])
+    workdir = str(current["workdir"] or f"work/{row['task_id']}/{attempt_id}")
+    brief = _brief(ctx, row, attempt_id, workdir, read_set, config)
+    try:
+        old = ctx.storage.read_artifact(str(path)).decode("utf-8")
+    except OSError:
+        old = ""
+
+    def lines(text: str) -> list[str]:
+        return [x for x in text.splitlines() if x.startswith(PREFERENCE_LINES)]
+
+    if lines(brief) == lines(old):
+        return None
+    ctx.storage.put_artifact(str(path), brief.encode("utf-8"))
+    return str(path)
+
+
 @tool("attempt_continue", "orchestrator", description="续用原会话（T08）或扩大授权读取集合")
 def attempt_continue(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
@@ -975,19 +1009,15 @@ def attempt_continue(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         _check_preference_reads(ctx.conn, row, added)
         read_set = sorted({*before, *extra_reads})
         data: dict[str, Any] = {"attempt": current["attempt"], "read_set": read_set}
-        if added and current["brief_path"]:
-            # Preferences added for a session already at work go into its brief at once (the
-            # orchestrator tells it to reread), at the brief's own revision (DN007 §6.1).
-            workdir = str(current["workdir"] or f"work/{task_id}/{current['attempt']}")
-            path = str(current["brief_path"])
-            brief = _brief(ctx, row, str(current["attempt"]), workdir, read_set, env.config)
-            ctx.storage.put_artifact(path, brief.encode("utf-8"))
-            data["brief_rewritten"] = {"path": path, "preferences": added}
+        # Every check that can refuse comes before the brief is touched (review r2 F4).
         if row["status"] == "dispatching":
             _require_current_brief(row, current)
             data["transition"] = "T08"
         else:
             require_status(row, "in_progress", "waiting_user", "verifying")
+        rewritten = _refresh_preferences(ctx, row, current, read_set, env.config)
+        if rewritten:
+            data["brief_rewritten"] = {"path": rewritten, "preferences": added}
         return [
             EventDraft(
                 type="attempt.continued",
