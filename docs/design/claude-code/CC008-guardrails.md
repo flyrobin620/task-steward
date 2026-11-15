@@ -1,6 +1,6 @@
 # CC008 Claude Code 上的护栏
 
-- 状态：设计草案（T242 r2；T243 增加例行会话的规则；T251 Worker Merge 规则覆盖仓库 worktree；T276 §6 worker 会话的 prompt 以 worker 说明开头，Worker Dispatch 规则随之更新；T272 CC-S4 提醒处置 worker 会话的标题与归档，主会话允许 `set_session_title`；T279 §6 Worker Merge 认可 `gh-account` skill 规定的单个环境变量前缀，§3 命令替换的分词；T282 §5.7 主会话自我更新：在会话中运行 `tsw host render`，其他会话仍拒绝）
+- 状态：设计草案（T242 r2；T243 增加例行会话的规则；T251 Worker Merge 规则覆盖仓库 worktree；T276 §6 worker 会话的 prompt 以 worker 说明开头，Worker Dispatch 规则随之更新；T272 CC-S4 提醒处置 worker 会话的标题与归档，主会话允许 `set_session_title`；T279 §6 Worker Merge 认可 `gh-account` skill 规定的单个环境变量前缀，§3 命令替换的分词；T282 §5.7 主会话自我更新：在会话中运行 `tsw host render`，其他会话仍拒绝；T284 实现 §5.1 中文本兜底与 `import tsw` 拒绝两项删除）
 - 日期：2026-11-08
 - 实现：[DN008 校验原则](../DN008-guardrails.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC006 Claude Code 插件](CC006-plugins.md)
@@ -77,13 +77,13 @@
 | worker 编辑类工具的目标必须在可写根内 | 改写为 CC-B1、CC-B3 | allow list；改为只拦已知的错误目标（数据目录自有目录、主仓库检出），写到临时目录、缓存等不再被拦 |
 | Bash 写入路径必须在可写根内（`tsw/host/shell.py` 解析重定向、文件命令、PowerShell cmdlet、`cd`、嵌套 shell） | 删除 | allow list，解析复杂；删除、移动、写到意外位置属于一般风险，交给 auto 分类器；漏网的可能在主会话验收核对 diff 时发现，也可能漏掉，按易用性优先接受（DN008 §5 第 5 条）。`shell.py` 只保留分词与程序、子命令识别（CC-B4–CC-B7 用） |
 | Bash 写入 tsw 自有目录（解析出的路径） | 删除 | 同上；账本被意外改动时由摘要链与 `ledger audit` 发现（确定性）；其他自有目录的意外改动可能漏掉 |
-| 文本兜底：命令中出现数据目录路径加自有目录名，且出现 `>` `rm` `cp` 等写入词就拒绝 | 删除 | 误拦只读命令：`grep … runs/…/brief.md > work/…/x.txt`、`cp runs/…/brief.md work/…/` 都被拒（本任务用临时目录实测） |
+| 文本兜底：命令中出现数据目录路径加自有目录名，且出现 `>` `rm` `cp` 等写入词就拒绝 | 删除（T284 已删除） | 误拦只读命令：`grep … runs/…/brief.md > work/…/x.txt`、`cp runs/…/brief.md work/…/` 都被拒（本任务用临时目录实测） |
 | `.claude/settings*.json` 不能写（T241，编辑类工具与 shell 写法） | 简化为 CC-B2 | 只看编辑类工具；理由改为越过用户的权限选择与被覆盖，不再写“防止会话给自己追加权限” |
 | `git push` / `gh pr create` 对照 `delivery.push` / `create_pr` | 保留为 CC-B4、CC-B5 | 授权记录在 tsw 中，宿主不知道 |
 | 合并须是开发任务且有 `delivery.merge` | 保留为 CC-B6；T245 去掉“开发任务”的条件 | 同上；合并授权按仓库判断（决定记录 0003） |
 | 合并目标：必须写明 host、拒绝 `GH_REPO` / `GH_HOST`、拒绝短选项合写、解析 REST 合并路径 | 简化为 CC-B7 | 保留“连同 host 写明本仓库”（省略 host 时遗留的 `GH_HOST` 会改变目标）；host 写明后环境变量不再影响目标，去掉对它们的单独拒绝与合写选项解析；`gh api` 合并一律拦下。现状的拒绝信息“无法确认的目标：o/n”（本任务实测）改为写出 `-R github.com/o/n` |
 | 会话中运行 `tsw` 写入口；运行 `tsw guard`（理由“否则会话可以编造用户消息”） | 删除（hook 一侧） | CLI 自己按会话身份拒绝（`host_session_cli`，§5.2）；`tsw guard` 的拦截只为对抗伪造 |
-| `python -c` / heredoc 中 `import tsw` 就拒绝 | 删除 | 只为对抗；误拦调查或开发 tsw 本身的 worker（本任务中 `python -c "from tsw…"` 被拒） |
+| `python -c` / heredoc 中 `import tsw` 就拒绝 | 删除（T284 已删除） | 只为对抗；误拦调查或开发 tsw 本身的 worker（本任务中 `python -c "from tsw…"` 被拒） |
 | 对可执行文件求哈希的命令被拒（`policies.executable_hashing`） | 删除 | 用户的通用约定（2026-10-30），不是 tsw 特有的事；拒绝信息提到的“账本中的用户批准记录”并不存在。建议用户放进自己的全局指令。若用户希望保留，可作为 CC-B11 加入 block list（确定性、简单） |
 | 会话目录与执行目录不一致时拒绝编辑与命令（只放行 `cd` 回去） | 删除（hook 一侧） | 打断太多：任何 `cd` 到别处都会挡住全部操作；最常见的错误目标由 CC-B3 拦截。MCP 写工具的目录一致性检查保留（§5.3） |
 | 已撤销 / 待绑定会话拒绝编辑、命令与建会话 | 保留为 CC-B10 | 状态漂移 |

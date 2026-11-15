@@ -146,8 +146,9 @@ def test_worker_writes_are_confined_to_its_roots(h: Harness, tmp_path: Path) -> 
             "--input {{}}",
             False,
         ),
-        ("python -c 'from tsw.cli import main'", False),
-        ("python - <<'EOF'\nimport tsw.cli\nEOF", False),
+        # Importing tsw is not refused (CC008 §5.1); running the tsw CLI still is (cases above).
+        ("python -c 'from tsw.cli import main'", True),
+        ("python - <<'EOF'\nimport tsw.cli\nEOF", True),
         ("rg 'import tsw' tsw", True),
         ("git commit -m 'Fix import tsw behavior'", True),
         ("tsw host render", False),
@@ -156,13 +157,18 @@ def test_worker_writes_are_confined_to_its_roots(h: Harness, tmp_path: Path) -> 
         ("git -C .. clone https://example.invalid/repo.git local", False),
         ("sed -i -e '/^#/d' notes.txt", True),
         ("powershell -Command \"Set-Content paths.txt 'C:/sdk/bin'\"", True),
-        ("python -X utf8 - <<'PY'\nimport tsw.cli\nPY", False),
+        ("python -X utf8 - <<'PY'\nimport tsw.cli\nPY", True),
         ("python -X utf8 tools/check.py", True),
         ("cat <<\\EOF\nhello\nEOF\ngit push origin HEAD", False),
         ("echo hello # <<EOF\ngit push origin HEAD", False),
         ('cmd.exe /d /c "echo # Build step & git push origin HEAD"', False),
         ('powershell -Command "Copy-Item -Path local.txt ../outside.txt"', False),
         ("git status", True),
+        # Reading tsw's directories with a write word elsewhere is not refused (CC008 §5.1).
+        ('cat "{home}/runs/T001/a1/brief.md"; ls "{home}/runs/T001" 2>/dev/null', True),
+        ('grep goal "{home}/runs/T001/a1/brief.md" > {draft}', True),
+        ('echo x > "{home}/runs/T001/a1/brief.md"', False),
+        ('cp {draft} "{home}/ledger/events/a.jsonl"', False),
     ],
 )
 def test_worker_shell_writes_are_confined_too(
@@ -175,6 +181,7 @@ def test_worker_shell_writes_are_confined_too(
         outside=(tmp_path / "elsewhere").as_posix(),
         draft=draft.as_posix(),
         launcher="plugin/bin/tsw_launch.py",
+        home=h.home.root.as_posix(),
     )
     decision = guard(h, session, workdir, tool_name="Bash", tool_input={"command": text}).run(
         "PreToolUse"
