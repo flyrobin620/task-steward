@@ -1,6 +1,6 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`；T283 §11 自我更新的载入时机与生效方式，§12 Dashboard 常驻服务）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`；T283 §11 自我更新的载入时机与生效方式，§12 Dashboard 常驻服务；T287 §10.2 受理与派发时检查长期偏好）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -315,10 +315,11 @@ DN002 §5.8 在 Claude app 上的做法（T272）。
 **内容**：
 
 1. 检索历史（原 `orchestrate`“检索历史”全文）与受理前的查重、依赖、既有决定。
+   长期偏好不靠主题词搜索（DN007 §6.1）：受理时 `context_decisions` 以 `kind: standing`、`scope: repo`（项目任务加 `project`）、不写 `query` 列全能到达本任务的偏好并翻完分页，逐条判断；派发与续用前再列一次，目标中没写的适用偏好用 `task_update` 写回（来源为该偏好记录中的用户原话）。skill 只写这些步骤，不写任何具体的偏好；偏好从账本读取，记录后下一次受理即可用，不需要重新 render。
 2. 登记：`task_register` 的标题（`[仓库或项目简称] 摘要`）、类型、目标与验收；随后 `task_summary`（`stage: intake`）写 4–8 个具体关键词（模块、接口、现象、方案名，不写泛词）；有疑问时 `intake_question`。
 3. 目标的写法：
    - 以用户原话开头：日期、在哪个会话，按顺序逐条引用；主会话的答复与用户对它的回应也按顺序写入。
-   - “背景（主会话核实）”：主会话核实过的事实、相关任务与出处、既有决定、约束。
+   - “背景（主会话核实）”：主会话核实过的事实、相关任务与出处、既有决定、约束；其中“适用的用户偏好”逐条写编号、范围与原文，没有时写“无”（tsw 生成任务书时核对这些编号，DN007 §6.1）。
    - “要做的”：编号的工作项。
    - “并行”：同时执行、可能改到相同文件或资源的任务，没有时写“无”。
    - 设计确认：会改变已定义行为、需要先改设计的，写明“设计按仓库规则需用户确认后再实现与合并”。
