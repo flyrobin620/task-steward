@@ -501,11 +501,18 @@ def _listing_problem(fetched: Any, messages: Sequence[Mapping[str, Any]]) -> str
         if isinstance(count, int) and isinstance(listed, list) and count != len(listed):
             return f"列出的条数 {len(listed)} 与结果自带的条数 {count} 不一致"
     if not any(_has_body(m) for m in messages):
-        # A listing has nothing else to go by: every message needs its ID and time (PR #51).
+        # A listing has nothing else to go by: every message needs its ID and its own creation
+        # time, not one worked out from the ID (PR #51, review F4).
         for message in messages:
             if not message.get("id"):
                 return "列出的消息缺少 ID"
-            if _created(message) is None:
+            value = message.get("createdDateTime")
+            try:
+                datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                readable = isinstance(value, str)
+            except ValueError:
+                readable = False
+            if not readable:
                 return f"列出的消息 {message.get('id')} 缺少可读的创建时间"
     for message in messages:
         at = id_time(str(message.get("id") or ""))
@@ -1415,7 +1422,11 @@ def routine_armed(inp: Mapping[str, Any], env: ToolEnv) -> Command:
 )
 def routine_run(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     job_id = text(inp, "job_id")
-    fetched = inp.get("fetched")
+    # What the host layer worked out for a Teams step (``_fetched``: what was fetched, as the
+    # hook kept it, None after a failed check) is not part of the request: a retry with the same
+    # command_id is the same command and gets the first result back (review F5 of T286).
+    fetched = inp["_fetched"] if "_fetched" in inp else inp.get("fetched")
+    request = {k: v for k, v in inp.items() if not k.startswith("_")}
 
     def build(ctx: CommitContext) -> list[EventDraft]:
         require_routine(ctx.conn, env)
@@ -1462,7 +1473,7 @@ def routine_run(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             ]
         raise rejected("例行表中没有这一行", reason="unknown_job", job_id=job_id)
 
-    return _cmd(env, "routine_run", inp, build)
+    return _cmd(env, "routine_run", request, build)
 
 
 def _relayed_to_teams(events: Iterable[Any], request_id: str) -> bool:

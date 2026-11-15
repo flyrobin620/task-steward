@@ -533,6 +533,11 @@ def test_a_listing_or_whole_page_that_misses_fields_fails() -> None:
     assert teams_progress(job, first_step("c"), no_id)["failure"] == "列出的消息缺少 ID"
     no_time = {"@odata.count": 1, "value": [{"id": "x1"}]}
     assert "创建时间" in teams_progress(job, first_step("c"), no_time)["failure"]
+    # A real Teams ID stands for a time, but the listing must still give its own (review F4).
+    real = _teams_id("2026-11-05T00:12:00Z")
+    for listed in ({"id": real}, {"id": real, "createdDateTime": None}):
+        page = {"@odata.count": 1, "value": [listed]}
+        assert "创建时间" in teams_progress(job, first_step("c"), page)["failure"]
     card = _msg("card-1", f"{CARD_PREFIX} T001 Q-T001-1")
     bare = {"id": "r1", "createdDateTime": "2026-11-05T00:12:00Z", "body": {"contentType": "html"}}
     out = teams_progress(_job(outbound={"card-1"}), first_step("c"), {"value": [card, bare]})

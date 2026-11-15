@@ -707,6 +707,29 @@ def test_a_later_page_that_keeps_failing_is_reported(home: Home) -> None:
     assert "HTTP 429" in forwards[-1]["message"]
 
 
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_teams_step_retried_with_its_command_id_returns_the_first_result(home: Home) -> None:
+    # Review F5 of T286: the response to the bodies step is lost and the session retries with
+    # the same command_id. The fetch the hook kept is gone by then; the first result comes back.
+    h = Harness(home, TEAMS)
+    routine, request_id, _, server = teams_waiting(h)
+    run = {"job_id": "teams-replies", "chat_id": "48:notes"}
+    reply_at = "2026-11-05T00:12:00.000Z"
+    teams = next(
+        j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+    )
+    fetched_by_hook(h, routine, teams["fetch"]["arguments"], listed(reply_at))
+    step = server.call("routine_run", run)["next"]
+    fetched_by_hook(h, routine, step["arguments"], bodies((teams_id(reply_at), "T001 用 A")))
+    first = server.call("routine_run", {**run, "command_id": "bodies-1"})
+    assert [e["data"]["request_id"] for e in first["events"]] == [request_id]
+    again = server.call("routine_run", {**run, "command_id": "bodies-1"})
+    assert again["duplicate"] is True
+    assert [e["sequence"] for e in again["events"]] == [e["sequence"] for e in first["events"]]
+    assert again.get("next") == first.get("next")
+    assert "48:notes" not in routine_mod.load_cache(h.home).get("fetch_failures", {})
+
+
 @pytest.mark.use_case("UC-ROUTINE-001")
 def test_only_the_routine_sessions_fetches_are_kept(home: Home) -> None:
     h = Harness(home, TEAMS)

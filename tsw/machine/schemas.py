@@ -464,7 +464,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         chat_id={**S, "description": "Teams 例行项：取自该行 run 中的 chat_id"},
         fetched={
             "description": "这一行 fetch 或上次 routine_run 的 next 取到的一页原始数据"
-            "（宿主工具的返回值，原样）"
+            "（宿主工具的返回值，原样）；宿主集成已用 hook 记下取数结果时不用传（T286）"
         },
     ),
     "channel_sent": schema(

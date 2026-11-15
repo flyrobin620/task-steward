@@ -460,10 +460,21 @@ class Server:
         it; what the session passed only when the hook kept nothing), checked. A step that failed
         its check runs the script on nothing."""
         chat_id = str(args.get("chat_id") or "")
+        command_id = args.get("command_id")
         with ledger.view() as conn:
             job = next((j for j in routine_mod.teams_jobs(conn) if j["chat_id"] == chat_id), None)
+            done = command_id is not None and (
+                conn.execute(
+                    "SELECT 1 FROM commands WHERE command_id = ?", (str(command_id),)
+                ).fetchone()
+                is not None
+            )
         if job is None:
             return dict(args), None  # routine_run refuses the unknown row
+        if done:
+            # A retry of a step that was recorded: the first result comes back, nothing is taken
+            # or counted again, and the step after it is still the one kept (review F5).
+            return dict(args), {"chat_id": chat_id, "replay": True}
         steps = routine_mod.load_cache(self.home).get("teams_steps")
         step = steps.get(chat_id) if isinstance(steps, dict) else None
         if not isinstance(step, dict):
@@ -478,7 +489,7 @@ class Server:
         else:
             fetched = fetched if found else args.get("fetched")
             progress = routine_mod.teams_progress(job, step, fetched)
-        run_args = {**args, "fetched": fetched if progress["failure"] is None else None}
+        run_args = {**args, "_fetched": fetched if progress["failure"] is None else None}
         return run_args, {"chat_id": chat_id, "progress": progress}
 
     def _teams_after(
@@ -488,8 +499,12 @@ class Server:
         forward that tells the orchestrator once a chat could not be read several times in a row
         (T253), and the step to fetch next."""
         chat_id = str(teams_read["chat_id"])
-        progress = teams_read["progress"]
         kept = routine_mod.load_cache(self.home)
+        if teams_read.get("replay"):
+            steps = kept.get("teams_steps")
+            step = steps.get(chat_id) if isinstance(steps, dict) else None
+            return None, step if isinstance(step, dict) else None
+        progress = teams_read["progress"]
         now = utc_now()
         entry = routine_mod.note_fetch(
             kept,
