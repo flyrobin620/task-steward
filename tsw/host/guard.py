@@ -71,11 +71,6 @@ _HASH = re.compile(
     r"\b(sha\d*sum|md5sum|shasum|certutil\s+-hashfile|get-filehash)\b", re.IGNORECASE
 )
 _EXECUTABLE = re.compile(r"\.(exe|dll|msi|sys|so|dylib|bin|com|appx|msix)\b", re.IGNORECASE)
-_WRITE_WORDS = re.compile(
-    r"(>|\brm\b|\bmv\b|\bcp\b|\bsed\s+-i|set-content|out-file|remove-item|\bdel\b|\btouch\b)",
-    re.IGNORECASE,
-)
-_IMPORTS_TSW = re.compile(r"\b(import\s+tsw|from\s+tsw[\s.])")
 _PYTHONS = {"python", "python3", "py", "pythonw"}
 _PYTHON_VALUE_OPTIONS = {"-X", "-W", "--check-hash-based-pycs"}
 _TSW_MODULES = ("tsw", "tsw.cli", "tsw.__main__")
@@ -263,12 +258,6 @@ def bash_problem(
             return owned_reason(top)
         if writable_roots is not None and not any(within(path, r) for r in writable_roots):
             return f"只能写入本任务的可写路径（{path} 不在其中）"
-    home_text = str(home.root).replace("\\", "/").lower()
-    normalized = command.replace("\\", "/").lower()
-    if home_text in normalized and _WRITE_WORDS.search(command):
-        for top in TSW_OWNED:
-            if f"{home_text}/{top}" in normalized:
-                return owned_reason(top)
     for program in facts.programs:
         cli = tsw_cli_command(program)
         if cli == "guard":
@@ -283,8 +272,6 @@ def bash_problem(
                 )
         elif cli is not None and cli not in HOST_CLI_COMMANDS:
             return f"宿主会话中不能运行 tsw {cli}；写操作请使用 tsw MCP 工具"
-        if program.name in _PYTHONS and _IMPORTS_TSW.search(python_code(program, command)):
-            return "宿主会话中不能直接导入 tsw 包；请使用 tsw MCP 工具"
         if not worker:
             continue
         if program.name == "git":
@@ -454,14 +441,6 @@ def python_invocation(args: Sequence[str]) -> tuple[str, str, list[str]]:
                 break
         i += 2 if consumed_next else 1
     return "stdin", "", []
-
-
-def python_code(program: shell.Program, command: str) -> str:
-    """The code Python runs inline: ``-c CODE``, or stdin (a heredoc) when there is no script."""
-    kind, value, _ = python_invocation(list(program.args))
-    if kind == "code":
-        return value
-    return command if kind == "stdin" else ""
 
 
 # ---------------------------------------------------------------------- the hook

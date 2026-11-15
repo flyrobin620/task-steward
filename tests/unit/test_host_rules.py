@@ -99,10 +99,12 @@ def test_tsw_owned_paths(tmp_path: Path) -> None:
         ("python -mtsw tool run x", True, True, True, "tool run"),
         ("python -Bmtsw guard Stop", True, True, True, "宿主"),
         ("python -X utf8 -Bm tsw guard Stop", True, True, True, "宿主"),
-        ("python -Ic 'import tsw'", True, True, True, "导入"),
+        # Importing tsw is no longer refused (CC008 §5.1): it only stopped workers developing tsw.
+        ("python -Ic 'import tsw'", True, True, True, None),
         ("python -m pytest -k tsw", True, True, True, None),
         ("python script.py -m tsw guard", True, True, True, None),
-        ("python -- - <<'PY'\nimport tsw\nPY", True, True, True, "导入"),
+        ("python -- - <<'PY'\nimport tsw\nPY", True, True, True, None),
+        ("python - <<'PY'\nfrom tsw.host.identity import within\nPY", True, True, True, None),
         ("python -B -- tsw_launch.py guard Stop", True, True, True, "宿主"),
     ],
 )
@@ -126,6 +128,45 @@ def test_writes_into_the_ledger_through_the_shell_are_refused(tmp_path: Path) ->
     assert (
         bash_problem(reading, home=home, push_allowed=True, pr_allowed=True, worker=False) is None
     )
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        # Reading tsw's directories is not refused for a write word elsewhere in the command
+        # (CC008 §5.1: the text fallback is removed; it refused these, T282).
+        'cat "{home}/runs/T001/a1/brief.md"; ls "{home}/work" 2>/dev/null',
+        'grep goal "{home}/runs/T001/a1/brief.md" > "{home}/work/T001/a1/x.txt"',
+        'cp "{home}/runs/T001/a1/brief.md" "{home}/work/T001/a1/"',
+        'rm -f "{home}/work/T001/a1/old.md" && cat "{home}/ledger/events/a.jsonl"',
+    ],
+)
+def test_reading_tsw_directories_is_not_refused_for_a_write_word(
+    tmp_path: Path, template: str
+) -> None:
+    home = Home(tmp_path / "home")
+    command = template.format(home=home.root.as_posix())
+    problem = bash_problem(command, home=home, push_allowed=True, pr_allowed=True, worker=False)
+    assert problem is None, problem
+
+
+@pytest.mark.parametrize(
+    ("template", "top"),
+    [
+        ('echo x >> "{home}/ledger/events/a.jsonl"', "ledger"),
+        ('cp "{home}/work/T001/a1/r.md" "{home}/runs/T001/a1/result.md"', "runs"),
+        ('rm "{home}/todo/a.md"', "todo"),
+        ('sed -i s/a/b/ "{home}/config/config.toml"', "config"),
+        ('cat "{home}/runs/T001/a1/brief.md" > "{home}/views/x.html"', "views"),
+    ],
+)
+def test_writes_into_tsw_directories_are_still_refused(
+    tmp_path: Path, template: str, top: str
+) -> None:
+    home = Home(tmp_path / "home")
+    command = template.format(home=home.root.as_posix())
+    problem = bash_problem(command, home=home, push_allowed=True, pr_allowed=True, worker=False)
+    assert problem is not None and problem == owned_reason(top), problem
 
 
 @pytest.mark.use_case("UC-MERGE-001")
