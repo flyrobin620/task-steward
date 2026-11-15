@@ -459,3 +459,31 @@ def test_a_refused_continuation_leaves_the_brief_alone(home: Home) -> None:
     assert reason_of(h, "attempt_continue", task_id="T001", read_set=[added]) == "invalid_state"
     assert brief(h, "T001") == before
     assert [e for e in h.ledger.storage.read(since=0) if e.type == "attempt.continued"] == []
+
+
+@pytest.mark.use_case("UC-CONTEXT-006")
+def test_a_preference_with_line_breaks_stays_on_one_brief_line(home: Home) -> None:
+    """Review r3 F5: after a multi-line preference, one added on continuation still shows."""
+    h = Harness(home)
+    h.register("T001")
+    h.plan("T001")
+    first = record(h, "global", "报告要求：\n附截图", topic="报告")
+    h.run("task_dispatch", task_id="T001", workdir="~/wt/T001", user_turn=True, read_set=[first])
+    started = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
+    data = started["events"][0]["data"]
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt=data["attempt"],
+        generation=data["generation"],
+        outcome="created",
+        session_ref="w-1",
+        brief_delivered=True,
+        receipt={"model": "claude-opus-5-5[1m]"},
+    )
+    assert f"{first}（global）：“报告要求： 附截图”" in brief(h, "T001")
+    second = record(h, "global", "图只出 SVG", topic="图")
+    out = h.run("attempt_continue", task_id="T001", read_set=[second])
+    assert out["events"][0]["data"]["brief_rewritten"]["preferences"] == [second]
+    line = next(x for x in brief(h, "T001").splitlines() if x.startswith("- 派发时补充的适用偏好"))
+    assert f"{first}（global）" in line and f"{second}（global）：“图只出 SVG”" in line

@@ -207,7 +207,13 @@ def brief_lines(
 
 
 def _shown(item: Mapping[str, Any]) -> str:
-    return f"{item['ref']}（{item['scope']}）：“{item['text']}”"
+    # One physical line per preference in the brief: its words may hold line breaks (review r3
+    # F5), and the brief and attempt_continue treat each preference line as one line.
+    return f"{item['ref']}（{item['scope']}）：“{_flat(item['text'])}”"
+
+
+def _flat(text: Any) -> str:
+    return " ".join(str(text).split())
 
 
 def _note(
@@ -222,7 +228,7 @@ def _note(
     if ref not in here:
         return f"{ref}（{item['scope']}）的范围不包括仓库 {repo}"
     if item.get("revoked"):
-        return f"{ref} 已撤销（理由：{item['revoked']['reason']}）"
+        return f"{ref} 已撤销（理由：{_flat(item['revoked']['reason'])}）"
     # Follow same-scope replacements to the one now in that scope, then see whether a narrower
     # preference overrides that one for this repository (review r1 F2).
     now = item
