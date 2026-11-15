@@ -500,6 +500,13 @@ def _listing_problem(fetched: Any, messages: Sequence[Mapping[str, Any]]) -> str
         listed = next((page[k] for k in ENVELOPES if isinstance(page.get(k), list)), None)
         if isinstance(count, int) and isinstance(listed, list) and count != len(listed):
             return f"列出的条数 {len(listed)} 与结果自带的条数 {count} 不一致"
+    if not any(_has_body(m) for m in messages):
+        # A listing has nothing else to go by: every message needs its ID and time (PR #51).
+        for message in messages:
+            if not message.get("id"):
+                return "列出的消息缺少 ID"
+            if _created(message) is None:
+                return f"列出的消息 {message.get('id')} 缺少可读的创建时间"
     for message in messages:
         at = id_time(str(message.get("id") or ""))
         value = message.get("createdDateTime")
@@ -562,8 +569,14 @@ def teams_progress(job: Mapping[str, Any], step: Mapping[str, Any], fetched: Any
         if created is not None and created < floor:
             continue
         candidates.append(message_id)
-    if not candidates or any(_has_body(m) for m in messages):
-        # Nothing left to read, or the page came with its bodies (read at once).
+    if candidates and any(_has_body(m) for m in messages):
+        # The page came with its bodies (read at once): every candidate needs one (PR #51).
+        by_id = {str(m.get("id") or ""): m for m in messages}
+        empty = [i for i in candidates if not _readable_body(by_id[i])]
+        if empty:
+            return {"failure": f"消息 {empty} 没有正文", "page_done": False, "next": None}
+        return {"failure": None, "page_done": True, "next": following}
+    if not candidates:
         return {"failure": None, "page_done": True, "next": following}
     return {
         "failure": None,

@@ -522,3 +522,22 @@ def test_bodies_must_come_back_with_their_text() -> None:
     out = teams_progress(job, step, {"results": [{"data": empty, "statusCode": 200}]})
     assert out == {"failure": None, "page_done": True, "next": None}
     assert teams_progress(job, step, [{"id": "a", "content": "T001 好"}])["failure"] is None
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_listing_or_whole_page_that_misses_fields_fails() -> None:
+    # PR #51: a listing without IDs or times, or a whole page whose candidate has no body, is
+    # not read through (it would drop a reply and end the run of failures).
+    job = _job()
+    no_id = {"@odata.count": 1, "value": [{"createdDateTime": "2026-11-05T00:12:00.000Z"}]}
+    assert teams_progress(job, first_step("c"), no_id)["failure"] == "列出的消息缺少 ID"
+    no_time = {"@odata.count": 1, "value": [{"id": "x1"}]}
+    assert "创建时间" in teams_progress(job, first_step("c"), no_time)["failure"]
+    card = _msg("card-1", f"{CARD_PREFIX} T001 Q-T001-1")
+    bare = {"id": "r1", "createdDateTime": "2026-11-05T00:12:00Z", "body": {"contentType": "html"}}
+    out = teams_progress(_job(outbound={"card-1"}), first_step("c"), {"value": [card, bare]})
+    assert out["next"] is None and "没有正文" in out["failure"]
+    # The card has no body to read: only candidates need one.
+    whole = [{**card, "body": {}}, _msg("r1", "T001 好")]
+    out = teams_progress(_job(outbound={"card-1"}), first_step("c"), {"value": whole})
+    assert out == {"failure": None, "page_done": True, "next": None}
