@@ -473,10 +473,17 @@ class Server:
             return dict(args), None  # routine_run refuses the unknown row
         kept = routine_mod.load_cache(self.home)
         first = routine_mod.teams_command(kept, command_id)
+        if first is not None and first.get("request") != routine_mod.request_key(args):
+            raise rejected(
+                "command_id 已用于内容不同的命令",
+                reason="command_conflict",
+                command_id=str(command_id),
+            )
         if first is not None or done:
-            # A retry of a step already run (with ledger events or none, review F5 and F6): the
-            # first result comes back; nothing is taken, counted or moved on again.
-            return dict(args), {"chat_id": chat_id, "replay": first or {}}
+            # A retry of a step already run (with ledger events or none, review F5 to F8): the
+            # first result comes back. The script runs on nothing (the ledger gives back the
+            # events it recorded); nothing is taken, counted or moved on again.
+            return {**args, "_fetched": None}, {"chat_id": chat_id, "replay": first or {}}
         steps = kept.get("teams_steps")
         step = steps.get(chat_id) if isinstance(steps, dict) else None
         if not isinstance(step, dict):
@@ -492,7 +499,12 @@ class Server:
             fetched = fetched if found else args.get("fetched")
             progress = routine_mod.teams_progress(job, step, fetched)
         run_args = {**args, "_fetched": fetched if progress["failure"] is None else None}
-        return run_args, {"chat_id": chat_id, "progress": progress, "command_id": command_id}
+        return run_args, {
+            "chat_id": chat_id,
+            "progress": progress,
+            "command_id": command_id,
+            "request": routine_mod.request_key(args),
+        }
 
     def _teams_after(
         self, teams_read: Mapping[str, Any], ledger: Ledger
@@ -538,7 +550,9 @@ class Server:
                 }
             else:
                 alert = {"send": True, "session_id": target, "message": message}
-        routine_mod.note_teams_command(kept, teams_read.get("command_id"), step, alert)
+        routine_mod.note_teams_command(
+            kept, teams_read.get("command_id"), teams_read.get("request"), step, alert
+        )
         try:
             self.home.cache_dir.mkdir(parents=True, exist_ok=True)
             atomic_write(self.home.cache_dir / "routine.json", json.dumps(kept).encode("utf-8"))

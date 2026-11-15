@@ -743,9 +743,35 @@ def test_a_teams_step_retried_with_its_command_id_returns_the_first_result(home:
     retried = server.call("routine_run", {**run, "command_id": "list-1"})
     assert retried["events"] == [] and retried["next"] == listing["next"]
     assert "48:notes" not in routine_mod.load_cache(h.home).get("fetch_failures", {})
+    # The same command_id with another request is a conflict, not a retry (review F8).
+    other = {**run, "command_id": "list-1", "fetched": listed(later)}
+    assert reason_of(lambda: server.call("routine_run", other)) == "command_conflict"
     # The bodies the hook kept are still there for the step itself.
     assert server.call("routine_run", run)["events"] == []
     assert "48:notes" not in routine_mod.load_cache(h.home).get("fetch_failures", {})
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_failed_teams_step_retried_stays_failed(home: Home) -> None:
+    # Review F7 of T286: a bodies step that failed its check (one candidate's body missing)
+    # must not record the reply it did hold when it is retried with its command_id.
+    h = Harness(home, TEAMS)
+    routine, _, _, server = teams_waiting(h)
+    run = {"job_id": "teams-replies", "chat_id": "48:notes"}
+    times = ["2026-11-05T00:13:00.000Z", "2026-11-05T00:12:00.000Z"]
+    teams = next(
+        j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+    )
+    fetched_by_hook(h, routine, teams["fetch"]["arguments"], listed(*times))
+    server.call("routine_run", run)
+    partial = bodies((teams_id(times[1]), "T001 yes"))
+    attempt = {**run, "command_id": "bodies-x", "fetched": partial}
+    first = server.call("routine_run", attempt)
+    assert first["events"] == [] and "next" not in first
+    count = routine_mod.load_cache(h.home)["fetch_failures"]["48:notes"]["count"]
+    again = server.call("routine_run", attempt)
+    assert again["events"] == [] and "next" not in again
+    assert routine_mod.load_cache(h.home)["fetch_failures"]["48:notes"]["count"] == count
 
 
 @pytest.mark.use_case("UC-ROUTINE-001")

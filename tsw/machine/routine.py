@@ -27,6 +27,7 @@ session it started, the orchestrator detaches the routine session right after bi
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import html
 import json
 import re
@@ -1139,9 +1140,18 @@ def teams_command(kept: Mapping[str, Any], command_id: Any) -> dict[str, Any] | 
     return dict(found) if isinstance(found, Mapping) else None
 
 
+def request_key(args: Mapping[str, Any]) -> str:
+    """A ``routine_run`` request as its caller made it (not what tsw added): a command_id used
+    again with another request is a conflict, not a retry (review F8 of T286)."""
+    public = {k: v for k, v in args.items() if not str(k).startswith("_")}
+    text_form = json.dumps(public, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(text_form.encode("utf-8")).hexdigest()
+
+
 def note_teams_command(
     kept: dict[str, Any],
     command_id: Any,
+    request: str | None,
     step: Mapping[str, Any] | None,
     alert: Mapping[str, Any] | None,
 ) -> None:
@@ -1152,6 +1162,7 @@ def note_teams_command(
     commands = dict(commands) if isinstance(commands, Mapping) else {}
     commands.pop(str(command_id), None)
     commands[str(command_id)] = {
+        "request": request,
         "next": dict(step) if step else None,
         "alert": dict(alert) if alert else None,
     }
