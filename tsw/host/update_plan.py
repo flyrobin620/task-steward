@@ -121,6 +121,13 @@ def claude_md_template(text: str | None) -> str | None:
     return match.group(1) if match else None
 
 
+def without_template(text: str | None) -> str | None:
+    """``tsw/host/claude_code.py`` without its ``CLAUDE_MD`` template: what the MCP server runs."""
+    if text is None:
+        return None
+    return re.sub(r'^CLAUDE_MD = """.*?"""', "", text, count=1, flags=re.MULTILINE | re.DOTALL)
+
+
 def categorize(
     paths: Iterable[str], show: Callable[[str, str], str | None]
 ) -> dict[str, list[str]]:
@@ -143,10 +150,16 @@ def categorize(
             show("to", path), "SCHEMA_VERSION"
         ):
             add("index", path)
-        if path == CLAUDE_CODE and claude_md_template(show("from", path)) != claude_md_template(
-            show("to", path)
-        ):
-            add("instructions", path)
+        if path == CLAUDE_CODE:
+            before, after = show("from", path), show("to", path)
+            if claude_md_template(before) != claude_md_template(after):
+                add("instructions", path)
+                if without_template(before) == without_template(after):
+                    # Only the main session's instructions changed: render and reload them
+                    # (update.instructions); no running code changed (DN003 §3.6).
+                    for category in ("runtime", "dashboard"):
+                        result[category].remove(path)
+    result = {category: paths for category, paths in result.items() if paths}
     return {category: result[category] for category in CATEGORIES if category in result}
 
 
@@ -197,7 +210,9 @@ def actions(
     """The ordered actions for these categories and this state (DN006 §9.8, CC006 §11.2).
 
     Each action says its impact (``none``, ``session``, ``user``, ``blocking``), who runs it and
-    how, and whether it is still ``pending`` given the state.
+    how, and whether it is still ``pending`` given the state. Actions no state can show as done
+    (re-reading skills, compacting or clearing the main session) are ``manual``: never pending,
+    the main session confirms them itself.
     """
     out: list[dict[str, Any]] = []
     reload_files = needs_reload(categories)
@@ -205,7 +220,7 @@ def actions(
     instructions_mode = str(config_get(dict(config), "update.instructions") or "compact")
     rendered = cast("Mapping[str, Any]", state.get("render") or {})
     render_current = rendered.get("commit") == to
-    if "projection" in categories:
+    if "projection" in categories or state.get("projection") == "rebuild_required":
         out.append(
             {
                 "action": "ledger_rebuild",
@@ -259,7 +274,8 @@ def actions(
                 "how": "render 后用 Read 重读本会话已调用过的这些 skill（.claude/skills/<名>/"
                 "SKILL.md）；没调用过的不用读",
                 "skills": skills,
-                "pending": True,
+                "pending": False,
+                "manual": True,
             }
         )
     dashboard = cast("Mapping[str, Any]", state.get("dashboard") or {})
@@ -317,7 +333,8 @@ def actions(
                 "impact": "session",
                 "who": "user" if mode in ("compact", "restart_host") else "orchestrator",
                 "how": how,
-                "pending": True,
+                "pending": mode in ("restart_host", "new_session") and running != [to],
+                "manual": mode in ("compact", "clear"),
             }
         )
     return out
@@ -365,14 +382,20 @@ def build(
     *,
     env: Mapping[str, str],
     config: Mapping[str, Any],
-    conn: sqlite3.Connection,
+    conn: sqlite3.Connection | None,
     to: str | None = None,
     start: str | None = None,
     running: Sequence[str] = (),
     repo: Path = REPO_ROOT,
     dashboard: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The update plan between the running version and ``to`` (``HEAD`` by default)."""
+    """The update plan between the running version and ``to`` (``HEAD`` by default).
+
+    ``running`` are what the sessions loaded: the MCP server's commit and the plugin copy's
+    version (``whoami``'s ``runtime``); one that is not a commit of the product repository (a
+    plugin loaded in place, say) is listed as ``unresolved``. Without ``conn`` (the projection
+    needs a rebuild first) the sessions are not listed and ``ledger_rebuild`` comes first.
+    """
     target = commit_of(repo, to or "HEAD")
     if target is None:
         raise rejected("找不到终点提交", reason="invalid_input", field="to", value=to or "HEAD")
@@ -381,6 +404,7 @@ def build(
     render_commit = _field(rendered, "commit")
     copies = installed_copies(env)
     sources: list[dict[str, str]] = []
+    unresolved: list[str] = []
     if start:
         resolved = commit_of(repo, start)
         if resolved is None:
@@ -388,9 +412,10 @@ def build(
         base, sources = resolved, [{"source": "from", "commit": resolved}]
     else:
         for commit in running:
-            resolved = commit_of(repo, commit)
+            resolved = commit_of(repo, commit) if commit.strip() else None
             if resolved is None:
-                raise rejected("找不到运行中的提交", reason="invalid_input", value=commit)
+                unresolved.append(commit)
+                continue
             sources.append({"source": "running", "commit": resolved})
         if isinstance(render_commit, str) and commit_of(repo, render_commit):
             sources.append({"source": "rendered", "commit": str(commit_of(repo, render_commit))})
@@ -438,18 +463,21 @@ def build(
         "host_rules": rules,
         "host_rules_readable": allowed is not None,
         "running": [s["commit"] for s in sources if s["source"] == "running"],
+        "projection": "readable" if conn is not None else "rebuild_required",
     }
     planned = actions(categories, config=config, state=state, to=target)
     return {
         "from": base,
         "to": target,
         "from_sources": sources,
+        "unresolved": unresolved,
         "commits": len(subjects),
         "changed": changed,
         "categories": categories,
         "actions": planned,
         "pending": [a["action"] for a in planned if a.get("pending")],
+        "manual": [a["action"] for a in planned if a.get("manual")],
         "tasks": tasks,
-        "sessions": _active_sessions(conn),
+        "sessions": _active_sessions(conn) if conn is not None else {"unavailable": True},
         "state": state,
     }

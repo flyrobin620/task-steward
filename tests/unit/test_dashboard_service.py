@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from tsw.errors import TswError
 from tsw.home import Home
 from tsw.host import dashboard_service as ds
 from tsw.host.guard import same_dir, touches_secret
@@ -58,13 +59,22 @@ def test_the_token_lives_outside_the_data_directory_under_the_guarded_name(tmp_p
     assert ds.state_dir({"XDG_STATE_HOME": str(tmp_path / "x")}) == tmp_path / "x" / "task-steward"
 
 
-def test_the_token_is_created_once_and_kept(tmp_path: Path) -> None:
+def test_only_the_hashes_of_issued_tokens_are_stored(tmp_path: Path) -> None:
     env = {ds.STATE_ENV: str(tmp_path / "s")}
     home = Home(tmp_path / "h")
-    token, created = ds.ensure_token(env, "k", home)
-    again, created_again = ds.ensure_token(env, "k", home)
-    assert created and not created_again and token == again == ds.read_token(env, "k")
-    assert ds.read_token(env, "other") is None
+    with pytest.raises(TswError):
+        ds.issue_token(env, "k")  # not installed
+    assert ds.ensure_store(env, "k", home) is True
+    assert ds.ensure_store(env, "k", home) is False  # a reinstall keeps the sign-ins
+    admits = ds.verifier(env, "k")
+    first = ds.issue_token(env, "k")
+    second = ds.issue_token(env, "k")
+    stored = ds.secret_path(env, "k").read_text(encoding="utf-8")
+    assert first not in stored and second not in stored and ds.digest(first) in stored
+    assert admits(first) and admits(second) and not admits("forged") and not admits("")
+    issued = [ds.issue_token(env, "k") for _ in range(ds.MAX_TOKENS)]
+    assert not admits(first) and all(admits(t) for t in issued)  # the newest are kept
+    assert not ds.verifier(env, "other")(issued[-1])
 
 
 def test_the_windowless_interpreter_is_used_when_present(tmp_path: Path) -> None:

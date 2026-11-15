@@ -222,7 +222,8 @@ def _cmd_dashboard_open(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "opened": not args.no_browser,
         "url": f"http://127.0.0.1:{port}/",
-        "note": "浏览器打开的地址带令牌，第一次访问后换成 cookie；之后可从上面的地址安装为 PWA",
+        "note": "浏览器打开的地址带新令牌（只保存它的摘要），第一次访问后换成 cookie；之后可从上面"
+        "的地址安装为 PWA",
     }
 
 
@@ -243,18 +244,18 @@ def _cmd_dashboard_service(args: argparse.Namespace) -> dict[str, Any]:
     key = dashboard_service.home_key(home)
     log = dashboard_service.log_path(os.environ, key)
     log.parent.mkdir(parents=True, exist_ok=True)
-    token = dashboard_service.read_token(os.environ, key)
+    store = dashboard_service.read_store(os.environ, key)
     saved = sys.stdout, sys.stderr
     with log.open("w", encoding="utf-8") as stream:
         sys.stdout = sys.stderr = stream
         try:
-            if token is None:
-                print("没有找到 Dashboard 令牌：先运行 tsw dashboard install", flush=True)
+            if store is None:
+                print("Dashboard 常驻服务没有安装：先运行 tsw dashboard install", flush=True)
                 return {"ok": False, "reason": "not_installed"}
             found = product_head()
             serve_hosted(
                 home,
-                token=token,
+                verify=dashboard_service.verifier(os.environ, key),
                 port=_dashboard_port(home),
                 commit=found.get("commit") if found else None,
                 key=key,
@@ -475,17 +476,23 @@ def _cmd_host_update_plan(args: argparse.Namespace) -> dict[str, Any]:
     config = load_config(home)
     port = int(config.get("dashboard.port", 47800) or 47800)
     dashboard = dashboard_service.status(home, os.environ, port)
-    with _ledger(args).view() as conn:
-        return build_update_plan(
-            home,
-            env=os.environ,
-            config=config.values,
-            conn=conn,
-            to=args.to,
-            start=getattr(args, "from"),
-            running=args.running or [],
-            dashboard=dashboard,
-        )
+    plan: dict[str, Any] = {
+        "env": os.environ,
+        "config": config.values,
+        "to": args.to,
+        "start": getattr(args, "from"),
+        "running": args.running or [],
+        "dashboard": dashboard,
+    }
+    try:
+        with _ledger(args).view() as conn:
+            return build_update_plan(home, conn=conn, **plan)
+    except TswError as exc:
+        # After pulling a new projection version the ledger cannot be read until it is rebuilt;
+        # the plan says so first (DN006 §9.8, ``projection``).
+        if exc.details.get("reason") != "rebuild_required":
+            raise
+    return build_update_plan(home, conn=None, **plan)
 
 
 def _cmd_host_install_hint(args: argparse.Namespace) -> dict[str, Any]:

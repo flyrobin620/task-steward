@@ -107,7 +107,7 @@ def test_install_open_status_and_uninstall_in_a_terminal(
     code, out = run_json("dashboard", "install")
     assert code == 0, out
     assert out["installed"] is True and out["url"] == "http://127.0.0.1:47800/"
-    assert "token" not in json.dumps(out).replace("token_created", "")
+    assert "token" not in json.dumps(out)
     code, opened = run_json("dashboard", "open", "--no-browser")
     assert code == 0 and opened["url"] == "http://127.0.0.1:47800/" and opened["opened"] is False
     code, state = run_json("dashboard", "status")

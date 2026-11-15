@@ -147,6 +147,33 @@ def test_without_a_record_the_start_must_be_given(
 
 
 @pytest.mark.use_case(UPDATE)
+def test_the_plugin_the_session_loaded_counts_as_running(
+    h: Harness, product: tuple[Path, str, str]
+) -> None:
+    """Pulled to new, the session started on the old plugin copy, then rendered (F4)."""
+    repo, old, new = product
+    record_render(h.home, {"commit": new, "dirty": False, "at": "t"})
+    plan = _plan(h, repo, running=[new, old[:12], "plugin"])
+    assert plan["from"] == old and plan["unresolved"] == ["plugin"]
+    assert "reload" in plan["pending"]
+
+
+@pytest.mark.use_case(UPDATE)
+def test_update_plan_still_plans_when_the_projection_needs_a_rebuild(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with h.ledger.view() as conn:
+        conn.execute("UPDATE meta SET value = '999' WHERE key = 'reducer_version'")
+        conn.commit()
+    monkeypatch.chdir(h.home.root)
+    code = cli_main(["--home", str(h.home.root), "host", "update-plan", "--from", "HEAD", "--json"])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert code == 0, out
+    assert out["actions"][0]["action"] == "ledger_rebuild" and "ledger_rebuild" in out["pending"]
+    assert out["sessions"] == {"unavailable": True}
+
+
+@pytest.mark.use_case(UPDATE)
 def test_user_auto_rules_are_compared_with_the_install_hint(
     h: Harness, product: tuple[Path, str, str]
 ) -> None:
@@ -324,10 +351,8 @@ def test_install_restart_status_and_uninstall_through_task_scheduler(
     assert ds.status(home, env, port)["installed"] is False
     assert ds.restart(home, env, port)["installed"] is False
     installed = ds.install(home, env, port)
-    assert installed["installed"] and installed["token_created"] and installed["running"]
+    assert installed["installed"] and installed["store_created"] and installed["running"]
     key = ds.home_key(home)
-    token = ds.read_token(env, key)
-    assert token and token not in json.dumps(installed)
     fake = json.loads((Path(env[ds.STATE_ENV]) / "fake-schtasks.json").read_text("utf-8"))
     xml = fake["tasks"][ds.task_name(key)]["xml"]
     assert "<LogonTrigger>" in xml and f'--home "{home.root}"' in xml
@@ -336,13 +361,82 @@ def test_install_restart_status_and_uninstall_through_task_scheduler(
     assert restarted["current"] is True and restarted["commit"] == restarted["head"]
     state = ds.status(home, env, port)
     assert (state["installed"], state["running"], state["commit"]) == (True, True, state["head"])
-    assert ds.open_url(home, env, port) == f"http://127.0.0.1:{port}/?token={token}"
-    # Reinstalling keeps the token: browsers that signed in stay signed in.
-    assert ds.install(home, env, port)["token_created"] is False
+    url = ds.open_url(home, env, port)
+    token = url.split("?token=", 1)[1]
+    assert url == f"http://127.0.0.1:{port}/?token={token}" and ds.verifier(env, key)(token)
+    # Reinstalling keeps the sign-ins: browsers that signed in stay signed in.
+    assert ds.install(home, env, port)["store_created"] is False
+    assert ds.verifier(env, key)(token)
     assert ds.uninstall(home, env)["uninstalled"] is True
-    assert ds.read_token(env, key) is None
+    assert ds.read_store(env, key) is None
     with pytest.raises(TswError):
         ds.open_url(home, env, port)
+
+
+@pytest.mark.use_case(DASHBOARD)
+def test_another_data_directorys_service_on_the_port_is_a_conflict(
+    home: Home, tmp_path: Path
+) -> None:
+    other = StatusApp(
+        home,
+        "tok-o",
+        health={"service": ds.SERVICE_NAME, "commit": "x", "home_key": "ffffffff"},
+    )
+    server = make_server(other, 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        env = dict(os.environ)
+        installed = ds.install(home, env, other.port)
+        assert installed["running"] is False and "ffffffff" in installed["conflict"]
+        state = ds.status(home, env, other.port)
+        assert state["running"] is False and state["commit"] is None and "conflict" in state
+        restarted = ds.restart(home, env, other.port)
+        assert restarted["current"] is False and "conflict" in restarted
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.use_case(DASHBOARD)
+def test_the_hosted_service_signs_in_each_browser_with_its_own_token(home: Home) -> None:
+    env = dict(os.environ)
+    key = ds.home_key(home)
+    ds.ensure_store(env, key, home)
+    token = ds.issue_token(env, key)
+    app = StatusApp(home, verify=ds.verifier(env, key), cookie_max_age=ds.COOKIE_MAX_AGE)
+    server = make_server(app, 0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", app.port, timeout=5)
+        conn.request("GET", "/?token=forged")
+        assert conn.getresponse().status == 403
+        conn.close()
+        conn = HTTPConnection("127.0.0.1", app.port, timeout=5)
+        conn.request("GET", f"/?token={token}")
+        response = conn.getresponse()
+        cookie = (response.getheader("Set-Cookie") or "").split(";")[0]
+        assert response.status == 303 and cookie.endswith(f"={token}")
+        conn.close()
+        conn = HTTPConnection("127.0.0.1", app.port, timeout=5)
+        conn.request("GET", "/", headers={"Cookie": cookie})
+        page = conn.getresponse()
+        assert page.status == 200 and token in page.read().decode("utf-8")  # the buttons' token
+        conn.close()
+        conn = HTTPConnection("127.0.0.1", app.port, timeout=5)
+        origin = f"http://127.0.0.1:{app.port}"
+        conn.request(
+            "POST",
+            "/api/tasks/T999/accept",
+            body="{}",
+            headers={"Cookie": cookie, "Origin": origin, "X-TSW-Token": "other"},
+        )
+        assert conn.getresponse().status == 403  # the header must be this browser's token
+        conn.close()
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 @pytest.mark.use_case(DASHBOARD)

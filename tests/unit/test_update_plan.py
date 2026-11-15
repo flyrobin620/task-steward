@@ -133,7 +133,14 @@ def test_actions_run_in_order_with_impact_and_who() -> None:
     assert by_name["reread_skills"]["skills"] == ["orchestrate"]
     reload = by_name["reload"]
     assert (reload["mode"], reload["who"], reload["impact"]) == ("restart_host", "user", "session")
-    assert all(a["pending"] for a in planned)
+    assert by_name["reread_skills"]["manual"] is True
+    # Re-reading cannot be seen in any state: the main session confirms it, it is never pending.
+    assert [a["action"] for a in planned if a["pending"]] == [
+        "ledger_rebuild",
+        "render",
+        "dashboard_restart",
+        "reload",
+    ]
 
 
 def test_new_session_reload_is_the_main_sessions_own_step() -> None:
@@ -164,6 +171,32 @@ def test_instructions_without_a_reload_follow_the_configuration(
     assert not any(a["action"] == "reload" for a in planned)
 
 
+def test_a_change_to_the_claude_md_template_alone_follows_update_instructions() -> None:
+    """The real classification: only the template in claude_code.py changed (DN003 §3.6)."""
+    texts = {"from": CLAUDE_CODE_OLD, "to": CLAUDE_CODE_OLD.replace("{language}", "{language}！")}
+    found = up.categorize(["tsw/host/claude_code.py"], lambda side, path: texts[side])
+    assert found == {
+        "rendered": ["tsw/host/claude_code.py"],
+        "instructions": ["tsw/host/claude_code.py"],
+    }
+    state = _state(render={"commit": "new"}, dashboard={"installed": False}, running=["old"])
+    planned = up.actions(found, config=DEFAULTS, state=state, to="new")
+    assert [(a["action"], a.get("mode"), a["pending"]) for a in planned] == [
+        ("render", None, False),
+        ("instructions", "compact", False),
+    ]
+    assert planned[1]["manual"] is True
+    # The template and code together: the code needs a reload, which reloads the instructions.
+    both = up.categorize(
+        ["tsw/host/claude_code.py"],
+        lambda side, path: CLAUDE_CODE_OLD if side == "from" else CLAUDE_CODE_NEW,
+    )
+    assert "runtime" in both and "instructions" in both
+    assert [a["action"] for a in up.actions(both, config=DEFAULTS, state=state, to="new")][
+        -1
+    ] == "reload"
+
+
 def test_a_reload_covers_changed_instructions() -> None:
     categories = {"instructions": ["tsw/host/claude_code.py"], "runtime": ["tsw/ledger.py"]}
     planned = up.actions(categories, config=DEFAULTS, state=_state(), to="new")
@@ -175,6 +208,23 @@ def test_nothing_is_pending_once_everything_runs_the_target() -> None:
         render={"commit": "new"}, dashboard={"installed": True, "commit": "new"}, running=["new"]
     )
     assert up.actions({}, config=DEFAULTS, state=state, to="new") == []
+
+
+def test_a_skill_only_update_verifies_once_rendered() -> None:
+    state = _state(render={"commit": "new"}, dashboard={"installed": False}, running=["old"])
+    planned = up.actions(
+        {"rendered": ["tsw/host/orchestrate_skill.md"]}, config=DEFAULTS, state=state, to="new"
+    )
+    assert [(a["action"], a["pending"]) for a in planned] == [
+        ("render", False),
+        ("reread_skills", False),
+    ]
+
+
+def test_a_projection_that_cannot_be_read_asks_for_the_rebuild_first() -> None:
+    state = _state(projection="rebuild_required", render={"commit": "new"}, running=["new"])
+    planned = up.actions({}, config=DEFAULTS, state=state, to="new")
+    assert planned[0]["action"] == "ledger_rebuild" and planned[0]["pending"]
 
 
 def test_state_alone_still_asks_for_what_is_behind() -> None:

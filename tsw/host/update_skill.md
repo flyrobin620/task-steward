@@ -24,10 +24,11 @@ description: "TaskSteward 自我更新：拉取产品仓库、按改动决定步
 
 ## 3. 计算改动与动作
 
-1. `whoami`，记下 `runtime.commit`（本会话 MCP server 启动时的提交；没有 `runtime` 字段说明 MCP 早于这个功能，跳过下一步的 `--running`）。
-2. `tsw host update-plan --running <runtime.commit> --json`（没有 `tsw` 命令时 `python <repo>/plugin/bin/tsw_launch.py host update-plan …`）。它是只读的。输出中：
+1. `whoami`，记下 `runtime.commit`（本会话 MCP server 启动时的提交）与 `runtime.plugin_version`（本会话加载的插件副本版本）；没有 `runtime` 字段说明 MCP 早于这个功能，跳过下一步的 `--running`。
+2. `tsw host update-plan --running <runtime.commit> --running <runtime.plugin_version> --json`（没有 `tsw` 命令时 `python <repo>/plugin/bin/tsw_launch.py host update-plan …`）。它是只读的；不是提交的版本（例如原地加载的插件）列在 `unresolved` 中，不影响结果。输出中：
    - `from` / `to`：起点（运行中的最旧版本：你的运行时与上次 render 的提交中最旧的）与终点；`from_sources` 说明起点从何而来。
-   - `categories`：改动的文件按类别；`actions`：按顺序要做的动作，每项有 `impact`（`none` 无影响、`session` 需要会话生效、`user` 用户动作、`blocking` 先于一切）、`who`、`how` 与 `pending`。
+   - `categories`：改动的文件按类别；`actions`：按顺序要做的动作，每项有 `impact`（`none` 无影响、`session` 需要会话生效、`user` 用户动作、`blocking` 先于一切）、`who`、`how` 与 `pending`。`pending` 列出状态可以核对、还没做完的动作；`manual` 列出没有状态可核对、由你自己确认做过的动作（重读 skill、`/compact`、清空上下文）。
+   - 账本投影需要重建时（`sessions` 为 `unavailable`），`ledger_rebuild` 排在最前。
    - `tasks`：本次包含的提交提到的任务及其报告：读每份报告中“合并后用户需要做的操作”，有需要用户做的事就列入第 7 步。
    - `sessions`：执行中的 worker attempt（`starting` / `standby` / `live`）与例行会话。
 3. 把类别、动作与需要用户做的事简要告诉用户（一两句即可，详细内容留在账本）。
@@ -64,7 +65,7 @@ description: "TaskSteward 自我更新：拉取产品仓库、按改动决定步
 生效之后（重启后的第一轮、新会话中，或无需重新加载时紧接着第 4 步）：
 
 1. `whoami` 的 `runtime.commit` 应为终点提交（`reload` 之后）。
-2. 再运行 `tsw host update-plan --running <runtime.commit> --json`：`pending` 应为空（`from` 等于 `to`，render 记录、插件副本与 Dashboard 服务都是新版本）。仍有待做项时按第 4、5 步处理，不能处理的写进记录。
+2. 再运行 `tsw host update-plan --running <runtime.commit> --running <runtime.plugin_version> --json`：`pending` 应为空（render 记录、插件副本、Dashboard 服务与需要重新加载的运行时都是新版本）；`manual` 中的动作由你确认已做（不需要重新加载的更新，起点仍是旧的运行时，这些动作会再次列出，属正常）。仍有待做项时按第 4、5 步处理，不能处理的写进记录。
 3. SessionStart 不再提示插件副本与产品仓库不一致。
 4. 第 3 步 `tasks` 报告中的合并后步骤逐项确认：已做、请用户做，或说明为什么不需要。
 

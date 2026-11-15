@@ -1,10 +1,12 @@
-"""The Dashboard as a resident service: a logon task, a fixed port, a persistent token (T283).
+"""The Dashboard as a resident service: a logon task, a fixed port, lasting sign-ins (T283).
 
 DN006 §8.10 ("常驻服务") sets the principles, CC006 §12 the Windows specifics. The user installs
 the service in a terminal (``tsw dashboard install``): a Task Scheduler task that starts at the
-user's logon and runs ``tsw dashboard service`` without a window. The token is generated once and
-kept outside the data directory, in a folder whose name the hooks refuse to let a session touch
-(CC008 CC-B12); the service reads it at start, so a restart neither changes it nor shows it.
+user's logon and runs ``tsw dashboard service`` without a window. Each ``tsw dashboard open``
+(terminal only) makes a new token, opens the browser with it and keeps only its SHA-256, outside
+the data directory, in a folder the hooks keep sessions away from (CC008 CC-B12). The service
+admits a token whose hash is listed, so a restart signs nobody out, and a session that reads the
+folder anyway finds nothing it could sign in with.
 
 Task Scheduler is a platform outside this repository: every ``schtasks`` call goes through
 :func:`schtasks`, which a test points at a stand-in with ``TSW_SCHTASKS`` (an executable, or a
@@ -14,6 +16,7 @@ Task Scheduler is a platform outside this repository: every ``schtasks`` call go
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -22,7 +25,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 from xml.sax.saxutils import escape
@@ -33,6 +36,7 @@ from tsw.home import Home
 from tsw.host.version import REPO_ROOT, head
 
 SECRET_DIR = "tsw-dashboard-secret"  # CC008 CC-B12 refuses a session's tools on this name
+MAX_TOKENS = 8  # sign-ins kept: browsers and the PWA opened with the latest `open` runs
 STATE_ENV = "TSW_STATE_DIR"  # tests (and unusual setups) put the per-user state elsewhere
 SCHTASKS_ENV = "TSW_SCHTASKS"
 HEALTH_PATH = "/healthz"
@@ -87,30 +91,61 @@ def log_path(env: Mapping[str, str], key: str) -> Path:
     return state_dir(env) / "dashboard" / f"{key}.log"
 
 
-def read_token(env: Mapping[str, str], key: str) -> str | None:
+def digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def read_store(env: Mapping[str, str], key: str) -> dict[str, Any] | None:
+    """The sign-in store: the data directory and the hashes of the tokens handed out."""
     try:
         data: Any = json.loads(secret_path(env, key).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    token = _field(data, "token")
-    return token if isinstance(token, str) and token else None
+    return cast("dict[str, Any]", data) if isinstance(data, dict) else None
 
 
-def ensure_token(env: Mapping[str, str], key: str, home: Home) -> tuple[str, bool]:
-    """The stored token, created on first install; kept on reinstall so browsers stay signed in."""
-    existing = read_token(env, key)
-    if existing:
-        return existing, False
+def _write_store(env: Mapping[str, str], key: str, data: Mapping[str, Any]) -> None:
     path = secret_path(env, key)
     path.parent.mkdir(parents=True, exist_ok=True)
-    token = secrets.token_urlsafe(32)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(
-        json.dumps({"token": token, "home": str(home.root), "created_at": utc_now()}),
-        encoding="utf-8",
-    )
+    tmp.write_text(json.dumps(dict(data)), encoding="utf-8")
     tmp.replace(path)
-    return token, True
+
+
+def ensure_store(env: Mapping[str, str], key: str, home: Home) -> bool:
+    """Create the sign-in store on first install (empty); a reinstall keeps it, so browsers that
+    signed in stay signed in. Returns whether it was created."""
+    if read_store(env, key) is not None:
+        return False
+    _write_store(env, key, {"home": str(home.root), "created_at": utc_now(), "hashes": []})
+    return True
+
+
+def issue_token(env: Mapping[str, str], key: str) -> str:
+    """A new sign-in token: only its hash is kept (the newest ``MAX_TOKENS``)."""
+    store = read_store(env, key)
+    if store is None:
+        raise rejected(
+            "Dashboard 常驻服务没有安装：先运行 tsw dashboard install", reason="not_installed"
+        )
+    token = secrets.token_urlsafe(32)
+    hashes = [h for h in cast("list[Any]", store.get("hashes") or []) if isinstance(h, str)]
+    store["hashes"] = [*hashes, digest(token)][-MAX_TOKENS:]
+    _write_store(env, key, store)
+    return token
+
+
+def verifier(env: Mapping[str, str], key: str) -> Callable[[str], bool]:
+    """Whether a presented token is one ``tsw dashboard open`` handed out (read on each check, so
+    a new sign-in works without restarting the service)."""
+
+    def admits(token: str) -> bool:
+        store = read_store(env, key)
+        hashes = cast("list[Any]", store.get("hashes") or []) if store else []
+        wanted = digest(token)
+        return any(isinstance(h, str) and hmac.compare_digest(h, wanted) for h in hashes)
+
+    return admits
 
 
 def pythonw(executable: str = sys.executable) -> str:
@@ -206,7 +241,8 @@ def installed(env: Mapping[str, str], key: str) -> bool:
 
 
 def health(port: int, timeout: float = HEALTH_TIMEOUT_SECONDS) -> dict[str, Any] | None:
-    """The service's ``/healthz`` answer, or None when nothing answers."""
+    """The ``/healthz`` answer of a Dashboard service on ``port`` (any data directory's), or None
+    when nothing answers."""
     request = urllib.request.Request(f"http://127.0.0.1:{port}{HEALTH_PATH}")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -216,15 +252,33 @@ def health(port: int, timeout: float = HEALTH_TIMEOUT_SECONDS) -> dict[str, Any]
     return cast("dict[str, Any]", data) if _field(data, "service") == SERVICE_NAME else None
 
 
-def _wait(port: int, commit: str | None, seconds: float) -> dict[str, Any] | None:
+def ours(answer: Mapping[str, Any] | None, key: str) -> bool:
+    """Whether a ``/healthz`` answer comes from this data directory's service."""
+    return answer is not None and answer.get("home_key") == key
+
+
+def _wait(port: int, key: str, commit: str | None, seconds: float) -> dict[str, Any] | None:
+    """Wait for this data directory's service (at ``commit`` when given); the last answer."""
     deadline = time.monotonic() + seconds
     found = None
-    while time.monotonic() < deadline:
+    while True:
         found = health(port)
-        if found is not None and (commit is None or found.get("commit") == commit):
+        if ours(found, key) and (commit is None or _field(found, "commit") == commit):
+            return found
+        if time.monotonic() >= deadline:
             return found
         time.sleep(0.5)
-    return found
+
+
+def _service(answer: Mapping[str, Any] | None, key: str, port: int) -> dict[str, Any]:
+    """``running`` only for this data directory's service; another one is a port conflict."""
+    if answer is not None and not ours(answer, key):
+        return {
+            "running": False,
+            "conflict": f"端口 {port} 上是另一个数据目录的 Dashboard 服务"
+            f"（{answer.get('home_key')}）：改配置 dashboard.port 后重启",
+        }
+    return {"running": answer is not None}
 
 
 def status(home: Home, env: Mapping[str, str], port: int) -> dict[str, Any]:
@@ -236,13 +290,14 @@ def status(home: Home, env: Mapping[str, str], port: int) -> dict[str, Any]:
         return {"installed": False, "note": str(exc), "port": port, "home_key": key}
     answer = health(port)
     current = head()
+    service = _service(answer, key, port)
     return {
         "installed": registered,
         "task": task_name(key),
-        "running": answer is not None,
+        **service,
         "port": port,
         "url": f"http://127.0.0.1:{port}/",
-        "commit": answer.get("commit") if answer else None,
+        "commit": _field(answer, "commit") if service["running"] else None,
         "head": current.get("commit") if current else None,
         "home_key": key,
         "log": str(log_path(env, key)),
@@ -251,9 +306,8 @@ def status(home: Home, env: Mapping[str, str], port: int) -> dict[str, Any]:
 
 def install(home: Home, env: Mapping[str, str], port: int) -> dict[str, Any]:
     key = home_key(home)
-    scheduler(env)  # an unsupported platform is refused before a token is made
-    token, created = ensure_token(env, key, home)
-    del token  # never printed: `tsw dashboard open` shows it to the user
+    scheduler(env)  # an unsupported platform is refused before anything is written
+    created = ensure_store(env, key, home)
     user = f"{env.get('USERDOMAIN', '')}\\{env.get('USERNAME', '')}".lstrip("\\")
     xml = task_xml(
         user=user,
@@ -273,12 +327,12 @@ def install(home: Home, env: Mapping[str, str], port: int) -> dict[str, Any]:
     if code != 0:
         raise rejected("登记计划任务失败", reason="schtasks_failed", output=output)
     schtasks(env, "/Run", "/TN", task_name(key))
-    answer = _wait(port, None, wait_seconds(env))
+    answer = _wait(port, key, None, wait_seconds(env))
     return {
         "installed": True,
         "task": task_name(key),
-        "token_created": created,
-        "running": answer is not None,
+        "store_created": created,
+        **_service(answer, key, port),
         "url": f"http://127.0.0.1:{port}/",
         "next": "在终端运行 tsw dashboard open 用浏览器打开（第一次带令牌，之后可以安装为 PWA）",
         "log": str(log_path(env, key)),
@@ -304,23 +358,20 @@ def restart(home: Home, env: Mapping[str, str], port: int) -> dict[str, Any]:
         raise rejected("启动计划任务失败", reason="schtasks_failed", output=output)
     current = head()
     wanted = current.get("commit") if current else None
-    answer = _wait(port, wanted, wait_seconds(env))
+    answer = _wait(port, key, wanted, wait_seconds(env))
+    service = _service(answer, key, port)
+    commit = _field(answer, "commit") if service["running"] else None
     return {
         "installed": True,
         "restarted": True,
-        "running": answer is not None,
-        "commit": answer.get("commit") if answer else None,
+        **service,
+        "commit": commit,
         "head": wanted,
-        "current": answer is not None and answer.get("commit") == wanted,
+        "current": service["running"] and commit == wanted,
         "log": str(log_path(env, key)),
     }
 
 
 def open_url(home: Home, env: Mapping[str, str], port: int) -> str:
-    """The address with the token, for the user's browser (``tsw dashboard open``, terminal)."""
-    token = read_token(env, home_key(home))
-    if token is None:
-        raise rejected(
-            "没有找到 Dashboard 令牌：先运行 tsw dashboard install", reason="not_installed"
-        )
-    return f"http://127.0.0.1:{port}/?token={token}"
+    """The address with a new token, for the user's browser (``tsw dashboard open``, terminal)."""
+    return f"http://127.0.0.1:{port}/?token={issue_token(env, home_key(home))}"
