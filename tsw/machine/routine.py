@@ -34,6 +34,7 @@ import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import unquote_plus
 
 from tsw.commands import Command, CommitContext
 from tsw.config import EffectiveConfig
@@ -80,16 +81,21 @@ FETCH_TOOLS: dict[str, dict[str, str]] = {
 # One page of a chat at a time: a page has to fit in one host tool result (a self chat holds
 # long notes; 50 messages did not fit in the T243 live run). Paging reads the rest (DN006 §8.9.5).
 TEAMS_READ_TOP = 10
-# The message fields the script reads; WorkIQ returns whole messages otherwise.
+# A page is listed first with these fields only, and the bodies of the messages left once tsw's
+# own cards are taken out are read next (T286): whole pages of cards were too long to pass on.
+TEAMS_LIST_FIELDS = "id,createdDateTime"
+TEAMS_BODY_FIELDS = "id,from,body"
+# Deprecated (T286): the fields of the one-step read. Kept for code that imported it.
 TEAMS_READ_FIELDS = "id,createdDateTime,from,body"
+# The host tool results the routine session's PostToolUse hook keeps for routine_run (CC006 §6.2).
+FETCH_CAPTURES = "routine-fetch.json"
+CAPTURES_KEPT = 8
 # Consecutive failed reads of a chat before the orchestrator is told (T253): a failure or two
 # passes on its own (throttling), a chat that stays unreadable leaves its questions unanswered and
 # only the detached routine session would know (54 runs of HTTP 429 in the T253 report).
 TEAMS_FETCH_ALERT_AFTER = 3
 # How much of a failed tool's text is kept as the reason.
 FETCH_REASON_CHARS = 200
-# WorkIQ paths are relative to Microsoft Graph: a next link given in full is cut back to its path.
-_GRAPH_ROOT = re.compile(r"^https://graph\.microsoft\.com/(?:v1\.0|beta)(?=/)", re.IGNORECASE)
 # The read window starts this long before the earliest waiting card: the clocks of tsw and Teams
 # differ, and tsw records a card after Teams created it.
 TEAMS_WINDOW_MARGIN = timedelta(minutes=5)
@@ -290,9 +296,12 @@ def board(
         {"job_id": SESSION_SCAN, "script": "session_scan", "every": 1, "forward": "if_any"},
     ]
     host = str(config.get("plugins.host_integration"))
+    # Where each Teams row's read is: every run starts again from the newest page (T286).
+    kept["teams_steps"] = {}
     # One row per chat that still has a waiting Teams question (cards may go to several chats).
     for teams in teams_jobs(conn):
         since = teams["since"]
+        kept["teams_steps"][teams["chat_id"]] = first_step(teams["chat_id"])
         jobs.append(
             {
                 "job_id": TEAMS_REPLIES,
@@ -300,7 +309,7 @@ def board(
                 "every": 1,
                 "forward": "if_any",
                 "input": {"chat_id": teams["chat_id"], "tasks": teams["tasks"]},
-                # Pass these to routine_run as they are, with what the fetch returned.
+                # Pass these to routine_run as they are, after the fetch.
                 "run": {"job_id": TEAMS_REPLIES, "chat_id": teams["chat_id"]},
                 "fetch": {
                     "kind": "teams.read_chat",
@@ -308,8 +317,14 @@ def board(
                     "since": since,
                     "tool": FETCH_TOOLS.get(host, {}).get("teams.read_chat"),
                     "arguments": read_arguments(teams["chat_id"]),
-                    # Newest first, one page at a time: pass each page to routine_run on its own;
-                    # while routine_run returns ``next``, fetch with its arguments and run again.
+                    # What was fetched reaches tsw through the routine session's PostToolUse hook
+                    # (T286): the session does not copy it into routine_run.
+                    "then": (
+                        "取数后用 run 调用 routine_run，不用传 fetched："
+                        "tsw 的 hook 已记下取到的结果"
+                    ),
+                    # One step at a time: while routine_run returns ``next``, fetch with its
+                    # arguments and run again with its ``run``. tsw keeps where the read is.
                     "paging": "next",
                     # Deprecated (T243 a2): how routine sessions started before ``next`` collected
                     # every page into one list. Kept for them; routine_run still takes a list.
@@ -419,16 +434,239 @@ def plain_text(body: str) -> str:
 ENVELOPES = ("messages", "value", "items", "data", "results")
 
 
-def read_arguments(chat_id: str) -> dict[str, Any]:
-    """The arguments of the first fetch of a ``teams-replies`` row: the newest page of the chat
-    (``mcp__workiq__fetch``, CC006 §6.2). Ordered by creation, newest first, as paging needs:
-    Graph's default order is the last change, so an old message edited later would come first
-    and end the read early (review F1 of T253); the next links keep the order."""
+def list_path(chat_id: str, before: str | None = None) -> str:
+    """The path that lists a page of a chat: message IDs and times only, newest first (T286).
+
+    Ordered by creation, as paging needs: Graph's default order is the last change, so an old
+    message edited later would come first and end the read early (review F1 of T253). The next
+    page is the one before the oldest message of this one: tsw writes it, so no next link with a
+    long skip token has to be copied (WorkIQ takes ``createdDateTime lt``, not ``gt`` with it)."""
     path = (
         f"/me/chats/{chat_id}/messages?$top={TEAMS_READ_TOP}"
-        f"&$orderby=createdDateTime+desc&$select={TEAMS_READ_FIELDS}"
+        f"&$orderby=createdDateTime+desc&$select={TEAMS_LIST_FIELDS}"
     )
-    return {"entityUrls": [path]}
+    return f"{path}&$filter=createdDateTime+lt+{before}" if before else path
+
+
+def read_arguments(chat_id: str) -> dict[str, Any]:
+    """The arguments of the first fetch of a ``teams-replies`` row: the newest page of the chat,
+    listed (``mcp__workiq__fetch``, CC006 §6.2)."""
+    return {"entityUrls": [list_path(chat_id)]}
+
+
+def body_arguments(chat_id: str, ids: Sequence[str]) -> dict[str, Any]:
+    """The arguments that read the sender and body of each message named, in one fetch."""
+    return {"entityUrls": [full_text_path(chat_id, message_id) for message_id in ids]}
+
+
+def capture_tools() -> set[str]:
+    """The host tools whose results the routine session's PostToolUse hook keeps."""
+    return {tool for tools in FETCH_TOOLS.values() for tool in tools.values()}
+
+
+def full_text_path(chat_id: str, message_id: str) -> str:
+    """Where whoever needs a message's whole text reads it (the orchestrator, T286)."""
+    return f"/me/chats/{chat_id}/messages/{message_id}?$select={TEAMS_BODY_FIELDS}"
+
+
+def first_step(chat_id: str) -> dict[str, Any]:
+    """Where a ``teams-replies`` row starts every run: listing the newest page."""
+    return {"stage": "list", "arguments": read_arguments(chat_id)}
+
+
+def _ms_time(at: datetime) -> str:
+    at = at.astimezone(timezone.utc)
+    return at.strftime("%Y-%m-%dT%H:%M:%S.") + f"{at.microsecond // 1000:03d}Z"
+
+
+def _results(fetched: Any) -> list[Any] | None:
+    """The per-path results of a WorkIQ ``fetch``, in the order of its paths, or None."""
+    raw = fetched
+    if isinstance(raw, str):
+        try:
+            raw, _ = json.JSONDecoder().raw_decode(raw.lstrip())
+        except ValueError:
+            return None
+    results = raw.get("results") if isinstance(raw, Mapping) else None
+    return list(results) if isinstance(results, list) else None
+
+
+def _listing_problem(fetched: Any, messages: Sequence[Mapping[str, Any]]) -> str | None:
+    """Why a listed page does not hold together, or None (DN006 §8.9.5 “核对”): a Teams message
+    ID is the time it was created, in milliseconds, and the page names its own count."""
+    page = _decoded(fetched)
+    if isinstance(page, Mapping):
+        count = page.get("@odata.count")
+        listed = next((page[k] for k in ENVELOPES if isinstance(page.get(k), list)), None)
+        if isinstance(count, int) and isinstance(listed, list) and count != len(listed):
+            return f"列出的条数 {len(listed)} 与结果自带的条数 {count} 不一致"
+    for message in messages:
+        at = id_time(str(message.get("id") or ""))
+        value = message.get("createdDateTime")
+        if at is None or not isinstance(value, str):
+            continue
+        try:
+            created = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return f"消息 {message.get('id')} 的创建时间无法解析"
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if "." not in value:  # whole seconds only (the Teams tools before WorkIQ)
+            at = at.replace(microsecond=0)
+        if abs((created - at).total_seconds()) >= 0.001:
+            return f"消息 {message.get('id')} 的 ID 与创建时间 {value} 不一致"
+    return None
+
+
+def _has_body(message: Mapping[str, Any]) -> bool:
+    return any(k in message for k in ("body", "content", "text"))
+
+
+def teams_progress(job: Mapping[str, Any], step: Mapping[str, Any], fetched: Any) -> dict[str, Any]:
+    """One step of reading a ``teams-replies`` row (DN006 §8.9.5, T286): what was fetched for
+    ``step``, checked, and the step after it.
+
+    Returns ``failure`` (why this read failed, or None), ``page_done`` (a page was read through:
+    the run of failures ends) and ``next`` (the next step, or None when the row is read through
+    or the read failed). A listed page's candidates are its messages that tsw did not send, has
+    not passed on and that are in the read window; their bodies are read next. A page that comes
+    with bodies (the one-step read of routine sessions started before T286) is read at once."""
+    chat_id = str(job["chat_id"])
+    if str(step.get("stage") or "list") == "bodies":
+        return _bodies_progress(step, fetched)
+    failure = fetch_failure(fetched)
+    if failure is not None:
+        return {"failure": failure, "page_done": False, "next": None}
+    messages = fetched_messages(fetched)
+    problem = _listing_problem(fetched, messages)
+    if problem is not None:
+        return {"failure": problem, "page_done": False, "next": None}
+    floor = parse_time(str(job["since"]))
+    times = [t for t in (_created(m) for m in messages) if t is not None]
+    page = _decoded(fetched)
+    last = page[-1] if isinstance(page, list) and page else page
+    more = len(messages) >= TEAMS_READ_TOP or _next_link(last) is not None
+    following: dict[str, Any] | None = None
+    if more and times and min(times) >= floor:
+        following = {
+            "stage": "list",
+            "arguments": {"entityUrls": [list_path(chat_id, _ms_time(min(times)))]},
+        }
+    skip = set(job["outbound"]) | set(job["seen"])
+    candidates: list[str] = []
+    for message in messages:
+        message_id = str(message.get("id") or "")
+        created = _created(message)
+        if not message_id or message_id in skip or message_id in candidates:
+            continue
+        if created is not None and created < floor:
+            continue
+        candidates.append(message_id)
+    if not candidates or any(_has_body(m) for m in messages):
+        # Nothing left to read, or the page came with its bodies (read at once).
+        return {"failure": None, "page_done": True, "next": following}
+    return {
+        "failure": None,
+        "page_done": False,
+        "next": {
+            "stage": "bodies",
+            "arguments": body_arguments(chat_id, candidates),
+            "ids": candidates,
+            "after": following,
+        },
+    }
+
+
+def _bodies_progress(step: Mapping[str, Any], fetched: Any) -> dict[str, Any]:
+    """The bodies of a listed page's candidates: exactly the messages asked for come back, but
+    for those deleted since they were listed (HTTP 404), which are no longer candidates."""
+    ids = [str(i) for i in step.get("ids") or []]
+    results = _results(fetched)
+    gone: set[str] = set()
+    if results is not None and len(results) == len(ids):
+        gone = {
+            i
+            for i, r in zip(ids, results, strict=True)
+            if isinstance(r, Mapping) and r.get("statusCode") == 404
+        }
+        rest = [r for i, r in zip(ids, results, strict=True) if i not in gone]
+        failure = fetch_failure({"results": rest}) if rest else None
+    else:
+        failure = fetch_failure(fetched)
+    if failure is not None:
+        return {"failure": failure, "page_done": False, "next": None}
+    # A path that failed leaves its error object among the messages: it has no ID.
+    returned = sorted(str(m["id"]) for m in fetched_messages(fetched) if m.get("id"))
+    wanted = sorted(i for i in ids if i not in gone)
+    if returned != wanted:
+        return {
+            "failure": f"取回正文的消息 {returned} 与请求的候选 {wanted} 不一致",
+            "page_done": False,
+            "next": None,
+        }
+    after = step.get("after")
+    return {"failure": None, "page_done": True, "next": dict(after) if after else None}
+
+
+def capture_key(arguments: Any) -> str | None:
+    """How a fetch is known by its arguments: its paths, decoded, in order."""
+    urls = arguments.get("entityUrls") if isinstance(arguments, Mapping) else None
+    if not isinstance(urls, list) or not urls:
+        return None
+    return json.dumps([unquote_plus(str(u)).strip() for u in urls], ensure_ascii=False)
+
+
+def tool_text(response: Any) -> Any:
+    """The text of a host tool result as a hook sees it: a list of content blocks, an object
+    holding them, or the text itself."""
+    blocks = response.get("content") if isinstance(response, Mapping) else response
+    if isinstance(blocks, list) and blocks and all(isinstance(b, Mapping) for b in blocks):
+        texts = [str(b.get("text") or "") for b in blocks if b.get("type") == "text"]
+        if texts:
+            return "".join(texts)
+    return response
+
+
+def _captures(home: Home) -> list[dict[str, Any]]:
+    try:
+        kept = json.loads((home.cache_dir / FETCH_CAPTURES).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    entries = kept.get("fetches") if isinstance(kept, dict) else None
+    return [e for e in (entries if isinstance(entries, list) else []) if isinstance(e, dict)]
+
+
+def _keep_captures(home: Home, entries: Sequence[Mapping[str, Any]]) -> bool:
+    try:
+        home.cache_dir.mkdir(parents=True, exist_ok=True)
+        data = json.dumps({"fetches": list(entries)}, ensure_ascii=False).encode("utf-8")
+        atomic_write(home.cache_dir / FETCH_CAPTURES, data)
+    except OSError:  # without it routine_run falls back to what the session passes
+        return False
+    return True
+
+
+def record_fetch(home: Home, arguments: Any, response: Any, now: str) -> bool:
+    """Keep a fetch the routine session made, for ``routine_run`` (its PostToolUse hook, CC006
+    §6.2): the session then does not copy what it fetched. Only the latest few are kept."""
+    key = capture_key(arguments)
+    if key is None:
+        return False
+    entries = [e for e in _captures(home) if e.get("key") != key]
+    entries.append({"key": key, "at": now, "result": tool_text(response)})
+    return _keep_captures(home, entries[-CAPTURES_KEPT:])
+
+
+def take_fetch(home: Home, arguments: Any) -> tuple[bool, Any]:
+    """The result of the fetch made with ``arguments``, as the hook kept it; removed once taken.
+    ``(False, None)`` when there is none."""
+    key = capture_key(arguments)
+    entries = _captures(home)
+    found = next((e for e in reversed(entries) if key and e.get("key") == key), None)
+    if found is None:
+        return False, None
+    _keep_captures(home, [e for e in entries if e is not found])
+    return True, found.get("result")
 
 
 def fetched_messages(fetched: Any) -> list[dict[str, Any]]:
@@ -492,33 +730,6 @@ def _next_link(page: Any) -> str | None:
     return None
 
 
-def _is_page(item: Any) -> bool:
-    item = _decoded(item)
-    return isinstance(item, Mapping) and (
-        any(isinstance(item.get(k), list) for k in ENVELOPES) or _next_link(item) is not None
-    )
-
-
-def next_page(fetched: Any, *, since: str) -> dict[str, Any] | None:
-    """The arguments of the next fetch of a ``teams-replies`` row, or None (DN006 §8.9.5).
-
-    Pages come newest first. Another page is needed while the page given names a next one and
-    its oldest message is not older than ``since`` (a page without dated messages goes on).
-    ``fetched`` is one page, or a list of pages from a routine session started before paging by
-    ``next`` (the last page decides)."""
-    fetched = _decoded(fetched)
-    last = fetched[-1] if isinstance(fetched, list) and fetched else fetched
-    if not _is_page(last):
-        return None  # a plain list of messages names no next page
-    link = _next_link(last)
-    if link is None:
-        return None
-    times = [t for t in (_created(m) for m in fetched_messages(last)) if t is not None]
-    if times and min(times) < parse_time(since):
-        return None
-    return {"entityUrls": [_GRAPH_ROOT.sub("", link)]}
-
-
 def fetch_failure(fetched: Any) -> str | None:
     """Why the fetch a ``teams-replies`` run was given failed, or None when it holds a page.
 
@@ -562,15 +773,18 @@ def _error_text(data: Any) -> str:
 
 
 def note_fetch(
-    kept: dict[str, Any], chat_id: str, failure: str | None, now: str
+    kept: dict[str, Any], chat_id: str, failure: str | None, now: str, *, page_done: bool = True
 ) -> dict[str, Any] | None:
     """Count a ``teams-replies`` fetch in the routine cache: a failure adds to the chat's run of
-    failures, a page ends it. Returns the run when it has just reached
+    failures, a page read through ends it. A listed page whose bodies are still to be read
+    (``page_done`` false) leaves the count as it is: were it to end the run, bodies that fail
+    every time would never reach the alert (T286). Returns the run when it has just reached
     ``TEAMS_FETCH_ALERT_AFTER`` (the orchestrator is told once per run of failures)."""
     failures = kept.get("fetch_failures")
     failures = dict(failures) if isinstance(failures, Mapping) else {}
     if failure is None:
-        failures.pop(chat_id, None)
+        if page_done:
+            failures.pop(chat_id, None)
         kept["fetch_failures"] = failures
         return None
     entry = failures.get(chat_id)
@@ -714,10 +928,13 @@ def select_replies(
     sender_id: str | None,
     since: str,
     exclude: set[str],
+    cap: int | None = None,
 ) -> list[dict[str, Any]]:
     """The ``teams_replies`` script (DN006 §8.9.5): messages from the user, not older than
     ``since`` (the read window), starting with a question number or a waiting task's ID, that tsw
-    neither sent nor passed on before, each with the question it answers. Oldest first.
+    neither sent nor passed on before, each with the question it answers. Oldest first. A text
+    longer than ``cap`` keeps its first ``cap`` characters, with ``truncated`` and its ``length``
+    (``routine.teams_message_chars``, T286): whoever needs the whole of it reads it by its ID.
 
     ``requests`` are the Teams questions with their cards (``request_id``, ``task_id``,
     ``message_id`` of the card, ``sent_at``, ``status``), oldest first."""
@@ -757,8 +974,9 @@ def select_replies(
                 "task_id": str(question["task_id"]),
                 "request_id": str(question["request_id"]),
                 "pending": question["status"] == "pending",
-                "text": words,
+                "text": words[:cap] if cap else words,
                 "sent_at": format_time(created) if created else None,
+                **({"truncated": True, "length": len(words)} if cap and len(words) > cap else {}),
             }
         )
     out.sort(key=lambda m: (m["sent_at"] or "", m["message_id"]))
@@ -856,24 +1074,16 @@ def question_html(question: str) -> str:
     return "".join(blocks) or "<p></p>"
 
 
-def run_next(
-    conn: sqlite3.Connection, job_id: str, inp: Mapping[str, Any], host: str
-) -> dict[str, Any] | None:
-    """What a routine session does after ``routine_run`` of a row that reads by pages: fetch the
-    next page with ``tool`` and ``arguments`` and run the row again with ``run`` and that page
-    (DN006 §8.9.3). None when the row has read its whole window."""
-    if job_id != TEAMS_REPLIES:
-        return None
-    chat_id = str(inp.get("chat_id") or "")
-    job = next((j for j in teams_jobs(conn) if j["chat_id"] == chat_id), None)
-    if job is None:
-        return None
-    arguments = next_page(inp.get("fetched"), since=job["since"])
-    if arguments is None:
+def run_next(chat_id: str, step: Mapping[str, Any] | None, host: str) -> dict[str, Any] | None:
+    """What a routine session does after ``routine_run`` of a ``teams-replies`` row whose read
+    goes on: fetch with ``tool`` and ``arguments``, then run the row again with ``run`` (DN006
+    §8.9.3). Which step comes next is kept by tsw (``teams_steps``), not passed along. None when
+    the row has been read through."""
+    if step is None:
         return None
     return {
         "tool": FETCH_TOOLS.get(host, {}).get("teams.read_chat"),
-        "arguments": arguments,
+        "arguments": step["arguments"],
         "run": {"job_id": TEAMS_REPLIES, "chat_id": chat_id},
     }
 
@@ -986,10 +1196,16 @@ def forward_text(
             )
         elif event.get("type") == "channel.reply_seen":
             late = "" if data.get("pending", True) else "（问题已不再待答：按迟到答复处理）"
+            cut = ""
+            if data.get("truncated"):
+                cut = (
+                    f"……（正文已截断，原文 {data.get('length')} 字；全文按 teams-chat skill 读取："
+                    f"{full_text_path(str(data.get('chat_id')), str(data.get('message_id')))}）"
+                )
             lines.append(
                 f"- {event.get('task_id')} {data.get('request_id')}{late}，Teams 消息 "
                 f"{data.get('message_id')}（{data.get('sent_at') or '时间未知'}）："
-                f"{data.get('text')}"
+                f"{data.get('text')}{cut}"
             )
     if not lines:
         return ""
@@ -1180,6 +1396,7 @@ def routine_run(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 sender_id=job["sender_id"],
                 since=job["since"],
                 exclude=job["seen"] | job["outbound"],
+                cap=int(env.config.get("routine.teams_message_chars")),
             )
             return [
                 EventDraft(
@@ -1194,6 +1411,7 @@ def routine_run(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                         "message_id": reply["message_id"],
                         "text": reply["text"],
                         "sent_at": reply["sent_at"],
+                        **{k: reply[k] for k in ("truncated", "length") if k in reply},
                     },
                 )
                 for reply in found

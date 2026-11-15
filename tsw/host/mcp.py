@@ -384,6 +384,13 @@ class Server:
         caller = Caller(role=who.role, session_id=who.session_id, machine=self.machine)
         # Configuration tools must be able to repair an invalid configuration (DN003 §7.1).
         usable = config if name in CONFIG_TOOLS else config.require_valid()
+        teams_read: dict[str, Any] | None = None
+        if (
+            name == "routine_run"
+            and who.role == "routine"
+            and args.get("job_id") == routine_mod.TEAMS_REPLIES
+        ):
+            args, teams_read = self._teams_read(args, ledger)
         out = run_tool(ledger, usable, caller, name, dict(args))
         if who.role == "worker":
             wake = self._wake(out, ledger, usable)
@@ -399,16 +406,15 @@ class Server:
         if name == "routine_run":
             job_id = str(args.get("job_id") or "")
             out["forward"] = self._forward(job_id, out, ledger, usable)
-            if job_id == routine_mod.TEAMS_REPLIES:
-                alert = self._note_fetch(args, ledger)
+            if teams_read is not None:
+                alert, step = self._teams_after(teams_read, ledger)
                 if alert is not None and not out["forward"].get("send"):
                     out["forward"] = alert
-            with ledger.view() as conn:
                 following = routine_mod.run_next(
-                    conn, job_id, args, str(config.get("plugins.host_integration"))
+                    teams_read["chat_id"], step, str(config.get("plugins.host_integration"))
                 )
-            if following is not None:
-                out["next"] = following
+                if following is not None:
+                    out["next"] = following
         return out
 
     @staticmethod
@@ -446,27 +452,72 @@ class Server:
             "message": f"TaskSteward 回传：{items}。调用 inbox 处理。",
         }
 
-    def _note_fetch(self, args: Mapping[str, Any], ledger: Ledger) -> dict[str, Any] | None:
-        """Count a failed or good Teams read in the routine cache; the forward that tells the
-        orchestrator once a chat could not be read several times in a row (T253)."""
+    def _teams_read(
+        self, args: Mapping[str, Any], ledger: Ledger
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """A ``teams-replies`` step before its script runs (DN006 §8.9.5, T286): the step tsw
+        kept for the chat, what was fetched for it (as the routine session's PostToolUse hook kept
+        it; what the session passed only when the hook kept nothing), checked. A step that failed
+        its check runs the script on nothing."""
         chat_id = str(args.get("chat_id") or "")
-        failure = routine_mod.fetch_failure(args.get("fetched"))
+        with ledger.view() as conn:
+            job = next((j for j in routine_mod.teams_jobs(conn) if j["chat_id"] == chat_id), None)
+        if job is None:
+            return dict(args), None  # routine_run refuses the unknown row
+        steps = routine_mod.load_cache(self.home).get("teams_steps")
+        step = steps.get(chat_id) if isinstance(steps, dict) else None
+        if not isinstance(step, dict):
+            step = routine_mod.first_step(chat_id)
+        found, fetched = routine_mod.take_fetch(self.home, step.get("arguments"))
+        if not found and "fetched" not in args:
+            progress = {
+                "failure": "没有取到这一步的结果：hook 没有记下工具结果，也没有 fetched",
+                "page_done": False,
+                "next": None,
+            }
+        else:
+            fetched = fetched if found else args.get("fetched")
+            progress = routine_mod.teams_progress(job, step, fetched)
+        run_args = {**args, "fetched": fetched if progress["failure"] is None else None}
+        return run_args, {"chat_id": chat_id, "progress": progress}
+
+    def _teams_after(
+        self, teams_read: Mapping[str, Any], ledger: Ledger
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Keep where the chat's read is and count a failed read in the routine cache; the
+        forward that tells the orchestrator once a chat could not be read several times in a row
+        (T253), and the step to fetch next."""
+        chat_id = str(teams_read["chat_id"])
+        progress = teams_read["progress"]
         kept = routine_mod.load_cache(self.home)
         now = utc_now()
-        entry = routine_mod.note_fetch(kept, chat_id, failure, now)
+        entry = routine_mod.note_fetch(
+            kept, chat_id, progress["failure"], now, page_done=bool(progress["page_done"])
+        )
+        steps = kept.get("teams_steps")
+        steps = dict(steps) if isinstance(steps, dict) else {}
+        step = progress["next"]
+        if step is None:
+            steps.pop(chat_id, None)
+        else:
+            steps[chat_id] = step
+        kept["teams_steps"] = steps
         try:
             self.home.cache_dir.mkdir(parents=True, exist_ok=True)
             atomic_write(self.home.cache_dir / "routine.json", json.dumps(kept).encode("utf-8"))
-        except OSError:  # a lost count only delays the message
+        except OSError:  # a lost count only delays the message; the next run starts over
             pass
         if entry is None:
-            return None
+            return None, step
         with ledger.view() as conn:
             message = routine_mod.fetch_alert_text(conn, chat_id, entry)
             target = routine_mod.orchestrator_session(conn, now)
         if target is None:
-            return {"send": False, "note": "主会话不在线：attention 的 routine 中列出了读取失败"}
-        return {"send": True, "session_id": target, "message": message}
+            return {
+                "send": False,
+                "note": "主会话不在线：attention 的 routine 中列出了读取失败",
+            }, step
+        return {"send": True, "session_id": target, "message": message}, step
 
     def _forward(
         self, job_id: str, out: Mapping[str, Any], ledger: Ledger, config: EffectiveConfig

@@ -131,8 +131,8 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 | 例行表给出的内容 | 例行会话调用的工具 |
 | --- | --- |
 | 例行项没有 `fetch` | `routine_run`，参数为该行的 `run`（没有时为 `job_id`） |
-| 例行项的 `fetch` 为 `teams.read_chat`（列出） | `mcp__workiq__fetch`，`entityUrls` 为 `fetch.arguments` 给出的一个路径（`/me/chats/<chat>/messages?$top=10&$orderby=createdDateTime+desc&$select=id,createdDateTime`：只取消息 ID 与创建时间，按创建时间从新到旧；Graph 默认按最后修改时间排序，后来编辑过的旧消息会排在前面、让读取提前结束），把返回值原样（只这一页）与该行的 `run`（`job_id`、`chat_id`、`stage: list`）一起交给 `routine_run`。返回值形如 `{"results": [{"data": <这一页>, "statusCode": …}]}`，这一页的 `value` 是消息（新的在前），`@odata.count` 是条数；每条约 70 个字符，整页约 1 KB。脚本也仍接受带正文的整页与 `mcp__teams__ListChatMessages` 的返回（JSON 后接一行 `CorrelationId: …`） |
-| `routine_run` 返回 `next` | 按 `next.tool` 与 `next.arguments` 取数，再用 `next.run`（原样）加上 `fetched` 调用 `routine_run`；`fetched` 按 `next.pass` 写明的方式给出，没有 `pass` 时为取到的结果原样。直到不再返回 `next`。不合并页。`next` 有两种：**正文**（`run.stage: bodies`）的 `entityUrls` 是这一页每条候选消息一个路径 `/me/chats/<chat>/messages/<id>?$select=id,from,body`，一次取完；`pass` 要求 `fetched` 写成数组，按路径的顺序每条一项 `{"id": data.id, "sender": data.from.user.id, "content": data.body.content, "truncated": false}`，`content` 超过 `routine.teams_message_chars` 个字符时只抄开头这么多、`truncated` 为 `true`；某条的 `statusCode` 不是 200 时这一项写 `{"id": <路径中的消息 ID>, "status": <statusCode>}`。**下一页的列出**（`run.stage: list`）的路径在第一页的基础上加 `&$filter=createdDateTime+lt+<上一页最早消息的创建时间>`，由 tsw 写出，不用 Graph 的 `@odata.nextLink`（其中的 `$skiptoken` 很长，转抄容易出错）。`fetch.pages` 已弃用，只给 T243 a2 之前启动的例行会话用 |
+| 例行项的 `fetch` 为 `teams.read_chat`（列出） | `mcp__workiq__fetch`，`entityUrls` 为 `fetch.arguments` 给出的一个路径（`/me/chats/<chat>/messages?$top=10&$orderby=createdDateTime+desc&$select=id,createdDateTime`：只取消息 ID 与创建时间，按创建时间从新到旧；Graph 默认按最后修改时间排序，后来编辑过的旧消息会排在前面、让读取提前结束），然后用该行的 `run`（`job_id` 与 `chat_id`）调用 `routine_run`，不传 `fetched`：取到的结果由 tsw 的 PostToolUse hook 记下（见下）。返回值形如 `{"results": [{"data": <这一页>, "statusCode": …}]}`，这一页的 `value` 是消息（新的在前），`@odata.count` 是条数；脚本也仍接受带正文的整页与 `mcp__teams__ListChatMessages` 的返回（JSON 后接一行 `CorrelationId: …`） |
+| `routine_run` 返回 `next` | 按 `next.tool` 与 `next.arguments` 取数，再用 `next.run` 调用 `routine_run`；直到不再返回 `next`。`next` 有两种，执行者不需要区分：**正文**的 `entityUrls` 是这一页每条候选消息一个路径 `/me/chats/<chat>/messages/<id>?$select=id,from,body`，一次取完；**下一页的列出**在第一页的路径上加 `&$filter=createdDateTime+lt+<上一页最早消息的创建时间>`，不用 Graph 的 `@odata.nextLink`。读到哪一页、哪一步由 tsw 记在 `cache/routine.json`（`teams_steps`），`routine_board` 每次运行从第一页重新开始。`fetch.pages` 已弃用，只给 T243 a2 之前启动的例行会话用 |
 | `fetch` 的工具报错或返回错误 | 照样调用 `routine_run`，`fetched` 为工具返回的原文（行中的 `fetch.on_error` 也这样写）；连续失败的计数与通知由 tsw 完成（DN006 §8.9.5） |
 | `routine_run` 返回非空的 `forward` | `mcp__ccd_session_mgmt__send_message`，`session_id` 为 `forward` 中的主会话 ID，正文原样 |
 | 维护动作 `arm` | 有旧任务引用时先 `CronDelete`；再 `CronCreate`（`recurring: true`，`durable: false`，`cron` 与 `prompt` 原样）；然后 `routine_armed` 登记返回的任务引用 |
@@ -140,7 +140,9 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 
 WorkIQ 的读取方式（T286 在用户的自聊上实测）：列出与单条读取都遵守 `$select`，只返回选定的字段；列出支持 `$filter=createdDateTime lt <时间>`（与 `$orderby=createdDateTime desc` 同用），`gt` 与 `lt` 用 `and` 组合时报错，所以读取窗口的起点仍由 tsw 按每页最早的消息判断；`entityUrls` 中的多个路径一次取完，结果按路径的顺序放在 `results` 中，各带自己的 `statusCode`。
 
-正文由 tsw 核对（DN006 §8.9.5 的“转抄核对”）：列出的每条消息的 ID 必须等于创建时间的毫秒数、条数等于 `@odata.count`；正文交回的 `id` 必须恰好是 `next.run.ids`。核对失败时 `routine_run` 不返回 `next`，计入连续读取失败。例行会话的 SessionStart 说明写明 `fetched` 按 `pass` 给出；本版本之前启动的例行会话仍按旧说明把正文原样交回，tsw 照样接受并自己截取。
+取数结果的交接（T286）：插件的 PostToolUse hook（matcher `mcp__workiq__fetch`）在例行会话中把工具结果（`tool_response` 中的文字）按 `entityUrls` 记进 `cache/routine-fetch.json`（只保留最近几次），并提示“直接用 run 调用 routine_run，不用传 fetched”；`routine_run` 按这一步的取数参数取出记下的结果，用过即删。其他会话（主会话自己读全文时）不记。live 中已用同样的 hook 读到 `mcp__workiq__create_entity` 的 `tool_response`（T256 的 routine-e2e 检查 C）。没有记下的结果时（插件还没更新），`routine_run` 用执行者给的 `fetched`；两者都没有时这一步按读取失败计。
+
+tsw 核对取到的内容（DN006 §8.9.5 的“核对”）：列出的每条消息的 ID 必须等于创建时间的毫秒数、条数等于 `@odata.count`；取回正文的 `id` 必须恰好是请求的候选（HTTP 404 的不再是候选）。核对失败时 `routine_run` 不返回 `next`，计入连续读取失败。例行会话的 SessionStart 说明写明取数后用 `run` 调用 `routine_run`、不转抄；本版本之前启动的例行会话仍按旧说明传 `fetched`，hook 已记下时 tsw 不用它。
 
 间隔 N 分钟的 cron 表达式：N 整除 60 时为 `*/N * * * *`，N 为 60 的倍数时为 `0 */(N/60) * * *`（DN003 §3.1b）。`CronCreate` 的循环任务 7 天后到期，所以 `routine.renew_after_days` 默认 6。
 

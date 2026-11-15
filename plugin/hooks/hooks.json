@@ -9,6 +9,12 @@
         "hooks": [{"type": "command", "command": "python -X utf8 \"${CLAUDE_PLUGIN_ROOT}/bin/tsw_launch.py\" guard PreToolUse"}]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__workiq__fetch",
+        "hooks": [{"type": "command", "command": "python -X utf8 \"${CLAUDE_PLUGIN_ROOT}/bin/tsw_launch.py\" guard PostToolUse"}]
+      }
+    ],
     "UserPromptSubmit": [
       {"hooks": [{"type": "command", "command": "python -X utf8 \"${CLAUDE_PLUGIN_ROOT}/bin/tsw_launch.py\" guard UserPromptSubmit"}]}
     ],
