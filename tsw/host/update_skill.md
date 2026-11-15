@@ -73,5 +73,6 @@ description: "TaskSteward 自我更新：拉取产品仓库、按改动决定步
 
 1. `update_record`（需要用户先做一步才能生效的方式——重启 app、`new_session`、`compact`、`clear`——按第 5 步先记一次 `verified: false`，生效后再记最终结果）：`from`、`to`、`categories`、`actions`（已做的动作）、`pending`（未完成的）、`user_steps`（需要用户做的事）、`verified`（第 6 步通过时为 true）、`notes`（例如重启方式、被打断的会话）。
 2. 告诉用户：更新到哪个提交、做了什么、验证结果，以及还需要用户做的事。
+3. 本会话的 tsw 工具中还没有 `update_record`（MCP server 早于这个功能，例如第一次从 T282 之前的版本升级）时：生效前的记录跳过，在给用户的回复中写明起点与终点提交、已做的动作与待办；会话重新加载后（新的 MCP 已有这个工具）在验证之后补记一次完整的记录（`notes` 写明生效前记录因旧版本没有工具而跳过）。
 
 只有主会话可以运行 `tsw host render` 与 `tsw dashboard restart`；worker、例行会话与其他目录的会话运行会被拒绝（`host_session_cli`）。
