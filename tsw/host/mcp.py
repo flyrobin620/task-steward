@@ -471,11 +471,13 @@ class Server:
             )
         if job is None:
             return dict(args), None  # routine_run refuses the unknown row
-        if done:
-            # A retry of a step that was recorded: the first result comes back, nothing is taken
-            # or counted again, and the step after it is still the one kept (review F5).
-            return dict(args), {"chat_id": chat_id, "replay": True}
-        steps = routine_mod.load_cache(self.home).get("teams_steps")
+        kept = routine_mod.load_cache(self.home)
+        first = routine_mod.teams_command(kept, command_id)
+        if first is not None or done:
+            # A retry of a step already run (with ledger events or none, review F5 and F6): the
+            # first result comes back; nothing is taken, counted or moved on again.
+            return dict(args), {"chat_id": chat_id, "replay": first or {}}
+        steps = kept.get("teams_steps")
         step = steps.get(chat_id) if isinstance(steps, dict) else None
         if not isinstance(step, dict):
             step = routine_mod.first_step(chat_id)
@@ -490,7 +492,7 @@ class Server:
             fetched = fetched if found else args.get("fetched")
             progress = routine_mod.teams_progress(job, step, fetched)
         run_args = {**args, "_fetched": fetched if progress["failure"] is None else None}
-        return run_args, {"chat_id": chat_id, "progress": progress}
+        return run_args, {"chat_id": chat_id, "progress": progress, "command_id": command_id}
 
     def _teams_after(
         self, teams_read: Mapping[str, Any], ledger: Ledger
@@ -500,8 +502,11 @@ class Server:
         (T253), and the step to fetch next."""
         chat_id = str(teams_read["chat_id"])
         kept = routine_mod.load_cache(self.home)
-        if teams_read.get("replay"):
-            steps = kept.get("teams_steps")
+        replay = teams_read.get("replay")
+        if replay is not None:
+            if "next" in replay:
+                return replay.get("alert"), replay["next"]
+            steps = kept.get("teams_steps")  # the record is lost: the step kept is the next one
             step = steps.get(chat_id) if isinstance(steps, dict) else None
             return None, step if isinstance(step, dict) else None
         progress = teams_read["progress"]
@@ -521,22 +526,25 @@ class Server:
         else:
             steps[chat_id] = step
         kept["teams_steps"] = steps
+        alert: dict[str, Any] | None = None
+        if entry is not None:
+            with ledger.view() as conn:
+                message = routine_mod.fetch_alert_text(conn, chat_id, entry)
+                target = routine_mod.orchestrator_session(conn, now)
+            if target is None:
+                alert = {
+                    "send": False,
+                    "note": "主会话不在线：attention 的 routine 中列出了读取失败",
+                }
+            else:
+                alert = {"send": True, "session_id": target, "message": message}
+        routine_mod.note_teams_command(kept, teams_read.get("command_id"), step, alert)
         try:
             self.home.cache_dir.mkdir(parents=True, exist_ok=True)
             atomic_write(self.home.cache_dir / "routine.json", json.dumps(kept).encode("utf-8"))
         except OSError:  # a lost count only delays the message; the next run starts over
             pass
-        if entry is None:
-            return None, step
-        with ledger.view() as conn:
-            message = routine_mod.fetch_alert_text(conn, chat_id, entry)
-            target = routine_mod.orchestrator_session(conn, now)
-        if target is None:
-            return {
-                "send": False,
-                "note": "主会话不在线：attention 的 routine 中列出了读取失败",
-            }, step
-        return {"send": True, "session_id": target, "message": message}, step
+        return alert, step
 
     def _forward(
         self, job_id: str, out: Mapping[str, Any], ledger: Ledger, config: EffectiveConfig

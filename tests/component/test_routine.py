@@ -728,6 +728,24 @@ def test_a_teams_step_retried_with_its_command_id_returns_the_first_result(home:
     assert [e["sequence"] for e in again["events"]] == [e["sequence"] for e in first["events"]]
     assert again.get("next") == first.get("next")
     assert "48:notes" not in routine_mod.load_cache(h.home).get("fetch_failures", {})
+    # A listing records nothing in the ledger (review F6): its retry gives the same next step,
+    # takes no new fetch and counts nothing.
+    teams = next(
+        j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+    )
+    later = "2026-11-05T00:13:00.000Z"
+    fetched_by_hook(h, routine, teams["fetch"]["arguments"], listed(later, reply_at))
+    listing = server.call("routine_run", {**run, "command_id": "list-1"})
+    assert listing["events"] == [] and listing["next"]["arguments"]["entityUrls"] == [
+        routine_mod.full_text_path("48:notes", teams_id(later))
+    ]
+    fetched_by_hook(h, routine, listing["next"]["arguments"], bodies((teams_id(later), "笔记")))
+    retried = server.call("routine_run", {**run, "command_id": "list-1"})
+    assert retried["events"] == [] and retried["next"] == listing["next"]
+    assert "48:notes" not in routine_mod.load_cache(h.home).get("fetch_failures", {})
+    # The bodies the hook kept are still there for the step itself.
+    assert server.call("routine_run", run)["events"] == []
+    assert "48:notes" not in routine_mod.load_cache(h.home).get("fetch_failures", {})
 
 
 @pytest.mark.use_case("UC-ROUTINE-001")

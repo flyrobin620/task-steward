@@ -1125,6 +1125,39 @@ def question_html(question: str) -> str:
     return "".join(blocks) or "<p></p>"
 
 
+TEAMS_COMMANDS_KEPT = 20  # the latest Teams steps run with a command_id, for retries
+
+
+def teams_command(kept: Mapping[str, Any], command_id: Any) -> dict[str, Any] | None:
+    """What a Teams step run with ``command_id`` gave back the first time (its next step and the
+    alert it carried), or None. Steps without ledger events are not in the ledger's commands, so
+    the routine cache keeps them for a retry (review F6 of T286)."""
+    commands = kept.get("teams_commands")
+    if command_id is None or not isinstance(commands, Mapping):
+        return None
+    found = commands.get(str(command_id))
+    return dict(found) if isinstance(found, Mapping) else None
+
+
+def note_teams_command(
+    kept: dict[str, Any],
+    command_id: Any,
+    step: Mapping[str, Any] | None,
+    alert: Mapping[str, Any] | None,
+) -> None:
+    """Remember what a Teams step run with ``command_id`` gave back; only the latest few."""
+    if command_id is None:
+        return
+    commands = kept.get("teams_commands")
+    commands = dict(commands) if isinstance(commands, Mapping) else {}
+    commands.pop(str(command_id), None)
+    commands[str(command_id)] = {
+        "next": dict(step) if step else None,
+        "alert": dict(alert) if alert else None,
+    }
+    kept["teams_commands"] = dict(list(commands.items())[-TEAMS_COMMANDS_KEPT:])
+
+
 def run_next(chat_id: str, step: Mapping[str, Any] | None, host: str) -> dict[str, Any] | None:
     """What a routine session does after ``routine_run`` of a ``teams-replies`` row whose read
     goes on: fetch with ``tool`` and ``arguments``, then run the row again with ``run`` (DN006
