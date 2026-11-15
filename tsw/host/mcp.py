@@ -29,6 +29,7 @@ from tsw.host import inbox as inbox_mod
 from tsw.host.claude_code import clear_worker_settings
 from tsw.host.identity import Identity, resolve, within
 from tsw.host.maintenance import Maintenance
+from tsw.host.version import runtime as runtime_info
 from tsw.ledger import Ledger
 from tsw.machine import routine as routine_mod
 from tsw.machine.ask_user import user_channels
@@ -125,6 +126,28 @@ HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
         ("orchestrator",),
         "先全量审计，再从账本重建投影与派生文件（tsw ledger rebuild）",
         EMPTY,
+    ),
+    "update_record": (
+        ("orchestrator",),
+        "记录一次自我更新的结果（DN006 §9.8）：起点与终点提交、类别、已做的动作、验证结果、"
+        "未完成项与需要用户做的事；记 maintenance.performed（kind: host_update）",
+        {
+            "type": "object",
+            "properties": {
+                "from": {"type": "string", "description": "update-plan 的起点提交"},
+                "to": {"type": "string", "description": "更新到的提交"},
+                "categories": {"type": "array", "items": {"type": "string"}},
+                "actions": {"type": "array", "items": {"type": "string"}},
+                "pending": {"type": "array", "items": {"type": "string"}},
+                "user_steps": {"type": "array", "items": {"type": "string"}},
+                "verified": {
+                    "type": "boolean",
+                    "description": "生效后再运行 update-plan，pending 为空且运行时为终点提交",
+                },
+                "notes": {"type": "string"},
+            },
+            "required": ["from", "to"],
+        },
     ),
     "import_orchestrator_agent": (
         ("orchestrator",),
@@ -256,6 +279,8 @@ class Server:
         self.listed: ListKey | None = None  # identity at tools/list
         self._listed_lock = threading.Lock()
         self._marker: tuple[tuple[str, int, int], ...] | None = None
+        # The product commit this server loaded: a self-update's starting point (DN006 §9.9).
+        self.runtime = runtime_info(self.env)
 
     # ------------------------------------------------------------------ context
 
@@ -318,7 +343,7 @@ class Server:
             with Ledger(self.home, machine=self.machine).view() as conn:
                 # Where a worker or the routine session sends its wake-up message (DN001 §6.3).
                 target = lease.orchestrator_session(conn)
-            return {**who.to_dict(), "orchestrator_session": target}
+            return {**who.to_dict(), "orchestrator_session": target, "runtime": self.runtime}
         if who.pending and who.pending_role == "routine":
             raise rejected(
                 "例行会话还没有绑定：等主会话完成绑定（routine_bind）后再调用",
@@ -581,6 +606,8 @@ class Server:
         if name == "ledger_rebuild":
             config.require_valid()
             return maintenance.rebuild()
+        if name == "update_record":
+            return maintenance.update_record(args)
         if name == "import_orchestrator_agent":
             config.require_valid()
             return maintenance.import_orchestrator_agent(args)

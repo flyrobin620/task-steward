@@ -162,6 +162,10 @@ DEFAULTS: dict[str, Any] = {
         "work_dir": "work/{task_id}/{attempt}",
     },
     "reports": {"formats": ["md", "html"], "html_from_md": True, "print_styles": True},
+    # How a self-update's impactful steps are applied, and the hosted Dashboard's port
+    # (DN003 §3.6, DN006 §9.8 and §8.10; T283).
+    "update": {"reload": "restart_host", "instructions": "compact"},
+    "dashboard": {"port": 47800},
     "repositories": {},
     "accounts": {},
     "notifications": {},
@@ -188,8 +192,11 @@ B: dict[str, Any] = {"type": "bool"}
 STRS: dict[str, Any] = {"type": "list", "item": S}
 
 
-def _int(minimum: int = 0) -> dict[str, Any]:
-    return {"type": "int", "min": minimum}
+def _int(minimum: int = 0, maximum: int | None = None) -> dict[str, Any]:
+    spec: dict[str, Any] = {"type": "int", "min": minimum}
+    if maximum is not None:
+        spec["max"] = maximum
+    return spec
 
 
 def _obj(**fields: dict[str, Any]) -> dict[str, Any]:
@@ -285,6 +292,11 @@ SCHEMA: dict[str, Any] = _obj(
     ),
     worktrees=_obj(root=S, branch_pattern=S, work_dir=S),
     reports=_obj(formats=STRS, html_from_md=B, print_styles=B),
+    update=_obj(
+        reload=_choice("restart_host", "new_session"),
+        instructions=_choice("compact", "clear", "reload"),
+    ),
+    dashboard=_obj(port=_int(1024, 65535)),
     repositories={
         "type": "map",
         "item": _obj(
@@ -366,6 +378,8 @@ def _check(value: Any, spec: dict[str, Any], path: str, problems: list[str]) -> 
             problems.append(f"{path}: 应为整数")
         elif value < spec["min"]:
             problems.append(f"{path}: 不能小于 {spec['min']}")
+        elif "max" in spec and value > spec["max"]:
+            problems.append(f"{path}: 不能大于 {spec['max']}")
 
 
 # ---------------------------------------------------------------------- merge

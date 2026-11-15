@@ -2,7 +2,8 @@
 
 Every test runs with its own data directory and a scrubbed environment: no inherited
 ``CLAUDE*`` / ``ANTHROPIC*`` / ``CODEX*`` variables, and ``HOME`` / ``USERPROFILE`` /
-``CLAUDE_CONFIG_DIR`` / ``CODEX_HOME`` point into the test's temporary directory. tsw looks
+``CLAUDE_CONFIG_DIR`` / ``CODEX_HOME`` / ``TSW_STATE_DIR`` point into the test's temporary
+directory; ``schtasks`` is the stand-in ``tests/fixtures/fake_schtasks.py``. tsw looks
 for a data directory that claims the current directory before ``TSW_HOME``
 (``tsw.home.claiming_home``), so the tests refuse to run from a checkout inside one: they and
 the processes they start would use that data directory.
@@ -24,6 +25,7 @@ from tsw.ledger import Ledger
 SCRUBBED_PREFIXES = ("CLAUDE", "ANTHROPIC", "CODEX")
 RESULTS_ENV = "TSW_RESULTS_FILE"
 TIERS = ("unit", "component", "surface", "conformance")
+FAKE_SCHTASKS = Path(__file__).resolve().parent / "fixtures" / "fake_schtasks.py"
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +39,10 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         monkeypatch.setenv(key, str(user))
     data_home = tmp_path / "tsw-home"
     monkeypatch.setenv("TSW_HOME", str(data_home))
+    # Per-user state (the Dashboard token) and Task Scheduler stay inside the test (T283).
+    monkeypatch.setenv("TSW_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("TSW_SCHTASKS", str(FAKE_SCHTASKS))
+    monkeypatch.setenv("TSW_DASHBOARD_WAIT_SECONDS", "0.5")
     return data_home
 
 

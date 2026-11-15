@@ -206,6 +206,17 @@ def record_product_repo(home: Home, repo: Path) -> None:
         _write_marker(home.root, marker)
 
 
+def record_render(home: Home, rendered: dict[str, Any] | None) -> None:
+    """Remember the product commit ``host render`` last rendered (DN006 §9.9): the self-update's
+    starting point. Optional; an unknown commit (no git) is not recorded."""
+    if not rendered:
+        return
+    path = home.root / MARKER
+    marker: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    marker["rendered"] = rendered
+    _write_marker(home.root, marker)
+
+
 def claim_sessions(home: Home) -> None:
     """Let every session working inside this data directory use it (``claiming_home``)."""
     path = home.root / MARKER

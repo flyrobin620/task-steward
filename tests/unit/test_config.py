@@ -333,3 +333,15 @@ def test_routine_settings(home: Home) -> None:
     assert config.valid, config.problems
     assert config.get("roles.routine.permission_mode") == "edits"
     assert config.sources["roles.routine.permission_mode"] == "derived"
+
+
+def test_update_and_dashboard_settings(home: Home) -> None:
+    """How a self-update applies and the hosted Dashboard's port (DN003 §3.6, T283)."""
+    assert DEFAULTS["update"] == {"reload": "restart_host", "instructions": "compact"}
+    assert DEFAULTS["dashboard"] == {"port": 47800}
+    ok = {"update": {"reload": "new_session", "instructions": "clear"}, "dashboard": {"port": 1024}}
+    assert _problems(home, ok) == []
+    problems = _problems(home, {"update": {"reload": "reboot"}, "dashboard": {"port": 80}})
+    assert any(p.startswith("update.reload") for p in problems)
+    assert "dashboard.port: 不能小于 1024" in problems
+    assert "dashboard.port: 不能大于 65535" in _problems(home, {"dashboard": {"port": 70000}})

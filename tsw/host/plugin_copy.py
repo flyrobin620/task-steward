@@ -30,8 +30,9 @@ UPDATE_TIMEOUT_SECONDS = 300
 RESTART = "已在运行的 Claude 会话重启后才用上新的插件与 tsw 运行时（MCP server 在会话开始时载入）"
 # What ``tsw host render`` always says last: the main session that ran it tells the user (T282).
 RENDER_RESTART = (
-    "已在运行的 Claude 会话重启后才加载新的 CLAUDE.md、skill、插件与 tsw 运行时；会话不能重启"
-    "自己：在主会话中运行时，告诉用户本会话仍按旧的说明工作，请用户重启 Claude 会话"
+    "已在运行的 Claude 会话重新加载后才用上新的 CLAUDE.md、插件与 tsw 运行时；会话不能重启"
+    "自己：在主会话中运行时，按 tsw-update skill 运行 tsw host update-plan，按配置 update "
+    "让会话生效（默认请用户重启 Claude app）"
 )
 # Claude Code's own bookkeeping inside a cached copy, and Python's byte-code caches.
 IGNORED = frozenset({".in_use", ".orphaned_at", "__pycache__"})
@@ -187,8 +188,7 @@ def session_hint(env: Mapping[str, str] = os.environ) -> str | None:
     shown = "、".join(diff[:5]) + ("等" if len(diff) > 5 else "")
     return (
         f"注意：本会话加载的 task-steward 插件副本（{loaded}）与产品仓库的 plugin/ 不一致"
-        f"（{len(diff)} 个文件：{shown}），hooks 与启动器可能是旧的。向用户说明并请用户确认运行 "
-        "`tsw host render`（重新生成数据目录的说明与设置，并更新插件副本）；用户明确确认后由你"
-        "在本会话中运行它，再告诉用户重启 Claude 会话（会话不能重启自己）。用户也可以自己在终端"
-        "运行。"
+        f"（{len(diff)} 个文件：{shown}），hooks 与启动器可能是旧的。向用户说明并请用户确认更新；"
+        "用户明确确认后按 tsw-update skill 执行（tsw host update-plan、tsw host render，再按配置"
+        "让会话生效；会话不能重启自己）。用户也可以自己在终端运行 tsw host render。"
     )

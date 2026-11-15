@@ -769,7 +769,7 @@ class StorageBackend(Protocol):
 | 类别 | 例子 | 动作 | 影响 |
 | --- | --- | --- | --- |
 | `docs` | 设计与开发文档、测试、开发工具、CI 配置 | 无 | 无 |
-| `runtime` | tsw 运行时代码 | 命令行与 hooks 每次新起进程，拉取后即生效；常驻的 MCP server 要重新加载（`reload`）；Dashboard 服务要重启 | 有（`reload`） |
+| `runtime` | tsw 运行时代码 | 命令行与 hooks 每次新起进程，拉取后即生效；常驻的 MCP server 载入的代码要重新加载（`reload`），只有命令行用的不必；Dashboard 服务要重启 | 有（`reload`） |
 | `rendered` | 主会话说明、skill、worker 说明、生成的设置的来源 | `render`；已加载进对话的 skill 由主会话重读（`reread`）；worker 说明由 hook 提示已有 worker 重读 | 无 |
 | `instructions` | 数据目录的主会话说明文件（Claude Code 为 `CLAUDE.md`）的内容 | `render` 后按 `update.instructions` 让主会话重新载入 | 有（清掉或压缩主会话上下文） |
 | `plugin` | 宿主插件包中的注册与启动器（hooks 的事件与匹配、MCP 注册、启动器） | `render`（更新插件副本）后重新加载会话 | 有（`reload`） |

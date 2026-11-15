@@ -1163,6 +1163,61 @@
         "conformance": "不经过插件接口",
         "live": "只读本地账本、投影与数据目录文件，不依赖宿主与模型；真实数据目录上的检索在合并后由主会话验证（T275 报告）"
       }
+    },
+    {
+      "id": "UC-HOST-009",
+      "title": "自我更新按改动决定步骤：update-plan、render 记录、whoami runtime、update_record、接班主会话（T283，DN006 §9.8–§9.9，CC006 §11）",
+      "actor": "主会话 / 用户",
+      "acceptance": "tsw host render 把产品仓库当时的 HEAD 记入 tsw-home.json 的 rendered（commit、dirty、at）；MCP server 启动时记下产品仓库的 HEAD 与 CLAUDE_PLUGIN_ROOT 的目录名，whoami 在 runtime 中返回；tsw host update-plan（只读，任何会话都可运行）以 --from 或 --running 与 render 记录中最旧的提交为起点（都没有时用可识别的插件副本版本，仍没有时以 from_unknown 拒绝）、--to（默认 HEAD）为终点，按文件把改动分为 docs / install / rendered / plugin / runtime / dashboard，按内容判定 projection（REDUCER_VERSION）、index（SCHEMA_VERSION）与 instructions（CLAUDE_MD 模板），按顺序给出动作（ledger_rebuild、reinstall、render、plugin_copy、reread_skills、dashboard_restart、host_rules、reload 或 instructions），每项带 impact、who、how 与 pending；只有 MCP server 载入的运行时代码与插件包需要 reload（命令行专用模块的清单由测试核对 MCP server 不导入它们），reload 按 update.reload（restart_host 由用户、new_session 由主会话），只有 instructions 时按 update.instructions；列出提交标题中的任务及其报告、执行中的 worker attempt 与例行会话、render 记录、插件副本、Dashboard 服务与用户设置中缺少或过期的 auto 模式规则；render、运行时与服务都是终点时 pending 为空；update_record（主会话、持有租约）记 maintenance.performed（kind host_update）；主会话 start_session 的 cwd 就是数据目录本身时 CC-B9 放行（接班主会话），其他目录仍要求先 attempt_start；render 安装 tsw-update skill，orchestrate skill 引用它",
+      "surfaces": [
+        "cli",
+        "mcp",
+        "hook"
+      ],
+      "claims": [
+        "cli:host update-plan",
+        "mcp:update_record"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "按改动分类与动作由 unit / component / surface 覆盖；真实 app 中按新流程完成一次更新（重启 app 或接班主会话、auto 分类器是否放行接班会话）在合并后由主会话下一次更新时核对，作为任务证据"
+      }
+    },
+    {
+      "id": "UC-DIRECT-006",
+      "title": "Dashboard 常驻服务：登录时启动的计划任务、固定端口、持久令牌与会话读不到令牌（T283，DN006 §8.10，CC006 §12，CC-B12）",
+      "actor": "用户 / 主会话",
+      "acceptance": "tsw dashboard install（终端，会话中以 host_session_cli 拒绝）生成令牌（已有则沿用）存于数据目录之外的 tsw-dashboard-secret 目录，用 schtasks /Create /XML 登记登录触发、当前用户、InteractiveToken、LeastPrivilege、不限时、IgnoreNew 的任务，动作为 pythonw -m tsw dashboard service --home <数据目录>，再 /Run 并等 /healthz；输出不含令牌；非 Windows 且没有替身时以 unsupported_platform 拒绝且不生成令牌；tsw dashboard service 读令牌、监听 dashboard.port，/healthz 不要令牌（照常核对 Host）只返回 service、commit、home_key、started_at，cookie 带 Max-Age；tsw dashboard open（终端）打开带令牌的地址，输出不含令牌，没有令牌时拒绝；tsw dashboard restart 由主会话或终端运行（worker 等以 host_session_cli 拒绝，PreToolUse 同样拦下 worker），/End 后 /Run 并等服务报告产品 HEAD，未安装时报告 installed false；tsw dashboard status 只读、任何会话可运行；tsw dashboard uninstall 删除任务与令牌；CC-B12：所有已登记会话的 Read / Edit / Write / Grep / Glob 等的路径落在令牌目录中，或 Bash / PowerShell 中有指向令牌目录的路径词时拒绝；update.reload、update.instructions 与 dashboard.port 的取值与默认值经配置校验",
+      "surfaces": [
+        "cli",
+        "hook"
+      ],
+      "claims": [
+        "cli:dashboard install",
+        "cli:dashboard uninstall",
+        "cli:dashboard open",
+        "cli:dashboard restart",
+        "cli:dashboard status",
+        "cli:dashboard service"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "Task Scheduler 在测试中以记录参数的替身代替（模拟证据）；真实登记、登录启动与 PWA 由用户在终端运行 tsw dashboard install 验证，记在任务报告中"
+      }
     }
   ]
 }

@@ -282,12 +282,14 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     teams_chat = home / ".claude" / "skills" / "teams-chat" / "SKILL.md"
     task_intake = home / ".claude" / "skills" / "task-intake" / "SKILL.md"
     gh_account = home / ".claude" / "skills" / "gh-account" / "SKILL.md"
+    update = home / ".claude" / "skills" / "tsw-update" / "SKILL.md"
     assert [Path(p) for p in out["written"]] == [
         home / "CLAUDE.md",
         skill,
         handle_input,
         task_intake,
         gh_account,
+        update,
         teams_chat,
         settings,
         home / "roles" / "worker.md",

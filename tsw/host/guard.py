@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -25,6 +26,7 @@ from tsw.events import EventDraft, utc_now
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
 from tsw.host import shell
+from tsw.host.dashboard_service import SECRET_DIR
 from tsw.host.identity import (
     HOST_CLI_COMMANDS,
     MAIN_SESSION_CLI_COMMANDS,
@@ -97,7 +99,51 @@ _GH_VALUE_OPTIONS = {
     "--preview",
     "--cache",
 }
-_TSW_GROUPS = {"task", "ledger", "config", "lease", "tool", "host", "review"}
+_TSW_GROUPS = {"task", "ledger", "config", "lease", "tool", "host", "review", "dashboard"}
+# Path fields of the tools that read or write files (CC008 CC-B12).
+_PATH_FIELDS = ("file_path", "path", "notebook_path")
+SECRET_REASON = (
+    "CC-B12 Dashboard 令牌只给用户本人：会话不读取令牌目录。请用户在终端运行 tsw dashboard "
+    "open；服务的状态用 tsw dashboard status"
+)
+
+
+def _command_words(command: str, depth: int = 0) -> list[str]:
+    """Every word of a command line, redirection targets and ``$(…)`` commands included, read
+    both with backslashes as escapes (bash) and as path separators (Windows paths)."""
+    words: list[str] = []
+    for literal in (False, True):
+        for segment in shell.split(command, literal_backslash=literal):
+            words.extend(segment.words)
+            words.extend(segment.redirects)
+            if depth < 3:
+                for inner in segment.substitutions:
+                    words.extend(_command_words(inner, depth + 1))
+    return words
+
+
+def touches_secret(tool: str, tool_input: Mapping[str, Any]) -> bool:
+    """Whether a tool call reaches into the Dashboard token folder (CC008 CC-B12, T283).
+
+    File tools: a path field (and Glob's pattern) with the folder as one of its parts. Shell
+    tools: a word that is a path into the folder (it contains the folder name and a path
+    separator); a word merely naming it, such as a search term, is not refused.
+    """
+    marker = SECRET_DIR.lower()
+    if tool in ("Bash", "PowerShell"):
+        for word in _command_words(str(tool_input.get("command") or "")):
+            lowered = word.lower()
+            if marker in lowered and ("/" in word or "\\" in word):
+                return True
+        return False
+    fields = [*_PATH_FIELDS, "pattern"] if tool == "Glob" else _PATH_FIELDS
+    for field in fields:
+        value = tool_input.get(field)
+        if isinstance(value, str) and value:
+            parts = [part.lower() for part in value.replace("\\", "/").split("/")]
+            if marker in parts:
+                return True
+    return False
 
 
 def deny(event: str, reason: str) -> dict[str, Any]:
@@ -198,6 +244,16 @@ def worker_start_text(who: Identity, home: Home) -> str:
         f"验收。{standby}只在可写路径内修改：{roots}。主会话告诉你任务书已更新时，重新读取"
         "任务书（whoami 的 brief_revision），按新 revision 继续。"
     )
+
+
+def same_dir(text: str, root: Path) -> bool:
+    """Whether ``text`` names the directory ``root`` itself (case and separators aside)."""
+    if not text.strip():
+        return False
+    try:
+        return os.path.normcase(os.path.realpath(text)) == os.path.normcase(os.path.realpath(root))
+    except (OSError, ValueError):
+        return False
 
 
 def tsw_owned_path(home: Home, path: Path) -> bool:
@@ -584,6 +640,8 @@ class Guard:
     def on_PreToolUse(self, who: Identity) -> dict[str, Any] | None:
         tool = str(self.payload.get("tool_name") or "")
         tool_input: Mapping[str, Any] = self.payload.get("tool_input") or {}
+        if touches_secret(tool, tool_input):
+            return deny("PreToolUse", SECRET_REASON)
         if who.role == "revoked":
             if tool in WRITE_TOOLS or tool in ("Bash", "PowerShell", START_SESSION):
                 return deny(
@@ -661,6 +719,10 @@ class Guard:
                 )
             return None
         if tool == START_SESSION and who.role == "orchestrator":
+            if same_dir(str(tool_input.get("cwd") or ""), self.home.root):
+                # A successor main session (CC006 §11.4, T283): opened in the data directory it
+                # resolves as the orchestrator, and the scheduling lease keeps one writer.
+                return None
             name = str(tool_input.get("name") or "")
             with self.ledger.view() as conn:
                 row = conn.execute(

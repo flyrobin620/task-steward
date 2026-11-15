@@ -40,7 +40,7 @@
 | CC-B9 | 主会话 | `start_session` 的会话名不是已落账、代次有效的 attempt，也不是正在启动的例行会话代次；`cwd` 就是数据目录本身（接班主会话，CC006 §11.4，T283）时不拦 | 没有先 `attempt_start` / `routine_start` 就建会话，或重复建会话 | 先 `attempt_start`（例行会话先 `routine_start`），用返回的会话名。**不可放行**：没有落账的会话无法绑定到 attempt（DN002 §6） |
 | CC-B10 | 已撤销 / 待绑定 | 编辑类工具、Bash、`start_session` | 已被替换的会话继续写；绑定前就开始工作（状态漂移） | 已撤销：回到主会话；待绑定：等主会话绑定后的消息 |
 | CC-B11 | 例行会话 | 编辑类工具、Bash、`start_session` | 例行会话自己去“处理”问题（改代码、跑命令、建会话），越过“只执行例行动作、不作判断”的分工（DN006 §8.9） | 只执行例行表（`routine_board`）中的例行项；其余事项发消息交主会话 |
-| CC-B12 | 所有 | 编辑与读取类工具（Read / Edit / Write / MultiEdit / NotebookEdit / Grep / Glob）的目标路径在 Dashboard 令牌目录中，或 Bash 命令的某个词含令牌目录名 `tsw-dashboard-secret`（CC006 §12；T283） | 会话为了“帮用户打开 Dashboard”读出令牌，拿令牌替用户点验收等按钮（误认来源，DN006 §8.10） | 请用户在终端运行 `tsw dashboard open`；服务的状态用 `tsw dashboard status` |
+| CC-B12 | 所有 | 编辑与读取类工具（Read / Edit / Write / MultiEdit / NotebookEdit / Grep / Glob）的目标路径在 Dashboard 令牌目录中，或 Bash / PowerShell 命令中有指向令牌目录的路径词（含目录名 `tsw-dashboard-secret` 与路径分隔符；只提到这个名字的词，如搜索词，不拦；CC006 §12，T283） | 会话为了“帮用户打开 Dashboard”读出令牌，拿令牌替用户点验收等按钮（误认来源，DN006 §8.10） | 请用户在终端运行 `tsw dashboard open`；服务的状态用 `tsw dashboard status` |
 
 **escape**（DN008 §5 第 4 条）：每条拒绝信息以规则编号开头，写出上表的正确做法；可放行的规则还写明“动作确属任务需要时，问用户；用户同意后用 `user_answer` 登记放行这条规则”。CC-B6、CC-B9 是状态机守卫的镜像，不能放行或关闭（`waive_rules` 与 `guardrails.disabled` 中出现它们时以 `invalid_input` 拒绝），只给出状态机的路径。其余规则的做法：
 

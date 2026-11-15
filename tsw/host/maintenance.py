@@ -99,6 +99,25 @@ class Maintenance:
         out = {"kind": "context_rebuild", **built}
         return {**out, "sequence": self._record(out)}
 
+    def update_record(self, args: Mapping[str, Any]) -> dict[str, Any]:
+        """Record a self-update's result (DN006 §9.8 principle 6, T283): what ran, what was
+        verified, what is left. Nothing else changes; the plan itself is ``host update-plan``."""
+        self._require_lease()
+        commits: dict[str, str] = {}
+        for field in ("from", "to"):
+            value = args.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise rejected(f"需要 {field}（提交）", reason="invalid_input", field=field)
+            commits[field] = value.strip()
+        out: dict[str, Any] = {"kind": "host_update", **commits}
+        for field in ("categories", "actions", "pending", "user_steps"):
+            out[field] = _strings(args, field)
+        out["verified"] = bool(args.get("verified"))
+        notes = args.get("notes")
+        if isinstance(notes, str) and notes.strip():
+            out["notes"] = notes.strip()
+        return {**out, "sequence": self._record(out)}
+
     def import_orchestrator_agent(self, args: Mapping[str, Any]) -> dict[str, Any]:
         self._require_lease()
         snapshot = args.get("snapshot")

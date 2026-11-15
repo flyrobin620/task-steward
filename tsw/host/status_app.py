@@ -35,7 +35,7 @@ from tsw import direct
 from tsw.config import load_config
 from tsw.context.index import index_path, read_card
 from tsw.errors import TswError, rejected
-from tsw.events import Event
+from tsw.events import Event, utc_now
 from tsw.home import Home
 from tsw.host.markdown import MAX_SOURCE_CHARS, render_markdown
 from tsw.host.status import AppView, Revision, render
@@ -43,6 +43,7 @@ from tsw.host.task_view import card_state, not_found, render_task, timeline
 from tsw.ledger import Ledger
 from tsw.storage.fs import FsStorage
 
+HEALTH_PATH = "/healthz"
 # The cookie is named per port: browsers share cookies across the ports of one host.
 COOKIE = "tsw_status"
 TOKEN_HEADER = "X-TSW-Token"
@@ -102,9 +103,19 @@ def history(events: Iterable[Event]) -> dict[str, list[Revision]]:
 class StatusApp:
     """The state shared by the request handlers of one ``tsw status serve`` run."""
 
-    def __init__(self, home: Home, token: str | None = None) -> None:
+    def __init__(
+        self,
+        home: Home,
+        token: str | None = None,
+        *,
+        cookie_max_age: int | None = None,
+        health: Mapping[str, Any] | None = None,
+    ) -> None:
         self.home = home
         self.token = token or secrets.token_urlsafe(24)
+        # The hosted service (T283, CC006 §12): a persistent cookie, and a token-free /healthz.
+        self.cookie_max_age = cookie_max_age
+        self.health = dict(health) if health is not None else None
         self.instance = secrets.token_hex(4)
         self.port = 0
         self._count = 0
@@ -254,12 +265,17 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 self._text(HTTPStatus.FORBIDDEN, "只接受本机地址的访问")
                 return
             url = urlsplit(self.path)
+            if url.path == HEALTH_PATH and app.health is not None:
+                self._json(HTTPStatus.OK, app.health)
+                return
             given = parse_qs(url.query).get("token", [""])[0]
             if url.path == "/" and given:
                 if not hmac.compare_digest(given, app.token):
                     self._text(HTTPStatus.FORBIDDEN, "令牌无效：请打开 tsw status serve 输出的地址")
                     return
                 cookie = f"{COOKIE}_{app.port}={app.token}; HttpOnly; SameSite=Strict; Path=/"
+                if app.cookie_max_age:
+                    cookie += f"; Max-Age={app.cookie_max_age}"
                 self._send(
                     HTTPStatus.SEE_OTHER,
                     b"",
@@ -399,5 +415,30 @@ def serve_status(home: Home, *, port: int = 0, open_browser: bool = True) -> Non
         server.serve_forever()
     except KeyboardInterrupt:
         print("已停止", file=sys.stderr)
+    finally:
+        server.server_close()
+
+
+def serve_hosted(
+    home: Home,
+    *,
+    token: str,
+    port: int,
+    commit: str | None,
+    key: str,
+    cookie_max_age: int,
+) -> None:
+    """Run the hosted Dashboard service (``tsw dashboard service``) until it is ended."""
+    health = {
+        "service": "tsw-dashboard",
+        "commit": commit,
+        "home_key": key,
+        "started_at": utc_now(),
+    }
+    app = StatusApp(home, token, cookie_max_age=cookie_max_age, health=health)
+    server = make_server(app, port)
+    print(f"TaskSteward Dashboard 服务：http://127.0.0.1:{app.port}/（{utc_now()}）", flush=True)
+    try:
+        server.serve_forever()
     finally:
         server.server_close()

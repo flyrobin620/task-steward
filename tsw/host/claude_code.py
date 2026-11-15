@@ -4,14 +4,15 @@ The plugin in ``plugin/`` carries what every session needs wherever it runs: the
 and the hooks. It is enabled at user scope, so it carries no orchestrator skill. This module
 generates the orchestrator's instructions into the data directory: ``CLAUDE.md`` and the project
 skills ``.claude/skills/orchestrate/SKILL.md``, ``handle-input`` (questions handed over by the
-routine session, CC006 §6.4), ``task-intake`` (intake and writing briefs, CC006 §10.2) and the
-human channels' skills (``teams-chat``, CC006 §7), and ``gh-account`` (which gh account a
-repository uses, for one command at a time; CC006 §10.1), the one of them a worker in a repository
-worktree is pointed at by its brief. Sessions whose directory is under the data directory and not
-in a git repository (the routine session, a worker without a repository worktree) also discover
-them; a worker in a repository worktree does not (CC006 §8). A worker's own instructions are not a
-skill: they are copied from ``plugin/roles/worker.md`` to ``roles/worker.md`` (``tsw.roles``) and
-every worker session's prompt starts with them (CC006 §2). It also generates the permission rules
+routine session, CC006 §6.4), ``task-intake`` (intake and writing briefs, CC006 §10.2),
+``tsw-update`` (the self-update, CC006 §11.3) and the human channels' skills (``teams-chat``,
+CC006 §7), and ``gh-account`` (which gh account a repository uses, for one command at a
+time; CC006 §10.1), the one of them a worker in a repository worktree is pointed at by its brief.
+Sessions whose directory is under the data directory and not in a git repository (the routine
+session, a worker without a repository worktree) also discover them; a worker in a repository
+worktree does not (CC006 §8). A worker's own instructions are not a skill: they are copied from
+``plugin/roles/worker.md`` to ``roles/worker.md`` (``tsw.roles``) and every worker session's
+prompt starts with them (CC006 §2). It also generates the permission rules
 for the actions tsw guards itself (CC008 §6): ``.claude/settings.json`` in the data directory for
 the orchestrator. A worker's execution directory gets no settings file: a folder that brings its
 own permission rules asks for trust again even under a trusted data directory, so a worker relies
@@ -43,6 +44,10 @@ TASK_INTAKE_SKILL = Path(__file__).resolve().parent / "task_intake_skill.md"
 TASK_INTAKE_PATH = Path(".claude") / "skills" / "task-intake" / "SKILL.md"
 GH_ACCOUNT_SKILL = Path(__file__).resolve().parent / "gh_account_skill.md"
 GH_ACCOUNT_PATH = Path(".claude") / "skills" / "gh-account" / "SKILL.md"
+# The main session's self-update procedure (CC006 §11.3, T283); its source in the product
+# repository is read again after pulling (DN006 §9.8 principle 1).
+UPDATE_SKILL = Path(__file__).resolve().parent / "update_skill.md"
+UPDATE_SKILL_PATH = Path(".claude") / "skills" / "tsw-update" / "SKILL.md"
 # The human channels' own skills (P3, CC006 §7): how the main session sends through a channel
 # and registers what comes back. handle-input names the channel; its skill has the details.
 CHANNEL_SKILLS = {"teams-chat": Path(__file__).resolve().parent / "teams_chat_skill.md"}
@@ -112,6 +117,8 @@ def render_instructions(home: Home) -> list[Path]:
     atomic_write(task_intake, TASK_INTAKE_SKILL.read_bytes())
     gh_account = home.root / GH_ACCOUNT_PATH
     atomic_write(gh_account, GH_ACCOUNT_SKILL.read_bytes())
+    update = home.root / UPDATE_SKILL_PATH
+    atomic_write(update, UPDATE_SKILL.read_bytes())
     channels: list[Path] = []
     for name, source in CHANNEL_SKILLS.items():
         channel = home.root / ".claude" / "skills" / name / "SKILL.md"
@@ -120,7 +127,17 @@ def render_instructions(home: Home) -> list[Path]:
     settings = home.root / SETTINGS_PATH
     allow_actions(settings, ORCHESTRATOR_ALLOW)
     roles = render_roles(home.root)
-    return [claude_md, skill, handle_input, task_intake, gh_account, *channels, settings, *roles]
+    return [
+        claude_md,
+        skill,
+        handle_input,
+        task_intake,
+        gh_account,
+        update,
+        *channels,
+        settings,
+        *roles,
+    ]
 
 
 def clear_worker_settings(workdir: Path) -> bool:
@@ -265,7 +282,8 @@ def install_hint(home: Home) -> str:
             f"3. 设置环境变量 TSW_HOME={home.root}（或在仓库的 .local/tsw-home 中写入该路径），",
             "   让 worktree 中的 worker 会话也能找到数据目录。",
             "4. 运行 tsw host render，在数据目录生成主会话的 CLAUDE.md 与项目 skill",
-            "   .claude/skills/orchestrate/、handle-input/、task-intake/、teams-chat/，",
+            "   .claude/skills/orchestrate/、handle-input/、task-intake/、teams-chat/、",
+            "   tsw-update/（自我更新：按改动决定步骤），",
             "   主会话与 worker 共用的 gh-account/（按仓库选 gh 账号，只对一条命令生效），",
             "   以及 worker 说明",
             "   roles/worker.md（来自 plugin/roles/worker.md，每个 worker 会话的提示语以它开头；",

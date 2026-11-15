@@ -36,6 +36,8 @@ HOST_CLI_COMMANDS = frozenset(
         "config validate",
         "tool list",
         "host install-hint",
+        "host update-plan",
+        "dashboard status",
         "lease show",
         "ledger audit",
     }
@@ -44,7 +46,9 @@ HOST_CLI_COMMANDS = frozenset(
 # may run these on the command line, once the user confirmed in the conversation (the orchestrate
 # skill asks; tsw cannot tell a confirmation from other words). Every other session, including
 # one opened outside the data directory, is refused.
-MAIN_SESSION_CLI_COMMANDS = frozenset({"host render"})
+# ``dashboard restart`` (T283): the OS restarts the user's installed service, which reads its own
+# token; the session never sees it (DN006 §8.10).
+MAIN_SESSION_CLI_COMMANDS = frozenset({"host render", "dashboard restart"})
 
 
 def _norm(path: Path) -> str:

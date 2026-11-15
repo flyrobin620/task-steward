@@ -25,6 +25,10 @@ def tool(name: str, **inp: Any) -> dict[str, Any]:
 
 @pytest.fixture
 def home(tmp_path: Path) -> tuple[Path, Path]:
+    return bound_worker_home(tmp_path)
+
+
+def bound_worker_home(tmp_path: Path) -> tuple[Path, Path]:
     """A data directory with a bound worker ``w-1`` working in the returned directory."""
     code, out = run_json("init")
     assert code == 0
