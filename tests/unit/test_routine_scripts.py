@@ -452,9 +452,9 @@ def test_note_fetch_counts_failures_in_a_row_per_chat() -> None:
     assert note_fetch(kept, "c", "HTTP 429", "later") is None  # told once per run of failures
     assert note_fetch(kept, "other", "x", "t") is None  # counted per chat
     assert [f["chat_id"] for f in failing_fetches(kept)] == ["c"]
-    # A listed page whose bodies are still to be read leaves the count as it is (T286): bodies
-    # that fail every time still reach the alert.
-    assert note_fetch(kept, "c", None, "listed", page_done=False) is None
+    # A step with more to read after it leaves the count as it is (T286): bodies or a later
+    # page that fail every time still reach the alert.
+    assert note_fetch(kept, "c", None, "listed", read_through=False) is None
     assert kept["fetch_failures"]["c"]["count"] == TEAMS_FETCH_ALERT_AFTER + 1
     assert note_fetch(kept, "c", None, "ok") is None
     assert failing_fetches(kept) == [] and "c" not in kept["fetch_failures"]
@@ -501,3 +501,24 @@ def test_a_reply_in_the_same_second_as_its_card() -> None:
     early = _msg("1793869200010", "T001 先说一句", at="2026-11-05T09:00:00Z")
     found = select_replies([early], requests=[waiting], sender_id=None, since=WINDOW, exclude=set())
     assert found == []
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_bodies_must_come_back_with_their_text() -> None:
+    # Review F1 of T286: an ID alone or a listing given back is not an empty message.
+    job = _job()
+    step = {"stage": "bodies", "ids": ["a"], "arguments": {}, "after": None}
+    only_id = teams_progress(job, step, {"results": [{"data": {"id": "a"}, "statusCode": 200}]})
+    assert only_id["next"] is None and "没有正文" in only_id["failure"]
+    no_content = {"id": "a", "body": {"contentType": "html"}}
+    out = teams_progress(job, step, {"results": [{"data": no_content, "statusCode": 200}]})
+    assert "没有正文" in out["failure"]
+    listing = {"id": "a", "createdDateTime": "2026-11-05T00:12:00.000Z"}
+    out = teams_progress(
+        job, step, {"results": [{"data": {"value": [listing]}, "statusCode": 200}]}
+    )
+    assert "没有正文" in out["failure"]
+    empty = {"id": "a", "body": {"contentType": "html", "content": ""}}
+    out = teams_progress(job, step, {"results": [{"data": empty, "statusCode": 200}]})
+    assert out == {"failure": None, "page_done": True, "next": None}
+    assert teams_progress(job, step, [{"id": "a", "content": "T001 好"}])["failure"] is None

@@ -651,6 +651,62 @@ def test_a_teams_read_that_does_not_hold_together_counts_as_failed(home: Home) -
     assert "48:notes" not in routine_mod.load_cache(h.home)["fetch_failures"]
 
 
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_fetch_kept_in_a_broken_off_run_is_not_used_later(home: Home) -> None:
+    # Review F1 of T286: bodies kept by the hook but not taken (the run broke off) must not stand
+    # in for the same fetch in the next run when that one fails without reaching the hook.
+    h = Harness(home, TEAMS)
+    routine, _, _, server = teams_waiting(h)
+    run = {"job_id": "teams-replies", "chat_id": "48:notes"}
+    reply_at = "2026-11-05T00:12:00.000Z"
+
+    def listed_to_bodies() -> dict[str, Any]:
+        teams = next(
+            j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+        )
+        fetched_by_hook(h, routine, teams["fetch"]["arguments"], listed(reply_at))
+        return server.call("routine_run", run)["next"]
+
+    step = listed_to_bodies()
+    fetched_by_hook(h, routine, step["arguments"], bodies((teams_id(reply_at), "T001 用 A")))
+    # The run breaks off here. The next one lists again; the bodies fetch fails this time.
+    assert listed_to_bodies()["arguments"] == step["arguments"]
+    out = server.call("routine_run", {**run, "fetched": "Error: HTTP 429 Too Many Requests"})
+    assert out["events"] == [] and out["forward"] == {"send": False}
+    failures = routine_mod.load_cache(h.home)["fetch_failures"]["48:notes"]
+    assert failures["count"] == 1 and "429" in failures["reason"]
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_later_page_that_keeps_failing_is_reported(home: Home) -> None:
+    # Review F3 of T286: the first page reads fine every run, the second fails every run. Only a
+    # row read to its end ends the run of failures, so the orchestrator is told.
+    h = Harness(home, TEAMS)
+    routine, _, _, server = teams_waiting(h)
+    run = {"job_id": "teams-replies", "chat_id": "48:notes"}
+    times = [f"2026-11-05T00:2{m}:00.000Z" for m in range(9, -1, -1)]
+    throttled = {"results": [{"data": {"error": {"code": "TooMany"}}, "statusCode": 429}]}
+    forwards = []
+    for _ in range(routine_mod.TEAMS_FETCH_ALERT_AFTER):
+        teams = next(
+            j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+        )
+        fetched_by_hook(h, routine, teams["fetch"]["arguments"], listed(*times))
+        step = server.call("routine_run", run)["next"]
+        notes = bodies(*((teams_id(t), "笔记") for t in times))
+        fetched_by_hook(h, routine, step["arguments"], notes)
+        older = server.call("routine_run", run)["next"]
+        assert older["arguments"]["entityUrls"][0].endswith("lt+2026-11-05T00:20:00.000Z")
+        fetched_by_hook(h, routine, older["arguments"], throttled)
+        out = server.call("routine_run", run)
+        assert "next" not in out
+        forwards.append(out["forward"])
+    assert [f["send"] for f in forwards] == [False] * (routine_mod.TEAMS_FETCH_ALERT_AFTER - 1) + [
+        True
+    ]
+    assert "HTTP 429" in forwards[-1]["message"]
+
+
 @pytest.mark.use_case("UC-ROUTINE-001")
 def test_only_the_routine_sessions_fetches_are_kept(home: Home) -> None:
     h = Harness(home, TEAMS)

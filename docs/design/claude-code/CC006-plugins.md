@@ -140,7 +140,7 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 
 WorkIQ 的读取方式（T286 在用户的自聊上实测）：列出与单条读取都遵守 `$select`，只返回选定的字段；列出支持 `$filter=createdDateTime lt <时间>`（与 `$orderby=createdDateTime desc` 同用），`gt` 与 `lt` 用 `and` 组合时报错，所以读取窗口的起点仍由 tsw 按每页最早的消息判断；`entityUrls` 中的多个路径一次取完，结果按路径的顺序放在 `results` 中，各带自己的 `statusCode`。
 
-取数结果的交接（T286）：插件的 PostToolUse hook（matcher `mcp__workiq__fetch`）在例行会话中把工具结果（`tool_response` 中的文字）按 `entityUrls` 记进 `cache/routine-fetch.json`（只保留最近几次），并提示“直接用 run 调用 routine_run，不用传 fetched”；`routine_run` 按这一步的取数参数取出记下的结果，用过即删。其他会话（主会话自己读全文时）不记。live 中已用同样的 hook 读到 `mcp__workiq__create_entity` 的 `tool_response`（T256 的 routine-e2e 检查 C）。没有记下的结果时（插件还没更新），`routine_run` 用执行者给的 `fetched`；两者都没有时这一步按读取失败计。
+取数结果的交接（T286）：插件的 PostToolUse hook（matcher `mcp__workiq__fetch`）在例行会话中把工具结果（`tool_response` 中的文字）按 `entityUrls` 记进 `cache/routine-fetch.json`（只保留最近几次），并提示“直接用 run 调用 routine_run，不用传 fetched”；`routine_run` 按这一步的取数参数取出记下的结果，用过即删；`routine_board` 开始新一次运行时清空这个文件，中断的运行留下的结果不会顶替之后同一路径的取数。其他会话（主会话自己读全文时）不记。live 中已用同样的 hook 读到 `mcp__workiq__create_entity` 的 `tool_response`（T256 的 routine-e2e 检查 C）。没有记下的结果时（插件还没更新），`routine_run` 用执行者给的 `fetched`；两者都没有时这一步按读取失败计。
 
 tsw 核对取到的内容（DN006 §8.9.5 的“核对”）：列出的每条消息的 ID 必须等于创建时间的毫秒数、条数等于 `@odata.count`；取回正文的 `id` 必须恰好是请求的候选（HTTP 404 的不再是候选）。核对失败时 `routine_run` 不返回 `next`，计入连续读取失败。例行会话的 SessionStart 说明写明取数后用 `run` 调用 `routine_run`、不转抄；本版本之前启动的例行会话仍按旧说明传 `fetched`，hook 已记下时 tsw 不用它。
 

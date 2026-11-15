@@ -492,7 +492,11 @@ class Server:
         kept = routine_mod.load_cache(self.home)
         now = utc_now()
         entry = routine_mod.note_fetch(
-            kept, chat_id, progress["failure"], now, page_done=bool(progress["page_done"])
+            kept,
+            chat_id,
+            progress["failure"],
+            now,
+            read_through=progress["failure"] is None and progress["next"] is None,
         )
         steps = kept.get("teams_steps")
         steps = dict(steps) if isinstance(steps, dict) else {}
@@ -552,6 +556,8 @@ class Server:
 
     def _routine_board(self, who: Identity, config: EffectiveConfig, ledger: Ledger) -> Any:
         cache_path = self.home.cache_dir / "routine.json"
+        # A run starts every read over: fetches kept in an earlier run no longer count.
+        routine_mod.clear_fetches(self.home)
         with ledger.view() as conn:
             result, kept = routine_mod.board(
                 conn, config, utc_now(), routine_mod.load_cache(self.home), who.session_id

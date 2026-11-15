@@ -596,7 +596,8 @@ def _bodies_progress(step: Mapping[str, Any], fetched: Any) -> dict[str, Any]:
     if failure is not None:
         return {"failure": failure, "page_done": False, "next": None}
     # A path that failed leaves its error object among the messages: it has no ID.
-    returned = sorted(str(m["id"]) for m in fetched_messages(fetched) if m.get("id"))
+    found = [m for m in fetched_messages(fetched) if m.get("id")]
+    returned = sorted(str(m["id"]) for m in found)
     wanted = sorted(i for i in ids if i not in gone)
     if returned != wanted:
         return {
@@ -604,8 +605,25 @@ def _bodies_progress(step: Mapping[str, Any], fetched: Any) -> dict[str, Any]:
             "page_done": False,
             "next": None,
         }
+    # A body that is not there is not an empty message: a listing given back, or an ID alone.
+    empty = [str(m["id"]) for m in found if not _readable_body(m)]
+    if empty:
+        return {
+            "failure": f"取回的消息 {empty} 没有正文",
+            "page_done": False,
+            "next": None,
+        }
     after = step.get("after")
     return {"failure": None, "page_done": True, "next": dict(after) if after else None}
+
+
+def _readable_body(message: Mapping[str, Any]) -> bool:
+    body = message.get("body")
+    if isinstance(body, Mapping):
+        return isinstance(body.get("content"), str)
+    return isinstance(body, str) or any(
+        isinstance(message.get(k), str) for k in ("content", "text")
+    )
 
 
 def capture_key(arguments: Any) -> str | None:
@@ -655,6 +673,13 @@ def record_fetch(home: Home, arguments: Any, response: Any, now: str) -> bool:
     entries = [e for e in _captures(home) if e.get("key") != key]
     entries.append({"key": key, "at": now, "result": tool_text(response)})
     return _keep_captures(home, entries[-CAPTURES_KEPT:])
+
+
+def clear_fetches(home: Home) -> None:
+    """Forget every kept fetch: a run starts over (``routine_board``), and a result kept in a run
+    that broke off must not stand in for a fetch of the same paths that fails now (review F1)."""
+    with contextlib.suppress(OSError):
+        (home.cache_dir / FETCH_CAPTURES).unlink(missing_ok=True)
 
 
 def take_fetch(home: Home, arguments: Any) -> tuple[bool, Any]:
@@ -773,17 +798,23 @@ def _error_text(data: Any) -> str:
 
 
 def note_fetch(
-    kept: dict[str, Any], chat_id: str, failure: str | None, now: str, *, page_done: bool = True
+    kept: dict[str, Any],
+    chat_id: str,
+    failure: str | None,
+    now: str,
+    *,
+    read_through: bool = True,
 ) -> dict[str, Any] | None:
     """Count a ``teams-replies`` fetch in the routine cache: a failure adds to the chat's run of
-    failures, a page read through ends it. A listed page whose bodies are still to be read
-    (``page_done`` false) leaves the count as it is: were it to end the run, bodies that fail
-    every time would never reach the alert (T286). Returns the run when it has just reached
-    ``TEAMS_FETCH_ALERT_AFTER`` (the orchestrator is told once per run of failures)."""
+    failures, a row read through to its end ends it. A step with more to read after it
+    (``read_through`` false) leaves the count as it is: were it to end the run, a step that fails
+    every time after one that works (the bodies, a later page) would never reach the alert (T286,
+    review F3). Returns the run when it has just reached ``TEAMS_FETCH_ALERT_AFTER`` (the
+    orchestrator is told once per run of failures)."""
     failures = kept.get("fetch_failures")
     failures = dict(failures) if isinstance(failures, Mapping) else {}
     if failure is None:
-        if page_done:
+        if read_through:
             failures.pop(chat_id, None)
         kept["fetch_failures"] = failures
         return None
