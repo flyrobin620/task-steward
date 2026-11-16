@@ -203,16 +203,17 @@ DN001 §8 只定义了事件格式和“JSONL 账本为唯一事实、SQLite 投
 
 用户 2026-11-15 确认 §6.1 时追加：偏好要能被管理，增删改查都要有接口；将来在 Dashboard 中管理（另登记任务，F-T287-1）。账本只追加，修改与删除都以新的事件表达，历史保留。
 
-| 操作 | MCP（主会话，需要调度租约） | CLI（用户本人，在会话外的终端） | 事件 |
-| --- | --- | --- | --- |
-| 查询 | `context_decisions`（`kind: standing`；worker 也可用） | `tsw preference list [--repo <仓库>] [--project <项目>] [--all]` | 无（只读投影） |
-| 创建 | `preference_record` | `tsw preference record --scope <范围> --topic <主题> --text <原文>` | `user.preference_recorded` |
-| 修改 | `preference_record` 带 `supersedes`（同范围或更窄） | `tsw preference record … --supersedes <P-n>` | `user.preference_recorded` |
-| 删除 | `preference_revoke` | `tsw preference revoke <P-n> --reason <理由>` | `user.preference_revoked` |
+| 操作 | MCP（主会话，需要调度租约） | CLI（用户本人，在会话外的终端） | Dashboard 应用（用户本人，T290） | 事件 |
+| --- | --- | --- | --- | --- |
+| 查询 | `context_decisions`（`kind: standing`；worker 也可用） | `tsw preference list [--repo <仓库>] [--project <项目>] [--all]` | 「长期偏好」页（`preferences`） | 无（只读投影） |
+| 创建 | `preference_record` | `tsw preference record --scope <范围> --topic <主题> --text <原文>` | 「记录新偏好」 | `user.preference_recorded` |
+| 修改 | `preference_record` 带 `supersedes`（同范围或更窄） | `tsw preference record … --supersedes <P-n>` | 条目的「替代」 | `user.preference_recorded` |
+| 删除 | `preference_revoke` | `tsw preference revoke <P-n> --reason <理由>` | 条目的「撤销」 | `user.preference_revoked` |
 
 - **修改就是替代**：新偏好得到新编号，旧的标 `superseded_by`（更窄范围的标 `overridden_by`，§12.2），两条都可查；不提供原地改写，任务书与报告中引用的旧编号仍能查到当时的原文。
 - **删除就是撤销**：`user.preference_revoked` 记录编号、理由与用户来源（MCP 的 `user_source` 决定对象为 `["preference", <编号>, "revoke"]`）。只能撤销现行的偏好（未被同范围替代、未撤销）。撤销后它仍可查询，`usable_as_basis` 为 false 并带 `revoked`（时间与理由）；它对更宽范围偏好的覆盖随之解除（更宽的在该范围内重新有效）；不能再被替代；任务书核对（§6.1）把目标中引用它的写成“已撤销”。被它替代的旧偏好不会恢复，需要时由用户重新记录。
 - **CLI 是用户本人的操作**：`record` 与 `revoke` 和 `tsw task accept` 一样只在会话外的终端运行，以 `user` 调用者执行同一个工具，来源由 tsw 记录（渠道 `user-cli`，`text` 为偏好原文或撤销理由，DN006 §8.10），先显示内容并要求确认（`--yes` 跳过）；会话不能借它代用户说话。`list` 只读，默认列出现行的偏好（`--all` 包括已替代、被覆盖与已撤销的），给了 `--repo` / `--project` 时只列能到达该范围的；会话中不在命令行运行它（会话只能运行 DN001 §7.1 列出的命令），用 `context_decisions`。
+- **Dashboard 也是用户本人的操作**（用户 2026-11-15 要求，T290）：Dashboard 应用的「长期偏好」页按范围与主题列出全部长期偏好（原文、来源、替代关系与撤销状态），页面上的记录、替代、撤销以 `user` 调用者运行同一组工具，来源渠道为 `status-app`（`text` 为用户在页面上填写的原文或撤销理由），先弹出确认框；页面与接口见 DN006 §8.10“长期偏好页”。
 - **用户来源**：主会话的 `preference_record` / `preference_revoke` 只按用户在会话中明确说出的长期意图或撤销要求调用（附原话）；不能凭推测撤销或改写偏好。
 - 投影：撤销写入新表 `preference_revocations`（编号、理由、来源、时间、事件序号），不改变 `user_decisions` 的结构，已有投影仍然有效，不需要 `tsw ledger rebuild`。
 
