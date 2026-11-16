@@ -620,8 +620,15 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             raise rejected("未知的 attempt 阶段", reason="invalid_attempt", phase=previous["phase"])
         if mode in ("new", "reuse_planned"):
             guards.g_window(env.config, user_turn)
-        _check_preference_reads(ctx.conn, row, extra_reads)
-        read_set = _read_set(ctx.conn, task_id, extra_reads)
+        # A session dispatched again keeps the preferences added for it before: only new ones
+        # are checked, and the brief checks every one kept, so a revoked one says so (PR #52).
+        kept = (
+            [str(n) for n in loads(previous["read_set"], []) if is_ref(str(n))]
+            if previous is not None and mode != "new"
+            else []
+        )
+        _check_preference_reads(ctx.conn, row, [n for n in extra_reads if n not in kept])
+        read_set = _read_set(ctx.conn, task_id, [*extra_reads, *kept])
         brief_path = _brief_path(task_id, attempt_id)
         ctx.storage.put_artifact(
             brief_path,
@@ -963,6 +970,8 @@ def _refresh_preferences(
     current: Mapping[str, Any],
     read_set: list[str],
     config: EffectiveConfig,
+    *,
+    added: Sequence[str],
 ) -> str | None:
     """On continuation, bring the session's brief up to the preferences' state now (DN007
     §6.1): preferences just added, or cited ones replaced or revoked since the brief was written
@@ -979,7 +988,9 @@ def _refresh_preferences(
     except OSError:
         old = ""
 
-    if preference_block(brief) == preference_block(old):
+    # Preferences just added always rewrite and signal: a retry after a failed append finds the
+    # brief already written but the read set not yet recorded (PR #52 review).
+    if not added and preference_block(brief) == preference_block(old):
         return None
     ctx.storage.put_artifact(str(path), brief.encode("utf-8"))
     return str(path)
@@ -1010,7 +1021,7 @@ def attempt_continue(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             data["transition"] = "T08"
         else:
             require_status(row, "in_progress", "waiting_user", "verifying")
-        rewritten = _refresh_preferences(ctx, row, current, read_set, env.config)
+        rewritten = _refresh_preferences(ctx, row, current, read_set, env.config, added=added)
         if rewritten:
             data["brief_rewritten"] = {"path": rewritten, "preferences": added}
         return [

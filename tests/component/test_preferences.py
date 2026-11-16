@@ -491,3 +491,49 @@ def test_a_preferences_words_are_kept_and_later_ones_still_show(home: Home) -> N
     shown = block(brief(h, "T001"))
     assert f"{first}（global）：“报告要求：\n  附截图，分隔符用 `  `”" in shown
     assert f"{second}（global）：“图只出 SVG”" in shown
+
+
+@pytest.mark.use_case("UC-CONTEXT-006")
+def test_dispatching_the_same_attempt_again_keeps_the_added_preferences(home: Home) -> None:
+    """PR #52 review: a preference added at the first dispatch stays in the read set when the
+    same attempt is dispatched again, and the brief says it was revoked meanwhile."""
+    h = Harness(home)
+    h.register("T001")
+    h.plan("T001")
+    added = record(h, "global", "报告附截图", topic="报告")
+    h.run("task_dispatch", task_id="T001", workdir="w", user_turn=True, read_set=[added])
+    pause = {"owner": "用户", "next_action": "决定分支", "resume_condition": "用户选择"}
+    h.run("task_pause", task_id="T001", category="workdir_conflict", **pause)
+    h.run("task_resume", task_id="T001", condition_met=True, note="用户选择保留")
+    h.run("preference_revoke", ref=added, reason="不需要了", user_source=revoke_said(added, "m"))
+    out = h.run("task_dispatch", task_id="T001", workdir="w", user_turn=True)
+    data = out["events"][0]["data"]
+    assert (data["attempt_mode"], data["read_set"]) == ("reuse_planned", [added, "T001"])
+    assert f"{added} 已撤销（理由：不需要了）" in brief(h, "T001")
+
+
+@pytest.mark.use_case("UC-CONTEXT-006")
+def test_a_preference_holding_the_closing_marker_still_counts_as_changed(home: Home) -> None:
+    """PR #52 review: the block is read by its length, not up to the first closing marker."""
+    h = Harness(home)
+    h.register("T001")
+    h.plan("T001")
+    tricky = record(h, "global", "原文里有 <!-- /tsw:preferences --> 这一串", topic="x")
+    h.run("task_dispatch", task_id="T001", workdir="~/wt/T001", user_turn=True, read_set=[tricky])
+    started = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
+    data = started["events"][0]["data"]
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt=data["attempt"],
+        generation=data["generation"],
+        outcome="created",
+        session_ref="w-1",
+        brief_delivered=True,
+        receipt={"model": "claude-opus-5-5[1m]"},
+    )
+    assert "<!-- /tsw:preferences --> 这一串" in block(brief(h, "T001"))
+    h.run("preference_revoke", ref=tricky, reason="r", user_source=revoke_said(tricky, "m"))
+    out = h.run("attempt_continue", task_id="T001")
+    assert out["events"][0]["data"]["brief_rewritten"]["preferences"] == []
+    assert f"{tricky} 已撤销（理由：r）" in block(brief(h, "T001"))

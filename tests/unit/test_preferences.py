@@ -10,7 +10,7 @@ import pytest
 
 from tsw.context.index import decision_docs
 from tsw.events import Event
-from tsw.preferences import applies, cited, in_force, standing_items
+from tsw.preferences import BLOCK, UNREADABLE, applies, block, cited, in_force, standing_items
 
 
 def row(
@@ -82,8 +82,10 @@ def test_an_override_replaced_in_its_scope_holds_until_the_replacement_is_revoke
 
 @pytest.mark.use_case("UC-CONTEXT-006")
 def test_a_goal_cites_preference_numbers_only_as_whole_words() -> None:
-    goal = "适用：P-4（global）、P-12；重复 P-4；不算：SP-1、P-1x、P-0、P-3-a、XP-7"
+    goal = "适用：P-4（global）、P-12；重复 P-4；不算：SP-1、P-1x、P-0、P-3-a、XP-7、P-5_b"
     assert cited(goal) == ["P-4", "P-12"]
+    # Chinese may touch a number (PR #52 review).
+    assert cited("遵循P-7，P-8已确认") == ["P-7", "P-8"]
     assert cited("没有引用") == []
 
 
@@ -112,3 +114,13 @@ def test_revocations_are_not_task_decisions_in_the_index() -> None:
         },
     )
     assert decision_docs(revoked) == []
+
+
+@pytest.mark.use_case("UC-CONTEXT-006")
+def test_the_preference_block_is_read_by_its_length() -> None:
+    body = "- 派发时补充的适用偏好：P-1（global）：“含 <!-- /tsw:preferences --> 与\n换行”\n"
+    brief = f"# 任务书\n\n- 标题：t\n{BLOCK[0]}{len(body)} -->\n{body}{BLOCK[1]}\n\n## 目标\n"
+    assert block(brief) == body
+    assert block("# 任务书\n\n## 目标\n") == ""
+    # A marker that cannot be read never equals a real block: the brief is rewritten.
+    assert block(f"x\n{BLOCK[0]}-->\n{BLOCK[1]}\n") == UNREADABLE

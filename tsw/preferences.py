@@ -18,13 +18,18 @@ import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-# A preference number as the goal cites it: ``P-4``, not part of a longer word or number.
-REF = re.compile(r"(?<![\w-])P-[1-9]\d*(?![\w-])")
+# A preference number as the goal cites it: ``P-4``, not part of an English identifier or a
+# longer number; Chinese may touch it ("遵循P-4", PR #52 review).
+REF = re.compile(r"(?<![A-Za-z0-9_-])P-[1-9][0-9]*(?![A-Za-z0-9_-])")
 
 Where = tuple[str, set[str]]
-# The brief's preference lines sit between these markers, so a later brief can tell whether
-# they changed even when a preference's words span lines (review r3 F5, r4 F6).
-BLOCK = ("<!-- tsw:preferences -->", "<!-- /tsw:preferences -->")
+# The brief's preference lines sit between these markers, the opening one carrying their length,
+# so a later brief can tell whether they changed whatever the words hold: line breaks (review r3
+# F5, r4 F6) or the closing marker itself (PR #52 review).
+BLOCK = ("<!-- tsw:preferences ", "<!-- /tsw:preferences -->")
+BLOCK_HEAD = re.compile(r"(\d+) -->\n")
+# What a brief with markers that cannot be read compares as: never equal to a real block.
+UNREADABLE = "\x00unreadable"
 
 
 def applies(scope: str, where: Where | None) -> bool:
@@ -206,14 +211,21 @@ def brief_lines(
             + "；".join(notes)
             + "。以现在有效的偏好为准，有疑问时用 `context_decisions` 查或问用户\n"
         )
-    return f"{BLOCK[0]}\n{out}{BLOCK[1]}\n" if out else ""
+    return f"{BLOCK[0]}{len(out)} -->\n{out}{BLOCK[1]}\n" if out else ""
 
 
 def block(brief: str) -> str:
-    """The preference lines a brief holds (between the markers), or empty."""
+    """The preference lines a brief holds (by the length its opening marker gives), empty when
+    it has none, and :data:`UNREADABLE` when the marker cannot be read, so the brief is
+    rewritten rather than trusted."""
     start = brief.find(BLOCK[0])
-    end = brief.find(BLOCK[1], start)
-    return brief[start:end] if start >= 0 and end >= 0 else ""
+    if start < 0:
+        return ""
+    head = BLOCK_HEAD.match(brief, start + len(BLOCK[0]))
+    if head is None:
+        return UNREADABLE
+    body = head.end()
+    return brief[body : body + int(head.group(1))]
 
 
 def _shown(item: Mapping[str, Any]) -> str:
