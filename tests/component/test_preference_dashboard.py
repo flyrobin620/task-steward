@@ -149,3 +149,47 @@ def test_the_tools_rules_refuse_and_nothing_is_written(h: Harness, app: StatusAp
     ) == ("invalid_input")
     assert h.ledger.storage.tail() == after
     assert after.sequence == before.sequence + 1
+
+
+@mark.use_case("UC-DIRECT-007")
+def test_a_retry_with_the_same_command_id_records_once(h: Harness, app: StatusApp) -> None:
+    """A response lost after the commit, then the same submission again (PR #53 review)."""
+    body = {
+        "scope": "global",
+        "topic": "PR",
+        "text": "默认 ready",
+        "command_id": "dashboard-pref-1",
+    }
+    first = app.preference("record", None, body)
+    again = app.preference("record", None, dict(body))
+    assert (again["ref"], again["sequence"]) == (first["ref"], first["sequence"])
+    assert len(sources(h, "user.preference_recorded")) == 1
+    # A narrower override of a global one, retried: still one.
+    narrow = {
+        "scope": "repo:demo",
+        "topic": "PR",
+        "text": "demo 先开 draft",
+        "supersedes": ["P-1"],
+        "command_id": "dashboard-pref-2",
+    }
+    assert app.preference("record", None, narrow)["ref"] == "P-2"
+    assert app.preference("record", None, dict(narrow))["ref"] == "P-2"
+    assert len(sources(h, "user.preference_recorded")) == 2
+    revoke = {"reason": "不要了", "command_id": "dashboard-pref-3"}
+    first = app.preference("revoke", "P-2", revoke)
+    assert app.preference("revoke", "P-2", dict(revoke))["sequence"] == first["sequence"]
+    # The same id with other content, or after the app restarted (a new message reference),
+    # is refused rather than recorded twice.
+    tail = h.ledger.storage.tail()
+    other = {**body, "text": "改了"}
+    assert reason(app, "record", None, **other) == "command_conflict"
+    restarted = StatusApp(h.home, token="tok")
+    assert reason(restarted, "record", None, **body) == "command_conflict"
+    assert h.ledger.storage.tail() == tail
+    # Without an id every submission stands alone; a malformed id is refused.
+    plain = {"scope": "global", "topic": "邮件", "text": "只存草稿"}
+    assert (
+        app.preference("record", None, plain)["ref"] != app.preference("record", None, plain)["ref"]
+    )
+    for bad in ("short", "has space in it", 7, "x" * 81):
+        assert reason(app, "record", None, **{**plain, "command_id": bad}) == "invalid_input", bad

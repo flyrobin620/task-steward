@@ -136,6 +136,13 @@
      tools as tsw preference record / revoke as the user. Every rule is checked there. */
   function preferenceForms(token) {
     const OTHER = "__other__";
+    const sent = new WeakMap();
+    function commandId() {
+      const random = window.crypto && window.crypto.randomUUID
+        ? window.crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      return `dashboard-pref-${random}`;
+    }
     function field(form, name) {
       const node = form.querySelector(`[name="${name}"]`);
       return node ? node.value : "";
@@ -189,6 +196,11 @@
       if (!ask) return;
       if (ask.error) { show(box, false, ask.error); return; }
       if (!window.confirm(ask.question)) return;
+      // A retry of the same content (say, after a lost response) keeps its command_id, so the
+      // ledger returns the first result instead of recording it twice (PR #53 review).
+      const key = ask.url + "\n" + JSON.stringify(ask.body);
+      if (!sent.has(box) || sent.get(box).key !== key) sent.set(box, {key, id: commandId()});
+      ask.body.command_id = sent.get(box).id;
       const buttons = box.querySelectorAll("button");
       for (const b of buttons) b.disabled = true;
       show(box, null, "正在提交…");

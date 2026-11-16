@@ -177,8 +177,13 @@ def preference(
     message_ref: str,
     text: str,
     machine: str | None = None,
+    command_id: str | None = None,
 ) -> dict[str, Any]:
-    """Record or revoke a standing preference as the ``user`` caller (DN007 §6.2)."""
+    """Record or revoke a standing preference as the ``user`` caller (DN007 §6.2).
+
+    With ``command_id`` a repeat of the same request (the same source included) returns the first
+    result instead of recording again (DN001 §7.2); the Dashboard's retries use it.
+    """
     if action not in PREFERENCE_TOOLS:
         raise rejected("未知的操作", reason="invalid_input", action=action)
     user_source = {
@@ -189,9 +194,10 @@ def preference(
         "target": target,
     }
     caller = Caller(role="user", session_id=None, machine=machine or lease.this_machine())
-    result = run_tool(
-        ledger, config, caller, PREFERENCE_TOOLS[action], {**payload, "user_source": user_source}
-    )
+    request: dict[str, Any] = {**payload, "user_source": user_source}
+    if command_id is not None:
+        request["command_id"] = command_id
+    result = run_tool(ledger, config, caller, PREFERENCE_TOOLS[action], request)
     event = result["events"][0]
     return {
         "action": action,

@@ -485,8 +485,12 @@ def test_the_dashboard_manages_standing_preferences_as_the_user(h: Harness, dash
     assert post("/api/preferences", record)[0] == 404
     assert not events(h, "user.preference_recorded")
     # Record, replace, revoke: one event each, the user's own on the status-app channel.
-    status, out = post("/api/preferences/record", record)
+    status, out = post("/api/preferences/record", {**record, "command_id": "dashboard-pref-a"})
     assert (status, out["ok"], out["ref"]) == (200, True, "P-1")
+    # The page's retry of the same submission returns the first result (PR #53 review).
+    status, again = post("/api/preferences/record", {**record, "command_id": "dashboard-pref-a"})
+    assert (status, again["ref"], again["sequence"]) == (200, "P-1", out["sequence"])
+    assert "command_id" in APP_SCRIPT and "randomUUID" in APP_SCRIPT
     status, out = post(
         "/api/preferences/record", {**record, "text": "直接 ready", "supersedes": ["P-1"]}
     )

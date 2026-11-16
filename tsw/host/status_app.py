@@ -24,6 +24,7 @@ from __future__ import annotations
 import hmac
 import json
 import mimetypes
+import re
 import secrets
 import sys
 import threading
@@ -55,6 +56,9 @@ TOKEN_HEADER = "X-TSW-Token"
 # Files a page may link to (``tsw.host.status.link_for``), served read-only.
 SERVED_DIRS = ("runs", "legacy")
 MAX_BODY = 16 * 1024
+# The preference page's retries (command_id) remembered by one server run.
+REMEMBERED_COMMANDS = 256
+COMMAND_ID = re.compile(r"[A-Za-z0-9_-]{8,80}")
 # Served documents (reports) keep their own images and styles but run no script in this origin.
 SERVED_CSP = (
     "default-src 'self'; script-src 'none'; object-src 'none'; "
@@ -128,6 +132,9 @@ class StatusApp:
         self.port = 0
         self._count = 0
         self._lock = threading.Lock()
+        # The message reference given to each command_id the preference page sent, so a retry
+        # carries the same source and the ledger returns the first result (PR #53 review).
+        self._refs: dict[str, str] = {}
 
     def admits(self, token: str) -> bool:
         """Whether a presented token signs in: this run's, or one the hosted service lists."""
@@ -141,6 +148,22 @@ class StatusApp:
         with self._lock:
             self._count += 1
             return f"status-app:{self.instance}:{self._count}"
+
+    def ref_for(self, command_id: str | None) -> str:
+        """The message reference of a request: a new one, or for a command_id seen before (a
+        retry) the one it had. After a restart a retry gets a new reference, so the ledger
+        refuses it as a different command rather than recording it twice."""
+        if command_id is None:
+            return self.next_ref()
+        with self._lock:
+            found = self._refs.get(command_id)
+            if found is None:
+                self._count += 1
+                found = f"status-app:{self.instance}:{self._count}"
+                if len(self._refs) >= REMEMBERED_COMMANDS:
+                    self._refs.pop(next(iter(self._refs)))
+                self._refs[command_id] = found
+            return found
 
     def ledger(self) -> tuple[Ledger, Any]:
         config = load_config(self.home)
@@ -233,6 +256,12 @@ class StatusApp:
             words = values["reason"]
         else:
             raise rejected("未知的操作", reason="invalid_input", action=action)
+        # One confirmed submission keeps its command_id across retries (PR #53 review).
+        command_id = body.get("command_id")
+        if command_id is not None and (
+            not isinstance(command_id, str) or not COMMAND_ID.fullmatch(command_id)
+        ):
+            raise rejected("command_id 无效", reason="invalid_input", field="command_id")
         ledger, config = self.ledger()
         config.require_valid()
         return direct.preference(
@@ -242,8 +271,9 @@ class StatusApp:
             payload,
             target=target,
             channel="status-app",
-            message_ref=self.next_ref(),
+            message_ref=self.ref_for(command_id),
             text=words,
+            command_id=command_id,
         )
 
     def act(self, task_id: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
