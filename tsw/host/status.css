@@ -308,3 +308,29 @@ dialog.doc{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;
 .doc-bar{padding:8px 10px;padding-top:max(8px,env(safe-area-inset-top))}
 .doc-body{padding:4px 14px calc(18px + env(safe-area-inset-bottom))}
 .md{font-size:15px}}
+/* Standing preferences (DN006 §8.10, T290) */
+.pref-filter{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 12px}
+.pref-filter a{text-decoration:none;color:var(--ink);font-size:13px}
+.pref-filter a[aria-current=true],.pref-filter a[aria-pressed=true]{background:color-mix(in srgb,var(--link) 14%,var(--panel));border-color:var(--link)}
+.hero a.ghost{text-decoration:none;color:var(--ink);font-size:13px}
+.pref{--c:#0d9488;border-top:1px solid var(--line);padding:10px 0 8px}
+.pref:first-of-type{border-top:0}
+.pref.replaced,.pref.revoked{--c:#6b7280;opacity:.82}
+.pref .tid{text-decoration:none}
+.pref-state{font-size:12px;font-weight:650;border-radius:6px;padding:1px 8px;background:color-mix(in srgb,var(--c) 14%,var(--card));color:color-mix(in srgb,var(--c) 75%,var(--tint))}
+.pref-state.revoked{--c:#e11d48}
+.chip.topic{--c:#2563eb}
+.pref-text,.pref-words{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0}
+.pref-rel{font-size:13px;margin:4px 0;color:var(--muted)}
+.pref-src{font-size:12px;color:var(--muted);margin:2px 0}
+.note.conflict{--n:#d97706;margin:0 0 8px}
+.note.revoked{--n:#e11d48;margin:4px 0}
+.pref-form{flex-basis:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:6px}
+.pref-form[hidden]{display:none}
+.pref-form label{display:grid;gap:4px;font-size:12px;color:var(--muted)}
+.pref-form label[hidden]{display:none}
+.pref-form .wide,.pref-form .pref-buttons,.pref-form p{grid-column:1/-1}
+.pref-form input,.pref-form select,.pref-form textarea{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:5px 8px}
+.pref-form textarea{resize:vertical}
+.pref-buttons{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.act-replace{border-color:#2563eb;color:#2563eb;background:var(--card)}

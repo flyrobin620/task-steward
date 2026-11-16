@@ -452,3 +452,65 @@ def test_the_dashboard_renders_markdown_shows_references_and_the_index_card(
     # The page's own script opens these links in a dialog; the policy is unchanged.
     assert "connect-src 'self'" in view.replace("&#x27;", "'")
     assert 'searchParams.set("view", "html")' in APP_SCRIPT and "showModal()" in APP_SCRIPT
+
+
+@mark.use_case("UC-DIRECT-007")
+def test_the_dashboard_manages_standing_preferences_as_the_user(h: Harness, dashboard: App) -> None:
+    h.register("T001", repo="demo")
+    handed_back(h)
+    headers = {"X-TSW-Token": dashboard.token, "Origin": f"http://127.0.0.1:{dashboard.port}"}
+
+    def post(path: str, body: dict[str, Any], sent: dict[str, str] | None = None) -> Any:
+        status, _, raw = dashboard.request("POST", path, body, headers if sent is None else sent)
+        return status, json.loads(raw)
+
+    # The page needs the cookie and this server's host name, like the board.
+    assert dashboard.request("GET", "/preferences")[0] == 403
+    dashboard.cookie = f"tsw_status_{dashboard.port}={dashboard.token}"
+    evil = {"Host": f"evil.example:{dashboard.port}"}
+    assert dashboard.request("GET", "/preferences", headers=evil)[0] == 403
+    status, sent, body = dashboard.request("GET", "/preferences")
+    page = body.decode("utf-8")
+    assert status == 200 and sent["Content-Type"] == "text/html; charset=utf-8"
+    assert sent["X-Frame-Options"] == "DENY" and "还没有长期偏好。" in page
+    assert '<option value="repo:demo">' in page and 'data-pref-send="record"' in page
+    board = dashboard.request("GET", "/")[2].decode("utf-8")
+    assert '<a class="ghost" id="prefs" href="preferences"' in board and "长期偏好 0</a>" in board
+    # A request needs the header token and this page's origin.
+    record = {"scope": "repo:demo", "topic": "PR", "text": "先开 draft"}
+    assert post("/api/preferences/record", record, {"Origin": headers["Origin"]})[0] == 403
+    bad = {**headers, "Origin": "http://evil.example"}
+    assert post("/api/preferences/record", record, bad)[0] == 403
+    assert post("/api/preferences/P-1/remove", {"reason": "x"})[0] == 404
+    assert post("/api/preferences", record)[0] == 404
+    assert not events(h, "user.preference_recorded")
+    # Record, replace, revoke: one event each, the user's own on the status-app channel.
+    status, out = post("/api/preferences/record", record)
+    assert (status, out["ok"], out["ref"]) == (200, True, "P-1")
+    status, out = post(
+        "/api/preferences/record", {**record, "text": "直接 ready", "supersedes": ["P-1"]}
+    )
+    assert (status, out["ref"], out["event"]) == (200, "P-2", "user.preference_recorded")
+    status, out = post("/api/preferences/P-1/revoke", {"reason": "已被替代"})
+    assert (status, out["ok"], out["reason"]) == (409, False, "invalid_input")
+    status, out = post("/api/preferences/P-2/revoke", {"reason": "不再需要"})
+    assert (status, out["event"]) == (200, "user.preference_revoked")
+    assert out["sequence"] == events(h, "user.preference_revoked")[-1].sequence
+    recorded = [e.data["source"] for e in events(h, "user.preference_recorded")]
+    revoked = [e.data["source"] for e in events(h, "user.preference_revoked")]
+    assert [s["channel"] for s in recorded + revoked] == ["status-app"] * 3
+    assert [s["text"] for s in recorded + revoked] == ["先开 draft", "直接 ready", "不再需要"]
+    assert revoked[0]["target"] == ["preference", "P-2", "revoke"]
+    # The page lists them by scope with their state; the filter is in the address.
+    page = dashboard.request("GET", "/preferences?all=1&scope=repo%3Ademo")[2].decode("utf-8")
+    assert re.findall(r'<article class="pref (\w+)" id="pref-(P-\d)"', page) == [
+        ("replaced", "P-1"),
+        ("revoked", "P-2"),
+    ]
+    listing = page.split("</header>", 1)[1]
+    assert 'data-pref-open="' not in listing and "撤销理由</b>：不再需要" in listing
+    assert "现行 0 条" in dashboard.request("GET", "/preferences")[2].decode("utf-8")
+    # The script that sends them is the app's, admitted by the page's policy.
+    assert "/api/preferences/record" in APP_SCRIPT and "connect-src 'self'" in page.replace(
+        "&#x27;", "'"
+    )

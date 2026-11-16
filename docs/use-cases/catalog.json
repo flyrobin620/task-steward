@@ -1245,6 +1245,27 @@
         "conformance": "不经过插件接口",
         "live": "Task Scheduler 在测试中以记录参数的替身代替（模拟证据）；真实登记、登录启动与 PWA 由用户在终端运行 tsw dashboard install 验证，记在任务报告中"
       }
+    },
+    {
+      "id": "UC-DIRECT-007",
+      "title": "Dashboard 的长期偏好页：按范围与主题列出，记录、替代、撤销记为用户本人的操作（T290，DN006 §8.10，DN007 §6.2）",
+      "actor": "用户",
+      "acceptance": "Dashboard 应用的 /preferences 与看板同样准入（令牌 cookie、本机 Host），使用相同的 CSP 与 meta 令牌，返回看板为 ./；看板页首（只在应用中）有「长期偏好 N」链接（N 为现行条数），静态 STATUS.html 没有该链接并提示 tsw preference list；页面从投影列出全部长期偏好，按范围分组（全局、仓库、项目），组内按主题再按编号，每条显示编号锚点、主题、照录并转义的原文、状态（现行、已被 P-n 替代、已撤销附时间与理由、在某范围被更窄范围的 P-n 覆盖）、替代关系（替代 / 在本范围内覆盖 / 被替代 / 被覆盖，页内链接）与来源（渠道、记录者、消息引用、时间、账本序号；原话与原文不同时可展开；已撤销的附撤销来源）；同范围同主题两条以上现行偏好时在该组标出；筛选为地址参数 scope 与 all=1，在服务端筛选，默认只列现行的；页首记录表单（范围下拉：全局、任务的各仓库、已有范围、其他手填）；现行条目（未被同范围替代、未撤销）有替代（预填范围、主题、原文；全局的可选更窄范围）与撤销（理由）表单，其他条目没有；POST /api/preferences/record（scope、topic、text、可选 supersedes）与 /api/preferences/<编号>/revoke（reason）须带请求头令牌与本页 Origin、JSON 请求体，以 user 调用者运行 preference_record / preference_revoke，来源渠道 status-app、message_ref 为 status-app:<实例>:<序号>、text 为页面上填写的原文或理由，target 为 [preference, <范围>, standing] 或 [preference, <编号>, revoke]；缺少字段、supersedes 不是编号数组、替代或撤销已被替代或已撤销的偏好、范围不合规时返回 409 与原因且不写账本；成功返回编号与账本序号，应用在终端输出一行；其他 /api/preferences 路径 404",
+      "surfaces": [
+        "cli"
+      ],
+      "component": "host",
+      "status": "active",
+      "claims": [],
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "页面与接口在本机由 surface 层的独立进程覆盖，不依赖宿主会话；浏览器中的确认框与表单另以本机截图核对"
+      }
     }
   ]
 }

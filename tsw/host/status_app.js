@@ -24,6 +24,7 @@
     if (!meta) return;
     const token = meta.content;
     documents();
+    preferenceForms(token);
     document.addEventListener("input", event => {
       const box = event.target instanceof Element ? event.target.closest(".acts") : null;
       if (box && event.target.matches(".reason textarea")) { pending.add(box); hold(); }
@@ -128,6 +129,109 @@
     if (!node) return;
     node.textContent = text;
     node.dataset.ok = ok === null ? "" : String(ok);
+  }
+
+  /* The standing-preferences page (DN006 §8.10, T290): the forms are in the page, hidden until
+     opened; each one is confirmed and posted to /api/preferences/..., where the app runs the same
+     tools as tsw preference record / revoke as the user. Every rule is checked there. */
+  function preferenceForms(token) {
+    const OTHER = "__other__";
+    function field(form, name) {
+      const node = form.querySelector(`[name="${name}"]`);
+      return node ? node.value : "";
+    }
+    function scopeOf(form) {
+      const chosen = field(form, "scope");
+      return (chosen === OTHER ? field(form, "scope_other") : chosen).trim();
+    }
+    function open(box, which) {
+      for (const form of box.querySelectorAll(".pref-form")) {
+        form.hidden = form.dataset.form !== which ? true : !form.hidden;
+        if (!form.hidden) {
+          const first = form.querySelector("textarea, input");
+          if (first) first.focus();
+        }
+      }
+    }
+    function close(box) {
+      for (const form of box.querySelectorAll(".pref-form")) {
+        if (form.dataset.form !== "record") form.hidden = true;
+      }
+    }
+    function request(box, action) {
+      const ref = box.dataset.prefRef || "";
+      const form = box.querySelector(`.pref-form[data-form="${action}"]`);
+      if (!form) return null;
+      if (action === "revoke") {
+        const reason = field(form, "reason").trim();
+        if (!reason) return {error: "撤销须写明理由"};
+        const item = box.closest("article.pref");
+        const words = item ? (item.querySelector(".pref-text") || {}).textContent || "" : "";
+        return {
+          url: `/api/preferences/${encodeURIComponent(ref)}/revoke`,
+          body: {reason},
+          question: `撤销长期偏好 ${ref}（${box.dataset.prefScope}）？\n\n原文：${words}\n\n理由：${reason}`,
+        };
+      }
+      const scope = scopeOf(form), topic = field(form, "topic").trim(), text = field(form, "text").trim();
+      if (!scope || !topic || !text) return {error: "范围、主题与原文都要填写"};
+      const body = {scope, topic, text, supersedes: action === "replace" ? [ref] : []};
+      let head = `记录长期偏好（${scope}）`;
+      if (action === "replace") {
+        head = scope === box.dataset.prefScope
+          ? `替代 ${ref}：新偏好（${scope}）取代它，${ref} 标为已替代`
+          : `在 ${scope} 范围内覆盖 ${ref}（${box.dataset.prefScope}）：只在该范围内优先，${ref} 在其他范围仍有效`;
+      }
+      return {url: "/api/preferences/record", body, question: `${head}？\n\n主题：${topic}\n\n原文：${text}`};
+    }
+    async function submit(box, action) {
+      const ask = request(box, action);
+      if (!ask) return;
+      if (ask.error) { show(box, false, ask.error); return; }
+      if (!window.confirm(ask.question)) return;
+      const buttons = box.querySelectorAll("button");
+      for (const b of buttons) b.disabled = true;
+      show(box, null, "正在提交…");
+      try {
+        const response = await fetch(ask.url, {
+          method: "POST",
+          headers: {"Content-Type": "application/json", "X-TSW-Token": token},
+          body: JSON.stringify(ask.body),
+          credentials: "same-origin",
+        });
+        const body = await response.json().catch(() => ({message: `HTTP ${response.status}`}));
+        if (response.ok && body.ok) {
+          const done = action === "revoke" ? `已撤销 ${body.ref}` : `已记录 ${body.ref}`;
+          show(box, true, `${done}（账本序号 ${body.sequence}），正在刷新…`);
+          window.setTimeout(() => window.location.reload(), 1200);
+          return;
+        }
+        show(box, false, body.message || `HTTP ${response.status}`);
+      } catch (error) {
+        show(box, false, `请求失败：${error}`);
+      }
+      for (const b of buttons) b.disabled = false;
+    }
+    document.addEventListener("click", event => {
+      const target = event.target instanceof Element ? event.target : null;
+      const button = target ? target.closest("button[data-pref-open], button[data-pref-send], button[data-pref-close]") : null;
+      const box = button ? button.closest(".pref-acts") : null;
+      if (!box || button.disabled) return;
+      if (button.dataset.prefOpen) open(box, button.dataset.prefOpen);
+      else if (button.dataset.prefSend) submit(box, button.dataset.prefSend);
+      else close(box);
+    });
+    // "Other" shows the field for a scope of the user's own.
+    const sync = select => {
+      const form = select.closest(".pref-form");
+      const other = form ? form.querySelector('[name="scope_other"]') : null;
+      if (other) other.closest("label").hidden = select.value !== OTHER;
+    };
+    for (const select of document.querySelectorAll('.pref-form select[name="scope"]')) sync(select);
+    document.addEventListener("change", event => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target && target.matches('.pref-form select[name="scope"]')) sync(target);
+    });
   }
 
   /* Markdown files the app serves (briefs, reports) open in a dialog on the page, rendered by the

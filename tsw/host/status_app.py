@@ -6,7 +6,10 @@ a button runs :func:`tsw.direct.perform` on the ``status-app`` channel, the same
 ``tsw task accept``. Each task has its own read-only view at ``/tasks/<task>``
 (:mod:`tsw.host.task_view`). Report links on the page are served read-only from ``runs/`` and
 ``legacy/``; a Markdown file asked for with ``?view=html`` comes back rendered
-(:mod:`tsw.host.markdown`) for the page's document dialog (T278).
+(:mod:`tsw.host.markdown`) for the page's document dialog (T278). The standing preferences have
+their own page at ``/preferences`` (:mod:`tsw.host.preference_view`), whose forms record, replace
+and revoke them as the user on the same channel, the same implementation as ``tsw preference
+record`` / ``revoke`` (DN007 §6.2, T290).
 
 Requests are admitted only with this run's token (DN006 §8.10, DN008 §9; the hosted service
 checks tokens against the hashes ``tsw dashboard open`` stored, T283): it is printed in the
@@ -39,6 +42,7 @@ from tsw.errors import TswError, rejected
 from tsw.events import Event, utc_now
 from tsw.home import Home
 from tsw.host.markdown import MAX_SOURCE_CHARS, render_markdown
+from tsw.host.preference_view import parse_filter, render_preferences
 from tsw.host.status import AppView, Revision, render
 from tsw.host.task_view import card_state, not_found, render_task, timeline
 from tsw.ledger import Ledger
@@ -187,6 +191,61 @@ class StatusApp:
                 return False, not_found(task_id, view)
             return True, page
 
+    def preferences_page(self, query: str = "", token: str | None = None) -> str:
+        """The standing-preferences page (DN006 §8.10, T290) for the address's filter."""
+        ledger, _ = self.ledger()
+        with ledger.view() as conn:
+            view = AppView(token=token or self.token, actions={})
+            return render_preferences(conn, view, parse_filter(query))
+
+    def preference(self, action: str, ref: str | None, body: dict[str, Any]) -> dict[str, Any]:
+        """Record (``ref`` None; with ``supersedes`` a replacement) or revoke ``ref`` as the user
+        on the ``status-app`` channel (DN007 §6.2): the words typed on the page are the source's
+        text, and every rule is the tool's."""
+        fields = ("scope", "topic", "text") if action == "record" else ("reason",)
+        values: dict[str, str] = {}
+        for name in fields:
+            value = body.get(name)
+            if not isinstance(value, str) or not value.strip():
+                raise rejected(f"缺少或无效的字段：{name}", reason="invalid_input", field=name)
+            values[name] = value
+        if action == "record":
+            listed = body.get("supersedes")
+            refs: list[Any] = listed if isinstance(listed, list) else []  # pyright: ignore[reportUnknownVariableType]
+            if listed is not None and (
+                not isinstance(listed, list) or not all(isinstance(r, str) and r for r in refs)
+            ):
+                raise rejected(
+                    "supersedes 应为编号数组", reason="invalid_input", field="supersedes"
+                )
+            scope = values["scope"].strip()
+            payload: dict[str, Any] = {
+                "topic": values["topic"],
+                "text": values["text"],
+                "scope": scope,
+                "supersedes": [str(r).strip() for r in refs],
+            }
+            target: list[Any] = ["preference", scope, "standing"]
+            words = values["text"]
+        elif action == "revoke" and ref:
+            payload = {"ref": ref, "reason": values["reason"]}
+            target = ["preference", ref, "revoke"]
+            words = values["reason"]
+        else:
+            raise rejected("未知的操作", reason="invalid_input", action=action)
+        ledger, config = self.ledger()
+        config.require_valid()
+        return direct.preference(
+            ledger,
+            config,
+            action,
+            payload,
+            target=target,
+            channel="status-app",
+            message_ref=self.next_ref(),
+            text=words,
+        )
+
     def act(self, task_id: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
         revision = body.get("revision")
         if isinstance(revision, bool) or not isinstance(revision, int):
@@ -309,6 +368,12 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             if url.path == "/":
                 self._serve(lambda: app.page(token).encode("utf-8"), "text/html; charset=utf-8")
                 return
+            if url.path == "/preferences":
+                self._serve(
+                    lambda: app.preferences_page(url.query, token).encode("utf-8"),
+                    "text/html; charset=utf-8",
+                )
+                return
             parts = url.path.split("/")
             if len(parts) == 3 and parts[1] == "tasks" and parts[2]:
                 self._serve_task(unquote(parts[2]), token)
@@ -374,7 +439,13 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 self._json(HTTPStatus.FORBIDDEN, {"ok": False, "message": "令牌无效"})
                 return
             parts = [p for p in urlsplit(self.path).path.split("/") if p]
-            if len(parts) != 4 or parts[:2] != ["api", "tasks"] or parts[3] not in direct.ACTIONS:
+            task = len(parts) == 4 and parts[:2] == ["api", "tasks"] and parts[3] in direct.ACTIONS
+            # /api/preferences/record and /api/preferences/<ref>/revoke (DN006 §8.10, T290)
+            record = parts == ["api", "preferences", "record"]
+            revoke = (
+                len(parts) == 4 and parts[:2] == ["api", "preferences"] and parts[3] == "revoke"
+            )
+            if not (task or record or revoke):
                 self._json(HTTPStatus.NOT_FOUND, {"ok": False, "message": "没有这个操作"})
                 return
             if "application/json" not in (self.headers.get("Content-Type") or ""):
@@ -394,6 +465,13 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             if not isinstance(body, dict):
                 self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": "请求体应为 JSON 对象"})
                 return
+            if not task:
+                self._preference(
+                    "record" if record else "revoke",
+                    None if record else unquote(parts[2]),
+                    body,  # pyright: ignore[reportUnknownArgumentType]
+                )
+                return
             task_id, action = unquote(parts[2]), parts[3]
             try:
                 result = app.act(task_id, action, body)  # pyright: ignore[reportUnknownArgumentType]
@@ -406,6 +484,22 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             print(
                 f"tsw status: {result['task_id']} 已{direct.ACTIONS[action][2]}"
                 f"（账本序号 {result['sequence']}）",
+                flush=True,
+            )
+            self._json(HTTPStatus.OK, {"ok": True, **result})
+
+        def _preference(self, action: str, ref: str | None, body: dict[str, Any]) -> None:
+            try:
+                result = app.preference(action, ref, body)
+            except TswError as exc:
+                self._json(
+                    HTTPStatus.CONFLICT,
+                    {"ok": False, "code": exc.code.value, "message": exc.message, **exc.details},
+                )
+                return
+            done = "已记录" if action == "record" else "已撤销"
+            print(
+                f"tsw status: 长期偏好 {result['ref']} {done}（账本序号 {result['sequence']}）",
                 flush=True,
             )
             self._json(HTTPStatus.OK, {"ok": True, **result})

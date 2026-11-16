@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
 
+from tsw import preferences
 from tsw.commands import CommitContext
 from tsw.host.flow import FlowTask, render_flow
 from tsw.host.relations import references
@@ -794,10 +795,18 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
             "本页由 Dashboard 应用（tsw status serve）按账本实时生成；"
             "按钮直接写入账本，记为你本人的操作"
         )
+        # The standing preferences have their own page in the app (DN006 §8.10, T290).
+        in_force = sum(1 for p in preferences.load(conn, None) if preferences.in_force(p))
+        prefs_link = (
+            '<a class="ghost" id="prefs" href="preferences" title="查看与管理长期偏好">'
+            f"长期偏好 {in_force}</a>\n"
+        )
     else:
+        prefs_link = ""
         footer = (
             "本页由 tsw 根据账本生成，请勿手工编辑；"
-            "验收、退回、取消可运行 tsw status serve 在页面上操作"
+            "验收、退回、取消可运行 tsw status serve 在页面上操作；"
+            "长期偏好可用 tsw preference list 查看，或在 Dashboard 应用中管理"
         )
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -807,7 +816,9 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
 <p class="meta">账本序号 {_e(meta.get("projected_seq", "0"))} · 最近记录 {_e(last)} · {
         lease_text
     }</p>
-<button type="button" class="ghost" id="refresh" hidden aria-pressed="false" title="每 30 秒重新载入本页">自动刷新</button>
+{
+        prefs_link
+    }<button type="button" class="ghost" id="refresh" hidden aria-pressed="false" title="每 30 秒重新载入本页">自动刷新</button>
 <button type="button" class="ghost" id="style" hidden title="朴素或鲜艳">风格：朴素</button>
 <button type="button" class="ghost" id="theme" hidden>主题：跟随系统</button></header>
 <section class="tiles">{tiles_html}</section>
