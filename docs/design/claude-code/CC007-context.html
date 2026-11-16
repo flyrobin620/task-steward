@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="tsw-source-sha256" content="3544a8f409b3bca3901aa8f6a1cc221956d49e1a771fefcc44db3a49271cbafd">
+<title>CC007 Claude Code 中的任务上下文：任务结束时搜集偏好候选</title>
+<style>
+:root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.7 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--fg);background:#fff}
+.layout{display:grid;grid-template-columns:260px minmax(0,1fr);max-width:1400px;margin:0 auto}
+nav.toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:28px 18px;border-right:1px solid var(--line);font-size:13px}
+nav.toc h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
+nav.toc a{display:block;color:var(--fg);text-decoration:none;padding:2px 0}
+nav.toc a.l3{padding-left:14px;color:var(--muted)}
+nav.toc a:hover{color:var(--accent)}
+main{padding:32px 48px 64px;min-width:0}
+h1{font-size:28px;margin:0 0 16px;border-bottom:3px solid var(--accent);padding-bottom:10px}
+h2{font-size:21px;margin:36px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:17px;margin:26px 0 10px}
+h4{font-size:15px;margin:20px 0 8px}
+a{color:var(--accent)}
+code{font-family:Consolas,"Cascadia Mono",monospace;font-size:13px;background:var(--code);padding:1px 5px;border-radius:4px}
+pre{background:#1e2230;color:#e8eaf2;padding:14px 16px;border-radius:8px;overflow:auto;line-height:1.5}
+pre code{background:none;padding:0;color:inherit}
+table{border-collapse:collapse;width:100%;margin:12px 0 18px;font-size:13.5px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:var(--bg-soft);white-space:nowrap}
+tr:nth-child(even) td{background:#fbfcfe}
+blockquote{margin:12px 0;padding:8px 16px;border-left:4px solid var(--accent);background:var(--bg-soft)}
+figure{margin:18px 0 8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff}
+figure svg{display:block;width:100%;height:auto;max-height:none}
+figcaption{font-size:13px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between;gap:12px}
+.meta{color:var(--muted);font-size:13px}
+footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:10px}
+@media (max-width:900px){.layout{grid-template-columns:1fr}nav.toc{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line)}main{padding:20px}}
+@media print{nav.toc{display:none}.layout{display:block}main{padding:0}a{color:inherit;text-decoration:none}
+ pre{white-space:pre-wrap;background:#f3f4f8;color:#111}figure,table,pre{break-inside:avoid}h2,h3{break-after:avoid}
+ body{font-size:11pt}@page{margin:16mm 14mm}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc"><h2>目录</h2><a class="l2" href="#1-范围">1. 范围</a><a class="l2" href="#2-子代理">2. 子代理</a><a class="l2" href="#3-worker-的步骤">3. worker 的步骤</a><a class="l2" href="#4-主会话的步骤">4. 主会话的步骤</a><a class="l2" href="#5-用户在终端处理">5. 用户在终端处理</a><a class="l2" href="#6-待验证">6. 待验证</a></nav>
+<main>
+<h1>CC007 Claude Code 中的任务上下文：任务结束时搜集偏好候选</h1>
+<ul><li>状态：设计草案（T288）</li><li>日期：2026-11-16</li><li>实现的设计：<a href="../DN007-ledger-and-context.html">DN007 §6.3 任务结束时搜集偏好候选</a></li><li>相关：<a href="CC006-plugins.html">CC006 Claude Code 插件</a> · <a href="CC001-sessions-and-hooks.html">CC001 会话与 hooks</a></li></ul>
+<h2 id="1-范围">1. 范围</h2>
+<p>DN007 §6.3 规定任务结束时由子代理搜集偏好候选、经用户确认后记录。本文写这件事在 Claude Code（Claude 桌面 app 的 Code 标签）中的做法：子代理怎样启动、说明文字放在哪里、worker 与主会话各自的步骤、用户怎样确认。</p>
+<h2 id="2-子代理">2. 子代理</h2>
+<ul><li><strong>启动方式</strong>：会话用宿主的 <code>Agent</code> 工具启动一个子代理：<code>subagent_type: &quot;general-purpose&quot;</code>，<code>description</code> 为“搜集偏好候选”，<code>prompt</code> 原样使用 <code>preference_sources</code> 返回的 <code>prompt</code>，不自己拼接或删改。子代理有独立的上下文，结束时只把结果交回启动它的会话。</li><li><strong>为什么是 general-purpose</strong>：它继承会话的模型。判断一句中文是不是“以后都适用”需要理解措辞与上下文，用更小的模型容易把本任务的决定当成偏好，或漏掉不带“以后”字样的长期意图。</li><li><strong>只读</strong>：提示语要求子代理只读材料与报告草稿、不调用任何写工具（tsw 的写工具、编辑文件、git、gh），只返回一个 JSON 对象。即使它违反要求调用了 tsw 写工具，MCP server 也按会话解析为启动它的 worker 或主会话，只能做那个会话本来就能做的事；它不能把候选变成偏好（<code>preference_record</code> 只给主会话与用户本人，且须附用户原话）。</li><li><strong>说明文字只有一份来源</strong>：产品仓库的 <code>tsw/host/preference_scan.md</code>，由 <code>preference_sources</code> 在每次调用时读取并放在 <code>prompt</code> 开头，后面是本任务的材料、现行偏好与已有候选（JSON）。说明随产品拉取立即生效，不需要 <code>tsw host render</code>、插件更新或重启会话（MCP server 在调用时读取文件）。</li><li><strong>输出</strong>：一个 JSON 对象 <code>{&quot;candidates&quot;: [...], &quot;skipped&quot;: [...]}</code>。每个候选含 <code>quote</code>、<code>source_ref</code>、<code>scope</code>、<code>topic</code>、<code>reason</code>，可选 <code>supersedes</code>；<code>skipped</code> 列出看过但不提的（与现行偏好相同、已是候选、只对本任务等），每项写 <code>source_ref</code> 与理由。子代理没有找到候选时返回空列表。</li></ul>
+<p>考虑过、没有采用的做法：在插件中定义专用的子代理（<code>agents/</code> 下限定工具为只读）。它能在宿主层面限制工具，但说明文字随插件副本分发，每次修改都要更新插件、重启会话才生效（CC006 §11.1），与“偏好相关的说明随产品立即生效”相悖；子代理即使误调用写工具也受 tsw 的角色与来源校验约束，收益不足以抵消分发成本。</p>
+<h2 id="3-worker-的步骤">3. worker 的步骤</h2>
+<p>在 <code>plugin/roles/worker.md</code> 的“需要记住的决定”一条中（替换原来“写进报告的‘决定与约定’、主会话验收时转记”）：</p>
+<ol><li>自评审定稿、报告草稿写好之后，<code>submit</code> 之前：调用 <code>preference_sources</code>（<code>report_path</code> 为报告草稿的路径）。</li><li>用 <code>Agent</code> 工具按 §2 启动子代理，<code>prompt</code> 用返回的 <code>prompt</code>。</li><li>拿到结果后调用 <code>preference_candidates_record</code>：<code>scanned_through</code> 用 <code>preference_sources</code> 返回的值，<code>candidates</code> 用子代理的候选。worker 可以去掉明显不成立的候选（例如子代理把 worker 自己的话当成了用户的话），不能新增或改写原话；tsw 会核对每条原话确实出现在所引用的材料中。没有候选时也调用一次（<code>candidates</code> 为空），表示搜集过。</li><li>报告“决定与约定”一节列出本任务的候选编号（<code>PC-…</code>）与原话，注明“待用户在主会话确认”；不再自己判断哪些要记为偏好，也不写“建议记为偏好”之外的结论。</li><li>提交之后用户又在本会话中说了以后都适用的话（例如需求变更后重新提交），重新提交前再做一次 1–3。</li></ol>
+<p>worker 不问用户是否记为偏好：确认在主会话中进行（DN007 §6.3）。</p>
+<h2 id="4-主会话的步骤">4. 主会话的步骤</h2>
+<p>在 <code>tsw/host/orchestrate_skill.md</code> 的“核验与验收”中（替换原来“报告‘决定与约定’一节中用户明确说过以后也适用的约定，向用户确认后用 <code>preference_record</code> 记录”）：</p>
+<ol><li>核验 worker 的提交时看 <code>task_read</code> 的 <code>preference_scan</code>：<code>missing</code> 或 <code>stale</code> 时，在 <code>task_accept</code> 之前自己按 §3 的 1–3 补做（<code>task_id</code> 为该任务；报告路径为提交中的报告）。</li><li><code>task_accept</code> 之后，与 follow-up 一起把本任务未决的候选交给用户：每条写编号、原话、来源编号、建议的范围与主题；有替代建议的写出被替代偏好的编号与原文。问用户每条是“记录”“改范围或说法后记录”还是“不记”。</li><li>用户答复后：<ul><li>记录：<code>preference_record</code>，<code>candidate</code> 为候选编号，<code>scope</code> / <code>topic</code> 按用户的意思（没说就用建议值），<code>supersedes</code> 只在用户同意替代时给出；<code>user_source</code> 是用户这次答复的原话，<code>target</code> 为 <code>[&quot;preference&quot;, &lt;scope&gt;, &quot;standing&quot;]</code>。用户改了说法时，<code>text</code> 写用户的新说法（必须原样出现在这次答复中）；否则不写 <code>text</code>，用候选原话。</li><li>不记：<code>preference_candidate_dismiss</code>，<code>user_source</code> 是用户的原话（<code>target</code> 为 <code>[&quot;preference&quot;, &lt;候选编号&gt;, &quot;dismiss&quot;]</code>），<code>reason</code> 写用户的理由或“用户不记”。</li><li>用户暂不答复：候选留在 <code>attention</code> 的 <code>preference_candidates</code> 中，下次用户在主会话时再问；不要代用户决定，也不要因为没有答复就拒绝。</li></ul></li><li>用户在一条答复中处理多条候选时，每条分别调用，引用同一段原话。</li></ol>
+<p>主会话中用户直接说出的长期偏好仍按“配置与维护”当场 <code>preference_record</code>，不经候选。</p>
+<h2 id="5-用户在终端处理">5. 用户在终端处理</h2>
+<p>用户可以不经主会话，在 Claude 之外的终端运行（与 <code>tsw preference record / revoke</code> 一样，在宿主会话中运行会被拒绝，DN006 §8.10）：</p>
+<ul><li><code>tsw preference list --candidates [--all]</code>：列出未决的候选（<code>--all</code> 包括已记录与已拒绝的）；</li><li><code>tsw preference record --candidate &lt;PC-n&gt; [--scope …] [--topic …] [--text …] [--supersedes …]</code>：确认一条候选，缺省用候选的原话、建议的范围与主题；</li><li><code>tsw preference dismiss &lt;PC-n&gt; --reason &lt;理由&gt;</code>：拒绝一条候选。</li></ul>
+<h2 id="6-待验证">6. 待验证</h2>
+<ul><li>子代理在真实任务中提出的候选是否准确（不把本任务的决定当成偏好、不漏掉明确的长期意图）：本任务的单元、组件与 surface 测试只覆盖材料、记录、核对与确认的流程，不调用模型；子代理判断的质量要在之后的真实任务中观察，必要时调整 <code>preference_scan.md</code>。</li></ul>
+<footer>本页由同目录的 <a href="CC007-context.md">CC007-context.md</a> 生成，内容与 Markdown 版本一致。</footer>
+</main>
+</div>
+</body>
+</html>

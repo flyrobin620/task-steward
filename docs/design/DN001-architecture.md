@@ -159,6 +159,8 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一
 | `task_read` / `context_catalog` / `context_read` / `context_search` / `context_decisions` / `context_task` | ✓ | 可读全部任务（只读），brief 列出推荐读取集合（DN007 §7.2） | 任务卡片、原文、全文片段、用户决定、本任务过程 |
 | `task_register` / `task_update` / `task_plan` | ✓ | — | T01–T06 |
 | `task_summary` / `preference_record` / `preference_revoke` | ✓ | — | 写入任务卡片的关键词与摘要、记录（替代）与撤销用户的长期偏好（DN007 §5.1、§6、§6.2、§12） |
+| `preference_sources` / `preference_candidates_record` | ✓ | 仅本任务，用户验收前 | 任务结束时搜集偏好候选：取本任务的用户原话与子代理说明（只读）、记录一次搜集与其中的候选（DN007 §6.3）；不改变任务状态 |
+| `preference_candidate_dismiss` | ✓ | — | 按用户原话拒绝一条偏好候选（DN007 §6.3）；确认候选用 `preference_record` 的 `candidate` |
 | `task_dispatch` / `attempt_bind` / `attempt_reconcile` | ✓ | — | T07–T10、T15 |
 | `inbox` / `inbox_ack` | ✓ | — | 未处理 reportable 事件 |
 | `feedback` / `pause` / `resume` / `request_input` / `resolve_input` | ✓ | `pause` 仅自身 | T02、T12、T14、T17、T19–T21 |
