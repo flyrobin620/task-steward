@@ -528,3 +528,64 @@ def test_a_subagents_hand_back_is_never_the_users_words(home: Home) -> None:
         Guard(h.home, env, payload).run("UserPromptSubmit")
     assert h.query("SELECT * FROM session_messages") == []
     assert [m["ref"] for m in sources(h)["materials"]] == ["goal@r1"]
+
+
+@pytest.mark.use_case("UC-CONTEXT-007")
+def test_the_same_words_in_another_scope_are_a_new_candidate(home: Home) -> None:
+    """Duplicates are the same words in the same scope or a global one (review r1 F1)."""
+    h = Harness(home)
+    h.run(
+        "preference_record",
+        ORCH,
+        topic="PR",
+        text="PR 默认先开 draft",
+        scope="repo:other",
+        user_source=said(["preference", "repo:other", "standing"]),
+    )
+    h.register("T001", goal="用户原话：“在 demo 里我也是 PR 默认先开 draft”")
+    h.plan("T001")
+    worker = h.dispatch("T001")
+    through = int(sources(h)["scanned_through"])
+    found = {"quote": "PR 默认先开 draft", "source_ref": "goal@r1", "topic": "PR", "reason": "习惯"}
+    out = scan(h, worker, through, {**found, "scope": "repo:demo"})
+    assert out["events"][0]["data"]["ref"] == "PC-1"
+    # Widening to global is new too; the same scope again, or under a global one, is not.
+    widened = scan(h, worker, through, {**found, "scope": "global"})
+    assert widened["events"][0]["data"]["ref"] == "PC-2"
+    again = scan(h, worker, through, {**found, "scope": "repo:demo"})
+    assert again["events"][0]["data"]["duplicates"] == [
+        {"source_ref": "goal@r1", "same_as": "PC-1"}
+    ]
+
+
+@pytest.mark.use_case("UC-CONTEXT-007")
+def test_a_scan_of_an_older_revision_is_refused(home: Home) -> None:
+    """The goal changed after the materials were read: that scan does not count (review r1 F2)."""
+    h = Harness(home)
+    worker = started(h)
+    through = int(sources(h)["scanned_through"])
+    h.run(
+        "task_update",
+        task_id="T001",
+        goal=GOAL + "\n补充：以后报告都先写结论",
+        acceptance=["功能可用"],
+        user_source=h.source("T001", 1, "change", "以后报告都先写结论"),
+    )
+    assert (
+        reason_of(
+            h,
+            "preference_candidates_record",
+            worker,
+            task_id="T001",
+            scanned_through=through,
+            candidates=[],
+        )
+        == "stale_scan"
+    )
+    with h.ledger.view() as conn:
+        assert candidates.scan_status(conn, "T001")["state"] == "missing"
+    fresh = sources(h)
+    assert [m["ref"] for m in fresh["materials"]] == ["goal@r2", f"E{fresh['scanned_through']}"]
+    scan(h, worker, int(fresh["scanned_through"]))
+    with h.ledger.view() as conn:
+        assert candidates.scan_status(conn, "T001")["state"] == "done"

@@ -451,17 +451,35 @@ def check_supersedes(conn: sqlite3.Connection, scope: str, refs: Sequence[str]) 
             )
 
 
-def _known_words(conn: sqlite3.Connection) -> dict[str, str]:
-    """Words (without spacing) already a candidate (open or recorded) or a preference in force."""
-    known: dict[str, str] = {}
-    for r in conn.execute(
-        "SELECT ref, quote FROM preference_candidates WHERE status IN ('open', 'recorded')"
-    ):
-        known.setdefault(compact(str(r["quote"])), str(r["ref"]))
-    for p in preferences.load(conn, None):
-        if preferences.in_force(p):
-            known.setdefault(compact(str(p["text"])), str(p["ref"]))
+Known = list[tuple[str, str, str]]  # (words without spacing, scope, ref)
+
+
+def _known_words(conn: sqlite3.Connection) -> Known:
+    """Words already a candidate (open or recorded) or a preference in force, with their scope."""
+    known: Known = [
+        (compact(str(r["quote"])), str(r["scope"]), str(r["ref"]))
+        for r in conn.execute(
+            "SELECT ref, quote, scope FROM preference_candidates "
+            "WHERE status IN ('open', 'recorded')"
+        )
+    ]
+    known += [
+        (compact(str(p["text"])), str(p["scope"]), str(p["ref"]))
+        for p in preferences.load(conn, None)
+        if preferences.in_force(p)
+    ]
     return known
+
+
+def same_as(known: Known, words: str, scope: str) -> str | None:
+    """The candidate or preference that already covers these words in ``scope``: the same words in
+    the same scope or a global one. The same words in another repository's scope, or a narrower
+    one than ``scope``, do not reach where the user now wants them (review r1 F1)."""
+    key = compact(words)
+    for known_words, known_scope, ref in known:
+        if known_words == key and narrower_or_same(scope, known_scope):
+            return ref
+    return None
 
 
 @tool(
@@ -493,11 +511,17 @@ def preference_candidates_record(inp: Mapping[str, Any], env: ToolEnv) -> Comman
                 reason="invalid_input",
                 field="scanned_through",
             )
-        found = {
-            str(m["ref"]): m
-            for m in materials(ctx.conn, ctx.storage.read(since=0), task_id)
-            if int(m["sequence"]) <= through
-        }
+        every_material = materials(ctx.conn, ctx.storage.read(since=0), task_id)
+        # The goal of the current revision must have been read: a scan of an older revision
+        # does not count for this one (review r1 F2).
+        if int(every_material[0]["sequence"]) > through:
+            raise rejected(
+                "任务在读取材料之后改了目标或 revision：重新调用 preference_sources 再搜集",
+                reason="stale_scan",
+                field="scanned_through",
+                revision=int(row["revision"]),
+            )
+        found = {str(m["ref"]): m for m in every_material if int(m["sequence"]) <= through}
         for i, entry in enumerate(entries):
             material = found.get(entry["source_ref"])
             if material is None:
@@ -533,13 +557,13 @@ def preference_candidates_record(inp: Mapping[str, Any], env: ToolEnv) -> Comman
         recorded: list[str] = []
         duplicates: list[dict[str, Any]] = []
         for entry in entries:
-            key = compact(entry["quote"])
-            if key in known:
-                duplicates.append({"source_ref": entry["source_ref"], "same_as": known[key]})
+            already = same_as(known, entry["quote"], entry["scope"])
+            if already is not None:
+                duplicates.append({"source_ref": entry["source_ref"], "same_as": already})
                 continue
             count += 1
             ref = f"PC-{count}"
-            known[key] = ref
+            known.append((compact(entry["quote"]), entry["scope"], ref))
             recorded.append(ref)
             material = found[entry["source_ref"]]
             drafts.append(
