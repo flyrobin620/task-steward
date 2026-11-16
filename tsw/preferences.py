@@ -22,6 +22,9 @@ from typing import Any
 REF = re.compile(r"(?<![\w-])P-[1-9]\d*(?![\w-])")
 
 Where = tuple[str, set[str]]
+# The brief's preference lines sit between these markers, so a later brief can tell whether
+# they changed even when a preference's words span lines (review r3 F5, r4 F6).
+BLOCK = ("<!-- tsw:preferences -->", "<!-- /tsw:preferences -->")
 
 
 def applies(scope: str, where: Where | None) -> bool:
@@ -203,17 +206,19 @@ def brief_lines(
             + "；".join(notes)
             + "。以现在有效的偏好为准，有疑问时用 `context_decisions` 查或问用户\n"
         )
-    return out
+    return f"{BLOCK[0]}\n{out}{BLOCK[1]}\n" if out else ""
+
+
+def block(brief: str) -> str:
+    """The preference lines a brief holds (between the markers), or empty."""
+    start = brief.find(BLOCK[0])
+    end = brief.find(BLOCK[1], start)
+    return brief[start:end] if start >= 0 and end >= 0 else ""
 
 
 def _shown(item: Mapping[str, Any]) -> str:
-    # One physical line per preference in the brief: its words may hold line breaks (review r3
-    # F5), and the brief and attempt_continue treat each preference line as one line.
-    return f"{item['ref']}（{item['scope']}）：“{_flat(item['text'])}”"
-
-
-def _flat(text: Any) -> str:
-    return " ".join(str(text).split())
+    # The user's words as recorded, spaces and line breaks included (review r4 F6).
+    return f"{item['ref']}（{item['scope']}）：“{item['text']}”"
 
 
 def _note(
@@ -228,7 +233,7 @@ def _note(
     if ref not in here:
         return f"{ref}（{item['scope']}）的范围不包括仓库 {repo}"
     if item.get("revoked"):
-        return f"{ref} 已撤销（理由：{_flat(item['revoked']['reason'])}）"
+        return f"{ref} 已撤销（理由：{item['revoked']['reason']}）"
     # Follow same-scope replacements to the one now in that scope, then see whether a narrower
     # preference overrides that one for this repository (review r1 F2).
     now = item

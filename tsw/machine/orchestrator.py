@@ -41,6 +41,7 @@ from tsw.machine.model import (
     row_dict,
     task,
 )
+from tsw.preferences import block as preference_block
 from tsw.preferences import brief_lines, is_ref, supplied_problems
 from tsw.roles import record_given, worker_instructions, worker_prompt
 from tsw.tasks import TaskSpec, register, render_spec, validate_spec
@@ -956,9 +957,6 @@ def attempt_deliver(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return _cmd(env, "attempt_deliver", inp, build)
 
 
-PREFERENCE_LINES = ("- 派发时补充的适用偏好", "- 偏好核对")
-
-
 def _refresh_preferences(
     ctx: CommitContext,
     row: Mapping[str, Any],
@@ -981,10 +979,7 @@ def _refresh_preferences(
     except OSError:
         old = ""
 
-    def lines(text: str) -> list[str]:
-        return [x for x in text.splitlines() if x.startswith(PREFERENCE_LINES)]
-
-    if lines(brief) == lines(old):
+    if preference_block(brief) == preference_block(old):
         return None
     ctx.storage.put_artifact(str(path), brief.encode("utf-8"))
     return str(path)

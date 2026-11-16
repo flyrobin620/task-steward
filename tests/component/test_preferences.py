@@ -13,6 +13,7 @@ from tsw.context import ContextService, Reader
 from tsw.errors import TswError
 from tsw.home import Home
 from tsw.machine.base import Caller
+from tsw.preferences import block
 
 ORCH_READER = Reader("orchestrator", "orch-1")
 USER = Caller(role="user", session_id=None, machine=MACHINE)
@@ -462,12 +463,14 @@ def test_a_refused_continuation_leaves_the_brief_alone(home: Home) -> None:
 
 
 @pytest.mark.use_case("UC-CONTEXT-006")
-def test_a_preference_with_line_breaks_stays_on_one_brief_line(home: Home) -> None:
-    """Review r3 F5: after a multi-line preference, one added on continuation still shows."""
+def test_a_preferences_words_are_kept_and_later_ones_still_show(home: Home) -> None:
+    """Review r3 F5 and r4 F6: the words go into the brief as recorded (line breaks and
+    double spaces kept), and a preference added on continuation after a multi-line one still
+    rewrites the brief."""
     h = Harness(home)
     h.register("T001")
     h.plan("T001")
-    first = record(h, "global", "报告要求：\n附截图", topic="报告")
+    first = record(h, "global", "报告要求：\n  附截图，分隔符用 `  `", topic="报告")
     h.run("task_dispatch", task_id="T001", workdir="~/wt/T001", user_turn=True, read_set=[first])
     started = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
     data = started["events"][0]["data"]
@@ -481,9 +484,10 @@ def test_a_preference_with_line_breaks_stays_on_one_brief_line(home: Home) -> No
         brief_delivered=True,
         receipt={"model": "claude-opus-5-5[1m]"},
     )
-    assert f"{first}（global）：“报告要求： 附截图”" in brief(h, "T001")
+    assert f"{first}（global）：“报告要求：\n  附截图，分隔符用 `  `”" in brief(h, "T001")
     second = record(h, "global", "图只出 SVG", topic="图")
     out = h.run("attempt_continue", task_id="T001", read_set=[second])
     assert out["events"][0]["data"]["brief_rewritten"]["preferences"] == [second]
-    line = next(x for x in brief(h, "T001").splitlines() if x.startswith("- 派发时补充的适用偏好"))
-    assert f"{first}（global）" in line and f"{second}（global）：“图只出 SVG”" in line
+    shown = block(brief(h, "T001"))
+    assert f"{first}（global）：“报告要求：\n  附截图，分隔符用 `  `”" in shown
+    assert f"{second}（global）：“图只出 SVG”" in shown
