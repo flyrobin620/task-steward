@@ -58,6 +58,9 @@ AUTOMATED_PREFIXES = (
     "<cross-session-message",
     "<side-sessions-event",
     "<task-notification",
+    # A subagent's hand-back (the worker's preference scan runs one, DN007 §6.3): its words would
+    # otherwise be recorded as the user's and could be cited as their source.
+    "<agent-message",
     "<ci-monitor-event",
     "<scheduled-task",
     "<system-reminder",

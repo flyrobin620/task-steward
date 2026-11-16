@@ -362,6 +362,40 @@ CREATE TABLE IF NOT EXISTS preference_revocations(
     revoked_at TEXT NOT NULL,
     source_seq INTEGER NOT NULL
 );
+-- Preference candidates collected when a task ends, and the scans that found them (DN007 §6.3):
+-- only user.preference_candidate(_dismissed), task.preference_scanned and the candidate field of
+-- user.preference_recorded write them, so a projection made before them stays valid.
+CREATE TABLE IF NOT EXISTS preference_candidates(
+    ref TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    attempt TEXT,
+    quote TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    verified INTEGER NOT NULL,
+    scope TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    supersedes TEXT NOT NULL,
+    status TEXT NOT NULL,
+    preference TEXT,
+    resolution TEXT,
+    recorded_by TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    source_seq INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS preference_scans(
+    sequence INTEGER PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    attempt TEXT,
+    scanned_through INTEGER NOT NULL,
+    candidates TEXT NOT NULL,
+    skipped TEXT NOT NULL,
+    by TEXT NOT NULL,
+    scanned_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS index_queue(
     task_id TEXT NOT NULL,
     sequence INTEGER NOT NULL,

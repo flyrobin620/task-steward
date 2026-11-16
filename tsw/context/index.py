@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from tsw.events import Event, digest
+from tsw.events import Event, digest, sources_in
 from tsw.faults import fault
 from tsw.home import Home
 from tsw.ledger import Ledger
@@ -218,23 +218,6 @@ def task_facts(conn: sqlite3.Connection, task_id: str) -> Facts | None:
 # ---------------------------------------------------------------------- user decisions in events
 
 
-def sources_in(value: Any) -> Generator[Mapping[str, Any], None, None]:
-    """Every ``VerifiedSource`` in an event's data (DN006 §8.5)."""
-    if isinstance(value, Mapping):
-        if (
-            isinstance(value.get("channel"), str)
-            and isinstance(value.get("text"), str)
-            and isinstance(value.get("target"), list)
-        ):
-            yield value
-            return
-        for item in value.values():
-            yield from sources_in(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from sources_in(item)
-
-
 def _detail(data: Mapping[str, Any]) -> str:
     for key in ("answer", "summary", "reason", "decision", "note"):
         value = data.get(key)
@@ -244,9 +227,15 @@ def _detail(data: Mapping[str, Any]) -> str:
 
 
 def decision_docs(event: Event) -> list[dict[str, Any]]:
-    """User decisions an event carries (DN007 §12.2). Standing preferences and their revocations
-    are read from L1."""
-    if event.type in ("user.preference_recorded", "user.preference_revoked"):
+    """User decisions an event carries (DN007 §12.2). Standing preferences, their revocations and
+    preference candidates (DN007 §6.3) are read from L1."""
+    if event.type in (
+        "user.preference_recorded",
+        "user.preference_revoked",
+        "user.preference_candidate",
+        "user.preference_candidate_dismissed",
+        "task.preference_scanned",
+    ):
         return []
     found: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()

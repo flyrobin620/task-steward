@@ -18,8 +18,9 @@ from typing import Any
 from tsw.commands import Command, CommitContext
 from tsw.errors import rejected
 from tsw.events import Event, EventDraft, digest
-from tsw.machine import guards
+from tsw.machine import candidates, guards
 from tsw.machine.base import ToolEnv, items, mapping, opt_text, strings, text, tool
+from tsw.machine.candidates import revoked, scope_of, user_channels
 from tsw.machine.model import dumps, loads, task
 
 STAGES = ("intake", "acceptance", "update")
@@ -109,46 +110,18 @@ def task_summary(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return _cmd(env, "task_summary", inp, build)
 
 
-def scope_of(value: str) -> str:
-    """``global``, ``repo:<name>`` or ``project:<id>``."""
-    kind, _, name = value.partition(":")
-    if value == "global" or (kind in ("repo", "project") and name.strip() and name == name.strip()):
-        return value
-    raise rejected(
-        "scope 应为 global、repo:<仓库> 或 project:<项目>", reason="invalid_input", field="scope"
-    )
-
-
-def narrower_or_same(new: str, old: str) -> bool:
-    return old in (new, "global")
-
-
-def _channels(env: ToolEnv) -> tuple[str, ...]:
-    """The user's own terminal commands record their source on the direct channels; a session
-    quotes the user from a conversation (DN006 §8.10)."""
-    return guards.DIRECT_CHANNELS if env.caller.role == "user" else guards.USER_CHANNELS
-
-
-def _revoked(conn: sqlite3.Connection, ref: str) -> bool:
-    return (
-        conn.execute("SELECT 1 FROM preference_revocations WHERE ref = ?", (ref,)).fetchone()
-        is not None
-    )
-
-
 @tool(
     "preference_record",
     "orchestrator",
     "user",
     description="记录用户明确说出的长期偏好（DN007 §6、§6.2）：附用户原话，target 为 "
     '["preference", <scope>, "standing"]；修改即替代：在 supersedes 中列出被替代的'
-    "（同范围或更窄、现行的）",
+    "（同范围或更窄、现行的）；用户确认偏好候选时带 candidate（DN007 §6.3）",
 )
 def preference_record(inp: Mapping[str, Any], env: ToolEnv) -> Command:
-    topic = " ".join(text(inp, "topic").split())
-    statement = text(inp, "text").strip()
-    if len(statement) > MAX_PREFERENCE_CHARS or len(topic) > MAX_KEYWORD_CHARS * 2:
-        raise rejected("偏好或主题过长", reason="invalid_input", field="text")
+    from_candidate = (opt_text(inp, "candidate") or "").strip()
+    topic_in = " ".join(text(inp, "topic", required=not from_candidate).split())
+    text_in = text(inp, "text", required=not from_candidate).strip()
     scope = scope_of(text(inp, "scope"))
     supersedes = list(
         dict.fromkeys(strings(items(inp, "supersedes", required=False), "supersedes"))
@@ -156,46 +129,44 @@ def preference_record(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     source = guards.verified_source(
         mapping(inp, "user_source"),
         ["preference", scope, PREFERENCE_TARGET],
-        channels=_channels(env),
+        channels=user_channels(env),
         mismatch='用户来源的决定对象应为 ["preference", <scope>, "standing"]',
     )
 
     def build(ctx: CommitContext) -> list[EventDraft]:
-        for ref in supersedes:
-            old = ctx.conn.execute(
-                "SELECT scope, superseded_by FROM user_decisions WHERE ref = ?", (ref,)
-            ).fetchone()
-            if old is None:
-                raise rejected("要替代的偏好不存在", reason="invalid_input", ref=ref)
-            if old["superseded_by"]:
+        topic, statement = topic_in, text_in
+        if from_candidate:
+            found = candidates.open_candidate(ctx.conn, from_candidate)
+            topic = topic or str(found["topic"])
+            quote = str(found["quote"])
+            # The user's words: the candidate's quote, or what the user said when confirming it.
+            changed = statement and candidates.compact(statement) != candidates.compact(quote)
+            if changed and candidates.compact(statement) not in candidates.compact(
+                str(source["text"])
+            ):
                 raise rejected(
-                    "要替代的偏好已被替代", reason="invalid_input", ref=ref, by=old["superseded_by"]
-                )
-            if _revoked(ctx.conn, ref):
-                raise rejected("要替代的偏好已撤销", reason="invalid_input", ref=ref)
-            if not narrower_or_same(scope, str(old["scope"])):
-                raise rejected(
-                    "新偏好的范围须与被替代的相同或更窄",
+                    "改过的偏好原文须原样出现在用户这次确认的原话中",
                     reason="invalid_input",
-                    ref=ref,
-                    scope=old["scope"],
+                    field="text",
                 )
+            statement = statement or quote
+        if len(statement) > MAX_PREFERENCE_CHARS or len(topic) > MAX_KEYWORD_CHARS * 2:
+            raise rejected("偏好或主题过长", reason="invalid_input", field="text")
+        candidates.check_supersedes(ctx.conn, scope, supersedes)
         count = int(ctx.conn.execute("SELECT COUNT(*) AS n FROM user_decisions").fetchone()["n"])
         ref = f"P-{count + 1}"
-        return [
-            EventDraft(
-                type="user.preference_recorded",
-                data={
-                    "ref": ref,
-                    "kind": PREFERENCE_TARGET,
-                    "topic": topic,
-                    "text": statement,
-                    "scope": scope,
-                    "supersedes": supersedes,
-                    "source": source,
-                },
-            )
-        ]
+        data: dict[str, Any] = {
+            "ref": ref,
+            "kind": PREFERENCE_TARGET,
+            "topic": topic,
+            "text": statement,
+            "scope": scope,
+            "supersedes": supersedes,
+            "source": source,
+        }
+        if from_candidate:
+            data["candidate"] = from_candidate
+        return [EventDraft(type="user.preference_recorded", data=data)]
 
     return _cmd(env, "preference_record", inp, build)
 
@@ -216,7 +187,7 @@ def preference_revoke(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     source = guards.verified_source(
         mapping(inp, "user_source"),
         ["preference", ref, REVOKE_TARGET],
-        channels=_channels(env),
+        channels=user_channels(env),
         mismatch='用户来源的决定对象应为 ["preference", <编号>, "revoke"]',
     )
 
@@ -233,7 +204,7 @@ def preference_revoke(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 ref=ref,
                 by=row["superseded_by"],
             )
-        if _revoked(ctx.conn, ref):
+        if revoked(ctx.conn, ref):
             raise rejected("偏好已撤销", reason="invalid_input", ref=ref)
         return [
             EventDraft(
@@ -295,6 +266,8 @@ def reduce_preference_recorded(conn: sqlite3.Connection, event: Event) -> None:
             "UPDATE user_decisions SET superseded_by = ? WHERE ref = ? AND scope = ?",
             (ref, str(old), str(data.get("scope") or "global")),
         )
+    if data.get("candidate"):
+        candidates.reduce_confirmed(conn, str(data["candidate"]), ref, event)
 
 
 def reduce_preference_revoked(conn: sqlite3.Connection, event: Event) -> None:
@@ -321,6 +294,7 @@ REDUCERS = {
     "user.preference_recorded": reduce_preference_recorded,
     "user.preference_revoked": reduce_preference_revoked,
     "context.read": reduce_context_read,
+    **candidates.REDUCERS,
 }
 
 

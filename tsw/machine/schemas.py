@@ -533,15 +533,79 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         },
     ),
     "preference_record": schema(
-        ["topic", "text", "scope", "user_source"],
-        topic={**S, "description": "主题词，如“邮件发送”“PR 默认状态”"},
-        text={**S, "description": "偏好内容，按用户原意写清楚"},
-        scope={**S, "description": "global、repo:<仓库> 或 project:<项目>"},
+        ["scope", "user_source"],
+        topic={
+            **S,
+            "description": "主题词，如“邮件发送”“画图”；带 candidate 时可省（用候选的主题）",
+        },
+        text={
+            **S,
+            "description": "偏好原文，用户的原话；带 candidate 时可省（用候选原话），"
+            "用户确认时改了说法的写新说法（须原样出现在 user_source.text 中）",
+        },
+        scope={
+            **S,
+            "description": "global（默认）；只有用户的习惯本身只限于某个仓库或项目时才用 "
+            "repo:<仓库> 或 project:<项目>（DN007 §6）",
+        },
         supersedes={**STRS, "description": "被替代的偏好编号（P-…），须同范围或更宽"},
+        candidate={**S, "description": "用户确认的偏好候选编号（PC-…，须未决，DN007 §6.3）"},
         user_source={
             **SOURCE,
-            "description": "用户明确表示长期适用的原话；target 为 "
+            "description": "用户明确表示长期适用（或确认候选）的原话；target 为 "
             '["preference", <scope>, "standing"]',
+        },
+    ),
+    "preference_candidates_record": schema(
+        ["task_id", "scanned_through", "candidates"],
+        task_id=S,
+        scanned_through={**INT, "description": "preference_sources 返回的 scanned_through"},
+        candidates={
+            "type": "array",
+            "description": "子代理找出的候选，至多 5 条；没有时为空数组",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "quote": {**S, "description": "从一条材料中原样摘取的连续原话"},
+                    "source_ref": {**S, "description": "材料编号：M-…、E<序号> 或 goal@r<n>"},
+                    "scope": {**S, "description": "建议的范围，默认 global"},
+                    "topic": {**S, "description": "几个字的主题"},
+                    "reason": {**S, "description": "为什么是用户以后都适用的做事方式"},
+                    "supersedes": {**STRS, "description": "建议替代的现行偏好编号"},
+                },
+                "required": ["quote", "source_ref", "topic", "reason"],
+            },
+        },
+        skipped={
+            "type": "array",
+            "description": "看过但不提的：来源编号、类别与理由",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source_ref": S,
+                    "category": {
+                        "enum": [
+                            "same_as",
+                            "project_decision",
+                            "product_behavior",
+                            "task_requirement",
+                            "not_standing",
+                        ]
+                    },
+                    "same_as": {**S, "description": "category 为 same_as 时的偏好编号"},
+                    "reason": S,
+                },
+                "required": ["source_ref", "category"],
+            },
+        },
+    ),
+    "preference_candidate_dismiss": schema(
+        ["candidate", "reason", "user_source"],
+        candidate={**S, "description": "偏好候选编号（PC-…），须未决"},
+        reason={**S, "description": "用户不记的理由"},
+        user_source={
+            **SOURCE,
+            "description": '用户不记的原话；target 为 ["preference", <候选编号>, "dismiss"]',
         },
     ),
     "preference_revoke": schema(

@@ -1192,6 +1192,33 @@
       }
     },
     {
+      "id": "UC-CONTEXT-007",
+      "title": "任务结束时搜集偏好候选：preference_sources 给出材料与子代理说明，preference_candidates_record 记录候选，用户确认后才记为偏好（DN007 §6.3，CC007）",
+      "actor": "worker / 主会话 / 用户",
+      "acceptance": "preference_sources（worker 与主会话，只读）按任务从账本给出材料：hook 记录的 worker 会话用户消息 M-…、任务事件中带 VerifiedSource 的用户原话 E<序号>（由 hook 消息组成的与偏好自身的事件除外）、当前目标 goal@r<n>（verified false），以及能到达任务仓库的现行偏好、本任务的候选与其他任务未决的候选、scanned_through、搜集状态和以 tsw/host/preference_scan.md 开头的 prompt；材料超过上限时保留目标与最新的部分并标 materials_truncated；preference_candidates_record（worker 只对自己持有、用户验收前的任务，主会话除已归档外）一次记录一次搜集：candidates 至多 5 条且可以为空，每条的 source_ref 须为本任务在 scanned_through 之前的材料、quote 去除多余空白后须原样出现在该材料中（否则 quote_not_found），scope 缺省 global，supersedes 须存在、现行且范围相容，skipped 的类别为 same_as / project_decision / product_behavior / task_requirement / not_standing；与未决或已记录候选原话相同、或与现行偏好原文相同的跳过并列入 duplicates；每条候选记 user.preference_candidate（编号 PC-<n>），再记 task.preference_scanned；候选不进入 user_decisions，context_decisions 以 kind candidate 列出且 usable_as_basis 为 false，kind standing 不含候选；task_read 给出 preference_candidates 与 preference_scan（missing：本 revision 未搜集；stale：之后 hook 又记录了用户消息；done），attention 的 preference_candidates 列出未决候选；preference_record 带 candidate（须未决）时 topic 与 text 可省（用候选的主题与原话），改过的 text 须原样出现在 user_source.text 中，记 user.preference_recorded 带 candidate，候选标为已记录并指向新偏好；preference_candidate_dismiss（主会话或 user 调用者）附 target 为 [preference, <候选编号>, dismiss] 的用户原话，只能处理未决候选，记 user.preference_candidate_dismissed；已处理的候选再确认或拒绝以 candidate_closed 拒绝；tsw preference list --candidates（默认未决，--all 全部）、record --candidate、dismiss 以 user 调用者在会话外运行，来源渠道 user-cli",
+      "surfaces": [
+        "mcp",
+        "cli"
+      ],
+      "claims": [
+        "mcp:preference_sources",
+        "tool:preference_candidates_record",
+        "tool:preference_candidate_dismiss",
+        "cli:preference dismiss"
+      ],
+      "component": "context",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "材料、记录、核对与确认只读写本地账本与投影，不依赖宿主；子代理（宿主 Agent 工具与模型）判断候选的质量不在自动测试中，合并后在真实任务的提交与验收中观察（CC007 §6）"
+      }
+    },
+    {
       "id": "UC-HOST-009",
       "title": "自我更新按改动决定步骤：update-plan、render 记录、whoami runtime、update_record、接班主会话（T283，DN006 §9.8–§9.9，CC006 §11）",
       "actor": "主会话 / 用户",

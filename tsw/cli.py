@@ -47,6 +47,7 @@ from tsw.host.version import render_record
 from tsw.importer import renumber
 from tsw.importer.orchestrator_agent import run_import as run_import_orchestrator_agent
 from tsw.ledger import Ledger
+from tsw.machine import candidates as candidates_mod
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.config_tools import CONFIG_TOOLS
 from tsw.machine.runner import run_tool
@@ -199,6 +200,15 @@ def _cmd_preference_list(args: argparse.Namespace) -> dict[str, Any]:
         if args.repo or args.project
         else None
     )
+    if args.candidates:
+        # Preference candidates collected when tasks ended (DN007 §6.3): those waiting for the
+        # user, or with --all every one.
+        with _ledger(args).view() as conn:
+            pending = candidates_mod.every(conn)
+        if where is not None:
+            pending = [c for c in pending if preferences.applies(str(c["scope"]), where)]
+        listed = pending if args.all else [c for c in pending if c["status"] == "open"]
+        return {"candidates": listed, "total": len(listed), "all": bool(args.all)}
     with _ledger(args).view() as conn:
         found = preferences.load(conn, where)
     shown = found if args.all else [p for p in found if preferences.in_force(p)]
@@ -209,17 +219,57 @@ def _cmd_preference_record(args: argparse.Namespace) -> dict[str, Any]:
     direct.require_outside_session(os.environ, "tsw preference record ")
     ledger, config = _writer(args)
     supersedes = list(args.supersedes or [])
+    scope, topic, words = args.scope, args.topic, args.text
+    payload: dict[str, Any] = {"supersedes": supersedes}
+    if args.candidate:
+        # Confirming a candidate (DN007 §6.3): its words, suggested scope and topic by default.
+        with ledger.view() as conn:
+            found = candidates_mod.open_candidate(conn, args.candidate)
+        scope = scope or str(found["scope"])
+        topic = topic or str(found["topic"])
+        words = words or str(found["quote"])
+        payload["candidate"] = args.candidate
+    missing = [f"--{k}" for k, v in (("scope", scope), ("topic", topic), ("text", words)) if not v]
+    if missing:
+        raise TswError(
+            ErrorCode.REJECTED,
+            "缺少 " + "、".join(missing) + "（或用 --candidate 确认一条偏好候选）",
+            reason="invalid_input",
+        )
     replaces = f"，替代 {'、'.join(supersedes)}" if supersedes else ""
-    _confirm(args, f"记录长期偏好（{args.scope}{replaces}）「{args.topic}」：{args.text}？")
+    of = f"（确认候选 {args.candidate}）" if args.candidate else ""
+    _confirm(args, f"记录长期偏好{of}（{scope}{replaces}）「{topic}」：{words}？")
     return direct.preference(
         ledger,
         config,
         "record",
-        {"topic": args.topic, "text": args.text, "scope": args.scope, "supersedes": supersedes},
-        target=["preference", args.scope, "standing"],
+        {**payload, "topic": topic, "text": words, "scope": scope},
+        target=["preference", scope, "standing"],
         channel="user-cli",
         message_ref=_cli_ref(),
-        text=args.text,
+        text=words,
+    )
+
+
+def _cmd_preference_dismiss(args: argparse.Namespace) -> dict[str, Any]:
+    direct.require_outside_session(os.environ, "tsw preference dismiss ")
+    ledger, config = _writer(args)
+    with ledger.view() as conn:
+        found = candidates_mod.open_candidate(conn, args.ref)
+    _confirm(
+        args,
+        f"不记偏好候选 {args.ref}（{found['task_id']}，{found['scope']}）「{found['topic']}」："
+        f"{found['quote']}，理由：{args.reason}？",
+    )
+    return direct.preference(
+        ledger,
+        config,
+        "dismiss",
+        {"candidate": args.ref, "reason": args.reason},
+        target=["preference", args.ref, "dismiss"],
+        channel="user-cli",
+        message_ref=_cli_ref(),
+        text=args.reason,
     )
 
 
@@ -671,13 +721,21 @@ def build_parser() -> argparse.ArgumentParser:
     plist = add(pref, "list", _cmd_preference_list, "列出长期偏好（默认只列现行的）")
     plist.add_argument("--repo", help="只列能到达该仓库的（全局与该仓库）")
     plist.add_argument("--project", help="只列能到达该项目的（全局与该项目）")
-    plist.add_argument("--all", action="store_true", help="包括已被替代、覆盖或撤销的")
+    plist.add_argument(
+        "--all", action="store_true", help="包括已被替代、覆盖或撤销的（候选：已记录与已拒绝的）"
+    )
+    plist.add_argument(
+        "--candidates", action="store_true", help="列出偏好候选（DN007 §6.3），默认只列未决的"
+    )
     prec = add(
         pref, "record", _cmd_preference_record, "记录或替代一条长期偏好（用户本人在终端运行）"
     )
-    prec.add_argument("--scope", required=True, help="global、repo:<仓库> 或 project:<项目>")
-    prec.add_argument("--topic", required=True, help="主题词")
-    prec.add_argument("--text", required=True, help="偏好原文")
+    prec.add_argument(
+        "--scope", help="global、repo:<仓库> 或 project:<项目>（--candidate 时缺省为建议的范围）"
+    )
+    prec.add_argument("--topic", help="主题词（--candidate 时缺省为候选的主题）")
+    prec.add_argument("--text", help="偏好原文（--candidate 时缺省为候选原话）")
+    prec.add_argument("--candidate", help="确认一条偏好候选（PC-…，DN007 §6.3）")
     prec.add_argument(
         "--supersedes", action="append", help="被替代的偏好编号（同范围或更宽），可重复"
     )
@@ -686,6 +744,10 @@ def build_parser() -> argparse.ArgumentParser:
     prev.add_argument("ref", help="偏好编号（P-…）")
     prev.add_argument("--reason", required=True, help="撤销理由")
     prev.add_argument("--yes", action="store_true", help="不再询问，直接执行")
+    pdis = add(pref, "dismiss", _cmd_preference_dismiss, "不记一条偏好候选（用户本人在终端运行）")
+    pdis.add_argument("ref", help="偏好候选编号（PC-…）")
+    pdis.add_argument("--reason", required=True, help="不记的理由")
+    pdis.add_argument("--yes", action="store_true", help="不再询问，直接执行")
 
     ledger = sub.add_parser("ledger", help="账本").add_subparsers(
         dest="ledger_command", required=True, metavar="<ledger command>"

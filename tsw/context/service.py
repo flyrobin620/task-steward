@@ -26,12 +26,13 @@ from tsw.errors import rejected
 from tsw.events import EventDraft
 from tsw.home import Home
 from tsw.ledger import Ledger
+from tsw.machine import candidates as candidates_mod
 from tsw.preferences import revocations, standing_items
 
 from .index import ContextIndex, Facts, Freshness, report_refs, resolve_material, task_facts
 from .text import contains, is_short, pieces, read_text, terms
 
-DECISION_KINDS = ("standing", "task", "one_time")
+DECISION_KINDS = ("standing", "task", "one_time", "candidate")
 PARTS = ("spec", "brief", "report", "reviews", "decisions", "outputs", "follow_ups", "requests")
 SCOPES = ("repo", "project", "global")
 MAX_LIMIT = 50
@@ -371,7 +372,7 @@ class ContextService:
         kind = _opt(args, "kind") or None
         if kind is not None and kind not in DECISION_KINDS:
             raise rejected(
-                "kind 应为 standing、task 或 one_time",
+                "kind 应为 standing、task、one_time 或 candidate",
                 reason="invalid_input",
                 field="kind",
                 allowed=list(DECISION_KINDS),
@@ -404,8 +405,12 @@ class ContextService:
             items = standing_items(
                 list(l1.execute("SELECT * FROM user_decisions")), where, revocations(l1)
             )
-            if kind != "standing":
+            if kind not in ("standing", "candidate"):
                 items += [_historic(r) for r in c2.execute("SELECT * FROM decisions")]
+            if kind in (None, "candidate"):
+                # Candidates are not preferences: never a basis until the user records one
+                # (DN007 §6.3).
+                items += [_candidate(c) for c in candidates_mod.every(l1)]
         chosen: list[tuple[dict[str, Any], int]] = []
         for item in items:
             if kind is not None and item["kind"] != kind:
@@ -883,6 +888,27 @@ def _expand(word: str, aliases: Mapping[str, set[str]]) -> set[str]:
 def _match(forms: Sequence[str]) -> str:
     """An FTS5 query: any of the forms, each as a phrase."""
     return " OR ".join('"' + f.replace('"', '""') + '"' for f in forms)
+
+
+def _candidate(item: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "ref": item["ref"],
+        "kind": "candidate",
+        "scope": item["scope"],
+        "task_id": item["task_id"],
+        "revision": item["revision"],
+        "topic": item["topic"],
+        "text": item["quote"],
+        "detail": item["reason"],
+        "source_ref": item["source_ref"],
+        "verified": item["verified"],
+        "status": item["status"],
+        "preference": item["preference"],
+        "supersedes": item["supersedes"],
+        "time": item["recorded_at"],
+        "source_seq": item["source_seq"],
+        "usable_as_basis": False,
+    }
 
 
 def _historic(row: sqlite3.Row) -> dict[str, Any]:

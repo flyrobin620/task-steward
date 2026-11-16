@@ -239,6 +239,7 @@ def test_command_inventory_is_known() -> None:
             "lease show",
             "lease takeover",
             "mcp",
+            "preference dismiss",
             "preference list",
             "preference record",
             "preference revoke",

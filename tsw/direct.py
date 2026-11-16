@@ -162,8 +162,12 @@ def perform(
     }
 
 
-# action -> tool (DN007 §6.2): the user's own management of standing preferences.
-PREFERENCE_TOOLS = {"record": "preference_record", "revoke": "preference_revoke"}
+# action -> tool (DN007 §6.2, §6.3): the user's own management of standing preferences.
+PREFERENCE_TOOLS = {
+    "record": "preference_record",
+    "revoke": "preference_revoke",
+    "dismiss": "preference_candidate_dismiss",
+}
 
 
 def preference(
@@ -179,7 +183,8 @@ def preference(
     machine: str | None = None,
     command_id: str | None = None,
 ) -> dict[str, Any]:
-    """Record or revoke a standing preference as the ``user`` caller (DN007 §6.2).
+    """Record or revoke a standing preference, or turn a preference candidate down, as the
+    ``user`` caller (DN007 §6.2, §6.3).
 
     With ``command_id`` a repeat of the same request (the same source included) returns the first
     result instead of recording again (DN001 §7.2); the Dashboard's retries use it.

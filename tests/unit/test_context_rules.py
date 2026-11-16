@@ -12,7 +12,7 @@ from tsw.context.index import decision_docs, outputs_digest, timeline_row
 from tsw.context.text import generated_keywords, html_text, is_short, pieces, terms
 from tsw.errors import TswError
 from tsw.events import Event
-from tsw.machine.context_tools import narrower_or_same, scope_of
+from tsw.machine.candidates import narrower_or_same, scope_of
 
 
 def event(type_: str, data: dict[str, Any], task_id: str | None = "T001", seq: int = 7) -> Event:

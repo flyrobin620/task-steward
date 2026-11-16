@@ -12,6 +12,7 @@ from tsw.events import EventDraft
 from tsw.lease import parse_time
 from tsw.ledger import Ledger
 from tsw.machine import ask_user as _ask_user
+from tsw.machine import candidates as _candidates
 from tsw.machine import config_tools as _config_tools
 from tsw.machine import context_tools as _context_tools
 from tsw.machine import follow_up as _follow_up
@@ -33,6 +34,7 @@ TOOL_MODULES = (
     _routine,
     _follow_up,
     _context_tools,
+    _candidates,
     _session_titles,
 )
 
