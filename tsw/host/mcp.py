@@ -22,6 +22,7 @@ from typing import IO, Any
 from tsw import __version__, confedit, lease
 from tsw.config import EffectiveConfig, lease_minutes, load_config
 from tsw.context import ContextService, Reader
+from tsw.context.index import index_path, read_card
 from tsw.errors import ErrorCode, TswError, rejected
 from tsw.events import utc_now
 from tsw.home import Home, open_home, workdir_path
@@ -778,18 +779,27 @@ class Server:
                 return {
                     **task_row(conn, task_id),
                     "preference_candidates": candidates_mod.of_task(conn, task_id),
-                    "preference_scan": candidates_mod.scan_status(conn, task_id),
+                    "preference_scan": candidates_mod.scan_status(
+                        conn, task_id, lambda since: ledger.storage.read(since=since)
+                    ),
                 }
             if name == "preference_sources":
                 task_id = str(args.get("task_id") or who.task_id or "")
                 if not task_id:
                     raise rejected("需要 task_id", reason="invalid_input", field="task_id")
+                # The user's words of other tasks are not a worker's (DN001 §7.2: this task only).
+                if who.role == "worker" and task_id != who.task_id:
+                    raise rejected(
+                        "worker 只能取本任务的材料", reason="read_scope", task_id=task_id
+                    )
                 report = args.get("report_path")
+                card = read_card(index_path(self.home), task_id).card or {}
                 return candidates_mod.sources(
                     conn,
                     ledger.storage.read(since=0),
                     task_id,
                     report_path=str(report) if isinstance(report, str) and report else None,
+                    projects=[str(p) for p in card.get("project_ids") or []],
                 )
             if name == "task_list":
                 return [

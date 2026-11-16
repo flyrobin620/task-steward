@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +28,7 @@ from tsw.commands import Command, CommitContext
 from tsw.errors import rejected
 from tsw.events import Event, EventDraft, sources_in
 from tsw.machine import guards
+from tsw.machine.ask_user import is_automated
 from tsw.machine.base import (
     ToolEnv,
     integer,
@@ -119,29 +120,51 @@ def revoked(conn: sqlite3.Connection, ref: str) -> bool:
 # ---------------------------------------------------------------------- materials
 
 
-def materials(
-    conn: sqlite3.Connection, events: Iterable[Event], task_id: str
-) -> list[dict[str, Any]]:
-    """The user's words recorded for the task, in ledger order (DN007 §6.3):
+Renames = list[tuple[int, str, str]]  # (sequence, old id, new id) of each task.renumbered
 
-    - ``M-…``: what the user typed in the worker's session, as the hook recorded it;
-    - ``E<seq>`` (``E<seq>-<k>`` for a second source in one event): the user's words a task event
-      carries as a ``VerifiedSource``, except those made of hook-recorded messages (cited as
-      ``M-…``) and those about preferences themselves;
-    - ``goal@r<revision>``: the current goal, which the orchestrator wrote (not verified).
-    """
-    row = task(conn, task_id)
-    revision = int(row["revision"])
-    messages = {
+
+def renames_in(events: Iterable[Event]) -> Renames:
+    return [
+        (e.sequence, str(e.data.get("from") or ""), str(e.task_id))
+        for e in events
+        if e.type == "task.renumbered" and e.task_id is not None and e.data.get("from")
+    ]
+
+
+def owner(event: Event, renames: Renames) -> str | None:
+    """The task an event belongs to now: what an old number did before a renumbering belongs to
+    the task that took the new number (as the index reads it, DN005 §4.4; PR #54 review)."""
+    task_id = event.task_id
+    for sequence, old, new in renames:
+        if task_id == old and event.sequence < sequence:
+            task_id = new
+    return task_id
+
+
+def _messages(conn: sqlite3.Connection, task_id: str) -> dict[str, Mapping[str, Any]]:
+    """The hook's records of the user's messages for the task, injected ones included: those
+    recorded before the hook knew a marker (a subagent's ``<agent-message``) are never material
+    but still stand for the words an answer cites (PR #54 review)."""
+    return {
         str(m["message_id"]): m
         for m in conn.execute(
             "SELECT * FROM session_messages WHERE task_id = ? ORDER BY sequence", (task_id,)
         )
     }
+
+
+def _event_words(
+    events: Iterable[Event],
+    task_id: str,
+    messages: Mapping[str, Mapping[str, Any]],
+    renames: Renames,
+) -> tuple[list[dict[str, Any]], int | None]:
+    """The user's words the task's events carry, and the sequence of the event that set the goal
+    last (None when none of ``events`` did)."""
     found: list[dict[str, Any]] = []
-    goal_seq = int(row["registered_seq"])
+    goal_seq: int | None = None
     for event in events:
-        if event.task_id != task_id:
+        if owner(event, renames) != task_id:
             continue
         if "goal" in event.data or event.type == "task.registered":
             goal_seq = event.sequence
@@ -152,6 +175,8 @@ def materials(
             cited = [r for r in str(source.get("message_ref") or "").split(",") if r]
             if cited and all(r in messages for r in cited):
                 continue  # the hook's own record of these words is cited instead
+            if is_automated(str(source.get("text") or "")):
+                continue
             seen += 1
             found.append(
                 {
@@ -164,25 +189,50 @@ def materials(
                     "text": str(source.get("text") or ""),
                 }
             )
-    for message_id, message in messages.items():
-        found.append(
-            {
-                "ref": message_id,
-                "kind": "input.session_message",
-                "channel": "in-session",
-                "verified": True,
-                "sequence": int(message["sequence"]),
-                "time": None,
-                "text": str(message["text"]),
-            }
-        )
+    return found, goal_seq
+
+
+def _message_words(messages: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "ref": message_id,
+            "kind": "input.session_message",
+            "channel": "in-session",
+            "verified": True,
+            "sequence": int(message["sequence"]),
+            "time": None,
+            "text": str(message["text"]),
+        }
+        for message_id, message in messages.items()
+        if not is_automated(str(message["text"]))
+    ]
+
+
+def materials(
+    conn: sqlite3.Connection, events: Iterable[Event], task_id: str
+) -> list[dict[str, Any]]:
+    """The user's words recorded for the task, in ledger order (DN007 §6.3):
+
+    - ``M-…``: what the user typed in the worker's session, as the hook recorded it;
+    - ``E<seq>`` (``E<seq>-<k>`` for a second source in one event): the user's words a task event
+      carries as a ``VerifiedSource``, except those made of hook-recorded messages (cited as
+      ``M-…``) and those about preferences themselves;
+    - ``goal@r<revision>``: the current goal, which the orchestrator wrote (not verified).
+
+    Messages a host injected are never material, even if recorded before the hook knew them.
+    """
+    row = task(conn, task_id)
+    every = list(events)
+    messages = _messages(conn, task_id)
+    found, goal_seq = _event_words(every, task_id, messages, renames_in(every))
+    found += _message_words(messages)
     found.sort(key=lambda m: int(m["sequence"]))
     goal = {
-        "ref": f"goal@r{revision}",
+        "ref": f"goal@r{int(row['revision'])}",
         "kind": "goal",
         "channel": "orchestrator",
         "verified": False,
-        "sequence": goal_seq,
+        "sequence": goal_seq if goal_seq is not None else int(row["registered_seq"]),
         "time": None,
         "text": str(row["goal"] or ""),
     }
@@ -264,9 +314,15 @@ def every(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     ]
 
 
-def scan_status(conn: sqlite3.Connection, task_id: str) -> dict[str, Any]:
-    """Whether the task's words were scanned (DN007 §6.3): ``done``, ``stale`` (the hook recorded
-    the user's words after the scan) or ``missing`` (no scan at the current revision)."""
+def scan_status(
+    conn: sqlite3.Connection,
+    task_id: str,
+    read: Callable[[int], Iterable[Event]] | None = None,
+) -> dict[str, Any]:
+    """Whether the task's words were scanned (DN007 §6.3): ``done``, ``stale`` (the user's words
+    reached the task after the scan: a message the hook recorded or, when ``read`` gives the
+    ledger from a sequence on, a source in any of its events) or ``missing`` (no scan at the
+    current revision)."""
     row = task(conn, task_id)
     last = row_dict(
         conn.execute(
@@ -277,11 +333,14 @@ def scan_status(conn: sqlite3.Connection, task_id: str) -> dict[str, Any]:
     if last is None or int(last["revision"]) != int(row["revision"]):
         state = "missing"
     else:
-        newer = conn.execute(
-            "SELECT 1 FROM session_messages WHERE task_id = ? AND sequence > ?",
-            (task_id, int(last["scanned_through"])),
-        ).fetchone()
-        state = "stale" if newer is not None else "done"
+        through = int(last["scanned_through"])
+        messages = _messages(conn, task_id)
+        newer = [m for m in _message_words(messages) if int(m["sequence"]) > through]
+        if read is not None and not newer:
+            later = list(read(through))
+            words, _ = _event_words(later, task_id, messages, renames_in(later))
+            newer = [w for w in words if int(w["sequence"]) > through]
+        state = "stale" if newer else "done"
     out: dict[str, Any] = {"state": state}
     if last is not None:
         out["last"] = {
@@ -310,17 +369,21 @@ def sources(
     task_id: str,
     *,
     report_path: str | None = None,
+    projects: Iterable[str] = (),
 ) -> dict[str, Any]:
     """What ``preference_sources`` returns: the task's words, the preferences in force for its
-    repository, the candidates so far, and the prompt for the subagent (DN007 §6.3)."""
+    repository and projects (the card's ``project_ids``, read by the caller), the candidates so
+    far, and the prompt for the subagent (DN007 §6.3)."""
     row = task(conn, task_id)
     repo = str(row["repo"])
-    found = materials(conn, events, task_id)
+    where = (repo, {repo, *projects})
+    ledger = list(events)
+    found = materials(conn, ledger, task_id)
     through = max(int(m["sequence"]) for m in found)
     shown, truncated = _trimmed(found)
     standing = [
         {"ref": p["ref"], "scope": p["scope"], "topic": p["topic"], "text": p["text"]}
-        for p in preferences.load(conn, (repo, {repo}))
+        for p in preferences.load(conn, where)
         if preferences.in_force(p)
     ]
     mine = of_task(conn, task_id)
@@ -329,7 +392,7 @@ def sources(
         for c in every(conn)
         if c["status"] == "open"
         and c["task_id"] != task_id
-        and preferences.applies(str(c["scope"]), (repo, {repo}))
+        and preferences.applies(str(c["scope"]), where)
     ]
     shown_candidates = [
         {k: c[k] for k in ("ref", "task_id", "quote", "scope", "topic", "status", "preference")}
@@ -357,7 +420,7 @@ def sources(
     return {
         **payload,
         "scanned_through": through,
-        "scan": scan_status(conn, task_id),
+        "scan": scan_status(conn, task_id, lambda since: (e for e in ledger if e.sequence > since)),
         "prompt": prompt,
         "next": "用 Agent 工具启动子代理（general-purpose），prompt 原样使用本结果的 prompt；"
         "拿到 JSON 后调用 preference_candidates_record（scanned_through 用本结果的值），"

@@ -613,3 +613,73 @@ def test_a_confirmed_candidate_counts_in_the_scope_the_user_chose(home: Home) ->
     assert out["events"][0]["data"]["ref"] == "PC-2"
     again = scan(h, worker, through, {**found, "scope": "repo:other"})
     assert again["events"][0]["data"]["duplicates"] == [{"source_ref": "goal@r1", "same_as": "P-1"}]
+
+
+@pytest.mark.use_case("UC-CONTEXT-007")
+def test_user_words_in_any_event_after_the_scan_make_it_stale(home: Home) -> None:
+    """Not only the hook's records: the user's words the orchestrator cites after the scan count
+    too, once the ledger is read (PR #54 review)."""
+    h = Harness(home)
+    worker = started(h)
+    through = int(sources(h)["scanned_through"])
+    scan(h, worker, through)
+    h.run(
+        "follow_up_record",
+        ORCH,
+        task_id="T001",
+        items=[{"title": "导出", "detail": "以后再做"}],
+        user_source=h.source("T001", 1, "follow_up", "这个以后再做，以后报告都先写结论"),
+    )
+    with h.ledger.view() as conn:
+        assert candidates.scan_status(conn, "T001")["state"] == "done"  # L1 alone cannot tell
+        read = candidates.scan_status(conn, "T001", lambda s: h.ledger.storage.read(since=s))
+    assert read["state"] == "stale"
+    assert sources(h)["scan"]["state"] == "stale"
+
+
+@pytest.mark.use_case("UC-CONTEXT-007")
+def test_candidates_reach_repositories_by_their_scope_and_projects_by_the_card(
+    home: Home,
+) -> None:
+    """context_decisions lists a candidate for a repository by the scope it suggests; a task
+    query lists the task's own; preference_sources takes the task's projects (PR #54 review)."""
+    h = Harness(home)
+    h.run(
+        "preference_record",
+        ORCH,
+        topic="报告",
+        text="alpha 的报告用英文",
+        scope="project:alpha",
+        user_source=said(["preference", "project:alpha", "standing"]),
+    )
+    h.register("T001", goal="用户原话：“以后 PR 先开 draft；在 other 里提交要签名”")
+    h.plan("T001")
+    worker = h.dispatch("T001")
+    through = int(sources(h)["scanned_through"])
+    scan(
+        h,
+        worker,
+        through,
+        {"quote": "以后 PR 先开 draft", "source_ref": "goal@r1", "topic": "PR", "reason": "习惯"},
+        {
+            "quote": "在 other 里提交要签名",
+            "source_ref": "goal@r1",
+            "scope": "repo:other",
+            "topic": "提交",
+            "reason": "只在 other",
+        },
+    )
+    svc = ContextService(h.home, h.ledger, h.config)
+
+    def refs(**args: Any) -> list[str]:
+        out = svc.decisions(ORCH_READER, {"kind": "candidate", **args})["decisions"]
+        return sorted(d["ref"] for d in out)
+
+    assert refs(scope="repo", repo="demo") == ["PC-1"]
+    assert refs(scope="repo", repo="other") == ["PC-1", "PC-2"]
+    assert refs(scope="task", task_id="T001") == ["PC-1", "PC-2"]
+    with h.ledger.view() as conn:
+        plain = candidates.sources(conn, h.ledger.storage.read(since=0), "T001")
+        alpha = candidates.sources(conn, h.ledger.storage.read(since=0), "T001", projects=["alpha"])
+    assert plain["preferences_in_force"] == []
+    assert [p["ref"] for p in alpha["preferences_in_force"]] == ["P-1"]

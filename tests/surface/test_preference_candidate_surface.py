@@ -36,6 +36,7 @@ def test_the_worker_scans_over_mcp_and_the_orchestrator_confirms_with_the_users_
         INIT,
         LIST,
         call(2, "preference_sources", report_path="work/T001/a1/result.md"),
+        call(3, "preference_sources", task_id="T002"),
     )
     tools = {t["name"]: t for t in worker[1]["result"]["tools"]}
     assert {"preference_sources", "preference_candidates_record"} <= set(tools)
@@ -46,6 +47,8 @@ def test_the_worker_scans_over_mcp_and_the_orchestrator_confirms_with_the_users_
         "scanned_through",
         "candidates",
     ]
+    # Another task's user words are not the worker's (PR #54 review).
+    assert errored(worker[3]) and "read_scope" in worker[3]["result"]["content"][0]["text"]
     given = result(worker[2])
     assert [m["ref"] for m in given["materials"]] == ["goal@r1", "M-T001-1"]
     assert given["prompt"].startswith("# 搜集用户偏好候选") and "M-T001-1" in given["prompt"]

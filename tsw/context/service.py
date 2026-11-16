@@ -27,7 +27,7 @@ from tsw.events import EventDraft
 from tsw.home import Home
 from tsw.ledger import Ledger
 from tsw.machine import candidates as candidates_mod
-from tsw.preferences import revocations, standing_items
+from tsw.preferences import applies, revocations, standing_items
 
 from .index import ContextIndex, Facts, Freshness, report_refs, resolve_material, task_facts
 from .text import contains, is_short, pieces, read_text, terms
@@ -415,7 +415,14 @@ class ContextService:
         for item in items:
             if kind is not None and item["kind"] != kind:
                 continue
-            if item["kind"] != "standing" and not _decision_in_scope(
+            if item["kind"] == "candidate":
+                # A candidate reaches a repository by the scope it suggests; a task query keeps
+                # the candidates the task itself raised (PR #54 review).
+                if scope == "repo" and not applies(str(item["scope"]), where):
+                    continue
+                if scope == "task" and item.get("task_id") != task_id:
+                    continue
+            elif item["kind"] != "standing" and not _decision_in_scope(
                 item, scope, repo, task_id, repos
             ):
                 continue

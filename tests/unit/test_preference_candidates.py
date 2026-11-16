@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from tsw.errors import TswError
+from tsw.events import Event
 from tsw.machine import candidates
 from tsw.machine.schemas import SCHEMAS
 
@@ -112,3 +113,67 @@ def test_the_tool_schemas_match_the_rules() -> None:
         "reason",
         "user_source",
     ]
+
+
+def event(sequence: int, kind: str, task_id: str | None, **data: Any) -> Event:
+    return Event(
+        schema=1,
+        sequence=sequence,
+        time="2026-11-16T00:00:00Z",
+        type=kind,
+        actor={"role": "orchestrator"},
+        prev="",
+        checksum="",
+        task_id=task_id,
+        data=data,
+    )
+
+
+def said(text: str, ref: str = "m-1") -> dict[str, Any]:
+    return {
+        "channel": "main-session",
+        "principal": "owner",
+        "message_ref": ref,
+        "text": text,
+        "target": ["T9", 1, "answer"],
+    }
+
+
+@pytest.mark.use_case("UC-CONTEXT-007")
+def test_words_follow_a_renumbered_task_and_injected_messages_are_never_words() -> None:
+    """PR #54 review: what an old number said before a renumbering is the renamed task's; a
+    message a host injected is never the user's, even if recorded before the hook knew it."""
+    events = [
+        event(1, "input.resolved", "T9", source=said("以后报告先写结论")),
+        event(2, "task.renumbered", "T19", **{"from": "T9"}),
+        event(3, "task.registered", "T9", goal="新任务"),
+        event(4, "input.resolved", "T9", source=said("这个任务用英文")),
+        event(5, "input.resolved", "T19", source=said("<agent-message>假的</agent-message>")),
+        event(6, "input.resolved", "T19", source=said("用 B", ref="M-T19-1")),
+    ]
+    renames = candidates.renames_in(events)
+    assert renames == [(2, "T9", "T19")]
+    assert [candidates.owner(e, renames) for e in events] == [
+        "T19",
+        "T19",
+        "T9",
+        "T9",
+        "T19",
+        "T19",
+    ]
+    messages: dict[str, Any] = {
+        "M-T19-1": {"sequence": 5, "text": '<agent-message from="a">x</agent-message>'},
+        "M-T19-2": {"sequence": 7, "text": "以后图都用 diagram skill"},
+    }
+    words, goal_seq = candidates._event_words(  # pyright: ignore[reportPrivateUsage]
+        events, "T19", messages, renames
+    )
+    # The answer citing a hook record stands for that record, injected or not.
+    assert [(w["ref"], w["text"]) for w in words] == [("E1", "以后报告先写结论")]
+    assert goal_seq is None
+    other, goal = candidates._event_words(  # pyright: ignore[reportPrivateUsage]
+        events, "T9", {}, renames
+    )
+    assert [w["ref"] for w in other] == ["E4"] and goal == 3
+    shown = candidates._message_words(messages)  # pyright: ignore[reportPrivateUsage]
+    assert [m["ref"] for m in shown] == ["M-T19-2"]
