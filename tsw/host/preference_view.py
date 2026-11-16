@@ -17,7 +17,7 @@ Every check is the tool's; the page only offers what the rules allow (DN007 §6.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, urlencode
@@ -116,38 +116,47 @@ def _anchor(ref: Any) -> str:
     return f"pref-{ref}"
 
 
-def _ref_link(ref: Any) -> str:
-    return f'<a href="#{escape(_anchor(ref))}">{escape(ref)}</a>'
+Link = Callable[[Any], str]
 
 
-def _state(item: Mapping[str, Any]) -> tuple[str, str]:
+def linker(shown: Iterable[str]) -> Link:
+    """Links to preferences by number: within the page when the number is listed, else to the
+    page listing every preference, so a filter never leaves a dead link (review r1 F1)."""
+    here = {str(r) for r in shown}
+
+    def link(ref: Any) -> str:
+        anchor = _anchor(ref)
+        href = f"#{anchor}" if str(ref) in here else f"{PATH}?all=1#{anchor}"
+        return f'<a href="{escape(href)}">{escape(ref)}</a>'
+
+    return link
+
+
+def _state(item: Mapping[str, Any], link: Link) -> tuple[str, str]:
     """The state's class and words."""
     revoked = item.get("revoked")
     if revoked:
         return "revoked", f"已撤销（{escape(revoked.get('time') or '')}）"
     if item.get("superseded_by"):
-        return "replaced", f"已被 {_ref_link(item['superseded_by'])} 替代"
+        return "replaced", f"已被 {link(item['superseded_by'])} 替代"
     return "current", "现行"
 
 
-def _relations(item: Mapping[str, Any], scopes: Mapping[str, str]) -> list[str]:
+def _relations(item: Mapping[str, Any], scopes: Mapping[str, str], link: Link) -> list[str]:
     out: list[str] = []
     replaced: list[Any] = list(item.get("supersedes") or [])
     for old in replaced:
         old_scope = scopes.get(str(old), "")
         if old_scope == item["scope"]:
-            out.append(f"替代 {_ref_link(old)}")
+            out.append(f"替代 {link(old)}")
         else:
-            out.append(
-                f"在本范围内覆盖 {_ref_link(old)}（{escape(scope_label(old_scope) or '?')}）"
-            )
+            out.append(f"在本范围内覆盖 {link(old)}（{escape(scope_label(old_scope) or '?')}）")
     if item.get("superseded_by"):
-        out.append(f"被 {_ref_link(item['superseded_by'])} 替代")
+        out.append(f"被 {link(item['superseded_by'])} 替代")
     overrides: list[Mapping[str, Any]] = list(item.get("overridden_in") or [])
     for over in overrides:
         out.append(
-            f"在{escape(scope_label(str(over['scope'])))}中"
-            f"被更窄范围的 {_ref_link(over['ref'])} 覆盖"
+            f"在{escape(scope_label(str(over['scope'])))}中被更窄范围的 {link(over['ref'])} 覆盖"
         )
     return out
 
@@ -201,7 +210,8 @@ def _scope_fields(choices: Sequence[str], chosen: str, other: bool = True) -> st
 
 
 def replace_choices(scope: str, choices: Sequence[str]) -> list[str]:
-    """Where a replacement may go: the same scope, or (for a global one) a narrower one."""
+    """Where a replacement may go: the same scope, or (for a global one) a narrower one; a
+    global one may also go to a scope typed in ("other"), even when none is listed yet."""
     if scope != "global":
         return [scope]
     return [scope, *(c for c in choices if c != "global")]
@@ -229,9 +239,12 @@ def _record_form(choices: Sequence[str]) -> str:
 def _item_forms(item: Mapping[str, Any], choices: Sequence[str]) -> str:
     scope = str(item["scope"])
     where = replace_choices(scope, choices)
+    # Only a global preference can be overridden in a narrower scope (DN007 §6.2): whether the
+    # form offers that depends on the scope, not on how many scopes are known (review r1 F2).
+    wider = scope == "global"
     narrower = (
         "；也可以改为更窄的仓库或项目范围：新偏好只在该范围内优先，原偏好在其他范围仍然有效"
-        if len(where) > 1
+        if wider
         else ""
     )
     return (
@@ -243,7 +256,7 @@ def _item_forms(item: Mapping[str, Any], choices: Sequence[str]) -> str:
         '<div class="pref-form" data-form="replace" hidden>'
         f'<p class="meta">新偏好得到新编号；范围不变时 {escape(item["ref"])} 标为已替代'
         f"{escape(narrower)}。</p>"
-        f"{_scope_fields(where, scope, other=len(where) > 1)}"
+        f"{_scope_fields(where, scope, other=wider)}"
         f'<label>主题 <input name="topic" value="{escape(item["topic"])}" '
         'autocomplete="off"></label>'
         f'<label class="wide">原文 <textarea name="text" rows="3">{escape(item["text"])}</textarea>'
@@ -266,14 +279,15 @@ def _item(
     scopes: Mapping[str, str],
     revocations: Mapping[str, Mapping[str, Any]],
     choices: Sequence[str],
+    link: Link,
 ) -> str:
     ref = str(item["ref"])
-    cls, state = _state(item)
+    cls, state = _state(item, link)
     revoked = item.get("revoked")
     notes = ""
     if revoked:
         notes += f'<div class="note revoked"><b>撤销理由</b>：{escape(revoked.get("reason"))}</div>'
-    relations = _relations(item, scopes)
+    relations = _relations(item, scopes, link)
     rel = f'<p class="pref-rel">{"；".join(relations)}</p>' if relations else ""
     sources = _source(
         item.get("source") or {},
@@ -311,6 +325,7 @@ def render_preferences(conn: sqlite3.Connection, app: AppView, chosen: Filter | 
         for i in (every if chosen.all else in_force)
         if not chosen.scope or i["scope"] == chosen.scope
     ]
+    link = linker(str(i["ref"]) for i in shown)
     groups: dict[str, list[dict[str, Any]]] = {}
     for item in shown:
         groups.setdefault(str(item["scope"]), []).append(item)
@@ -320,11 +335,11 @@ def render_preferences(conn: sqlite3.Connection, app: AppView, chosen: Filter | 
         warn = "".join(
             f'<div class="note conflict"><b>同主题有 {len(refs)} 条现行偏好</b>：'
             f"「{escape(topic)}」"
-            f"（{'、'.join(_ref_link(r) for r in refs)}）彼此没有替代关系，"
+            f"（{'、'.join(link(r) for r in refs)}）彼此没有替代关系，"
             "请用「替代」或「撤销」只留下一条（DN007 §6）。</div>"
             for topic, refs in conflicts(i for i in every if i["scope"] == scope)
         )
-        body = "".join(_item(i, scopes, revocations, choices) for i in items)
+        body = "".join(_item(i, scopes, revocations, choices, link) for i in items)
         sections.append(
             f'<section class="panel pref-group" data-scope="{escape(scope)}">'
             f"<h2>{escape(scope_label(scope))}"

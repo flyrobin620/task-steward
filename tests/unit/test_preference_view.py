@@ -263,3 +263,43 @@ def test_the_scope_choices() -> None:
     assert replace_choices("global", choices) == choices
     assert replace_choices("repo:a", choices) == ["repo:a"]
     assert replace_choices("project:x", choices) == ["project:x"]
+
+
+@mark.use_case("UC-DIRECT-007")
+def test_links_to_preferences_left_out_by_the_filter_open_the_full_list(
+    prefs: sqlite3.Connection,
+) -> None:
+    # By default P-1 (replaced) is not listed: its link opens the list of every preference.
+    page = render_preferences(prefs, APP)
+    assert "pref-P-1" not in re.findall(r'<article [^>]*id="(pref-P-\d+)"', page)
+    p2 = _item(page, "P-2")
+    assert '替代 <a href="preferences?all=1#pref-P-1">P-1</a>' in p2
+    # With every one listed, the same link stays on the page.
+    assert '替代 <a href="#pref-P-1">P-1</a>' in _item(
+        render_preferences(prefs, APP, Filter(all=True)), "P-2"
+    )
+    # Filtered to one scope, a link to another scope's preference leaves the filter too.
+    page = render_preferences(prefs, APP, Filter("repo:demo"))
+    assert '在本范围内覆盖 <a href="preferences?all=1#pref-P-3">P-3</a>' in _item(page, "P-4")
+    page = render_preferences(prefs, APP, Filter("global"))
+    assert '被更窄范围的 <a href="preferences?all=1#pref-P-4">P-4</a> 覆盖' in _item(page, "P-3")
+    # Links within the listed ones (the conflict note) stay on the page.
+    demo = render_preferences(prefs, APP, Filter("repo:demo"))
+    assert '<a href="#pref-P-6">P-6</a>、<a href="#pref-P-7">P-7</a>' in demo
+
+
+@mark.use_case("UC-DIRECT-007")
+def test_a_lone_global_preference_can_still_be_overridden_in_a_scope_typed_in(
+    conn: sqlite3.Connection,
+) -> None:
+    # No tasks and no other scope yet: the replace form still offers a scope of the user's own.
+    _pref(conn, 1, "global", "PR", "PR 默认 ready")
+    item = _item(render_preferences(conn, APP), "P-1")
+    replace = item.split('data-form="replace"')[1].split('data-form="revoke"')[0]
+    assert f'<option value="{OTHER}">其他（手填）</option>' in replace
+    assert 'name="scope_other"' in replace and "也可以改为更窄的仓库或项目范围" in replace
+    # A repository preference stays in its own scope.
+    _pref(conn, 2, "repo:demo", "PR", "draft")
+    item = _item(render_preferences(conn, APP), "P-2")
+    replace = item.split('data-form="replace"')[1].split('data-form="revoke"')[0]
+    assert OTHER not in replace and "scope_other" not in replace and "更窄" not in replace
