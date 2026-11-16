@@ -24,14 +24,16 @@ description: "TaskSteward 的 teams-chat 人类渠道（P3）在主会话中的�
 
 例行会话取出 Teams chat 中以等待中任务 ID 或问题编号开头的消息（`channel.reply_seen`），转来以“TaskSteward 例行项 teams-replies”开头的消息。脚本不判断内容，由你判断：
 
+正文长于 `routine.teams_message_chars`（默认 400 字）的消息只转来开头，后面写着“正文已截断，原文 N 字”和读取路径。判断与登记需要全文时，先用 `mcp__workiq__fetch` 读这一条：`entityUrls` 为转来消息中给出的路径（`/me/chats/<chat>/messages/<消息 ID>?$select=id,from,body`），按读到的全文（去掉 HTML 标签）判断；登记时 `text` 用全文。没有截断的消息不用再读。
+
 1. 消息回答了该任务待答的问题：`input_resolve`，`user_source` 为 `{"channel": "teams-chat", "principal": "teams", "message_ref": <消息 ID>, "text": <消息原文>, "request_id": <问题编号>, "target": [<任务 ID>, <revision>, "answer"]}`，`answer` 按原文整理；可同时登记用户批准的追加轮次（`extend_rounds`）。然后用 `mcp__ccd_session_mgmt__send_message` 告诉 worker 用户的答复与问题编号，让它继续。
 2. 不是答复（例如“稍后回复”“看一下”）：不登记，问题保持待答。
 3. 问题已由别处答复、已取消或已过时：`input_resolve` 会记为迟到答复（`input.late_response`）；内容与已生效的答复冲突时，告诉 worker，由它在自己的会话里再问用户确认。
 
 ## 读取失败
 
-例行会话连续几次读不到某个 Teams chat（工具报错、限流或返回错误）时，tsw 告诉你一次：消息写明 chat、连续失败的次数、开始时间、最近一次的原因，以及这个 chat 中等待中的问题；`attention` 的 `routine` 中也有对应的 `fetch_failing`，直到读取恢复。这不是账本事件，不需要 `inbox_ack`。
+例行会话连续几次读不到某个 Teams chat（工具报错、限流、返回错误，或取到的内容核对不一致、tsw 的 hook 没有记下取数结果）时，tsw 告诉你一次：消息写明 chat、连续失败的次数、开始时间、最近一次的原因，以及这个 chat 中等待中的问题；`attention` 的 `routine` 中也有对应的 `fetch_failing`，直到读取恢复。这不是账本事件，不需要 `inbox_ack`。
 
 1. 自己用 `mcp__workiq__fetch` 读一次同一个 chat（`/me/chats/<chat>/messages?$top=5&$select=id,createdDateTime,from,body`，自聊的 chat 为 `48:notes`），区分是这个 chat 读不到，还是例行会话那边的工具出了问题。
-2. 你能读到时：例行会话的工具或权限有问题（例如它的 WorkIQ 未连接、auto 模式规则仍是旧版本）。给例行会话发消息“运行 routine_board”，让它再试一次；仍然失败时告诉用户原因与需要用户做的事（例如更新 auto 模式规则后重启例行会话）。
+2. 你能读到时：例行会话的工具或权限有问题（例如它的 WorkIQ 未连接、auto 模式规则仍是旧版本；原因是“hook 没有记下工具结果”时，插件还没有更新，按 update skill 更新插件）。给例行会话发消息“运行 routine_board”，让它再试一次；仍然失败时告诉用户原因与需要用户做的事（例如更新 auto 模式规则后重启例行会话）。
 3. 你也读不到时：告诉用户 Teams 读取失败、等待中的问题的回复暂时收不回来，可以直接在对应的 worker 会话里回答（会话内的回复始终有效）。

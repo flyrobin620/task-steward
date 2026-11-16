@@ -748,7 +748,9 @@ def build_parser() -> argparse.ArgumentParser:
     guard = add(
         sub, "guard", _cmd_guard, "Claude Code hooks 入口（由插件调用，从 stdin 读取 payload）"
     )
-    guard.add_argument("event", choices=["SessionStart", "PreToolUse", "UserPromptSubmit", "Stop"])
+    guard.add_argument(
+        "event", choices=["SessionStart", "PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop"]
+    )
     host = sub.add_parser("host", help="宿主集成").add_subparsers(
         dest="host_command", required=True, metavar="<host command>"
     )

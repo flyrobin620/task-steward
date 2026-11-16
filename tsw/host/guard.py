@@ -572,13 +572,14 @@ class Guard:
                 "每次运行（定时提示或主会话的消息）：调用 routine_board；按 maintenance 设定定时"
                 "任务（arm：有 replace 时先 CronDelete，再 CronCreate，recurring: true，cron 与 "
                 "prompt 原样，然后 routine_armed 登记），逐行执行 jobs（有 fetch 的先按 tool 与 "
-                "arguments 取数，再调用 routine_run：参数为该行的 run（没有 run 时为 job_id）加上 "
-                "fetched（取到的这一页，原样；工具报错或返回错误时 fetched 为它返回的原文，照样 "
-                "routine_run）；没有 fetch 的直接 routine_run）。每次 routine_run "
+                "arguments 取数，再调用 routine_run：参数为该行的 run（没有 run 时为 job_id），"
+                "不用传 fetched，取到的结果由 tsw 的 hook 记下；工具报错或返回错误时 fetched 为它"
+                "返回的原文，照样 routine_run；没有 fetch 的直接 routine_run）。每次 routine_run "
                 "之后：forward.send 为 true 时用 mcp__ccd_session_mgmt__send_message 把 message "
-                "原样发给 session_id；返回 next 时按 next 的 tool 与 arguments 取下一页，再用 "
-                "next.run 加上这一页调用 routine_run，直到不再返回 next（不管多少页，一页一次，"
-                "不要合并、不要自行截断）。有 clear_context 时最后调用 "
+                "原样发给 session_id；返回 next 时按 next 的 tool 与 arguments 取数，再用 "
+                "next.run 调用 routine_run，直到不再返回 next（不管多少次，一次一步；"
+                "读哪一页、哪些消息由 tsw 决定，不要自己转抄、截断或合并）。"
+                "有 clear_context 时最后调用 "
                 'mcp__ccd_session_mgmt__clear_session(session_id="self")。'
                 "不作任何判断，不改文件、不运行命令、不建会话；遇到问题发消息告诉主会话"
                 "（routine_board 的 orchestrator_session：当前持有调度租约的主会话）。",
@@ -743,6 +744,25 @@ class Guard:
                     "会话名必须是当前有效代次的名称",
                 )
         return None
+
+    def on_PostToolUse(self, who: Identity) -> dict[str, Any] | None:
+        """The routine session fetched data for a routine job: tsw keeps the tool result for
+        ``routine_run``, so the session does not copy it (CC006 §6.2, T286)."""
+        tool = str(self.payload.get("tool_name") or "")
+        if who.role != "routine" or tool not in routine_mod.capture_tools():
+            return None
+        kept = routine_mod.record_fetch(
+            self.home,
+            self.payload.get("tool_input"),
+            self.payload.get("tool_response"),
+            utc_now(),
+        )
+        if not kept:
+            return None
+        return context(
+            "PostToolUse",
+            "tsw 已记下这次取数的结果：用 run（或 next.run）直接调用 routine_run，不用传 fetched。",
+        )
 
     def on_UserPromptSubmit(self, who: Identity) -> dict[str, Any] | None:
         prompt = str(self.payload.get("prompt") or "")

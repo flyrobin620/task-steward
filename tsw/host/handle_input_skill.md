@@ -31,7 +31,7 @@ description: "TaskSteward 主会话处理问题的流程：例行会话转来超
 配置的是什么就用什么，没有配置的方式不用（转来的消息写明了配置的渠道）。对每个配置的渠道：
 
 - **`in-session`**：在主会话中直接问用户。`input_relay`（`channel: in-session`），然后在本会话的回复里写出问题全文、任务与 worker 会话。用户在本会话答复时，用 `input_resolve` 记录（`user_source` 的 `channel` 为 `main-session`，`text` 为用户在本会话的原话，`request_id` 为问题编号），再告诉 worker。
-- **`teams-chat`** 或其他渠道插件：`input_relay`（`channel` 为该渠道），然后按与渠道同名的 skill 发出、登记发送结果，并在回复转回时按它登记。
+- **`teams-chat`** 或其他渠道插件：`input_relay`（`channel` 为该渠道），然后按与渠道同名的 skill 发出、登记发送结果，并在回复转回时按它登记。渠道转回的回复正文可能被截断（标明“正文已截断”）：需要全文时按渠道的 skill 用消息 ID 单独读取这一条，再判断、登记。
 
 注意：
 

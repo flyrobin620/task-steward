@@ -6,6 +6,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -281,9 +282,11 @@ def test_teams_round_trip(home: Home) -> None:
     assert teams["fetch"]["arguments"] == {
         "entityUrls": [
             f"/me/chats/chat-1/messages?$top={routine_mod.TEAMS_READ_TOP}"
-            "&$orderby=createdDateTime+desc&$select=id,createdDateTime,from,body"
+            "&$orderby=createdDateTime+desc&$select=id,createdDateTime"
         ]
     }
+    # Every run starts the chat's read again from the newest page (T286).
+    assert cache["teams_steps"] == {"chat-1": routine_mod.first_step("chat-1")}
     # The window starts just before the waiting question's card, however long ago that was.
     assert teams["fetch"]["since"] == "2026-11-05T00:05:00Z"
     fetched = {
@@ -318,24 +321,15 @@ def test_teams_round_trip(home: Home) -> None:
     assert "T001 用方案 B" in message and request_id in message
     again = run_job(h, routine, "teams-replies", chat_id="chat-1", fetched=fetched)
     assert again == ([], "")  # passed on once
-    # One page at a time: the script asks for the next page until it reaches back past the card.
+    # The step tsw keeps for the chat is what the routine session fetches next, with the row's run.
     run = {"job_id": "teams-replies", "chat_id": "chat-1"}
-    with h.ledger.view() as conn:
-        assert routine_mod.run_next(conn, "teams-replies", run, "claude-code") is None
-        follow = routine_mod.run_next(
-            conn, "teams-replies", {**run, "fetched": {**fetched, "nextLink": "p2"}}, "claude-code"
-        )
-        assert follow == {
-            "tool": "mcp__workiq__fetch",
-            "arguments": {"entityUrls": ["p2"]},
-            "run": run,
-        }
-        older = {
-            "messages": [{"id": "x", "createdDateTime": "2026-11-05T00:04:59Z"}],
-            "nextLink": "p3",
-        }
-        assert routine_mod.run_next(conn, "teams-replies", {**run, "fetched": older}, "x") is None
-        assert routine_mod.run_next(conn, "handoff-scan", {"fetched": fetched}, "x") is None
+    assert routine_mod.run_next("chat-1", None, "claude-code") is None
+    step = routine_mod.first_step("chat-1")
+    assert routine_mod.run_next("chat-1", step, "claude-code") == {
+        "tool": "mcp__workiq__fetch",
+        "arguments": step["arguments"],
+        "run": run,
+    }
     # The orchestrator decides it answers the question and records it with the Teams source.
     out = h.run(
         "input_resolve",
@@ -474,6 +468,338 @@ def test_a_chat_that_cannot_be_read_is_reported_once(home: Home) -> None:
     # After it, failures count from one again.
     again = server.call("routine_run", {**run, "fetched": throttled})
     assert again["forward"] == {"send": False}
+
+
+def teams_id(at: str) -> str:
+    """A Teams message ID: the time the message was created, in milliseconds."""
+    return str(int(datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp() * 1000))
+
+
+def listed(*times: str) -> dict[str, Any]:
+    """A listed page as mcp__workiq__fetch returns it: IDs and creation times only."""
+    value = [{"id": teams_id(t), "createdDateTime": t} for t in times]
+    data: dict[str, Any] = {"@odata.count": len(value), "value": value}
+    if len(value) >= routine_mod.TEAMS_READ_TOP:
+        data["@odata.nextLink"] = "/me/chats/48:notes/messages?$skiptoken=abc"
+    return {"note": "Results limited", "results": [{"data": data, "statusCode": 200}]}
+
+
+def bodies(*messages: tuple[str, str]) -> dict[str, Any]:
+    """The bodies read by ID, one result per path."""
+    return {
+        "results": [
+            {
+                "data": {
+                    "id": mid,
+                    "from": {"user": {"id": "u1"}},
+                    "body": {"contentType": "html", "content": f"<p>{text}</p>"},
+                },
+                "statusCode": 200,
+            }
+            for mid, text in messages
+        ]
+    }
+
+
+def fetched_by_hook(h: Harness, routine: Caller, arguments: Any, result: Any) -> Any:
+    """The routine session fetched with ``arguments``: its PostToolUse hook keeps the result."""
+    return hook(
+        h,
+        str(routine.session_id),
+        "PostToolUse",
+        h.home.root / "routine",
+        tool_name="mcp__workiq__fetch",
+        tool_input=arguments,
+        tool_response=[{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
+    )
+
+
+def teams_waiting(h: Harness) -> tuple[Caller, str, str, Server]:
+    """A Teams question waiting in the user's self chat; its card's Teams ID."""
+    routine = start_routine(h)
+    _, request_id = asked(h)
+    h.clock.now = "2026-11-05T00:10:00Z"
+    run_job(h, routine, "handoff-scan")
+    h.run("input_relay", task_id="T001", request_id=request_id, channel="teams-chat")
+    card = teams_id("2026-11-05T00:09:59.500Z")
+    h.run(
+        "channel_sent",
+        task_id="T001",
+        request_id=request_id,
+        chat_id="48:notes",
+        message_id=card,
+        sender_id="u1",
+    )
+    server = Server(h.home, {SESSION_ENV: str(routine.session_id)}, h.home.root / "routine")
+    return routine, request_id, card, server
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_teams_replies_lists_ids_then_reads_the_bodies_left(home: Home) -> None:
+    # T286: whole pages of long cards were copied by the routine session into routine_run and
+    # came out cut or changed. Now a page is listed first, tsw's own cards are taken out, only the
+    # rest are read in full, every result reaches tsw through the hook, and each text passed on is
+    # cut to routine.teams_message_chars.
+    h = Harness(home, {**TEAMS, "routine": {"teams_message_chars": 100}})
+    routine, request_id, card, server = teams_waiting(h)
+    teams = next(
+        j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+    )
+    run = teams["run"]
+    assert run == {"job_id": "teams-replies", "chat_id": "48:notes"}
+    assert "不用传 fetched" in teams["fetch"]["then"]
+    # Page one, newest first and full: two replies, notes, and tsw's card at the end.
+    long_reply = "T001 " + "按方案 B 做，另外" * 30
+    notes = [f"2026-11-05T00:1{m}:00.000Z" for m in range(8, 1, -1)]
+    times = ["2026-11-05T00:20:00.000Z", "2026-11-05T00:19:00.000Z", *notes]
+    page = listed(*times, "2026-11-05T00:09:59.500Z")
+    told = fetched_by_hook(h, routine, teams["fetch"]["arguments"], page)
+    assert "routine_run" in told["hookSpecificOutput"]["additionalContext"]
+    first = server.call("routine_run", run)
+    assert first["events"] == [] and first["forward"] == {"send": False}
+    step = first["next"]
+    assert step["tool"] == "mcp__workiq__fetch" and step["run"] == run
+    urls = step["arguments"]["entityUrls"]
+    assert len(urls) == 9 and not any(card in u for u in urls)  # the card is never read
+    assert urls[0] == f"/me/chats/48:notes/messages/{teams_id(times[0])}?$select=id,from,body"
+    texts = [long_reply, "T001 用方案 B", *(f"笔记 {n}" for n in range(7))]
+    fetched_by_hook(
+        h, routine, step["arguments"], bodies(*zip(map(teams_id, times), texts, strict=True))
+    )
+    second = server.call("routine_run", run)
+    seen = [e["data"] for e in second["events"]]
+    assert [(d["message_id"], d["request_id"]) for d in seen] == [
+        (teams_id(times[1]), request_id),
+        (teams_id(times[0]), request_id),
+    ]
+    assert seen[1]["text"] == long_reply[:100]
+    assert seen[1]["truncated"] is True and seen[1]["length"] == len(long_reply)
+    assert "truncated" not in seen[0]
+    message = second["forward"]["message"]
+    assert second["forward"]["send"] is True and "T001 用方案 B" in message
+    assert f"正文已截断，原文 {len(long_reply)} 字" in message
+    assert f"/me/chats/48:notes/messages/{teams_id(times[0])}?$select=id,from,body" in message
+    # Page one reached back to the card, still inside the window: the page before it is next.
+    older = second["next"]["arguments"]["entityUrls"][0]
+    assert older.endswith("&$filter=createdDateTime+lt+2026-11-05T00:09:59.500Z")
+    fetched_by_hook(h, routine, second["next"]["arguments"], listed("2026-11-05T00:01:00.000Z"))
+    last = server.call("routine_run", run)
+    assert last["events"] == [] and "next" not in last
+    assert routine_mod.load_cache(h.home)["teams_steps"] == {}
+    # The next run starts again from the newest page; the replies are not passed on twice.
+    server.call("routine_board", {})
+    fetched_by_hook(h, routine, teams["fetch"]["arguments"], page)
+    again = server.call("routine_run", run)
+    assert len(again["next"]["arguments"]["entityUrls"]) == 7  # the notes only
+    fetched_by_hook(
+        h,
+        routine,
+        again["next"]["arguments"],
+        bodies(*zip(map(teams_id, notes), texts[2:], strict=True)),
+    )
+    assert server.call("routine_run", run)["events"] == []
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_teams_read_that_does_not_hold_together_counts_as_failed(home: Home) -> None:
+    h = Harness(home, TEAMS)
+    routine, _, _, server = teams_waiting(h)
+    run = {"job_id": "teams-replies", "chat_id": "48:notes"}
+    reply_at = "2026-11-05T00:12:00.000Z"
+    # Bodies that never match what was asked for: each run lists fine but fails on the bodies.
+    # The listing does not end the run of failures, so the orchestrator is still told (T286).
+    forwards = []
+    for _ in range(routine_mod.TEAMS_FETCH_ALERT_AFTER):
+        teams = next(
+            j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+        )
+        fetched_by_hook(h, routine, teams["fetch"]["arguments"], listed(reply_at))
+        step = server.call("routine_run", run)["next"]
+        fetched_by_hook(h, routine, step["arguments"], bodies(("1794000000000", "T001 好")))
+        out = server.call("routine_run", run)
+        assert out["events"] == [] and "next" not in out
+        forwards.append(out["forward"])
+    assert [f["send"] for f in forwards] == [False] * (routine_mod.TEAMS_FETCH_ALERT_AFTER - 1) + [
+        True
+    ]
+    assert "请求的候选" in forwards[-1]["message"]
+    # Nothing kept by the hook and nothing passed: a failed read, not an empty page.
+    server.call("routine_board", {})
+    assert server.call("routine_run", run)["events"] == []
+    reason = routine_mod.load_cache(h.home)["fetch_failures"]["48:notes"]["reason"]
+    assert "hook 没有记下" in reason
+    # A listing whose IDs and times disagree is not used either.
+    teams = next(
+        j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+    )
+    bad = listed(reply_at)
+    bad["results"][0]["data"]["value"][0]["createdDateTime"] = "2026-11-05T00:13:00.000Z"
+    fetched_by_hook(h, routine, teams["fetch"]["arguments"], bad)
+    out = server.call("routine_run", run)
+    assert "next" not in out
+    assert "不一致" in routine_mod.load_cache(h.home)["fetch_failures"]["48:notes"]["reason"]
+    # A session that passes what it fetched (started before T286) is still read when the hook
+    # kept nothing; one that passes it although the hook kept it reads the hook's.
+    server.call("routine_board", {})
+    out = server.call("routine_run", {**run, "fetched": listed(reply_at)})
+    assert out["next"]["arguments"]["entityUrls"][0].endswith(
+        f"/{teams_id(reply_at)}?$select=id,from,body"
+    )
+    fetched_by_hook(h, routine, out["next"]["arguments"], bodies((teams_id(reply_at), "T001 好")))
+    done = server.call("routine_run", {**run, "fetched": "copied wrong"})
+    assert [e["data"]["text"] for e in done["events"]] == ["T001 好"]
+    assert "48:notes" not in routine_mod.load_cache(h.home)["fetch_failures"]
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_fetch_kept_in_a_broken_off_run_is_not_used_later(home: Home) -> None:
+    # Review F1 of T286: bodies kept by the hook but not taken (the run broke off) must not stand
+    # in for the same fetch in the next run when that one fails without reaching the hook.
+    h = Harness(home, TEAMS)
+    routine, _, _, server = teams_waiting(h)
+    run = {"job_id": "teams-replies", "chat_id": "48:notes"}
+    reply_at = "2026-11-05T00:12:00.000Z"
+
+    def listed_to_bodies() -> dict[str, Any]:
+        teams = next(
+            j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+        )
+        fetched_by_hook(h, routine, teams["fetch"]["arguments"], listed(reply_at))
+        return server.call("routine_run", run)["next"]
+
+    step = listed_to_bodies()
+    fetched_by_hook(h, routine, step["arguments"], bodies((teams_id(reply_at), "T001 用 A")))
+    # The run breaks off here. The next one lists again; the bodies fetch fails this time.
+    assert listed_to_bodies()["arguments"] == step["arguments"]
+    out = server.call("routine_run", {**run, "fetched": "Error: HTTP 429 Too Many Requests"})
+    assert out["events"] == [] and out["forward"] == {"send": False}
+    failures = routine_mod.load_cache(h.home)["fetch_failures"]["48:notes"]
+    assert failures["count"] == 1 and "429" in failures["reason"]
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_later_page_that_keeps_failing_is_reported(home: Home) -> None:
+    # Review F3 of T286: the first page reads fine every run, the second fails every run. Only a
+    # row read to its end ends the run of failures, so the orchestrator is told.
+    h = Harness(home, TEAMS)
+    routine, _, _, server = teams_waiting(h)
+    run = {"job_id": "teams-replies", "chat_id": "48:notes"}
+    times = [f"2026-11-05T00:2{m}:00.000Z" for m in range(9, -1, -1)]
+    throttled = {"results": [{"data": {"error": {"code": "TooMany"}}, "statusCode": 429}]}
+    forwards = []
+    for _ in range(routine_mod.TEAMS_FETCH_ALERT_AFTER):
+        teams = next(
+            j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+        )
+        fetched_by_hook(h, routine, teams["fetch"]["arguments"], listed(*times))
+        step = server.call("routine_run", run)["next"]
+        notes = bodies(*((teams_id(t), "笔记") for t in times))
+        fetched_by_hook(h, routine, step["arguments"], notes)
+        older = server.call("routine_run", run)["next"]
+        assert older["arguments"]["entityUrls"][0].endswith("lt+2026-11-05T00:20:00.000Z")
+        fetched_by_hook(h, routine, older["arguments"], throttled)
+        out = server.call("routine_run", run)
+        assert "next" not in out
+        forwards.append(out["forward"])
+    assert [f["send"] for f in forwards] == [False] * (routine_mod.TEAMS_FETCH_ALERT_AFTER - 1) + [
+        True
+    ]
+    assert "HTTP 429" in forwards[-1]["message"]
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_teams_step_retried_with_its_command_id_returns_the_first_result(home: Home) -> None:
+    # Review F5 of T286: the response to the bodies step is lost and the session retries with
+    # the same command_id. The fetch the hook kept is gone by then; the first result comes back.
+    h = Harness(home, TEAMS)
+    routine, request_id, _, server = teams_waiting(h)
+    run = {"job_id": "teams-replies", "chat_id": "48:notes"}
+    reply_at = "2026-11-05T00:12:00.000Z"
+    teams = next(
+        j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+    )
+    fetched_by_hook(h, routine, teams["fetch"]["arguments"], listed(reply_at))
+    step = server.call("routine_run", run)["next"]
+    fetched_by_hook(h, routine, step["arguments"], bodies((teams_id(reply_at), "T001 用 A")))
+    first = server.call("routine_run", {**run, "command_id": "bodies-1"})
+    assert [e["data"]["request_id"] for e in first["events"]] == [request_id]
+    again = server.call("routine_run", {**run, "command_id": "bodies-1"})
+    assert again["duplicate"] is True
+    assert [e["sequence"] for e in again["events"]] == [e["sequence"] for e in first["events"]]
+    assert again.get("next") == first.get("next")
+    assert "48:notes" not in routine_mod.load_cache(h.home).get("fetch_failures", {})
+    # A listing records nothing in the ledger (review F6): its retry gives the same next step,
+    # takes no new fetch and counts nothing.
+    teams = next(
+        j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+    )
+    later = "2026-11-05T00:13:00.000Z"
+    fetched_by_hook(h, routine, teams["fetch"]["arguments"], listed(later, reply_at))
+    listing = server.call("routine_run", {**run, "command_id": "list-1"})
+    assert listing["events"] == [] and listing["next"]["arguments"]["entityUrls"] == [
+        routine_mod.full_text_path("48:notes", teams_id(later))
+    ]
+    fetched_by_hook(h, routine, listing["next"]["arguments"], bodies((teams_id(later), "笔记")))
+    retried = server.call("routine_run", {**run, "command_id": "list-1"})
+    assert retried["events"] == [] and retried["next"] == listing["next"]
+    assert "48:notes" not in routine_mod.load_cache(h.home).get("fetch_failures", {})
+    # The same command_id with another request is a conflict, not a retry (review F8).
+    other = {**run, "command_id": "list-1", "fetched": listed(later)}
+    assert reason_of(lambda: server.call("routine_run", other)) == "command_conflict"
+    # The bodies the hook kept are still there for the step itself.
+    assert server.call("routine_run", run)["events"] == []
+    assert "48:notes" not in routine_mod.load_cache(h.home).get("fetch_failures", {})
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_failed_teams_step_retried_stays_failed(home: Home) -> None:
+    # Review F7 of T286: a bodies step that failed its check (one candidate's body missing)
+    # must not record the reply it did hold when it is retried with its command_id.
+    h = Harness(home, TEAMS)
+    routine, _, _, server = teams_waiting(h)
+    run = {"job_id": "teams-replies", "chat_id": "48:notes"}
+    times = ["2026-11-05T00:13:00.000Z", "2026-11-05T00:12:00.000Z"]
+    teams = next(
+        j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+    )
+    fetched_by_hook(h, routine, teams["fetch"]["arguments"], listed(*times))
+    server.call("routine_run", run)
+    partial = bodies((teams_id(times[1]), "T001 yes"))
+    attempt = {**run, "command_id": "bodies-x", "fetched": partial}
+    first = server.call("routine_run", attempt)
+    assert first["events"] == [] and "next" not in first
+    count = routine_mod.load_cache(h.home)["fetch_failures"]["48:notes"]["count"]
+    again = server.call("routine_run", attempt)
+    assert again["events"] == [] and "next" not in again
+    assert routine_mod.load_cache(h.home)["fetch_failures"]["48:notes"]["count"] == count
+
+
+@pytest.mark.use_case("UC-ROUTINE-001")
+def test_only_the_routine_sessions_fetches_are_kept(home: Home) -> None:
+    h = Harness(home, TEAMS)
+    routine = start_routine(h, "r1")
+    arguments = {"entityUrls": ["/me/chats/48:notes/messages?$top=1"]}
+    response = [{"type": "text", "text": '{"results": []}'}]
+    fields = {"tool_name": "mcp__workiq__fetch", "tool_input": arguments, "tool_response": response}
+    # The orchestrator reading a message in full, or another tool: nothing kept, nothing said.
+    assert hook(h, "orch-1", "PostToolUse", h.home.root, **fields) is None
+    other = {**fields, "tool_name": "mcp__workiq__retrieve"}
+    assert hook(h, "r1", "PostToolUse", h.home.root / "routine", **other) is None
+    assert routine_mod.take_fetch(h.home, arguments) == (False, None)
+    told = hook(h, "r1", "PostToolUse", h.home.root / "routine", **fields)
+    assert "不用传 fetched" in told["hookSpecificOutput"]["additionalContext"]
+    # Taken once; the same paths spelled with %2c are the same fetch.
+    spelled = {"entityUrls": ["/me/chats/48%3anotes/messages?$top=1"]}
+    assert routine_mod.take_fetch(h.home, spelled) == (True, '{"results": []}')
+    assert routine_mod.take_fetch(h.home, arguments) == (False, None)
+    # Only the latest few are kept.
+    for n in range(routine_mod.CAPTURES_KEPT + 2):
+        args = {"entityUrls": [f"/p/{n}"]}
+        assert routine_mod.record_fetch(h.home, args, response, h.clock.now)
+    assert routine_mod.take_fetch(h.home, {"entityUrls": ["/p/0"]}) == (False, None)
+    assert routine_mod.take_fetch(h.home, {"entityUrls": ["/p/9"]})[0] is True
+    assert routine_mod.record_fetch(h.home, {"entityUrls": []}, response, h.clock.now) is False
+    del routine
 
 
 @pytest.mark.use_case("UC-ROUTINE-001")

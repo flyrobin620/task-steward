@@ -11,18 +11,23 @@ import pytest
 from tsw.machine.routine import (
     CARD_PREFIX,
     TEAMS_FETCH_ALERT_AFTER,
+    body_arguments,
     cron_for,
     failing_fetches,
     fetch_failure,
     fetched_messages,
+    first_step,
+    full_text_path,
     id_time,
-    next_page,
+    list_path,
     note_fetch,
     plain_text,
     question_html,
     read_arguments,
     select_replies,
     starting_task,
+    teams_progress,
+    tool_text,
 )
 
 
@@ -199,49 +204,186 @@ def test_a_tool_result_with_text_after_the_json() -> None:
     one = {"id": "1", "content": "T001 a"}
     text = json.dumps({"messages": [one], "nextLink": "p2"}) + "CorrelationId: abc, TimeStamp: x"
     assert fetched_messages(text) == [one]
-    assert next_page(text, since=WINDOW) == {"entityUrls": ["p2"]}
+    assert fetch_failure(text) is None
+
+
+def _listed(*times: str, count: int | None = None) -> dict[str, Any]:
+    """A listed page as mcp__workiq__fetch returns it (T286): IDs and creation times only."""
+    value = [{"id": _teams_id(t), "createdDateTime": t.replace("Z", ".000Z")} for t in times]
+    data: dict[str, Any] = {"@odata.count": len(value) if count is None else count, "value": value}
+    if len(value) >= 10:  # a next link only while there is more
+        data["@odata.nextLink"] = "/me/chats/c/messages?$skiptoken=abc"
+    return {"note": "Results limited", "results": [{"data": data, "statusCode": 200}]}
+
+
+def _job(*, outbound: set[str] | None = None, seen: set[str] | None = None) -> dict[str, Any]:
+    return {
+        "chat_id": "48:notes",
+        "since": WINDOW,
+        "outbound": outbound or set(),
+        "seen": seen or set(),
+    }
+
+
+def _bodies(*messages: dict[str, Any], gone: int = 0, status: int = 404) -> dict[str, Any]:
+    results: list[dict[str, Any]] = [{"data": m, "statusCode": 200} for m in messages]
+    results += [{"data": {"error": {"code": "NotFound"}}, "statusCode": status}] * gone
+    return {"results": results}
 
 
 @pytest.mark.use_case("UC-CHANNEL-001")
-def test_next_page_reads_the_whole_window_one_page_at_a_time() -> None:
-    def page(*times: str, link: str | None = "p-next") -> dict[str, Any]:
-        out: dict[str, Any] = {"messages": [_msg(str(i), "x", at=t) for i, t in enumerate(times)]}
-        if link:
-            out["nextLink"] = link
-        return out
-
-    # Every message on the page is inside the window and there is more: read on.
-    inside = page("2026-11-05T00:09:00Z", "2026-11-04T00:00:00Z")
-    assert next_page(inside, since=WINDOW) == {"entityUrls": ["p-next"]}
-    # The page reaches back past the window's start: done.
-    assert next_page(page("2026-11-05T00:09:00Z", "2026-11-03T23:59:59Z"), since=WINDOW) is None
-    # The last page of the chat: done.
-    assert next_page(page("2026-11-05T00:09:00Z", link=None), since=WINDOW) is None
-    # A page without dated messages tells nothing about the window: read on.
-    assert next_page(page(), since=WINDOW) == {"entityUrls": ["p-next"]}
-    # A list of pages from an older routine session: the last page decides.
-    older = [inside, page("2026-11-03T00:00:00Z")]
-    assert next_page(older, since=WINDOW) is None
-    assert next_page([page("2026-11-03T00:00:00Z"), inside], since=WINDOW) == {
-        "entityUrls": ["p-next"]
+def test_the_read_paths_list_ids_first_and_bodies_by_id() -> None:
+    # T286: a page is listed with IDs and times only, newest first; the next page is the one
+    # before the oldest message, written by tsw (no long next link to copy); bodies by ID.
+    assert read_arguments("48:notes") == {
+        "entityUrls": [
+            "/me/chats/48:notes/messages?$top=10&$orderby=createdDateTime+desc"
+            "&$select=id,createdDateTime"
+        ]
     }
-    # Plain messages and nothing at all name no next page.
-    assert next_page([_msg("1", "x")], since=WINDOW) is None
-    assert next_page(None, since=WINDOW) is None
-    assert next_page("not json", since=WINDOW) is None
+    assert first_step("48:notes") == {"stage": "list", "arguments": read_arguments("48:notes")}
+    assert list_path("c", "2026-11-05T00:01:02.003Z") == (
+        "/me/chats/c/messages?$top=10&$orderby=createdDateTime+desc&$select=id,createdDateTime"
+        "&$filter=createdDateTime+lt+2026-11-05T00:01:02.003Z"
+    )
+    assert body_arguments("c", ["1", "2"]) == {
+        "entityUrls": [
+            "/me/chats/c/messages/1?$select=id,from,body",
+            "/me/chats/c/messages/2?$select=id,from,body",
+        ]
+    }
+    assert full_text_path("c", "1") == "/me/chats/c/messages/1?$select=id,from,body"
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_listed_page_leaves_out_tsws_cards_before_reading_bodies() -> None:
+    times = [f"2026-11-05T00:{m:02d}:00Z" for m in range(20, 10, -1)]  # a full page, newest first
+    ids = [_teams_id(t) for t in times]
+    job = _job(outbound={ids[0], ids[2]}, seen={ids[3]})
+    out = teams_progress(job, first_step("48:notes"), _listed(*times))
+    assert out["failure"] is None and out["page_done"] is False
+    step = out["next"]
+    wanted = [i for n, i in enumerate(ids) if n not in (0, 2, 3)]
+    assert step["stage"] == "bodies" and step["ids"] == wanted
+    assert step["arguments"] == body_arguments("48:notes", wanted)
+    # tsw's own cards are never read: their IDs are not among the paths.
+    assert not any(ids[0] in url or ids[2] in url for url in step["arguments"]["entityUrls"])
+    # The page is full and still inside the window: the next listing comes after the bodies.
+    assert step["after"] == {
+        "stage": "list",
+        "arguments": {"entityUrls": [list_path("48:notes", "2026-11-05T00:11:00.000Z")]},
+    }
+    # The bodies come back: the page is done and the next listing follows.
+    bodies = [_msg(i, "随手记") for i in wanted]
+    done = teams_progress(job, step, _bodies(*bodies))
+    assert done == {"failure": None, "page_done": True, "next": step["after"]}
+    # Text after the JSON, as a hook may keep it, reads the same.
+    assert teams_progress(job, step, json.dumps(_bodies(*bodies)) + "\n") == done
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_listed_page_ends_the_read_or_goes_on() -> None:
+    job = _job()
+    # Fewer than a page: the chat has nothing older; only cards: nothing to read, page done.
+    few = ["2026-11-05T00:12:00Z", "2026-11-05T00:11:00Z"]
+    out = teams_progress(_job(outbound={_teams_id(t) for t in few}), first_step("c"), _listed(*few))
+    assert out == {"failure": None, "page_done": True, "next": None}
+    # A full page reaching back before the window's start: the last one.
+    full = [f"2026-11-0{5 if m else 3}T00:{m:02d}:00Z" for m in range(10)]
+    out = teams_progress(job, first_step("c"), _listed(*full))
+    assert out["next"]["stage"] == "bodies" and out["next"]["after"] is None
+    # Older messages than the window are not candidates.
+    assert _teams_id(full[0]) not in out["next"]["ids"]
+    # A full page of cards inside the window: straight to the next listing.
+    inside = [f"2026-11-05T00:{m:02d}:00Z" for m in range(30, 20, -1)]
+    cards = _job(outbound={_teams_id(t) for t in inside})
+    out = teams_progress(cards, first_step("c"), _listed(*inside))
+    assert out["page_done"] is True and out["next"]["stage"] == "list"
+    assert (
+        "createdDateTime+lt+2026-11-05T00:21:00.000Z" in out["next"]["arguments"]["entityUrls"][0]
+    )
+    # An empty chat.
+    assert teams_progress(job, first_step("c"), _listed()) == {
+        "failure": None,
+        "page_done": True,
+        "next": None,
+    }
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_what_was_fetched_is_checked() -> None:
+    job = _job()
+    times = ["2026-11-05T00:12:00Z", "2026-11-05T00:11:00Z"]
+    # The page's own count disagrees with its messages.
+    out = teams_progress(job, first_step("c"), _listed(*times, count=3))
+    assert out["next"] is None and "条数" in out["failure"]
+    # An ID that does not stand for its creation time.
+    page = _listed(*times)
+    page["results"][0]["data"]["value"][1]["createdDateTime"] = "2026-11-05T00:11:00.500Z"
+    out = teams_progress(job, first_step("c"), page)
+    assert out["page_done"] is False and "不一致" in out["failure"]
+    # Whole seconds (the Teams tools) compare at whole seconds.
+    seconds = {"value": [{"id": "1793869200050", "createdDateTime": "2026-11-05T09:00:00Z"}]}
+    assert teams_progress(job, first_step("c"), seconds)["failure"] is None
+    # A failed read.
+    throttled = {"results": [{"data": {"error": {"code": "TooMany"}}, "statusCode": 429}]}
+    out = teams_progress(job, first_step("c"), throttled)
+    assert out == {"failure": "HTTP 429（TooMany）", "page_done": False, "next": None}
+    # Bodies: exactly the candidates come back, but those deleted since (HTTP 404).
+    step = {"stage": "bodies", "ids": ["a", "b", "c"], "arguments": {}, "after": None}
+    two = _bodies(_msg("a", "x"), _msg("b", "y"), gone=1)
+    assert teams_progress(job, step, two) == {"failure": None, "page_done": True, "next": None}
+    missing = teams_progress(job, step, _bodies(_msg("a", "x"), _msg("b", "y")))
+    assert missing["page_done"] is False and "请求的候选" in missing["failure"]
+    extra = _bodies(_msg("a", "x"), _msg("b", "y"), _msg("z", "z"))
+    assert "请求的候选" in teams_progress(job, step, extra)["failure"]
+    twice = _bodies(_msg("a", "x"), _msg("a", "x"), _msg("b", "y"))
+    assert "请求的候选" in teams_progress(job, step, twice)["failure"]
+    failed = teams_progress(job, step, _bodies(_msg("a", "x"), _msg("b", "y"), gone=1, status=429))
+    assert failed["failure"] == "HTTP 429（NotFound）" and failed["next"] is None
+    assert teams_progress(job, step, None)["failure"] == "没有取数结果"
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_page_with_bodies_is_read_at_once() -> None:
+    # The one-step read of routine sessions started before T286: no bodies step after it.
+    reply = _msg(_teams_id("2026-11-05T00:12:00Z"), "T001 用 B", at="2026-11-05T00:12:00.000Z")
+    out = teams_progress(_job(), first_step("c"), {"value": [reply]})
+    assert out == {"failure": None, "page_done": True, "next": None}
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_long_message_is_cut_to_the_cap() -> None:
+    requests = [_q("T001", 1, "card-1", "2026-11-04T23:00:00Z")]
+    long_reply = "T001 " + "很长的答复" * 100
+    messages = [_msg("2", f"<p>{long_reply}</p>"), _msg("3", "<p>T001 好</p>")]
+    found = select_replies(
+        messages, requests=requests, sender_id="u1", since=WINDOW, exclude=set(), cap=100
+    )
+    assert [(m["message_id"], m["text"]) for m in found] == [
+        ("2", long_reply[:100]),
+        ("3", "T001 好"),
+    ]
+    assert found[0]["truncated"] is True and found[0]["length"] == len(long_reply)
+    assert "truncated" not in found[1] and "length" not in found[1]
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_tool_text_reads_what_a_hook_sees() -> None:
+    text = '{"results": []}'
+    assert tool_text([{"type": "text", "text": text}]) == text
+    assert tool_text(
+        {"content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}
+    ) == ("ab")
+    assert tool_text(text) == text
+    assert tool_text({"results": []}) == {"results": []}
+    assert tool_text([]) == []
 
 
 @pytest.mark.use_case("UC-CHANNEL-001")
 def test_a_workiq_fetch_result() -> None:
     # What mcp__workiq__fetch returns for one chat path (T253 live): the page is the ``data`` of
-    # the path's result, its next page an ``@odata.nextLink`` path to fetch as it is.
-    first = read_arguments("48:notes")
-    assert first == {
-        "entityUrls": [
-            "/me/chats/48:notes/messages?$top=10&$orderby=createdDateTime+desc"
-            "&$select=id,createdDateTime,from,body"
-        ]
-    }
+    # the path's result.
     card = _msg(_teams_id("2026-11-05T00:10:00Z"), f"{CARD_PREFIX} T001 Q-T001-1<br>问题")
     reply = {
         "id": _teams_id("2026-11-05T00:12:00Z"),
@@ -260,14 +402,9 @@ def test_a_workiq_fetch_result() -> None:
     fetched = result(link, reply, card)
     assert fetched_messages(fetched) == [reply, card]
     assert fetched_messages(json.dumps(fetched, ensure_ascii=False)) == [reply, card]
-    assert next_page(fetched, since=WINDOW) == {"entityUrls": [link]}
-    # A link given in full is cut back to the path WorkIQ takes.
-    full = result("https://graph.microsoft.com/v1.0" + link, reply)
-    assert next_page(full, since=WINDOW) == {"entityUrls": [link]}
-    # The last page names no next one; a failed fetch holds no messages and no next page.
-    assert next_page(result(None, reply), since=WINDOW) is None
+    # A failed fetch holds no messages.
     failed = {"results": [{"data": {"error": {"code": "x"}}, "statusCode": 404}]}
-    assert fetched_messages(failed) == [] and next_page(failed, since=WINDOW) is None
+    assert fetched_messages(failed) == []
     # Several pages as an older routine session collected them.
     assert fetched_messages([fetched, result(None, card)]) == [reply, card, card]
     requests = [_q("T001", 1, card["id"], "2026-11-05T00:10:00Z")]
@@ -315,6 +452,10 @@ def test_note_fetch_counts_failures_in_a_row_per_chat() -> None:
     assert note_fetch(kept, "c", "HTTP 429", "later") is None  # told once per run of failures
     assert note_fetch(kept, "other", "x", "t") is None  # counted per chat
     assert [f["chat_id"] for f in failing_fetches(kept)] == ["c"]
+    # A step with more to read after it leaves the count as it is (T286): bodies or a later
+    # page that fail every time still reach the alert.
+    assert note_fetch(kept, "c", None, "listed", read_through=False) is None
+    assert kept["fetch_failures"]["c"]["count"] == TEAMS_FETCH_ALERT_AFTER + 1
     assert note_fetch(kept, "c", None, "ok") is None
     assert failing_fetches(kept) == [] and "c" not in kept["fetch_failures"]
     assert failing_fetches({}) == [] and failing_fetches({"fetch_failures": []}) == []
@@ -360,3 +501,48 @@ def test_a_reply_in_the_same_second_as_its_card() -> None:
     early = _msg("1793869200010", "T001 先说一句", at="2026-11-05T09:00:00Z")
     found = select_replies([early], requests=[waiting], sender_id=None, since=WINDOW, exclude=set())
     assert found == []
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_bodies_must_come_back_with_their_text() -> None:
+    # Review F1 of T286: an ID alone or a listing given back is not an empty message.
+    job = _job()
+    step = {"stage": "bodies", "ids": ["a"], "arguments": {}, "after": None}
+    only_id = teams_progress(job, step, {"results": [{"data": {"id": "a"}, "statusCode": 200}]})
+    assert only_id["next"] is None and "没有正文" in only_id["failure"]
+    no_content = {"id": "a", "body": {"contentType": "html"}}
+    out = teams_progress(job, step, {"results": [{"data": no_content, "statusCode": 200}]})
+    assert "没有正文" in out["failure"]
+    listing = {"id": "a", "createdDateTime": "2026-11-05T00:12:00.000Z"}
+    out = teams_progress(
+        job, step, {"results": [{"data": {"value": [listing]}, "statusCode": 200}]}
+    )
+    assert "没有正文" in out["failure"]
+    empty = {"id": "a", "body": {"contentType": "html", "content": ""}}
+    out = teams_progress(job, step, {"results": [{"data": empty, "statusCode": 200}]})
+    assert out == {"failure": None, "page_done": True, "next": None}
+    assert teams_progress(job, step, [{"id": "a", "content": "T001 好"}])["failure"] is None
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_listing_or_whole_page_that_misses_fields_fails() -> None:
+    # PR #51: a listing without IDs or times, or a whole page whose candidate has no body, is
+    # not read through (it would drop a reply and end the run of failures).
+    job = _job()
+    no_id = {"@odata.count": 1, "value": [{"createdDateTime": "2026-11-05T00:12:00.000Z"}]}
+    assert teams_progress(job, first_step("c"), no_id)["failure"] == "列出的消息缺少 ID"
+    no_time = {"@odata.count": 1, "value": [{"id": "x1"}]}
+    assert "创建时间" in teams_progress(job, first_step("c"), no_time)["failure"]
+    # A real Teams ID stands for a time, but the listing must still give its own (review F4).
+    real = _teams_id("2026-11-05T00:12:00Z")
+    for listed in ({"id": real}, {"id": real, "createdDateTime": None}):
+        page = {"@odata.count": 1, "value": [listed]}
+        assert "创建时间" in teams_progress(job, first_step("c"), page)["failure"]
+    card = _msg("card-1", f"{CARD_PREFIX} T001 Q-T001-1")
+    bare = {"id": "r1", "createdDateTime": "2026-11-05T00:12:00Z", "body": {"contentType": "html"}}
+    out = teams_progress(_job(outbound={"card-1"}), first_step("c"), {"value": [card, bare]})
+    assert out["next"] is None and "没有正文" in out["failure"]
+    # The card has no body to read: only candidates need one.
+    whole = [{**card, "body": {}}, _msg("r1", "T001 好")]
+    out = teams_progress(_job(outbound={"card-1"}), first_step("c"), {"value": whole})
+    assert out == {"failure": None, "page_done": True, "next": None}

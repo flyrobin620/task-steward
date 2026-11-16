@@ -76,6 +76,7 @@
     "renew_after_days": 6,
     "context_reset_hours": 24,
     "stale_after_intervals": 3,
+    "teams_message_chars": 400,
     "teams_lookback_hours": 24
   },
   "review": {
@@ -215,6 +216,7 @@
 | `routine.renew_after_days` | 6 | 定时任务设定后超过这么多天就重新设定（宿主的定时任务有期限，Claude Code 为 7 天）；续期在超过之后的第一次运行时进行，所以它加上一个运行间隔须小于宿主的期限 |
 | `routine.context_reset_hours` | 24 | 例行会话每隔这么久清空一次自己的上下文 |
 | `routine.stale_after_intervals` | 3 | 超过这么多个间隔没有运行记录时，认为定时任务已失效，由主会话让例行会话重新设定 |
+| `routine.teams_message_chars` | 400 | Teams 例行项转出的每条消息正文的上限（字符数，按去掉格式后的文字计，取值 100 到 4000）：超过时 tsw 只保留开头这么多字符，`channel.reply_seen` 与转给主会话的消息标明截断与原文长度，需要全文的一方按消息 ID 单独读取；是否以任务 ID 开头不受截取影响（DN006 §8.9.5，T286）。调大让较长的答复免于截断，代价是转给主会话的消息变长 |
 | `routine.teams_lookback_hours` | 24 | 已弃用，不再使用：Teams 例行项从最早一个待答问题的卡片起读取全部消息（DN006 §8.9.5）。保留以便旧配置照常加载 |
 
 超时阈值仍是 `input.in_session_timeout_minutes`：默认例行项 `handoff-scan` 每次运行时转交已到期的问题，所以实际转交时间在阈值之后、一个运行间隔之内。
@@ -314,7 +316,7 @@ tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命�
 7. 别名全局唯一，不能与其他仓库 ID 冲突。`delivery.merge` 为 `true` 的仓库必须写明 `repository`（`owner/name`）。
 8. `input.channels` 中的每个渠道都必须已在 `plugins.human_channels` 中加载，且能力为 `request_response`；未显式设置时取已加载的全部 `request_response` 渠道。
 9. `input.decision_digest.enabled=true` 时，`channel` 必须为 `"local"`（只写入 Dashboard 页面与验收报告，不经任何渠道通知），或是已加载且支持 `notify` 的渠道；合并后缺少 `channel` 视为配置错误。`null` 只用于合并时删除字段（§5a），不作为业务取值。
-10. `routine.enabled=true` 时，`roles.routine.session` 必须是已加载的、具备 `interactive` 与 `timer` 的会话适配器（delegated 时与主会话同宿主），权限模式不高于主会话；`routine.interval_minutes` 按 §3.1b 的取值范围检查。
+10. `routine.enabled=true` 时，`roles.routine.session` 必须是已加载的、具备 `interactive` 与 `timer` 的会话适配器（delegated 时与主会话同宿主），权限模式不高于主会话；`routine.interval_minutes` 与 `routine.teams_message_chars` 按 §3.1b 的取值范围检查。
 11. 校验针对合并后的有效配置（默认值 + 数据目录配置 + 本机覆盖），`tsw config show --effective` 可查看结果。
 
 ## 5. 本机覆盖

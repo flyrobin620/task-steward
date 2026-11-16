@@ -253,7 +253,9 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     servers = json.loads((PLUGIN / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]
     assert "${CLAUDE_PLUGIN_ROOT}/bin/tsw_launch.py" in servers["tsw"]["args"]
     hooks = json.loads((PLUGIN / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
-    assert set(hooks) == {"SessionStart", "PreToolUse", "UserPromptSubmit", "Stop"}
+    assert set(hooks) == {"SessionStart", "PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop"}
+    # Only the routine session's fetches are kept (T286): the hook runs for that tool alone.
+    assert [m["matcher"] for m in hooks["PostToolUse"]] == ["mcp__workiq__fetch"]
     for entries in hooks.values():
         for entry in entries:
             assert "tsw_launch.py" in entry["hooks"][0]["command"]
