@@ -363,14 +363,14 @@ def test_only_the_user_turns_a_candidate_into_a_preference(home: Home) -> None:
     assert (rows["PC-2"]["status"], rows["PC-2"]["preference"]) == ("recorded", "P-2")
     words = {r["ref"]: r["text"] for r in h.query("SELECT ref, text FROM user_decisions")}
     assert words == {"P-1": "邮件一律只存草稿", "P-2": "画 workflow 图用 diagram skill"}
-    # A preference in force: the same words are no candidate again.
+    # A preference in force: the same words are no candidate again (counted as the preference).
     again = scan(
         h,
         worker,
         through,
         {"quote": "邮件一律只存草稿", "source_ref": mail, "topic": "邮件", "reason": "长期"},
     )
-    assert again["events"][0]["data"]["duplicates"] == [{"source_ref": mail, "same_as": "PC-1"}]
+    assert again["events"][0]["data"]["duplicates"] == [{"source_ref": mail, "same_as": "P-1"}]
 
 
 @pytest.mark.use_case("UC-CONTEXT-007")
@@ -589,3 +589,27 @@ def test_a_scan_of_an_older_revision_is_refused(home: Home) -> None:
     scan(h, worker, int(fresh["scanned_through"]))
     with h.ledger.view() as conn:
         assert candidates.scan_status(conn, "T001")["state"] == "done"
+
+
+@pytest.mark.use_case("UC-CONTEXT-007")
+def test_a_confirmed_candidate_counts_in_the_scope_the_user_chose(home: Home) -> None:
+    """The user narrowed a global candidate to one repository: the same words for another
+    repository are still a new candidate (review r2 F3)."""
+    h = Harness(home)
+    h.register("T001", goal="用户原话：“以后 PR 默认先开 draft”")
+    h.plan("T001")
+    worker = h.dispatch("T001")
+    through = int(sources(h)["scanned_through"])
+    found = {"quote": "PR 默认先开 draft", "source_ref": "goal@r1", "topic": "PR", "reason": "习惯"}
+    scan(h, worker, through, found)
+    h.run(
+        "preference_record",
+        ORCH,
+        candidate="PC-1",
+        scope="repo:other",
+        user_source=said(["preference", "repo:other", "standing"], "只在 other 这样"),
+    )
+    out = scan(h, worker, through, {**found, "scope": "repo:demo"})
+    assert out["events"][0]["data"]["ref"] == "PC-2"
+    again = scan(h, worker, through, {**found, "scope": "repo:other"})
+    assert again["events"][0]["data"]["duplicates"] == [{"source_ref": "goal@r1", "same_as": "P-1"}]

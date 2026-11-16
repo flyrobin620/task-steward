@@ -455,12 +455,13 @@ Known = list[tuple[str, str, str]]  # (words without spacing, scope, ref)
 
 
 def _known_words(conn: sqlite3.Connection) -> Known:
-    """Words already a candidate (open or recorded) or a preference in force, with their scope."""
+    """Words already an open candidate (in its suggested scope) or a preference in force (in the
+    scope and words the user recorded: a candidate the user confirmed counts as the preference it
+    became, review r2 F3), with their scope."""
     known: Known = [
         (compact(str(r["quote"])), str(r["scope"]), str(r["ref"]))
         for r in conn.execute(
-            "SELECT ref, quote, scope FROM preference_candidates "
-            "WHERE status IN ('open', 'recorded')"
+            "SELECT ref, quote, scope FROM preference_candidates WHERE status = 'open'"
         )
     ]
     known += [
