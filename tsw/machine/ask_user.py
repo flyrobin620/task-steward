@@ -289,11 +289,17 @@ def _review_decisions(
     *,
     extension_limit: int | None,
 ) -> list[EventDraft]:
-    """Extra rounds, approved deferrals and overruled findings that come with an answer."""
+    """Extra rounds, approved deferrals and overruled findings that come with an answer.
+
+    An answer given after a requirement change opens a new cycle (DN002 §5.1, T292): the extra
+    rounds count in it, while deferrals and overrulings concern findings of the cycle the
+    question was asked in and are recorded there; they no longer apply to the new revision.
+    """
     task_id, revision = str(row["task_id"]), int(row["revision"])
     attempt_row = current_attempt(ctx.conn, task_id)
     assert attempt_row is not None
-    cycle = int(row["cycle"]) + (1 if data.get("new_cycle") else 0)
+    asked_in = int(row["cycle"])
+    cycle = asked_in + (1 if data.get("new_cycle") else 0)
     drafts: list[EventDraft] = []
     rounds = int(inp.get("extend_rounds") or 0)
     if rounds:
@@ -328,9 +334,9 @@ def _review_decisions(
                     data={
                         **base,
                         "attempt": attempt_row["attempt"],
-                        "cycle": cycle,
+                        "cycle": asked_in,
                         "findings": _findings(
-                            ctx.conn, task_id, str(attempt_row["attempt"]), cycle, refs
+                            ctx.conn, task_id, str(attempt_row["attempt"]), asked_in, refs
                         ),
                     },
                 )

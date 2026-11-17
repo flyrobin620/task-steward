@@ -564,3 +564,55 @@ def test_a_change_in_intake_still_voids_the_intake_question(home: Home) -> None:
     assert data["superseded_requests"] == [request_id]
     assert h.query("SELECT status FROM input_requests")[0]["status"] == "superseded"
     assert h.status("T001") == "intake"
+
+
+@pytest.mark.transition("T12")
+def test_an_answer_about_old_findings_still_resumes_after_a_change(home: Home) -> None:
+    """PR #56 review: deferring a finding of the cycle the question was asked in must not be
+    refused once a change has opened a new revision; the task leaves waiting_user."""
+    h = Harness(home, {"review": {"max_rounds": 1}})
+    h.register("T001")
+    h.plan("T001")
+    w = h.dispatch("T001")
+    high = {
+        "id": "F1",
+        "severity": "high",
+        "category": "correctness",
+        "claim": "c",
+        "evidence": "e",
+    }
+    r1 = h.review_round(w, "T001", "h1", [high])
+    h.run("review_triage", w, task_id="T001", round=r1, items=[{"finding": "F1", "action": "fix"}])
+    h.run(
+        "review_decide",
+        w,
+        task_id="T001",
+        round=r1,
+        decision="escalate",
+        head="h1",
+        escalate_kind="defer_requested",
+        suggestion="延后 F1",
+    )
+    item = h.query("SELECT item_id FROM judgments")[0]["item_id"]
+    request_id = h.run("ask_user", w, task_id="T001", question="F1 可以延后吗？", items=[item])[
+        "events"
+    ][0]["data"]["request_id"]
+    update(h, 1)
+    message_id = str(say(h, w, "可以延后，再给一轮"))
+    out = h.run(
+        "user_answer",
+        w,
+        task_id="T001",
+        request_id=request_id,
+        message_id=message_id,
+        answer="延后 F1，追加一轮",
+        defer_findings=[{"round": r1, "finding": "F1"}],
+        extend_rounds=1,
+    )
+    types = [e["type"] for e in out["events"]]
+    assert types == ["input.resolved", "review.budget_extended", "review.defer_approved"]
+    assert out["events"][1]["data"]["cycle"] == 2  # the new cycle's budget
+    assert out["events"][2]["data"]["cycle"] == 1  # the finding's own cycle
+    row = h.task("T001")
+    assert (row["status"], row["revision"], row["cycle"]) == ("in_progress", 2, 2)
+    assert h.query("SELECT disposition FROM findings")[0]["disposition"] == "deferred_approved"
