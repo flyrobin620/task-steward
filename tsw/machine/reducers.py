@@ -248,9 +248,14 @@ def input_resolved(conn: sqlite3.Connection, event: Event) -> None:
                     "source": data["source"],
                     "answer": data.get("answer"),
                     **{k: data[k] for k in ("source_kind", "decision_id") if k in data},
-                    # The revision the answer took effect in: the user's later replies in the
-                    # worker's session are late answers to it until the next change (T292).
-                    "revision": event.revision,
+                    # The revision the answer took effect in (T292; absent before): the user's
+                    # later replies in the worker's session are late answers to it until the
+                    # next change. Older answers reduce exactly as before.
+                    **(
+                        {"revision": data["answered_revision"]}
+                        if "answered_revision" in data
+                        else {}
+                    ),
                 }
             ),
             data["request_id"],

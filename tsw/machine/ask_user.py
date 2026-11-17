@@ -268,6 +268,7 @@ def _resolution(
         and int(row["waiting_revision"]) != int(row["revision"]),
         resume_substate=binding.get("substate") or "executing",
         resolves=binding.get("judgments", []),
+        answered_revision=int(row["revision"]),
     )
     return [
         EventDraft(

@@ -239,7 +239,12 @@ def input_resolve(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 )
             ]
         binding = loads(request["binding"], {})
-        data: dict[str, Any] = {"request_id": request_id, "source": source, "answer": answer}
+        data: dict[str, Any] = {
+            "request_id": request_id,
+            "source": source,
+            "answer": answer,
+            "answered_revision": int(row["revision"]),
+        }
         drafts: list[EventDraft] = []
         if request["kind"] == "intake":
             require_status(row, "intake")
