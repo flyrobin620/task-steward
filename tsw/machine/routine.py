@@ -593,8 +593,10 @@ def teams_progress(
         if created is not None and created < floor:
             continue
         modified = _modified(message)
-        if message_id in judged and judged[message_id] == modified:
-            continue  # read before, judged not to pass on, unchanged since (T293)
+        if modified is not None and message_id in judged and judged[message_id] == modified:
+            # Read before, judged not to pass on, unchanged since (T293). Without the time of
+            # its last change a message may have been edited: it is read again (PR #55).
+            continue
         candidates.append(message_id)
         checks[message_id] = {
             "at": format_time(created) if created is not None else None,
@@ -670,7 +672,7 @@ def _bodies_progress(step: Mapping[str, Any], fetched: Any) -> dict[str, Any]:
 
 def _modified(message: Mapping[str, Any]) -> str | None:
     """When a listed message last changed, as the listing gave it (``lastModifiedDateTime``: an
-    edit or a reaction), or None when the listing does not say."""
+    edit or a reaction), or None when the listing does not say (unknown: read it again)."""
     value = message.get("lastModifiedDateTime")
     return value if isinstance(value, str) and value else None
 
@@ -742,6 +744,9 @@ def note_checked(
     entry = _checked_entry(record.get(chat_id), job)
     skip = set(passed_on)
     floor = parse_time(str(job["since"]))
+    for message_id in skip:
+        # Passed on after all (a note edited into an answer): the ledger has it now (PR #55).
+        entry["messages"].pop(str(message_id), None)
     for message_id, check in checks.items():
         if message_id in skip or not isinstance(check, Mapping):
             continue

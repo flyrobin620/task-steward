@@ -476,8 +476,8 @@ def teams_id(at: str) -> str:
 
 
 def listed(*times: str) -> dict[str, Any]:
-    """A listed page as mcp__workiq__fetch returns it: IDs and creation times only."""
-    value = [{"id": teams_id(t), "createdDateTime": t} for t in times]
+    """A listed page as mcp__workiq__fetch returns it: IDs, creation and last change times."""
+    value = [{"id": teams_id(t), "createdDateTime": t, "lastModifiedDateTime": t} for t in times]
     data: dict[str, Any] = {"@odata.count": len(value), "value": value}
     if len(value) >= routine_mod.TEAMS_READ_TOP:
         data["@odata.nextLink"] = "/me/chats/48:notes/messages?$skiptoken=abc"
@@ -998,6 +998,8 @@ def test_a_note_is_read_once_while_a_question_waits(home: Home) -> None:
     ]
     out = read(listed_changed(*edited), {teams_id(note_a): "T001 改用 C"})
     assert [e["data"]["text"] for e in out["events"]] == ["T001 改用 C"]
+    judged = routine_mod.load_cache(h.home)["teams_checked"]["48:notes"]["messages"]
+    assert set(judged) == {teams_id(note_b)}  # passed on now: left to the ledger (PR #55)
     # A second task asks in the same chat: note b could answer it now, so it is read once more.
     h.clock.now = "2026-11-05T00:40:00Z"
     _, second = asked(h, "T002")

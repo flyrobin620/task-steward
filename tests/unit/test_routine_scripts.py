@@ -616,6 +616,13 @@ def test_a_message_judged_before_is_not_read_again() -> None:
     assert out["next"]["ids"] == [ids[1]]
     plain = teams_progress(_job(seen={ids[2]}), first_step("48:notes"), _listed(*times), judged)
     assert plain["next"]["ids"] == [ids[0], ids[1]]
+    # Nor is one judged from a listing without it: an unknown last change may be an edit (PR #55).
+    unknown = {ids[0]: None, ids[1]: None}
+    plain = teams_progress(_job(seen={ids[2]}), first_step("48:notes"), _listed(*times), unknown)
+    assert plain["next"]["ids"] == [ids[0], ids[1]]
+    # A note judged before and passed on later (edited into an answer) leaves the record.
+    note_checked(kept, job, {}, passed_on={ids[1]})
+    assert set(kept["teams_checked"]["48:notes"]["messages"]) == {ids[0]}
     # A failed step leaves nothing to remember.
     throttled = {"results": [{"data": {"error": {"code": "TooMany"}}, "statusCode": 429}]}
     assert "checks" not in teams_progress(job, first["next"], throttled)
