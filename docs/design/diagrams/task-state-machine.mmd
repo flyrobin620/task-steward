@@ -44,7 +44,7 @@ stateDiagram-v2
     dispatching --> paused: T10 现场冲突需用户决定
 
     in_progress --> waiting_user: T11 主会话判断后交给人类
-    waiting_user --> in_progress: T12 / T29 答复已记录·或主会话登记需求变更
+    waiting_user --> in_progress: T12 答复已记录
     in_progress --> verifying: T13 提交·终版已评审
     in_progress --> paused: T14 外部等待或失败·worker 已停
     in_progress --> ready: T15 会话丢失·核实已停
