@@ -117,9 +117,8 @@ def test_r2_duplicate_dependencies_are_refused(h: Harness) -> None:
     assert h.ledger.audit()["ok"]
 
 
-@mark.use_case("UC-JUDGE-001")
-@mark.transition("T12")
-def test_r3_requirement_change_while_waiting_is_asked_again(home: Home) -> None:
+def escalated(home: Home) -> Harness:
+    """The orchestrator gave a worker's cross-task question to the user (T11)."""
     h, w = started(home)
     h.run("question", w, task_id="T001", text="q")
     h.run(
@@ -132,6 +131,14 @@ def test_r3_requirement_change_while_waiting_is_asked_again(home: Home) -> None:
         basis=["b"],
         confidence="low",
     )
+    return h
+
+
+@mark.use_case("UC-JUDGE-001")
+@mark.transition("T12")
+def test_r3_an_escalated_question_outlives_a_change_while_waiting(home: Home) -> None:
+    """DN002 §5.1 (T292): the change keeps the question; its answer opens a new cycle."""
+    h = escalated(home)
     h.run(
         "task_update",
         task_id="T001",
@@ -139,6 +146,44 @@ def test_r3_requirement_change_while_waiting_is_asked_again(home: Home) -> None:
         acceptance=["新验收"],
         user_source=h.source("T001", 1, "change"),
     )
+    assert h.query("SELECT status FROM input_requests")[0]["status"] == "pending"
+    assert h.status("T001") == "waiting_user"
+    h.run(
+        "input_resolve",
+        task_id="T001",
+        request_id="Q-T001-1",
+        answer="是",
+        user_source=h.source("T001", 2, "answer", request_id="Q-T001-1"),
+    )
+    row = h.task("T001")
+    assert (row["status"], row["substate"], row["cycle"]) == ("in_progress", "executing", 2)
+
+
+@mark.use_case("UC-JUDGE-001")
+@mark.transition("T12")
+def test_r3_a_change_recorded_before_t292_is_asked_again(home: Home) -> None:
+    """Ledgers written before T292: the change voided the question and the task waited with
+    nothing to answer; the orchestrator asks again for the new revision (DN002 §5.1)."""
+    h = escalated(home)
+    legacy = Command(
+        actor=ORCH.actor(),
+        input={"op": "legacy_change"},
+        build=lambda ctx: [
+            EventDraft(
+                type="task.requirement_changed",
+                task_id="T001",
+                revision=2,
+                data={
+                    "revision": 2,
+                    "goal": "新目标",
+                    "acceptance": ["新验收"],
+                    "spec_sha256": "0" * 64,
+                    "user_source": h.source("T001", 1, "change"),
+                },
+            )
+        ],
+    )
+    h.ledger.commit(legacy)
     assert h.query("SELECT status FROM input_requests")[0]["status"] == "superseded"
     assert h.status("T001") == "waiting_user"
     asked = h.run(
@@ -537,24 +582,14 @@ def test_r16_a_user_extension_after_a_requirement_change_applies_to_the_new_cycl
         acceptance=["a2"],
         user_source=h.source("T001", 1, "change"),
     )
-    asked = h.run(
-        "judge",
-        task_id="T001",
-        items=[],
-        decision="escalate",
-        question="q2",
-        rationale="r",
-        basis=["b"],
-        confidence="low",
-    )
-    request = asked["events"][1]["data"]["request_id"]
+    # The question outlives the change (DN002 §5.1, T292); its answer opens the new cycle.
     h.run(
         "input_resolve",
         task_id="T001",
-        request_id=request,
+        request_id="Q-T001-1",
         answer="好",
         extend_rounds=2,
-        user_source=h.source("T001", 2, "answer", request_id=request),
+        user_source=h.source("T001", 2, "answer", request_id="Q-T001-1"),
     )
     assert h.task("T001")["cycle"] == 2
     cycles = h.query("SELECT cycle, user_extension FROM review_cycles")

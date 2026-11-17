@@ -168,11 +168,18 @@ def session_message(
             (task_id, session_ref),
         ).fetchone()
     )
+    # A pending question is still asked after a requirement change (DN002 §5.1, T292); one
+    # already answered elsewhere collects late replies only within its own revision.
     answers = (
         request is not None
         and not request["answered_in_session"]
-        and request["status"] in ("pending", "resolved")
-        and loads(request["binding"], {}).get("revision") == revision
+        and (
+            request["status"] == "pending"
+            or (
+                request["status"] == "resolved"
+                and loads(request["binding"], {}).get("revision") == revision
+            )
+        )
     )
     message_id = next_item_id(conn, "session_messages", "message_id", "M", task_id)
     return EventDraft(
@@ -238,13 +245,14 @@ def _resolution(
     request: Mapping[str, Any],
     data: dict[str, Any],
 ) -> list[EventDraft] | None:
-    """T12 for a pending in-session question, or None when the binding no longer holds."""
+    """T12 for a pending in-session question, or None when the binding no longer holds: the
+    question belongs to another attempt or session. A requirement change made while it waits
+    does not void it (DN002 §5.1, T292); the answer then opens a new cycle."""
     require_status(dict(row), "waiting_user")
     binding = loads(request["binding"], {})
     attempt_row = current_attempt(ctx.conn, str(row["task_id"]))
     if (
-        binding.get("revision") != int(row["revision"])
-        or attempt_row is None
+        attempt_row is None
         or binding.get("attempt") != attempt_row["attempt"]
         or binding.get("generation") != int(attempt_row["generation"])
     ):

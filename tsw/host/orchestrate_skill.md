@@ -45,6 +45,7 @@ description: "TaskSteward 主会话流程：受理（细则见 task-intake）、
 worker 先在自己的会话里直接问用户（`ask_user`），你看不到问题内容，也不用处理。会出现在 `inbox` 的回传：
 
 - `input.handed_off` 与 `channel.reply_seen`：worker 会话中的问题超时（默认 10 分钟）无人回复，由例行会话转交给你；或经 Teams 转达的问题在 Teams 中有了以任务 ID 开头的回复。按 `handle-input` skill 处理：在授权边界内代为决定（`handoff_resolve`）；需要用户决定的，按 `plugins.human_channels` 交给用户（`in-session`：在本会话中直接问；`teams-chat`：按 `teams-chat` skill 发卡片；没有配置的方式不用）；渠道转回的答复按渠道的 skill 登记（`input_resolve`）。worker 标了 `reserved` 的问题只能交给用户。决定后用消息告诉 worker。`attention` 的 `handoff_due` 列出已到期但还没转交的问题（例行会话不在时），运行 `sync` 转交。用户之后在 worker 会话里的回复仍然有效：问题未决时它直接生效，已决时记为迟到答复，以用户的话为准。
+- 用户在本会话中说的话涉及一个正在等用户的任务（`waiting_user`，`inbox` 的 `pending_input` 列出待答问题）：先判断它是否回答了待答的问题，再按 task-intake skill“写回与修改”登记：是回答就先 `input_resolve` 再（有需求变更时）`task_update`，并把答复与新任务书一并告诉 worker；与问题无关的需求变更只 `task_update`，问题继续等待；拿不准时问用户（DN002 §5.1）。
 - `task.requirement_changed`（只有 worker 登记的才进入 inbox）：用户在 worker 会话中修改了需求，worker 已登记新的 revision、目标与验收（`user_source` 是 hook 记录的用户原话）。不需要退回、规划或重新派发，也不需要通知 worker 重读任务书：确认后 `inbox_ack`。迁移为 `T28` 时，已完成的任务回到了执行中，你之前的技术验收作废，等 worker 重新提交后按新 revision 核验；为 `T23` 时（独占资源或依赖不满足），任务回到了待受理，按新 revision 重新规划，之后派发会续用原会话。`sync` 列出的 `needs_stop` 下游按依赖失效处理。
 - `worker.question`：跨任务的事（独占资源冲突、依赖调整、改动其他任务的范围）。用 `judge` 处理：
 

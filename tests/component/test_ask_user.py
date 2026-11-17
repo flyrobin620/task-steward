@@ -476,10 +476,11 @@ def test_only_the_latest_question_of_the_session_collects_messages(home: Home) -
     )
 
 
-def test_a_requirement_change_closes_the_question_to_messages(home: Home) -> None:
+def test_a_requirement_change_keeps_the_question_open_to_messages(home: Home) -> None:
+    """DN002 §5.1 (T292): a change while waiting does not void the question."""
     h = Harness(home)
     w = started(h)
-    ask(h, w)
+    request_id = ask(h, w)
     h.run(
         "task_update",
         task_id="T001",
@@ -487,7 +488,15 @@ def test_a_requirement_change_closes_the_question_to_messages(home: Home) -> Non
         acceptance=["功能可用"],
         user_source=h.source("T001", 1, "change"),
     )
-    assert unlinked(h, w, "用 B")
+    hint = say(h, w, "用 B")
+    assert messages(h)[-1]["request_id"] == request_id
+    assert f"（问题 {request_id}）" in str((hint or {})["hookSpecificOutput"]["additionalContext"])
+    # Once it is answered, later replies are no longer linked to it.
+    h.run(
+        "user_answer", w, task_id="T001", request_id=request_id, message_id="M-T001-1", answer="B"
+    )
+    assert h.task("T001")["cycle"] == 2
+    assert unlinked(h, w, "就这样")
 
 
 def test_the_orchestrator_stop_hook_hands_off_due_questions(home: Home) -> None:

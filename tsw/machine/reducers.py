@@ -190,7 +190,16 @@ def requirement_changed(conn: sqlite3.Connection, event: Event) -> None:
             pause["resume_target"] = None
             pause["submission_invalidated"] = True
             _set(conn, task_id, pause=dumps(pause), submission=None)
-    _close_requests(conn, task_id, "superseded")
+    if "superseded_requests" in data:
+        # Since T292 the event names them: a question the user is waiting on stays open.
+        for request_id in data["superseded_requests"]:
+            conn.execute(
+                "UPDATE input_requests SET status = 'superseded' "
+                "WHERE request_id = ? AND task_id = ? AND status = 'pending'",
+                (request_id, task_id),
+            )
+    else:
+        _close_requests(conn, task_id, "superseded")
     _touch(conn, event)
 
 

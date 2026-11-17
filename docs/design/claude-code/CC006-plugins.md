@@ -160,6 +160,8 @@ tsw 核对取到的内容（DN006 §8.9.5 的“核对”）：列出的每条�
 2. **主会话判断**：读问题与任务书，按 DN006 §8.2 的授权边界与因素判断。能代答时 `handoff_resolve`，再用 `send_message` 把决定告诉 worker，让它继续；`reserved` 或超出授权的交给用户。
 3. **按 `plugins.human_channels` 交给用户**：配置的是什么就用什么，没有配置的方式不用。`in-session`：`input_relay`（`channel: in-session`）后在主会话中直接问，用户的答复用 `input_resolve` 登记（来源渠道 `main-session`）；`teams-chat`：`input_relay` 后按与渠道同名的 skill 发出（§7）。没有配置 `in-session` 时不在主会话里问用户（`input_relay` 也会拒绝），也不用“去 worker 会话回答”代替渠道。发送失败时问题保持待答，向用户说明，问题仍可在 worker 会话里回答。
 
+4. **用户在主会话里的话回答了待答的问题**（T292，DN002 §5.1）：不论问题是否已转交，主会话用 `context_task` 读出问题正文对照用户的话；是回答就 `input_resolve`（来源渠道 `main-session`），有需求变更时再 `task_update`，把答复与新任务书一起告诉 worker；与问题无关的需求变更只 `task_update`，问题继续等待；拿不准时问用户。
+
 渠道转回的答复与渠道的故障（Teams 的回复登记与读取失败）按渠道的 skill 处理。通用的 skill 不写渠道的工具、路径、格式与 `channel_sent` 字段：新增渠道时只加它自己的 skill，问题流程不变。
 
 改动原因：Q-T255-1 超时转交后，主会话只在主会话里提示“去 worker 会话回答”，没有经 Teams 转达。原 skill 把“用户正在本会话对话时转达到 `main-session`”与“否则转 Teams”并列，主会话据此判断出了偏差；`input_relay` 也总是允许 `main-session`，与配置无关（用户 2026-11-10）。现在只有配置的渠道可用，本机配置为只有 `teams-chat`。
@@ -334,7 +336,7 @@ DN002 §5.8 在 Claude app 上的做法（T272）。
 4. 验收：每条可以逐项核对（有对象、有证据），不写“质量好”一类无法核对的话；交付方式与 live 规则由 tsw 写在任务书开头，不重复。
 5. 交流语言：用户偏好的语言在配置 `control.language`，由 tsw 写进任务书（DN003 §3.5a），主会话不在目标中重复；用户说以后都用别的语言时按原话 `config_change`，只是某个任务要用别的语言时写进该任务的目标。
 6. 推荐读取集合：检索中入围、worker 需要参考的任务，在 `task_dispatch` / `attempt_continue` 的 `read_set` 中给出，并在背景中写明理由（DN007 §7.2）。
-7. 写回：之后的决定影响已登记、尚未完成的任务时，立即 `task_update`（附用户来源），已有会话时告诉它重读任务书（原 `orchestrate` 的两条）。
+7. 写回：之后的决定影响已登记、尚未完成的任务时，立即 `task_update`（附用户来源），已有会话时告诉它重读任务书（原 `orchestrate` 的两条）。任务在等用户回答 worker 的问题时，先判断用户的话是否回答了问题：是回答就先 `input_resolve` 再 `task_update`，与问题无关时只 `task_update`、问题继续等待，拿不准时问用户（T292，DN002 §5.1）。
 8. 按任务类型的附加说明：
    - code：写明涉及的仓库规则（需要用户确认的改动、live 场景）。gh 账号的注意事项由 tsw 写在任务书的“仓库与 worktree”一节（§8.3，按 `auth_profile`），主会话不再手写；仓库没有配置 `auth_profile` 时，把建议的账号配置告诉用户，按用户原话 `config_change`。
    - design：产出的设计文档位置、需要用户确认的范围。

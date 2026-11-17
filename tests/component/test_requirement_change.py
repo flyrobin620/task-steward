@@ -384,3 +384,154 @@ def test_only_the_workers_change_reaches_the_orchestrators_inbox(home: Home) -> 
         )
     )
     assert not [e for e in reportable(h) if e["type"] == "task.requirement_changed"]
+
+
+# ------------------------------------------------- the orchestrator's change while waiting (T292)
+#
+# DN002 §5.1: a change recorded while the user is being asked does not void the question. A
+# change that has nothing to do with it leaves the task waiting; a change that is the answer is
+# recorded as the answer first (input_resolve, T12) and then as the change (E07).
+
+
+def asked(h: Harness, question: str = "设计可以确认吗？") -> tuple[Caller, str]:
+    h.register("T001")
+    h.plan("T001")
+    w = h.dispatch("T001")
+    out = h.run("ask_user", w, task_id="T001", question=question)
+    return w, str(out["events"][0]["data"]["request_id"])
+
+
+def update(h: Harness, revision: int, text: str = "再加一个导出功能") -> dict[str, Any]:
+    return h.run(
+        "task_update",
+        task_id="T001",
+        goal="实现功能，并支持导出 CSV",
+        acceptance=NEW_ACCEPTANCE,
+        user_source=h.source("T001", revision, "change", text=text),
+    )
+
+
+@pytest.mark.transition("T12")
+def test_an_unrelated_change_keeps_the_task_waiting_on_its_question(home: Home) -> None:
+    h = Harness(home)
+    w, request_id = asked(h)
+    data = update(h, 1)["events"][0]["data"]
+    assert "transition" not in data and data["superseded_requests"] == []
+    # The brief is at the new revision and the worker is to be told to read it again.
+    assert data["brief"]["revision"] == 2 and data["brief"]["session_ref"] == w.session_id
+    row = h.task("T001")
+    assert (row["status"], row["revision"], row["cycle"]) == ("waiting_user", 2, 1)
+    assert h.query("SELECT status FROM input_requests")[0]["status"] == "pending"
+    # Still waiting: the worker cannot go on before the user answers.
+    assert reason_of(lambda: h.finalize(w, "T001")) == "invalid_state"
+    # The user answers in the worker's session: the hook still links the reply to the question.
+    message_id = str(say(h, w, "可以，确认"))
+    assert messages(h)[-1]["request_id"] == request_id
+    out = h.run(
+        "user_answer",
+        w,
+        task_id="T001",
+        request_id=request_id,
+        message_id=message_id,
+        answer="确认",
+    )
+    resolved = out["events"][0]
+    assert (resolved["type"], resolved["data"]["transition"]) == ("input.resolved", "T12")
+    assert resolved["data"]["new_cycle"] is True
+    row = h.task("T001")
+    assert (row["status"], row["substate"], row["cycle"]) == ("in_progress", "executing", 2)
+    # The worker reviews, may ask again and submits at the new revision.
+    h.run("ask_user", w, task_id="T001", question="导出用逗号还是制表符？")
+    second = str(say(h, w, "逗号"))
+    h.run("user_answer", w, task_id="T001", request_id="Q-T001-2", message_id=second, answer="逗号")
+    h.finalize(w, "T001", head="h2")
+    h.submit(w, "T001", head="h2")
+    assert h.status("T001") == "verifying"
+    assert reportable(h)[-1]["data"]["submission"]["revision"] == 2
+
+
+@pytest.mark.transition("T12")
+def test_a_handed_off_question_is_still_answered_after_an_unrelated_change(home: Home) -> None:
+    h = Harness(home)
+    _, request_id = asked(h)
+    update(h, 1)
+    h.clock.now = "2026-11-05T00:10:00Z"
+    assert [e["type"] for e in h.run("sync")["events"]] == ["input.handed_off"]
+    out = h.run(
+        "handoff_resolve",
+        task_id="T001",
+        request_id=request_id,
+        decision="answer",
+        answer="确认",
+        rationale="任务书已写明",
+        basis=["任务书 目标"],
+        confidence="high",
+    )
+    assert out["events"][1]["data"]["new_cycle"] is True
+    row = h.task("T001")
+    assert (row["status"], row["substate"], row["revision"], row["cycle"]) == (
+        "in_progress",
+        "executing",
+        2,
+        2,
+    )
+
+
+@pytest.mark.transition("T12")
+@pytest.mark.transition("E07")
+def test_a_change_that_answers_the_question_is_recorded_as_the_answer_first(
+    home: Home,
+) -> None:
+    """T285 a1: asked "can the design be confirmed?", the user said "add the figure" in the
+    main session. That is the answer: input_resolve, then task_update, then tell the worker."""
+    h = Harness(home)
+    w, request_id = asked(h)
+    out = h.run(
+        "input_resolve",
+        task_id="T001",
+        request_id=request_id,
+        answer="不确认：补图",
+        user_source=h.source("T001", 1, "answer", text="补图", request_id=request_id),
+    )
+    assert out["events"][0]["data"]["transition"] == "T12"
+    assert h.status("T001") == "in_progress"
+    data = update(h, 1, text="补图")["events"][0]["data"]
+    assert "transition" not in data and data["superseded_requests"] == []
+    row = h.task("T001")
+    assert (row["status"], row["substate"], row["revision"], row["cycle"]) == (
+        "in_progress",
+        "executing",
+        2,
+        2,
+    )
+    # Nothing blocks the worker: it reviews, asks again for the new revision and submits.
+    h.run("ask_user", w, task_id="T001", question="补的图可以确认吗？")
+    assert h.status("T001") == "waiting_user"
+    message_id = str(say(h, w, "可以"))
+    h.run(
+        "user_answer",
+        w,
+        task_id="T001",
+        request_id="Q-T001-2",
+        message_id=message_id,
+        answer="可以",
+    )
+    h.finalize(w, "T001", head="h2")
+    h.submit(w, "T001", head="h2")
+    assert h.status("T001") == "verifying"
+    statuses = h.query("SELECT request_id, status FROM input_requests ORDER BY request_id")
+    assert statuses == [
+        {"request_id": "Q-T001-1", "status": "resolved"},
+        {"request_id": "Q-T001-2", "status": "resolved"},
+    ]
+
+
+def test_a_change_in_intake_still_voids_the_intake_question(home: Home) -> None:
+    h = Harness(home)
+    h.register("T001")
+    asked_out = h.run("intake_question", task_id="T001", question="范围包括导入吗？")
+    request_id = asked_out["events"][0]["data"]["request_id"]
+    data = update(h, 1)["events"][0]["data"]
+    assert data["superseded_requests"] == [request_id]
+    assert h.query("SELECT status FROM input_requests")[0]["status"] == "superseded"
+    assert h.status("T001") == "intake"

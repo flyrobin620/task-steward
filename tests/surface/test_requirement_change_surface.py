@@ -164,3 +164,54 @@ def test_the_hook_records_the_users_words_and_the_worker_cites_them(
     assert "task.requirement_changed" in done["wake"]["message"]
     code, shown = run_json("task", "show", "T001")
     assert code == 0 and shown["task"]["revision"] == 2
+
+
+@pytest.mark.transition("T12")
+def test_a_change_while_waiting_keeps_the_question_through_the_real_processes(
+    started: tuple[Path, Path],
+) -> None:
+    """DN002 §5.1 (T292): the orchestrator's change does not void the worker's question; the
+    user's later reply in the worker's session still answers it and resumes the work."""
+    home, workdir = started
+    asked = mcp(workdir, "w-1", INIT, call(1, "ask_user", task_id="T001", question="用 A 还是 B？"))
+    assert asked[1]["result"].get("isError") is not True
+    changed = ok(
+        "task_update",
+        ORCH,
+        task_id="T001",
+        goal="g，并支持导出",
+        acceptance=["a", "可以导出"],
+        user_source={
+            "channel": "main-session",
+            "principal": "owner",
+            "message_ref": "msg-1",
+            "text": "再加导出",
+            "target": ["T001", 1, "change"],
+        },
+    )
+    data = changed["events"][0]["data"]
+    assert data["superseded_requests"] == [] and data["brief"]["session_ref"] == "w-1"
+    code, shown = run_json("task", "show", "T001")
+    assert code == 0 and shown["task"]["status"] == "waiting_user"
+
+    out = hook("w-1", home, "用 B")
+    context = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "M-T001-1" in context and "Q-T001-1" in context
+    replies = mcp(
+        workdir,
+        "w-1",
+        INIT,
+        call(
+            1,
+            "user_answer",
+            task_id="T001",
+            request_id="Q-T001-1",
+            message_id="M-T001-1",
+            answer="用 B",
+        ),
+    )
+    resolved = json.loads(replies[1]["result"]["content"][0]["text"])["events"][0]
+    assert resolved["data"]["transition"] == "T12" and resolved["data"]["new_cycle"] is True
+    code, shown = run_json("task", "show", "T001")
+    assert code == 0
+    assert (shown["task"]["status"], shown["task"]["revision"]) == ("in_progress", 2)
