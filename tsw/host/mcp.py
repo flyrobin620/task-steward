@@ -437,7 +437,7 @@ class Server:
             job_id = str(args.get("job_id") or "")
             out["forward"] = self._forward(job_id, out, ledger, usable)
             if teams_read is not None:
-                alert, step = self._teams_after(teams_read, ledger)
+                alert, step = self._teams_after(teams_read, ledger, out)
                 if alert is not None and not out["forward"].get("send"):
                     out["forward"] = alert
                 following = routine_mod.run_next(
@@ -527,21 +527,23 @@ class Server:
             }
         else:
             fetched = fetched if found else args.get("fetched")
-            progress = routine_mod.teams_progress(job, step, fetched)
+            checked = routine_mod.checked_messages(kept, job)
+            progress = routine_mod.teams_progress(job, step, fetched, checked)
         run_args = {**args, "_fetched": fetched if progress["failure"] is None else None}
         return run_args, {
             "chat_id": chat_id,
+            "job": job,
             "progress": progress,
             "command_id": command_id,
             "request": routine_mod.request_key(args),
         }
 
     def _teams_after(
-        self, teams_read: Mapping[str, Any], ledger: Ledger
+        self, teams_read: Mapping[str, Any], ledger: Ledger, out: Mapping[str, Any]
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        """Keep where the chat's read is and count a failed read in the routine cache; the
-        forward that tells the orchestrator once a chat could not be read several times in a row
-        (T253), and the step to fetch next."""
+        """Keep where the chat's read is, the messages read and not passed on (T293), and count
+        a failed read in the routine cache; the forward that tells the orchestrator once a chat
+        could not be read several times in a row (T253), and the step to fetch next."""
         chat_id = str(teams_read["chat_id"])
         kept = routine_mod.load_cache(self.home)
         replay = teams_read.get("replay")
@@ -568,6 +570,15 @@ class Server:
         else:
             steps[chat_id] = step
         kept["teams_steps"] = steps
+        if progress["failure"] is None and progress.get("checks"):
+            # The script has run and its events are in the ledger: what it passed on is
+            # remembered there (channel_replies), the rest is not read again (T293).
+            passed_on = {
+                str((e.get("data") or {}).get("message_id"))
+                for e in out.get("events") or []
+                if e.get("type") == "channel.reply_seen"
+            }
+            routine_mod.note_checked(kept, teams_read["job"], progress["checks"], passed_on)
         alert: dict[str, Any] | None = None
         if entry is not None:
             with ledger.view() as conn:

@@ -84,7 +84,7 @@ FETCH_TOOLS: dict[str, dict[str, str]] = {
 TEAMS_READ_TOP = 10
 # A page is listed first with these fields only, and the bodies of the messages left once tsw's
 # own cards are taken out are read next (T286): whole pages of cards were too long to pass on.
-TEAMS_LIST_FIELDS = "id,createdDateTime"
+TEAMS_LIST_FIELDS = "id,createdDateTime,lastModifiedDateTime"
 TEAMS_BODY_FIELDS = "id,from,body"
 # Deprecated (T286): the fields of the one-step read. Kept for code that imported it.
 TEAMS_READ_FIELDS = "id,createdDateTime,from,body"
@@ -97,6 +97,9 @@ CAPTURES_KEPT = 8
 TEAMS_FETCH_ALERT_AFTER = 3
 # How much of a failed tool's text is kept as the reason.
 FETCH_REASON_CHARS = 200
+# Messages whose bodies were read and that were not passed on, kept per chat in the routine cache
+# so they are not read again (T293): at most this many per chat, the newest.
+TEAMS_CHECKED_KEPT = 500
 # The read window starts this long before the earliest waiting card: the clocks of tsw and Teams
 # differ, and tsw records a card after Teams created it.
 TEAMS_WINDOW_MARGIN = timedelta(minutes=5)
@@ -299,8 +302,11 @@ def board(
     host = str(config.get("plugins.host_integration"))
     # Where each Teams row's read is: every run starts again from the newest page (T286).
     kept["teams_steps"] = {}
+    rows = teams_jobs(conn)
+    # Judged messages before the window, or of chats no longer read, are dropped (T293).
+    prune_checked(kept, rows)
     # One row per chat that still has a waiting Teams question (cards may go to several chats).
-    for teams in teams_jobs(conn):
+    for teams in rows:
         since = teams["since"]
         kept["teams_steps"][teams["chat_id"]] = first_step(teams["chat_id"])
         jobs.append(
@@ -537,15 +543,23 @@ def _has_body(message: Mapping[str, Any]) -> bool:
     return any(k in message for k in ("body", "content", "text"))
 
 
-def teams_progress(job: Mapping[str, Any], step: Mapping[str, Any], fetched: Any) -> dict[str, Any]:
+def teams_progress(
+    job: Mapping[str, Any],
+    step: Mapping[str, Any],
+    fetched: Any,
+    checked: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """One step of reading a ``teams-replies`` row (DN006 §8.9.5, T286): what was fetched for
     ``step``, checked, and the step after it.
 
     Returns ``failure`` (why this read failed, or None), ``page_done`` (a page was read through:
-    the run of failures ends) and ``next`` (the next step, or None when the row is read through
-    or the read failed). A listed page's candidates are its messages that tsw did not send, has
-    not passed on and that are in the read window; their bodies are read next. A page that comes
-    with bodies (the one-step read of routine sessions started before T286) is read at once."""
+    the run of failures ends), ``next`` (the next step, or None when the row is read through
+    or the read failed) and, when bodies are in hand, ``checks``: those messages, to remember
+    once the script has run (``note_checked``, T293). A listed page's candidates are its messages
+    that tsw did not send, has not passed on, has not judged before (``checked``, from
+    ``checked_messages``, unchanged since) and that are in the read window; their bodies are read
+    next. A page that comes with bodies (the one-step read of routine sessions started before
+    T286) is read at once."""
     chat_id = str(job["chat_id"])
     if str(step.get("stage") or "list") == "bodies":
         return _bodies_progress(step, fetched)
@@ -568,7 +582,9 @@ def teams_progress(job: Mapping[str, Any], step: Mapping[str, Any], fetched: Any
             "arguments": {"entityUrls": [list_path(chat_id, _ms_time(min(times)))]},
         }
     skip = set(job["outbound"]) | set(job["seen"])
+    judged = checked or {}
     candidates: list[str] = []
+    checks: dict[str, dict[str, Any]] = {}
     for message in messages:
         message_id = str(message.get("id") or "")
         created = _created(message)
@@ -576,14 +592,23 @@ def teams_progress(job: Mapping[str, Any], step: Mapping[str, Any], fetched: Any
             continue
         if created is not None and created < floor:
             continue
+        modified = _modified(message)
+        if modified is not None and message_id in judged and judged[message_id] == modified:
+            # Read before, judged not to pass on, unchanged since (T293). Without the time of
+            # its last change a message may have been edited: it is read again (PR #55).
+            continue
         candidates.append(message_id)
+        checks[message_id] = {
+            "at": format_time(created) if created is not None else None,
+            "modified": modified,
+        }
     if candidates and any(_has_body(m) for m in messages):
         # The page came with its bodies (read at once): every candidate needs one (PR #51).
         by_id = {str(m.get("id") or ""): m for m in messages}
         empty = [i for i in candidates if not _readable_body(by_id[i])]
         if empty:
             return {"failure": f"消息 {empty} 没有正文", "page_done": False, "next": None}
-        return {"failure": None, "page_done": True, "next": following}
+        return {"failure": None, "page_done": True, "next": following, "checks": checks}
     if not candidates:
         return {"failure": None, "page_done": True, "next": following}
     return {
@@ -593,6 +618,7 @@ def teams_progress(job: Mapping[str, Any], step: Mapping[str, Any], fetched: Any
             "stage": "bodies",
             "arguments": body_arguments(chat_id, candidates),
             "ids": candidates,
+            "checks": checks,
             "after": following,
         },
     }
@@ -635,7 +661,115 @@ def _bodies_progress(step: Mapping[str, Any], fetched: Any) -> dict[str, Any]:
             "next": None,
         }
     after = step.get("after")
-    return {"failure": None, "page_done": True, "next": dict(after) if after else None}
+    checks = step.get("checks")
+    return {
+        "failure": None,
+        "page_done": True,
+        "next": dict(after) if after else None,
+        "checks": {i: checks[i] for i in ids if i in checks} if isinstance(checks, Mapping) else {},
+    }
+
+
+def _modified(message: Mapping[str, Any]) -> str | None:
+    """When a listed message last changed, as the listing gave it (``lastModifiedDateTime``: an
+    edit or a reaction), or None when the listing does not say (unknown: read it again)."""
+    value = message.get("lastModifiedDateTime")
+    return value if isinstance(value, str) and value else None
+
+
+def checked_basis(job: Mapping[str, Any]) -> dict[str, Any]:
+    """What a row's judgements rest on (T293): the questions a message could answer and whose
+    messages count. A message judged against these is judged the same against fewer questions."""
+    return {
+        "requests": sorted({str(r["request_id"]) for r in job["requests"]}),
+        "sender_id": job.get("sender_id"),
+    }
+
+
+def _still_holds(entry: Mapping[str, Any], basis: Mapping[str, Any]) -> bool:
+    """Whether judgements made on ``entry``'s basis hold now: the user is the same and no
+    question was added (a new one could make a message judged before answer it)."""
+    before = entry.get("basis")
+    if not isinstance(before, Mapping) or not isinstance(before.get("requests"), list):
+        return False
+    return before.get("sender_id") == basis["sender_id"] and set(basis["requests"]) <= {
+        str(r) for r in before["requests"]
+    }
+
+
+def _in_window(value: Any, floor: datetime) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return parse_time(value) >= floor
+    except ValueError:
+        return False
+
+
+def _checked_entry(entry: Any, job: Mapping[str, Any]) -> dict[str, Any]:
+    """A chat's record brought up to the row as it is now: on the row's basis now, only what
+    still holds and is inside the read window."""
+    basis = checked_basis(job)
+    messages: dict[str, Any] = {}
+    if isinstance(entry, Mapping) and _still_holds(entry, basis):
+        floor = parse_time(str(job["since"]))
+        found = entry.get("messages")
+        for message_id, m in found.items() if isinstance(found, Mapping) else ():
+            if isinstance(m, Mapping) and _in_window(m.get("at"), floor):
+                messages[str(message_id)] = {"at": m["at"], "modified": m.get("modified")}
+    return {"basis": basis, "messages": messages}
+
+
+def checked_messages(kept: Mapping[str, Any], job: Mapping[str, Any]) -> dict[str, Any]:
+    """The messages of a ``teams-replies`` row whose bodies were read and that were not passed
+    on, as far as that still holds for the row now (T293): message ID → the last change the
+    listing gave then. Empty when a question was added or the user changed since."""
+    record = kept.get("teams_checked")
+    entry = record.get(str(job["chat_id"])) if isinstance(record, Mapping) else None
+    messages = _checked_entry(entry, job)["messages"]
+    return {i: m["modified"] for i, m in messages.items()}
+
+
+def note_checked(
+    kept: dict[str, Any],
+    job: Mapping[str, Any],
+    checks: Mapping[str, Any],
+    passed_on: Iterable[str],
+) -> None:
+    """Remember the messages of a step whose bodies were read and that were not passed on
+    (T293), once the script has run. Only the newest ``TEAMS_CHECKED_KEPT`` per chat."""
+    record = kept.get("teams_checked")
+    record = dict(record) if isinstance(record, Mapping) else {}
+    chat_id = str(job["chat_id"])
+    entry = _checked_entry(record.get(chat_id), job)
+    skip = set(passed_on)
+    floor = parse_time(str(job["since"]))
+    for message_id in skip:
+        # Passed on after all (a note edited into an answer): the ledger has it now (PR #55).
+        entry["messages"].pop(str(message_id), None)
+    for message_id, check in checks.items():
+        if message_id in skip or not isinstance(check, Mapping):
+            continue
+        if not _in_window(check.get("at"), floor):
+            continue  # a message without a readable time is simply read again
+        entry["messages"][str(message_id)] = {"at": check["at"], "modified": check.get("modified")}
+    newest = sorted(entry["messages"].items(), key=lambda kv: (str(kv[1]["at"]), kv[0]))
+    entry["messages"] = dict(newest[-TEAMS_CHECKED_KEPT:])
+    record[chat_id] = entry
+    kept["teams_checked"] = record
+
+
+def prune_checked(kept: dict[str, Any], jobs: Sequence[Mapping[str, Any]]) -> None:
+    """Drop what no longer counts (T293): chats without a waiting question, messages before the
+    read window, a chat's judgements once a question was added or the user changed."""
+    record = kept.get("teams_checked")
+    if not isinstance(record, Mapping):
+        return
+    kept["teams_checked"] = {
+        str(job["chat_id"]): _checked_entry(record[str(job["chat_id"])], job)
+        for job in jobs
+        if str(job["chat_id"]) in record
+    }
 
 
 def _readable_body(message: Mapping[str, Any]) -> bool:
