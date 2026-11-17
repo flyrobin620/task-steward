@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterator
 from typing import Any
@@ -10,7 +11,8 @@ from typing import Any
 import pytest
 
 from tsw.events import Event
-from tsw.machine.reducers import requirement_changed
+from tsw.machine.ask_user import session_message
+from tsw.machine.reducers import input_resolved, requirement_changed
 from tsw.projection import SCHEMA_SQL
 
 pytestmark = [pytest.mark.use_case("UC-CHANGE-001"), pytest.mark.transition("T12")]
@@ -86,3 +88,66 @@ def test_a_change_recorded_before_t292_voids_every_pending_request(
 ) -> None:
     requirement_changed(conn, _changed())  # no list: the ledger replays as it was written
     assert _statuses(conn) == {"Q-T001-1": "superseded", "Q-T001-2": "superseded"}
+
+
+# --------------------------------------------- answers and the replies the hook links to them
+
+
+def _resolved(**extra: Any) -> Event:
+    return Event(
+        schema=1,
+        sequence=10,
+        time="2026-11-17T00:00:00Z",
+        type="input.resolved",
+        actor={"role": "orchestrator"},
+        prev="",
+        checksum="",
+        task_id="T001",
+        revision=1,
+        data={"request_id": "Q-T001-1", "source": {"channel": "x"}, "answer": "好", **extra},
+    )
+
+
+def test_an_answer_recorded_before_t292_reduces_as_before(conn: sqlite3.Connection) -> None:
+    input_resolved(conn, _resolved())
+    row = conn.execute("SELECT resolution FROM input_requests WHERE request_id = 'Q-T001-1'")
+    assert json.loads(row.fetchone()["resolution"]) == {"source": {"channel": "x"}, "answer": "好"}
+
+
+def test_an_answer_keeps_the_revision_it_took_effect_in(conn: sqlite3.Connection) -> None:
+    input_resolved(conn, _resolved(answered_revision=2))
+    row = conn.execute("SELECT resolution FROM input_requests WHERE request_id = 'Q-T001-1'")
+    assert json.loads(row.fetchone()["resolution"])["revision"] == 2
+
+
+def _linked(conn: sqlite3.Connection, resolution: dict[str, Any], revision: int) -> bool:
+    conn.execute(
+        "INSERT INTO in_session_requests(request_id, task_id, session_ref, asked_at, "
+        "handoff_after, reserved) VALUES('Q-T001-1', 'T001', 'w-1', 't', 't', 0)"
+    )
+    conn.execute(
+        "UPDATE input_requests SET status = 'resolved', resolution = ? "
+        "WHERE request_id = 'Q-T001-1'",
+        (json.dumps(resolution),),
+    )
+    conn.execute("UPDATE tasks SET revision = ?", (revision,))
+    draft = session_message(conn, "T001", "w-1", "用户的回复")
+    assert draft is not None
+    return draft.data["request_id"] == "Q-T001-1"
+
+
+@pytest.mark.parametrize(
+    ("resolution", "revision", "linked"),
+    [
+        # Answered before T292: the question's own revision (1) decides.
+        ({"answer": "好"}, 1, True),
+        ({"answer": "好"}, 2, False),
+        # Answered in revision 2 after a change while waiting: linked until the next change.
+        ({"answer": "好", "revision": 2}, 2, True),
+        ({"answer": "好", "revision": 2}, 3, False),
+    ],
+)
+def test_a_late_reply_belongs_to_the_answered_question_until_the_next_change(
+    conn: sqlite3.Connection, resolution: dict[str, Any], revision: int, linked: bool
+) -> None:
+    assert _linked(conn, resolution, revision) is linked
