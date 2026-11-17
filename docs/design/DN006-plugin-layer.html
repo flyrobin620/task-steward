@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="2110d66f494600f9ee0263ad54a6ce0959d1fdb0a3bc5c18e15ea195f37229e9">
+<meta name="tsw-source-sha256" content="e6d0e26ccfb5de89d2007fca6f0a84686e76a89006f4381b625271417239a051">
 <title>DN006 插件层：宿主集成、会话、人类渠道与数据存储</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -219,7 +219,7 @@ class VerifiedSource:              # DN002 G-USER 的统一证据
     target: tuple[str, int, str]   # (任务 ID, revision, 决定类别：answer / accept / reject / approve / change)</code></pre>
 <p><code>InputRequest</code> 含请求 ID（如 <code>Q-T241-3</code>）、触发场合、问题正文、可选项、主会话已作的分析（<code>DecisionRecord</code> 摘要）、过期时间、worker 会话的直达链接（如果宿主支持用户直接对话），以及<strong>上下文绑定</strong>：任务 ID、revision、attempt、创建代次、提交周期。</p>
 <p>请求生命周期：</p>
-<table><thead><tr><th>状态</th><th>含义</th><th>进入方式</th></tr></thead><tbody><tr><td><code>pending</code></td><td>已投递，等待答复</td><td>T11</td></tr><tr><td><code>resolved</code></td><td>第一个通过核实的答复已生效</td><td>T12</td></tr><tr><td><code>cancelled</code></td><td>任务不再需要这个答复</td><td>任务取消（T25）、依赖失效离开 <code>waiting_user</code>（T16）、attempt 被替换、请求过期后用户撤回</td></tr><tr><td><code>superseded</code></td><td>问题因需求变更（revision+1）而过时</td><td><code>task.requirement_changed</code>；如仍需答复，由主会话按新 revision 重新判断，必要时以新请求 ID 再问</td></tr></tbody></table>
+<table><thead><tr><th>状态</th><th>含义</th><th>进入方式</th></tr></thead><tbody><tr><td><code>pending</code></td><td>已投递，等待答复</td><td>T11</td></tr><tr><td><code>resolved</code></td><td>第一个通过核实的答复已生效</td><td>T12</td></tr><tr><td><code>cancelled</code></td><td>任务不再需要这个答复</td><td>任务取消（T25）、依赖失效离开 <code>waiting_user</code>（T16）、attempt 被替换、请求过期后用户撤回</td></tr><tr><td><code>superseded</code></td><td>问题因需求变更（revision+1）而过时</td><td><code>task.requirement_changed</code>；任务在 <code>waiting_user</code> 时同一事件经 T29 回到执行中（DN002 §5.1）。如仍需答复，worker 按新 revision 用 <code>ask_user</code> 以新请求 ID 再问</td></tr></tbody></table>
 <p>T12 在同一事件中原子检查：请求为 <code>pending</code>，且上下文绑定与任务当前的 revision、attempt、代次一致。对 <code>cancelled</code> / <code>superseded</code> / <code>resolved</code> 请求的任何答复都只记录为 <code>input.late_response</code>，不恢复 worker。</p>
 <h3 id="86-渠道实现">8.6 渠道实现</h3>
 <p>层次与命名（T256，用户 2026-11-10）：</p>

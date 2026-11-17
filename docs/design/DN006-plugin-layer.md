@@ -400,7 +400,7 @@ class VerifiedSource:              # DN002 G-USER 的统一证据
 | `pending` | 已投递，等待答复 | T11 |
 | `resolved` | 第一个通过核实的答复已生效 | T12 |
 | `cancelled` | 任务不再需要这个答复 | 任务取消（T25）、依赖失效离开 `waiting_user`（T16）、attempt 被替换、请求过期后用户撤回 |
-| `superseded` | 问题因需求变更（revision+1）而过时 | `task.requirement_changed`；如仍需答复，由主会话按新 revision 重新判断，必要时以新请求 ID 再问 |
+| `superseded` | 问题因需求变更（revision+1）而过时 | `task.requirement_changed`；任务在 `waiting_user` 时同一事件经 T29 回到执行中（DN002 §5.1）。如仍需答复，worker 按新 revision 用 `ask_user` 以新请求 ID 再问 |
 
 T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与任务当前的 revision、attempt、代次一致。对 `cancelled` / `superseded` / `resolved` 请求的任何答复都只记录为 `input.late_response`，不恢复 worker。
 
