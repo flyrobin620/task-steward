@@ -453,7 +453,7 @@ def test_an_unrelated_change_keeps_the_task_waiting_on_its_question(home: Home) 
 @pytest.mark.transition("T12")
 def test_a_handed_off_question_is_still_answered_after_an_unrelated_change(home: Home) -> None:
     h = Harness(home)
-    _, request_id = asked(h)
+    w, request_id = asked(h)
     update(h, 1)
     h.clock.now = "2026-11-05T00:10:00Z"
     assert [e["type"] for e in h.run("sync")["events"]] == ["input.handed_off"]
@@ -475,6 +475,35 @@ def test_a_handed_off_question_is_still_answered_after_an_unrelated_change(home:
         2,
         2,
     )
+    # The user replies in the worker's session afterwards: a late answer that prevails over the
+    # orchestrator's (DN006 §8.5), although the question was asked in revision 1.
+    late = str(say(h, w, "不，先别确认"))
+    assert messages(h)[-1]["request_id"] == request_id
+    out = h.run(
+        "user_answer", w, task_id="T001", request_id=request_id, message_id=late, answer="不确认"
+    )
+    event = out["events"][0]
+    assert event["type"] == "input.late_response"
+    assert event["data"]["supersedes"]["source_kind"] == "orchestrator"
+    assert h.status("T001") == "in_progress"
+
+
+def test_a_change_after_the_answer_stops_the_question_collecting_replies(home: Home) -> None:
+    h = Harness(home)
+    w, request_id = asked(h)
+    update(h, 1)
+    h.run(
+        "input_resolve",
+        task_id="T001",
+        request_id=request_id,
+        answer="确认",
+        user_source=h.source("T001", 2, "answer", request_id=request_id),
+    )
+    say(h, w, "补充一句")
+    assert messages(h)[-1]["request_id"] == request_id  # a late answer, same revision
+    update(h, 2)
+    say(h, w, "再补一句")
+    assert messages(h)[-1]["request_id"] == ""
 
 
 @pytest.mark.transition("T12")

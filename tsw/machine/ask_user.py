@@ -161,7 +161,7 @@ def session_message(
     # replaced it, older questions never collect messages again.
     request = row_dict(
         conn.execute(
-            "SELECT s.request_id, s.answered_in_session, r.status, r.binding "
+            "SELECT s.request_id, s.answered_in_session, r.status, r.binding, r.resolution "
             "FROM in_session_requests s JOIN input_requests r ON r.request_id = s.request_id "
             "WHERE s.task_id = ? AND s.session_ref = ? "
             "ORDER BY r.rowid DESC LIMIT 1",
@@ -169,7 +169,8 @@ def session_message(
         ).fetchone()
     )
     # A pending question is still asked after a requirement change (DN002 §5.1, T292); one
-    # already answered elsewhere collects late replies only within its own revision.
+    # already answered elsewhere collects late replies until the next change after its answer
+    # (answers recorded before T292 do not say their revision: the question's own is used).
     answers = (
         request is not None
         and not request["answered_in_session"]
@@ -177,7 +178,11 @@ def session_message(
             request["status"] == "pending"
             or (
                 request["status"] == "resolved"
-                and loads(request["binding"], {}).get("revision") == revision
+                and (
+                    loads(request["resolution"], {}).get("revision")
+                    or loads(request["binding"], {}).get("revision")
+                )
+                == revision
             )
         )
     )
