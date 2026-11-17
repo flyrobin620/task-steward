@@ -10,8 +10,10 @@ import pytest
 
 from tsw.machine.routine import (
     CARD_PREFIX,
+    TEAMS_CHECKED_KEPT,
     TEAMS_FETCH_ALERT_AFTER,
     body_arguments,
+    checked_messages,
     cron_for,
     failing_fetches,
     fetch_failure,
@@ -20,8 +22,10 @@ from tsw.machine.routine import (
     full_text_path,
     id_time,
     list_path,
+    note_checked,
     note_fetch,
     plain_text,
+    prune_checked,
     question_html,
     read_arguments,
     select_replies,
@@ -216,10 +220,19 @@ def _listed(*times: str, count: int | None = None) -> dict[str, Any]:
     return {"note": "Results limited", "results": [{"data": data, "statusCode": 200}]}
 
 
-def _job(*, outbound: set[str] | None = None, seen: set[str] | None = None) -> dict[str, Any]:
+def _job(
+    *,
+    outbound: set[str] | None = None,
+    seen: set[str] | None = None,
+    requests: list[str] | None = None,
+    sender_id: str | None = "u1",
+    since: str = WINDOW,
+) -> dict[str, Any]:
     return {
         "chat_id": "48:notes",
-        "since": WINDOW,
+        "since": since,
+        "sender_id": sender_id,
+        "requests": [{"request_id": r} for r in (requests or ["Q-T001-1"])],
         "outbound": outbound or set(),
         "seen": seen or set(),
     }
@@ -238,13 +251,13 @@ def test_the_read_paths_list_ids_first_and_bodies_by_id() -> None:
     assert read_arguments("48:notes") == {
         "entityUrls": [
             "/me/chats/48:notes/messages?$top=10&$orderby=createdDateTime+desc"
-            "&$select=id,createdDateTime"
+            "&$select=id,createdDateTime,lastModifiedDateTime"
         ]
     }
     assert first_step("48:notes") == {"stage": "list", "arguments": read_arguments("48:notes")}
     assert list_path("c", "2026-11-05T00:01:02.003Z") == (
-        "/me/chats/c/messages?$top=10&$orderby=createdDateTime+desc&$select=id,createdDateTime"
-        "&$filter=createdDateTime+lt+2026-11-05T00:01:02.003Z"
+        "/me/chats/c/messages?$top=10&$orderby=createdDateTime+desc"
+        "&$select=id,createdDateTime,lastModifiedDateTime&$filter=createdDateTime+lt+2026-11-05T00:01:02.003Z"
     )
     assert body_arguments("c", ["1", "2"]) == {
         "entityUrls": [
@@ -276,7 +289,13 @@ def test_a_listed_page_leaves_out_tsws_cards_before_reading_bodies() -> None:
     # The bodies come back: the page is done and the next listing follows.
     bodies = [_msg(i, "随手记") for i in wanted]
     done = teams_progress(job, step, _bodies(*bodies))
-    assert done == {"failure": None, "page_done": True, "next": step["after"]}
+    assert done == {
+        "failure": None,
+        "page_done": True,
+        "next": step["after"],
+        "checks": step["checks"],
+    }
+    assert list(done["checks"]) == wanted  # to remember once the script has run (T293)
     # Text after the JSON, as a hook may keep it, reads the same.
     assert teams_progress(job, step, json.dumps(_bodies(*bodies)) + "\n") == done
 
@@ -332,7 +351,12 @@ def test_what_was_fetched_is_checked() -> None:
     # Bodies: exactly the candidates come back, but those deleted since (HTTP 404).
     step = {"stage": "bodies", "ids": ["a", "b", "c"], "arguments": {}, "after": None}
     two = _bodies(_msg("a", "x"), _msg("b", "y"), gone=1)
-    assert teams_progress(job, step, two) == {"failure": None, "page_done": True, "next": None}
+    assert teams_progress(job, step, two) == {
+        "failure": None,
+        "page_done": True,
+        "next": None,
+        "checks": {},  # a step kept before T293 has nothing to remember
+    }
     missing = teams_progress(job, step, _bodies(_msg("a", "x"), _msg("b", "y")))
     assert missing["page_done"] is False and "请求的候选" in missing["failure"]
     extra = _bodies(_msg("a", "x"), _msg("b", "y"), _msg("z", "z"))
@@ -349,7 +373,12 @@ def test_a_page_with_bodies_is_read_at_once() -> None:
     # The one-step read of routine sessions started before T286: no bodies step after it.
     reply = _msg(_teams_id("2026-11-05T00:12:00Z"), "T001 用 B", at="2026-11-05T00:12:00.000Z")
     out = teams_progress(_job(), first_step("c"), {"value": [reply]})
-    assert out == {"failure": None, "page_done": True, "next": None}
+    assert out == {
+        "failure": None,
+        "page_done": True,
+        "next": None,
+        "checks": {reply["id"]: {"at": "2026-11-05T00:12:00Z", "modified": None}},
+    }
 
 
 @pytest.mark.use_case("UC-CHANNEL-001")
@@ -520,7 +549,7 @@ def test_bodies_must_come_back_with_their_text() -> None:
     assert "没有正文" in out["failure"]
     empty = {"id": "a", "body": {"contentType": "html", "content": ""}}
     out = teams_progress(job, step, {"results": [{"data": empty, "statusCode": 200}]})
-    assert out == {"failure": None, "page_done": True, "next": None}
+    assert out == {"failure": None, "page_done": True, "next": None, "checks": {}}
     assert teams_progress(job, step, [{"id": "a", "content": "T001 好"}])["failure"] is None
 
 
@@ -545,4 +574,106 @@ def test_a_listing_or_whole_page_that_misses_fields_fails() -> None:
     # The card has no body to read: only candidates need one.
     whole = [{**card, "body": {}}, _msg("r1", "T001 好")]
     out = teams_progress(_job(outbound={"card-1"}), first_step("c"), {"value": whole})
-    assert out == {"failure": None, "page_done": True, "next": None}
+    assert out == {
+        "failure": None,
+        "page_done": True,
+        "next": None,
+        "checks": {"r1": {"at": "2026-11-05T00:05:00Z", "modified": None}},
+    }
+
+
+def _listed_changed(times: list[str], modified: dict[str, str]) -> dict[str, Any]:
+    """A listed page whose messages carry their last change (T293)."""
+    page = _listed(*times)
+    for message in page["results"][0]["data"]["value"]:
+        message["lastModifiedDateTime"] = modified.get(message["id"], message["createdDateTime"])
+    return page
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_message_judged_before_is_not_read_again() -> None:
+    # T293: a note in the user's self chat was read in every run while a question waited.
+    times = ["2026-11-05T00:12:00Z", "2026-11-05T00:11:00Z", "2026-11-05T00:10:00Z"]
+    ids = [_teams_id(t) for t in times]
+    job = _job()
+    page = _listed_changed(times, {})
+    first = teams_progress(job, first_step("48:notes"), page)
+    assert first["next"]["ids"] == ids
+    checks = first["next"]["checks"]
+    assert checks[ids[0]] == {"at": "2026-11-05T00:12:00Z", "modified": "2026-11-05T00:12:00.000Z"}
+    done = teams_progress(job, first["next"], _bodies(*(_msg(i, "随手记") for i in ids)))
+    kept: dict[str, Any] = {}
+    note_checked(kept, job, done["checks"], passed_on={ids[2]})  # the oldest was a reply
+    assert set(kept["teams_checked"]["48:notes"]["messages"]) == {ids[0], ids[1]}
+    judged = checked_messages(kept, job)
+    assert judged == {ids[0]: "2026-11-05T00:12:00.000Z", ids[1]: "2026-11-05T00:11:00.000Z"}
+    # The next run: the notes are not candidates (the reply is left out as seen, by the ledger).
+    again = teams_progress(_job(seen={ids[2]}), first_step("48:notes"), page, judged)
+    assert again == {"failure": None, "page_done": True, "next": None}
+    # A note edited since (or reacted to) is read again; one listed without its last change too.
+    edited = _listed_changed(times, {ids[1]: "2026-11-05T01:00:00.000Z"})
+    out = teams_progress(_job(seen={ids[2]}), first_step("48:notes"), edited, judged)
+    assert out["next"]["ids"] == [ids[1]]
+    plain = teams_progress(_job(seen={ids[2]}), first_step("48:notes"), _listed(*times), judged)
+    assert plain["next"]["ids"] == [ids[0], ids[1]]
+    # A failed step leaves nothing to remember.
+    throttled = {"results": [{"data": {"error": {"code": "TooMany"}}, "statusCode": 429}]}
+    assert "checks" not in teams_progress(job, first["next"], throttled)
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_judgements_hold_while_their_basis_does() -> None:
+    kept: dict[str, Any] = {}
+    two = _job(requests=["Q-T001-1", "Q-T002-1"])
+    note = {"1": {"at": "2026-11-05T00:12:00Z", "modified": "m"}}
+    note_checked(kept, two, note, passed_on=())
+    assert kept["teams_checked"]["48:notes"]["basis"] == {
+        "requests": ["Q-T001-1", "Q-T002-1"],
+        "sender_id": "u1",
+    }
+    # Fewer questions: whatever answered none of them answers none of fewer.
+    assert checked_messages(kept, _job(requests=["Q-T002-1"])) == {"1": "m"}
+    # A question added since, or another user: read again.
+    assert checked_messages(kept, _job(requests=["Q-T001-1", "Q-T003-1"])) == {}
+    assert checked_messages(kept, _job(requests=["Q-T001-1"], sender_id="u2")) == {}
+    # Recorded on fewer questions, then a question comes: the old judgements are dropped.
+    note_checked(kept, _job(requests=["Q-T002-1"]), {"2": {"at": "2026-11-05T00:13:00Z"}}, ())
+    assert kept["teams_checked"]["48:notes"]["basis"]["requests"] == ["Q-T002-1"]
+    note_checked(kept, _job(requests=["Q-T002-1", "Q-T004-1"]), {}, ())
+    assert kept["teams_checked"]["48:notes"]["messages"] == {}
+    # A damaged record holds nothing.
+    assert checked_messages({"teams_checked": {"48:notes": {"basis": "x"}}}, _job()) == {}
+    assert checked_messages({"teams_checked": "x"}, _job()) == {}
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_judgements_before_the_window_or_of_chats_no_longer_read_are_dropped() -> None:
+    kept: dict[str, Any] = {}
+    checks = {
+        "old": {"at": "2026-11-05T00:01:00Z", "modified": None},
+        "new": {"at": "2026-11-05T00:20:00Z", "modified": None},
+        "bad": {"at": "not a time", "modified": None},
+    }
+    note_checked(kept, _job(), checks, passed_on=())
+    assert set(kept["teams_checked"]["48:notes"]["messages"]) == {"old", "new"}
+    later = _job(since="2026-11-05T00:10:00Z")
+    assert checked_messages(kept, later) == {"new": None}
+    prune_checked(kept, [later])
+    assert set(kept["teams_checked"]["48:notes"]["messages"]) == {"new"}
+    # The chat has no waiting question any more: its row is gone, and so is its record.
+    prune_checked(kept, [])
+    assert kept["teams_checked"] == {}
+    prune_checked({}, [])  # nothing kept: nothing to do
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_only_the_newest_judgements_are_kept() -> None:
+    kept: dict[str, Any] = {}
+    checks = {
+        f"m{n:04d}": {"at": f"2026-11-05T{n // 3600:02d}:{n // 60 % 60:02d}:{n % 60:02d}Z"}
+        for n in range(TEAMS_CHECKED_KEPT + 5)
+    }
+    note_checked(kept, _job(), checks, passed_on=())
+    messages = kept["teams_checked"]["48:notes"]["messages"]
+    assert len(messages) == TEAMS_CHECKED_KEPT
+    assert "m0004" not in messages and "m0005" in messages

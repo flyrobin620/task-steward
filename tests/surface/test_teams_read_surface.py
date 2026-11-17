@@ -110,14 +110,15 @@ def test_the_hook_hands_each_fetch_to_routine_run(waiting: tuple[Harness, str, s
     teams = next(j for j in board["jobs"] if j["job_id"] == "teams-replies")
     run = teams["run"]
     reply_at, long_at = "2026-11-05T00:12:00.000Z", "2026-11-05T00:13:00.000Z"
+    note_at = "2026-11-05T00:11:00.000Z"
     page = {
         "results": [
             {
                 "data": {
-                    "@odata.count": 3,
+                    "@odata.count": 4,
                     "value": [
-                        {"id": teams_id(t), "createdDateTime": t}
-                        for t in (long_at, reply_at, "2026-11-05T00:09:59.500Z")
+                        {"id": teams_id(t), "createdDateTime": t, "lastModifiedDateTime": t}
+                        for t in (long_at, reply_at, note_at, "2026-11-05T00:09:59.500Z")
                     ],
                 },
                 "statusCode": 200,
@@ -130,7 +131,7 @@ def test_the_hook_hands_each_fetch_to_routine_run(waiting: tuple[Harness, str, s
     urls = first["next"]["arguments"]["entityUrls"]
     assert urls == [
         f"/me/chats/48:notes/messages/{teams_id(t)}?$select=id,from,body"
-        for t in (long_at, reply_at)
+        for t in (long_at, reply_at, note_at)
     ]
     assert card not in "".join(urls)
     long_reply = "T001 " + "第二个方案更好，" * 40
@@ -144,7 +145,7 @@ def test_the_hook_hands_each_fetch_to_routine_run(waiting: tuple[Harness, str, s
                 },
                 "statusCode": 200,
             }
-            for t, text in ((long_at, long_reply), (reply_at, "T001 用 B"))
+            for t, text in ((long_at, long_reply), (reply_at, "T001 用 B"), (note_at, "笔记"))
         ]
     }
     fetched(cwd, first["next"]["arguments"], bodies)
@@ -157,3 +158,12 @@ def test_the_hook_hands_each_fetch_to_routine_run(waiting: tuple[Harness, str, s
     assert seen[teams_id(long_at)]["request_id"] == request_id
     forward = second["forward"]
     assert forward["send"] is True and "正文已截断" in forward["message"]
+    assert teams_id(note_at) not in seen
+    # The next run lists the same page and reads no body: the replies were passed on, the note
+    # was judged not to be one (T293).
+    board = routine_call(cwd, "routine_board")
+    teams = next(j for j in board["jobs"] if j["job_id"] == "teams-replies")
+    fetched(cwd, teams["fetch"]["arguments"], page)
+    third = routine_call(cwd, "routine_run", **run)
+    assert third["events"] == [] and "next" not in third
+    assert third["forward"] == {"send": False}

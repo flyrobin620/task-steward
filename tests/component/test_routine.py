@@ -282,7 +282,7 @@ def test_teams_round_trip(home: Home) -> None:
     assert teams["fetch"]["arguments"] == {
         "entityUrls": [
             f"/me/chats/chat-1/messages?$top={routine_mod.TEAMS_READ_TOP}"
-            "&$orderby=createdDateTime+desc&$select=id,createdDateTime"
+            "&$orderby=createdDateTime+desc&$select=id,createdDateTime,lastModifiedDateTime"
         ]
     }
     # Every run starts the chat's read again from the newest page (T286).
@@ -586,18 +586,16 @@ def test_teams_replies_lists_ids_then_reads_the_bodies_left(home: Home) -> None:
     last = server.call("routine_run", run)
     assert last["events"] == [] and "next" not in last
     assert routine_mod.load_cache(h.home)["teams_steps"] == {}
-    # The next run starts again from the newest page; the replies are not passed on twice.
+    # The next run starts again from the newest page. The replies are not passed on twice, and
+    # the notes, read once and not passed on, are not read again (T293): straight to the page
+    # before.
+    judged = routine_mod.load_cache(h.home)["teams_checked"]["48:notes"]["messages"]
+    assert set(judged) == {teams_id(t) for t in notes}
     server.call("routine_board", {})
     fetched_by_hook(h, routine, teams["fetch"]["arguments"], page)
     again = server.call("routine_run", run)
-    assert len(again["next"]["arguments"]["entityUrls"]) == 7  # the notes only
-    fetched_by_hook(
-        h,
-        routine,
-        again["next"]["arguments"],
-        bodies(*zip(map(teams_id, notes), texts[2:], strict=True)),
-    )
-    assert server.call("routine_run", run)["events"] == []
+    assert again["events"] == []
+    assert again["next"]["arguments"] == second["next"]["arguments"]
 
 
 @pytest.mark.use_case("UC-CHANNEL-001")
@@ -623,6 +621,8 @@ def test_a_teams_read_that_does_not_hold_together_counts_as_failed(home: Home) -
         True
     ]
     assert "请求的候选" in forwards[-1]["message"]
+    # A step that failed leaves nothing judged (T293): the reply is read again next run.
+    assert "teams_checked" not in routine_mod.load_cache(h.home)
     # Nothing kept by the hook and nothing passed: a failed read, not an empty page.
     server.call("routine_board", {})
     assert server.call("routine_run", run)["events"] == []
@@ -687,15 +687,18 @@ def test_a_later_page_that_keeps_failing_is_reported(home: Home) -> None:
     times = [f"2026-11-05T00:2{m}:00.000Z" for m in range(9, -1, -1)]
     throttled = {"results": [{"data": {"error": {"code": "TooMany"}}, "statusCode": 429}]}
     forwards = []
-    for _ in range(routine_mod.TEAMS_FETCH_ALERT_AFTER):
+    for n in range(routine_mod.TEAMS_FETCH_ALERT_AFTER):
         teams = next(
             j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
         )
         fetched_by_hook(h, routine, teams["fetch"]["arguments"], listed(*times))
-        step = server.call("routine_run", run)["next"]
-        notes = bodies(*((teams_id(t), "笔记") for t in times))
-        fetched_by_hook(h, routine, step["arguments"], notes)
         older = server.call("routine_run", run)["next"]
+        if n == 0:
+            # The first run reads the notes' bodies; later runs go straight to the page before,
+            # the notes having been judged (T293). Either way the run of failures goes on.
+            notes = bodies(*((teams_id(t), "笔记") for t in times))
+            fetched_by_hook(h, routine, older["arguments"], notes)
+            older = server.call("routine_run", run)["next"]
         assert older["arguments"]["entityUrls"][0].endswith("lt+2026-11-05T00:20:00.000Z")
         fetched_by_hook(h, routine, older["arguments"], throttled)
         out = server.call("routine_run", run)
@@ -931,3 +934,104 @@ def test_no_detach_where_the_host_does_not_wake_the_starter(
     h.run("routine_bind", generation=1, session_id="routine-1")
     with h.ledger.view() as conn:
         assert routine_mod.status(conn, h.config, h.clock.now, {})["state"] == "unarmed"
+
+
+def listed_changed(*messages: tuple[str, str]) -> dict[str, Any]:
+    """A listed page whose messages carry their last change: (created, last modified)."""
+    page = listed(*(t for t, _ in messages))
+    for item, (_, modified) in zip(page["results"][0]["data"]["value"], messages, strict=True):
+        item["lastModifiedDateTime"] = modified
+    return page
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_a_note_is_read_once_while_a_question_waits(home: Home) -> None:
+    # T293: the read window does not move while a question waits, and every note the user wrote
+    # in the self chat was read in full in every run. Read once, a note is not read again until
+    # it changes or a new question could make it an answer; the window moving on drops it.
+    h = Harness(home, TEAMS)
+    routine, request_id, _, server = teams_waiting(h)
+    run = {"job_id": "teams-replies", "chat_id": "48:notes"}
+    note_a, note_b, reply_at = (
+        "2026-11-05T00:11:00.000Z",
+        "2026-11-05T00:12:00.000Z",
+        "2026-11-05T00:13:00.000Z",
+    )
+    card_at = "2026-11-05T00:09:59.500Z"
+
+    def read(page: dict[str, Any], texts: dict[str, str] | None = None) -> dict[str, Any]:
+        teams = next(
+            j for j in server.call("routine_board", {})["jobs"] if j["job_id"] == "teams-replies"
+        )
+        fetched_by_hook(h, routine, teams["fetch"]["arguments"], page)
+        out = server.call("routine_run", run)
+        if texts is None:
+            return out
+        urls = out["next"]["arguments"]["entityUrls"]
+        asked_for = [u.split("/messages/")[1].split("?")[0] for u in urls]
+        assert sorted(asked_for) == sorted(texts)
+        fetched_by_hook(h, routine, out["next"]["arguments"], bodies(*texts.items()))
+        return server.call("routine_run", run)
+
+    unchanged = [(t, t) for t in (reply_at, note_b, note_a, card_at)]
+    first = read(
+        listed_changed(*unchanged),
+        {teams_id(reply_at): "T001 用 B", teams_id(note_b): "笔记 b", teams_id(note_a): "笔记 a"},
+    )
+    assert [e["data"]["message_id"] for e in first["events"]] == [teams_id(reply_at)]
+    assert "next" not in first
+    cache = routine_mod.load_cache(h.home)
+    assert cache["teams_checked"]["48:notes"]["messages"] == {
+        teams_id(note_a): {"at": "2026-11-05T00:11:00Z", "modified": note_a},
+        teams_id(note_b): {"at": "2026-11-05T00:12:00Z", "modified": note_b},
+    }
+    assert "48:notes" not in cache.get("fetch_failures", {})
+    # The next run reads no body: the reply was passed on, the notes were judged.
+    again = read(listed_changed(*unchanged))
+    assert again["events"] == [] and "next" not in again
+    # The user edits note a into an answer: read again and passed on.
+    edited = [
+        (reply_at, reply_at),
+        (note_b, note_b),
+        (note_a, "2026-11-05T00:30:00.000Z"),
+        unchanged[3],
+    ]
+    out = read(listed_changed(*edited), {teams_id(note_a): "T001 改用 C"})
+    assert [e["data"]["text"] for e in out["events"]] == ["T001 改用 C"]
+    # A second task asks in the same chat: note b could answer it now, so it is read once more.
+    h.clock.now = "2026-11-05T00:40:00Z"
+    _, second = asked(h, "T002")
+    h.clock.now = "2026-11-05T01:00:00Z"
+    run_job(h, routine, "handoff-scan")
+    h.run("input_relay", task_id="T002", request_id=second, channel="teams-chat")
+    card2_at = "2026-11-05T00:59:59.500Z"
+    h.run(
+        "channel_sent",
+        task_id="T002",
+        request_id=second,
+        chat_id="48:notes",
+        message_id=teams_id(card2_at),
+        sender_id="u1",
+    )
+    out = read(listed_changed((card2_at, card2_at), *edited), {teams_id(note_b): "笔记 b"})
+    assert out["events"] == []
+    basis = routine_mod.load_cache(h.home)["teams_checked"]["48:notes"]["basis"]
+    assert basis == {"requests": sorted([request_id, second]), "sender_id": "u1"}
+    # T001's question is answered: the window starts at T002's card, and what came before it is
+    # dropped at the next run's start.
+    h.run(
+        "input_resolve",
+        task_id="T001",
+        request_id=request_id,
+        answer="用 C",
+        user_source={
+            "channel": "teams-chat",
+            "principal": "teams",
+            "message_ref": teams_id(note_a),
+            "text": "T001 改用 C",
+            "request_id": request_id,
+            "target": ["T001", 1, "answer"],
+        },
+    )
+    server.call("routine_board", {})
+    assert routine_mod.load_cache(h.home)["teams_checked"]["48:notes"]["messages"] == {}
