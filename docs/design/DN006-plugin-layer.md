@@ -616,6 +616,22 @@ Dashboard 应用：
   - 四个 `data-tsw-*` 属性是对嵌入方的契约，只增不删。嵌入方（例如把本应用挂在自己路径前缀下的门户）按 `data-tsw-session` 识别会话，可以改写链接或接管点击，例如改为打开自己的会话页。嵌入方不应依赖 class 与链接文字。
   - 详细页的 `<main>` 带 `data-tsw-task="<任务 ID>"`，嵌入方据此识别当前显示的是哪个任务；详细页地址 `tasks/<任务 ID>` 也是契约的一部分，嵌入方可以从会话跳到对应任务的详细页。
 - 路径与代理：应用内的链接都用相对路径（看板到详细页 `tasks/<ID>`，详细页回看板 `../`，到依赖任务 `<ID>`，报告 `../runs/...`），不写主机与端口。应用挂在路径前缀下（如 `/plugins/<id>/`）经代理访问时，这些链接即使不经代理改写也解析到前缀之下。按钮照旧请求 `/api/tasks/...`，由代理补上前缀。令牌、cookie、`Host` / `Origin` 核对、CSP 与 `X-TSW-Token` 都不变：详细页使用与看板相同的 CSP、meta 令牌与脚本。
+- 会话标签端点（与嵌入方的约定，用户 2026-11-18 要求，T297）：嵌入方的门户列出 agent 会话时，由本应用告诉它哪些会话属于 TaskSteward、是哪个任务的哪个 attempt、什么角色。契约由嵌入方 workdeck 定义（workdeck DN005 §10、决定 0023：插件给会话加标签，workdeck 不认识任务工具），取代 workdeck 中直接读本数据目录 `cache/state.sqlite` 的 tsw annotator；端点上线后 workdeck 删除 annotator。
+  1. 路径：`POST /workdeck/labels`（应用根下）。嵌入方在插件配置中声明 `"labels": {"path": "/workdeck/labels", "refreshSeconds": 10}`，经同一个插件代理（同一上游、同样的改写、插件自己的登录）请求；`tsw status serve` 与常驻服务（`tsw dashboard service`）都提供。
+  2. 准入：与页面相同的令牌 cookie 与 `Host` 核对（嵌入方的代理用 `query-token` 换得的 cookie，workdeck DN005 §7），`Origin` 缺省或为本应用，`Content-Type` 为 JSON，请求体至多 1 MiB。不要求 `X-TSW-Token`：代理不添加它（workdeck DN005 §7），而端点只读、不写账本，返回的是看板上已经显示的信息（会话 ID、任务、attempt、阶段、角色）。其他网页不能利用它：跨站请求不带 `SameSite=Strict` 的 cookie，JSON 请求要先经 CORS 预检而应用不回答预检，响应也不带 CORS 头；DNS 重绑定由 `Host` 核对挡住。
+  3. 请求：`{"sessions": [{"id": "<会话 ID>"}, ...]}`。会话 ID 是宿主的会话 ID，即 attempt 的 `session_ref`（Claude app 为 `local_…`）。按契约忽略不认识的字段；`id` 不是 1–512 个字符的字符串的条目跳过；请求体不是带 `sessions` 数组的 JSON 对象时返回 400（嵌入方保留上次的标签）。
+  4. 数据来源：每次请求从账本投影读取三类记录（与页面同一读取：投影先追上账本末尾；不写账本）：
+
+     | 会话 | 来源 | `text` | `title` | `link` |
+     | --- | --- | --- | --- | --- |
+     | worker | `attempts.session_ref`（每个 attempt 一个，按记录顺序） | `<任务> · <attempt> · worker` | `task: <任务>`、`attempt: <attempt>`、`phase: <阶段>`、`role: worker` 四行 | `/tasks/<任务>`（单任务视图，任务 ID 按 URL 路径段编码） |
+     | 主会话 | `leases.holder_session`（持有租约的会话） | `orchestrator` | `role: orchestrator`、`lease: <租约名>` 两行 | `/`（看板） |
+     | 例行会话 | `routine_sessions.session_ref` | `routine g<代>` | `role: routine`、`generation: <代>`、`phase: <状态>` 三行 | 无：例行会话不处理某个任务 |
+
+     与 workdeck annotator（`src/annotators/tsw.ts` 的 `readAnnotations`）读同样的三张表、给出同样的文字与链接目标；`title` 就是门户为 annotator 标签显示的提示（它的 `detail` 逐行写成 `键: 值`）。一个会话可以有多个标签（例如主会话同时是某个 attempt 的会话），顺序为 worker、主会话、例行会话。annotator 的链接文字（「任务 T…」「任务看板」）不在契约中，门户按自己的方式显示链接。
+  5. 回答：`{"labels": {"<会话 ID>": [{"text": "…", "title": "…", "link": "/…"}]}}`，请求中的每个会话都有一项，没有标签的为空数组。`text`、`title` 是纯文本，各至多 256 个字符（超出截断），每个会话至多 64 个标签；`link` 是本应用 URL 空间中以 `/` 开头的路径，嵌入方加上挂载前缀（`/plugins/<id>`），没有链接时不带这个字段。投影无法读取时返回 503（JSON，带原因），嵌入方保留上次的标签。
+  6. 刷新与开销：嵌入方每个刷新间隔（默认 10 秒）对全部列出的会话查询一次，超时 2 秒。每次请求读三张小表并按 ID 过滤，不读账本全文，不渲染页面。
+  7. 契约：按 workdeck DN009 的规则只增不删，双方忽略不认识的字段，新字段可选；本应用的单任务视图地址 `tasks/<任务 ID>` 本来就是契约（见上方“会话链接”）。
 - follow-up（T270）：卡片（STATUS.html 与 Dashboard 应用都是）在有 `open` 的 follow-up 时显示“follow-up N”，Dashboard 应用中它链接到详细页的 follow-up 一节；由 follow-up 转来的任务在卡片上列出来源任务。筛选区的「follow-up」快捷项（见下方“顶部计数卡”）点击后只看有 `open` 条目的任务（包括已验收、已取消的卡片）。
 - 名称（用户 2026-11-11 要求，T273）：页面与应用对用户显示的名称是 **TaskSteward Dashboard**：静态页与 Dashboard 应用的页面标题与页首、单任务视图的标题（`<任务> · TaskSteward Dashboard`）、终端输出与文档都用这个名称（文档中简称 Dashboard 应用、Dashboard 静态页）。名称之外的契约不变：命令 `tsw status serve`、生成文件 `views/STATUS.html`、配置键 `control.status_page`、渠道 `status-app`、浏览器本地存储的键都保持原样；新增 `tsw dashboard` 作为 `tsw status serve` 的别名（选项相同，同样在宿主会话中拒绝）。
 - 顶部计数卡（T273）：计数为 0 的卡片不显示。卡片分两组：
