@@ -21,7 +21,7 @@ from tsw.storage.fs import atomic_write
 
 # Bump when tables or reduction rules change; older projections and checkpoints then need a
 # rebuild (DN007 §3.4).
-REDUCER_VERSION = 5
+REDUCER_VERSION = 6
 # Events that keep the task's business time: an import carries the source's own times, and a
 # renumbering only moves the task to a new id.
 IMPORTS = frozenset({"import.task_imported", "task.renumbered"})
@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS tasks(
     registered_seq INTEGER NOT NULL,
     last_activity TEXT NOT NULL,
     source_seq INTEGER NOT NULL,
+    last_record TEXT NOT NULL DEFAULT '',
     goal TEXT NOT NULL DEFAULT '',
     acceptance TEXT NOT NULL DEFAULT '[]',
     resources TEXT NOT NULL DEFAULT '[]',
@@ -561,10 +562,18 @@ class Projection:
         if event.task_id is not None:
             # An imported task keeps the business time it had in its source system (DN005 §4.3);
             # a renumbered task keeps its own.
+            # ``last_record`` is the time of the task's latest ledger record of any kind: the
+            # task flow orders by it (DN006 §8.10, T304).
             conn.execute(
                 "UPDATE tasks SET last_activity = CASE WHEN ? THEN last_activity ELSE ? END, "
-                "source_seq = ? WHERE task_id = ?",
-                (event.type in IMPORTS | QUIET, event.time, event.sequence, event.task_id),
+                "source_seq = ?, last_record = ? WHERE task_id = ?",
+                (
+                    event.type in IMPORTS | QUIET,
+                    event.time,
+                    event.sequence,
+                    event.time,
+                    event.task_id,
+                ),
             )
             conn.execute(
                 "INSERT OR IGNORE INTO index_queue(task_id, sequence) VALUES(?, ?)",

@@ -64,8 +64,9 @@
     const q = $("q"), repo = $("repo"), flag = $("flag"), sort = $("sort"), group = $("group");
     const DEFAULT_CLOSED = {status: ["accepted", "cancelled"]};
     const VIEWS = ["board", "flow"];
-    // The task flow's relations (T280): the legend hides any of them, a display choice the
-    // filters' reset and the tiles keep.
+    // The task flow's relations: dependencies always shown, the follow-ups hidden by unticking
+    // them ("hide"), the references shown by ticking them ("refs", T304); display choices that
+    // the filters' reset and the tiles keep, like the line shape.
     const RELATIONS = ["dep", "fu", "ref"];
     let state;
 
@@ -74,7 +75,9 @@
       const list = key => (p.get(key) || "").split(",").filter(Boolean);
       return {q: p.get("q") || "", st: list("st"), kind: list("kind"), repo: p.get("repo") || "",
         flag: p.get("flag") || "", sort: p.get("sort") || "status", group: p.get("group") || "status",
-        view: p.get("view") || "board", arch: p.get("arch") === "1", hide: list("hide")};
+        view: p.get("view") || "board", arch: p.get("arch") === "1",
+        hide: list("hide").filter(r => r === "fu"), refs: p.get("refs") === "1",
+        shape: p.get("line") === "curve" ? "curve" : "poly"};
     }
     function serialize(s) {
       const p = new URLSearchParams();
@@ -88,6 +91,8 @@
       if (s.view !== "board") p.set("view", s.view);
       if (s.arch) p.set("arch", "1");
       if (s.hide.length) p.set("hide", s.hide.join(","));
+      if (s.refs) p.set("refs", "1");
+      if (s.shape === "curve") p.set("line", "curve");
       return p.toString();
     }
     function initial() {
@@ -196,7 +201,7 @@
     }
     function reset() {
       state = {...parse(""), sort: state.sort, group: state.group, view: state.view, arch: state.arch,
-        hide: state.hide};
+        hide: state.hide, refs: state.refs, shape: state.shape};
     }
     function words() {
       return state.q.toLowerCase().split(/\s+/).filter(Boolean);
@@ -276,13 +281,16 @@
       save();
     }
 
-    /* The task flow: nodes placed by tsw (DN006 §8.10); shown by the filters, arrows drawn here. */
+    /* The task flow (DN006 §8.10): cards placed and lines routed by tsw for every choice; the
+       script takes the layout of the current choice, shows cards by the filters, closes up the
+       columns and lanes left empty and draws the lines along their waypoints. */
     const flow = (() => {
-      const pane = $("flow"), grid = $("flow-grid"), svg = $("flow-edges"), data = $("flow-layouts");
+      const pane = $("flow"), grid = $("flow-grid"), canvas = $("flow-canvas"), svg = $("flow-edges");
+      const names = $("flow-names"), data = $("flow-layouts");
       const scroller = $("flow-scroll"), sizer = $("flow-size");
-      if (!pane || !grid || !svg || !scroller || !sizer || !data) return null;
+      if (!pane || !grid || !canvas || !svg || !names || !scroller || !sizer || !data) return null;
       const SVG = "http://www.w3.org/2000/svg";
-      const nodes = Array.from(grid.querySelectorAll(".fnode"));
+      const nodes = Array.from(canvas.querySelectorAll(".fnode"));
       const nodeById = new Map(nodes.map(n => [n.dataset.id, n]));
       const ids = value => (value || "").split(" ").filter(id => nodeById.has(id));
       // The tasks each relation joins a task to, both ways.
@@ -303,64 +311,45 @@
         const card = byId.get("task-" + n.dataset.id);
         return [n, card ? text.get(card) : (n.title || "").toLowerCase()];
       }));
-      const lanes = Array.from(grid.querySelectorAll(".lane, .lane-name"));
-      // The layouts tsw computed for every choice of relations, with and without the archived
-      // tasks (T280); equal ones are written once. Each task's lines spanning columns run on its
-      // track (T278 revision 4).
+      const bands = new Map(Array.from(canvas.querySelectorAll(".lane")).map(l => [l.dataset.repo, l]));
+      const labels = new Map(Array.from(names.querySelectorAll(".lane-name")).map(l => [l.dataset.repo, l]));
+      // The layouts tsw computed for every choice, with and without the archived tasks; equal
+      // ones are written once.
       const layouts = JSON.parse(data.textContent);
       const order = layouts.ids.map(id => nodeById.get(id));
-      let tracks = [], trackOf = new Map(), placed = "";
+      const index = new Map(layouts.ids.map((id, i) => [id, i]));
+      const [W, H] = layouts.card;
+      const KIND = ["dep", "fu", "ref"];
       const ZOOMS = [0.3, 0.4, 0.5, 0.6, 0.75, 0.9, 1, 1.15, 1.3, 1.5];
       let zoom = Number(store.get("zoom")) || 1;
-      let shown = new Set();
+      let shown = new Set(), room = new Set(), set = null, peek = "";
+      // Each card shows the time of its latest ledger record, in the browser's time zone.
+      const clock = new Intl.DateTimeFormat(undefined, {month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false});
+      const when = value => {
+        const t = Date.parse(value);
+        return Number.isFinite(t) ? clock.format(new Date(t)).replace(",", "") : "";
+      };
+      for (const n of nodes) {
+        const t = n.querySelector(".ftime");
+        if (t) t.textContent = when(n.dataset.when);
+        n.style.width = `${W}px`;
+        n.style.height = `${H}px`;
+      }
 
-      const showing = () => RELATIONS.filter(r => !state.hide.includes(r));
-      // Places the nodes, the lanes and the tracks by the layout of the current choice.
+      // Dependencies are always shown; the follow-ups unless unticked, the references if ticked.
+      const showing = () => ["dep", ...(state.hide.includes("fu") ? [] : ["fu"]), ...(state.refs ? ["ref"] : [])];
       function arrange() {
-        const key = (state.arch ? "all" : "live") + ":" + showing().join(",");
-        if (key === placed) return;
-        placed = key;
-        const set = layouts.sets[layouts.pick[key]];
-        grid.style.setProperty("--cols", String(set.cols));
-        order.forEach((n, i) => {
-          const cell = set.cells[i];
-          n.classList.toggle("out", !cell);
-          if (cell) {
-            n.style.setProperty("--gc", String(cell[0]));
-            n.style.setProperty("--gr", String(cell[1]));
-          }
-        });
-        const rows = new Map(layouts.repos.map((repo, i) => [repo, set.lanes[i]]));
-        for (const lane of lanes) {
-          const r = rows.get(lane.dataset.repo);
-          lane.classList.toggle("out", !r);
-          if (r) {
-            lane.style.setProperty("--r0", String(r[0]));
-            lane.style.setProperty("--r1", String(r[1]));
-          }
-        }
-        for (const t of tracks) t.remove();
-        tracks = set.tracks.map(([i, c0, c1, r, back]) => {
-          const t = document.createElement("div");
-          t.className = "ftrack";
-          t.dataset.src = layouts.ids[i];
-          t.dataset.dir = back ? "back" : "on";
-          t.style.setProperty("--c0", String(c0));
-          t.style.setProperty("--c1", String(c1));
-          t.style.setProperty("--r", String(r));
-          t.hidden = true;
-          return t;
-        });
-        grid.append(...tracks);
-        trackOf = new Map(tracks.map(t => [`${t.dataset.src}:${t.dataset.dir}`, t]));
+        set = layouts.sets[layouts.pick[(state.arch ? "all" : "live") + ":" + showing().join(",")]];
+        order.forEach((n, i) => n.classList.toggle("out", !set.cards[i]));
       }
       function inLayout(n) { return !n.classList.contains("out"); }
       function render() {
         arrange();
         $("flow-archived").checked = state.arch;
         for (const box of $("flow-legend").querySelectorAll("input[data-rel]")) {
-          box.checked = !state.hide.includes(box.dataset.rel);
+          box.checked = box.dataset.rel === "ref" ? state.refs : !state.hide.includes(box.dataset.rel);
         }
+        for (const radio of pane.querySelectorAll("input[name=flow-shape]")) radio.checked = radio.value === state.shape;
         const kinds = showing();
         near = new Map(nodes.map(n => [n.dataset.id, new Set(kinds.flatMap(r => [...joined[r].get(n.dataset.id)]))]));
         const w = words();
@@ -375,122 +364,215 @@
           }
         }
         shown = new Set([...matched, ...context]);
-        const repos = new Set();
+        // The places kept for the cards the references would add as context: showing the
+        // references (or not) never moves a card.
+        room = new Set(shown);
+        if (!state.refs) {
+          for (const n of matched) {
+            for (const id of joined.ref.get(n.dataset.id)) {
+              const other = nodeById.get(id);
+              if (inLayout(other)) room.add(other);
+            }
+          }
+        }
         for (const n of nodes) {
           n.hidden = !shown.has(n);
           n.classList.toggle("ctx", context.has(n));
-          if (shown.has(n)) repos.add(n.dataset.repo);
         }
-        for (const lane of lanes) lane.hidden = !repos.has(lane.dataset.repo) || lane.classList.contains("out");
-        // A track keeps its row open only while its task is shown.
-        for (const t of tracks) t.hidden = !shown.has(nodeById.get(t.dataset.src));
-        headings();
         const pool = nodes.filter(n => inLayout(n) && (state.arch || n.dataset.status !== "archived")).length;
         $("count").textContent = `显示 ${matched.size} / ${pool} 个任务`
           + (context.size ? `（另有 ${context.size} 个相连任务淡色显示）` : "");
         $("flow-empty").hidden = matched.size !== 0;
-        applyZoom();
+        peek = "";
         draw();
+        applyZoom();
       }
-      function column(n) {
-        return Number(n.style.getPropertyValue("--gc")) || 0;
+      // The lines of the current choice: with the references shown, the routes in the widened
+      // gaps; with a card hovered and the references not shown, the routes with the references in
+      // the same gaps, showing only that card's references.
+      function routes() {
+        const wide = state.refs;
+        const group = wide ? (set.wide || set.lines) : peek ? (set.peek || set.lines) : set.lines;
+        return {xs: wide ? set.xw : set.xs, gaps: wide ? set.gw : set.gaps, lines: decode(group, true),
+          // Every line between cards shown, the references included whether drawn or not: what
+          // closes up does not depend on them, so showing or hovering never moves a card.
+          every: decode(wide ? (set.wide || set.lines) : (set.peek || set.lines), false, room)};
       }
-      function headings() {
-        for (const h of grid.querySelectorAll(".col-h")) h.remove();
-        const columns = new Map();
-        for (const n of shown) {
-          const c = column(n);
-          if (!columns.has(c)) columns.set(c, []);
-          columns.get(c).push(n);
+      function decode(group, drawn, among = shown) {
+        const wide = state.refs;
+        const out = [];
+        for (const row of group) {
+          const kind = KIND[row[0]], a = order[row[1]], b = order[row[2]];
+          if (!among.has(a) || !among.has(b)) continue;
+          if (drawn && kind === "ref" && !wide && peek !== a.dataset.id && peek !== b.dataset.id) continue;
+          // x0, y0, then the coordinate each move changes: x, y, x, ...
+          const pts = [[row[3], row[4]]];
+          for (let i = 5; i < row.length; i++) {
+            const [x, y] = pts[pts.length - 1];
+            pts.push(i % 2 ? [row[i], y] : [x, row[i]]);
+          }
+          out.push({kind, a, b, pts});
         }
-        for (const [c, members] of columns) {
-          members.sort((a, b) => Number(b.dataset.seq) - Number(a.dataset.seq));
-          const first = members[0].dataset.id, last = members[members.length - 1].dataset.id;
-          const h = document.createElement("div");
-          h.className = "col-h";
-          h.style.gridColumn = String(c);
-          h.textContent = first === last ? first : `${first} – ${last}`;
-          grid.append(h);
-        }
+        return out;
       }
-      // An arrow from a task to what it depends on (or came from): a curve and its head, both
-      // plain paths, so the page needs no references between SVG elements.
-      function edge(from, to, kind) {
-        const y1 = from.offsetTop + from.offsetHeight / 2, y2 = to.offsetTop + to.offsetHeight / 2;
-        const span = column(to) - column(from);
-        const dir = span >= 2 ? "on" : span <= -2 ? "back" : "";
-        const track = dir ? trackOf.get(`${from.dataset.id}:${dir}`) : null;
-        if (track && !track.hidden) return routed(from, to, kind, track, y1, y2, dir === "on" ? 1 : -1);
-        let x1, x2, c1, c2, sign;
-        const sameColumn = to.offsetLeft < from.offsetLeft + from.offsetWidth
-          && from.offsetLeft < to.offsetLeft + to.offsetWidth;
-        if (sameColumn) {
-          // Tasks that reference each other share a column (T278 revision 3): the arrow goes
-          // round the side, downward ones on the left and upward ones on the right, so the
-          // two directions never overlap.
-          // The curve stays within the nodes' 14px side margin, clear of the lane names on the
-          // first column and of the grid's edge on the last.
-          const left = y2 >= y1;
-          sign = left ? 1 : -1;
-          x1 = left ? from.offsetLeft : from.offsetLeft + from.offsetWidth;
-          x2 = left ? to.offsetLeft : to.offsetLeft + to.offsetWidth;
-          c1 = x1 - sign * 12;
-          c2 = x2 - sign * 12;
-        } else {
-          const rightward = to.offsetLeft >= from.offsetLeft + from.offsetWidth;
-          sign = rightward ? 1 : -1; // leftward only for a follow-up to a newer task, a cycle or an old record
-          x1 = rightward ? from.offsetLeft + from.offsetWidth : from.offsetLeft;
-          x2 = rightward ? to.offsetLeft : to.offsetLeft + to.offsetWidth;
-          const dx = sign * Math.max(30, Math.abs(x2 - x1) / 2);
-          c1 = x1 + dx;
-          c2 = x2 - sign * 8 - dx;
-        }
-        const tip = x2 - sign * 8;
-        return arrowed(from, to, kind, `M${x1},${y1} C${c1},${y1} ${c2},${y2} ${tip},${y2}`, x2, tip, y2);
+      // A coordinate with the given spans taken out (a coordinate inside one lands on its start).
+      function collapse(spans) {
+        spans.sort((p, q) => p[0] - q[0]);
+        return v => {
+          let out = v;
+          for (const [lo, hi] of spans) {
+            if (v <= lo) break;
+            out -= Math.min(v, hi) - lo;
+          }
+          return out;
+        };
       }
-      // A line spanning columns: out of its task into the gap, along the task's track (a row no
-      // card holds in the columns between), and into its target from the gap before it. A line
-      // running left (``sign`` -1) leaves the task's left side and enters the target's right.
-      function routed(from, to, kind, track, y1, y2, sign) {
-        const yt = track.offsetTop + track.offsetHeight / 2;
-        const x1 = sign > 0 ? from.offsetLeft + from.offsetWidth : from.offsetLeft;
-        const x2 = sign > 0 ? to.offsetLeft : to.offsetLeft + to.offsetWidth, tip = x2 - sign * 8;
-        const g1 = x1 + sign * 14, g2 = x2 - sign * 14; // the middle of the gaps (side margins)
-        const d = `M${x1},${y1} C${g1},${y1} ${g1},${yt} ${g1 + sign * 14},${yt} L${g2 - sign * 14},${yt} `
-          + `C${g2},${yt} ${g2},${y2} ${tip},${y2}`;
-        return arrowed(from, to, kind, d, x2, tip, y2);
-      }
-      function arrowed(from, to, kind, d, x2, tip, y2) {
-        const g = document.createElementNS(SVG, "g");
-        g.setAttribute("class", `edge ${kind}` + (from.classList.contains("ctx") || to.classList.contains("ctx") ? " ctx" : ""));
-        g.dataset.a = from.dataset.id;
-        g.dataset.b = to.dataset.id;
-        const line = document.createElementNS(SVG, "path");
-        line.setAttribute("class", "line");
-        line.setAttribute("d", d);
-        const head = document.createElementNS(SVG, "path");
-        head.setAttribute("class", "head");
-        head.setAttribute("d", `M${tip},${y2 - 4.5} L${x2},${y2} L${tip},${y2 + 4.5} Z`);
-        g.append(line, head);
-        return g;
-      }
+      // Places the cards, the lanes and the headings, and draws the lines.
       function draw() {
-        if (pane.hidden) return;
-        svg.setAttribute("width", String(grid.offsetWidth));
-        svg.setAttribute("height", String(grid.offsetHeight));
-        const paths = [];
-        const kinds = showing();
-        for (const n of shown) {
-          for (const kind of kinds) {
-            for (const id of ids(n.dataset[ATTR[kind]])) {
-              const to = nodeById.get(id);
-              if (shown.has(to)) paths.push(edge(n, to, kind));
+        if (pane.hidden || !set) return;
+        const {xs, gaps, lines, every} = routes();
+        const cols = new Map(), used = new Set();
+        for (const n of room) {
+          const c = set.cards[index.get(n.dataset.id)][0];
+          used.add(c);
+          if (!shown.has(n)) continue;
+          if (!cols.has(c)) cols.set(c, []);
+          cols.get(c).push(n);
+        }
+        // A column without a card shown closes up, with its gap when no line drawn passes there;
+        // so does a lane without a card shown.
+        const reach = every.map(l => [Math.min(...l.pts.map(p => p[0])), Math.max(...l.pts.map(p => p[0]))]);
+        const xSpans = [];
+        for (let c = 0; c < xs.length; c++) {
+          if (used.has(c)) continue;
+          const g0 = xs[c] + W, g1 = g0 + gaps[c];
+          const crossed = reach.some(([lo, hi]) => lo < g1 && hi > g0);
+          xSpans.push([xs[c], crossed ? g0 : g1]);
+        }
+        const lanesShown = new Set(Array.from(room, n => n.dataset.repo));
+        // Heights: what a card shown, a line's horizontal run or a lane's name needs is kept,
+        // with some room around it; the rest closes up (a lane without a card shown entirely).
+        const PAD = 16;
+        const kept = [[0, layouts.head]];
+        for (const n of room) {
+          const top = set.cards[index.get(n.dataset.id)][1];
+          kept.push([top - PAD, top + H + PAD]);
+        }
+        for (const l of every) {
+          for (let i = 1; i < l.pts.length; i++) {
+            if (l.pts[i][1] === l.pts[i - 1][1]) kept.push([l.pts[i][1] - PAD / 2, l.pts[i][1] + PAD / 2]);
+          }
+        }
+        for (const [i, repo] of layouts.repos.entries()) {
+          if (set.lanes[i] && lanesShown.has(repo)) kept.push([set.lanes[i][0], set.lanes[i][0] + 2 * PAD]);
+        }
+        kept.sort((p, q) => p[0] - q[0]);
+        const ySpans = [];
+        let reached = kept[0][1];
+        for (const [lo, hi] of kept) {
+          if (lo > reached) ySpans.push([reached, lo]);
+          reached = Math.max(reached, hi);
+        }
+        const X = collapse(xSpans), Y = collapse(ySpans);
+        const lastX = xs.length ? xs[xs.length - 1] + W + gaps[gaps.length - 1] : 0;
+        const bottom = reached;
+        const width = X(lastX), height = Y(bottom);
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        names.style.height = `${height}px`;
+        for (const [i, n] of order.entries()) {
+          if (!shown.has(n)) continue;
+          const [c, top] = set.cards[i];
+          n.style.left = `${X(xs[c])}px`;
+          n.style.top = `${Y(top)}px`;
+        }
+        for (const [i, repo] of layouts.repos.entries()) {
+          const lane = set.lanes[i], on = !!lane && lanesShown.has(repo);
+          for (const el of [bands.get(repo), labels.get(repo)]) {
+            if (!el) continue;
+            el.hidden = !on;
+            if (on) {
+              el.style.top = `${Y(lane[0])}px`;
+              el.style.height = `${Y(lane[1]) - Y(lane[0])}px`;
             }
           }
         }
-        svg.replaceChildren(...paths);
-        sizer.style.width = `${grid.offsetWidth * zoom}px`;
-        sizer.style.height = `${grid.offsetHeight * zoom}px`;
+        // Column headings: the range of the latest ledger records of the cards shown.
+        for (const h of canvas.querySelectorAll(".col-h")) h.remove();
+        for (const [c, members] of cols) {
+          const times = members.map(n => n.dataset.when).sort();
+          const newest = when(times[times.length - 1]), oldest = when(times[0]);
+          const h = document.createElement("div");
+          h.className = "col-h";
+          h.style.left = `${X(xs[c])}px`;
+          h.style.width = `${W}px`;
+          h.textContent = newest === oldest ? newest : `${newest} – ${oldest}`;
+          h.title = "该列卡片最近修改时间的范围（新 – 旧）";
+          canvas.append(h);
+        }
+        svg.setAttribute("width", String(width));
+        svg.setAttribute("height", String(height));
+        // The gap a channel lies in, as its left and right x.
+        const gapAt = x => {
+          for (let c = 0; c < xs.length; c++) {
+            if (x > xs[c] + W && x < xs[c] + W + gaps[c]) return [xs[c] + W, xs[c] + W + gaps[c]];
+          }
+          return [x, x];
+        };
+        // References first, so they lie under the other lines.
+        lines.sort((p, q) => Number(q.kind === "ref") - Number(p.kind === "ref"));
+        svg.replaceChildren(...lines.map(l => line(l, gapAt, X, Y)));
+        highlight(grid.querySelector(".fnode.on"));
+      }
+      // A line along its waypoints, as an orthogonal polyline with rounded corners or with a curve
+      // through the line's own channel at every turn; the head at the last point, along it.
+      function line(l, gapAt, X, Y) {
+        const P = l.pts, n = P.length;
+        const [lx, ly] = P[n - 1];
+        const dir = lx >= P[n - 2][0] ? 1 : -1, tip = lx - dir * 8;
+        // The last point stops short of the card, where the head begins.
+        const at = i => (i === n - 1 ? [tip, P[i][1]] : P[i]);
+        const pt = ([x, y]) => `${X(x).toFixed(1)},${Y(y).toFixed(1)}`;
+        let d = `M${pt(P[0])}`;
+        if (state.shape === "curve") {
+          for (let i = 1; i < n; i++) {
+            const [x0, y0] = P[i - 1], [x1] = P[i];
+            const turns = i + 1 < n && P[i + 1][0] === x1 && x0 !== x1;
+            if (!turns) { d += ` L${pt(at(i))}`; continue; }
+            // Out of the horizontal run at the gap's edge, through the channel, into the next
+            // run at the gap's other edge (the same edge for a U-turn).
+            const [g0, g1] = gapAt(x1);
+            const y1 = P[i + 1][1];
+            const next = P[i + 2] || P[i + 1];
+            const from = x0 < x1 ? g0 : g1, to = next[0] < x1 ? g0 : g1;
+            if (Math.abs(from - x0) > 0.05) d += ` L${pt([from, y0])}`;
+            const last = i + 2 === n - 1 && Math.abs(next[0] - to) < 0.05;
+            d += ` C${pt([x1, y0])} ${pt([x1, y1])} ${pt(last ? [tip, y1] : [to, y1])}`;
+            if (i + 2 < n && !last && Math.abs(next[0] - to) > 0.05) d += ` L${pt(at(i + 2))}`;
+            i += 2;
+          }
+        } else {
+          for (let i = 1; i < n - 1; i++) {
+            const [ax, ay] = P[i - 1], [bx, by] = P[i], [cx, cy] = at(i + 1);
+            const r = Math.min(6, Math.hypot(bx - ax, by - ay) / 2, Math.hypot(cx - bx, cy - by) / 2);
+            const ux = Math.sign(bx - ax), uy = Math.sign(by - ay), vx = Math.sign(cx - bx), vy = Math.sign(cy - by);
+            d += ` L${pt([bx - ux * r, by - uy * r])} Q${pt([bx, by])} ${pt([bx + vx * r, by + vy * r])}`;
+          }
+          d += ` L${pt(at(n - 1))}`;
+        }
+        const g = document.createElementNS(SVG, "g");
+        g.setAttribute("class", `edge ${l.kind}` + (l.a.classList.contains("ctx") || l.b.classList.contains("ctx") ? " ctx" : ""));
+        g.dataset.a = l.a.dataset.id;
+        g.dataset.b = l.b.dataset.id;
+        const path = document.createElementNS(SVG, "path");
+        path.setAttribute("class", "line");
+        path.setAttribute("d", d);
+        const head = document.createElementNS(SVG, "path");
+        head.setAttribute("class", "head");
+        const hx = X(lx).toFixed(1), ht = X(tip).toFixed(1), hy = Y(ly);
+        head.setAttribute("d", `M${ht},${(hy - 4.5).toFixed(1)} L${hx},${hy.toFixed(1)} L${ht},${(hy + 4.5).toFixed(1)} Z`);
+        g.append(path, head);
+        return g;
       }
       function applyZoom() {
         zoom = Math.min(1.5, Math.max(0.1, zoom));
@@ -506,19 +588,29 @@
         applyZoom();
       }
       function highlight(node) {
-        grid.classList.toggle("hl", node !== null);
+        grid.classList.toggle("hl", !!node);
         for (const el of grid.querySelectorAll(".on")) el.classList.remove("on");
         if (!node) return;
         node.classList.add("on");
         for (const id of near.get(node.dataset.id)) nodeById.get(id).classList.add("on");
         for (const p of svg.querySelectorAll("g.edge")) {
-          if (p.dataset.a === node.dataset.id || p.dataset.b === node.dataset.id) p.classList.add("on");
+          if (p.dataset.a === node.dataset.id || p.dataset.b === node.dataset.id) {
+            p.classList.add("on");
+            nodeById.get(p.dataset.a === node.dataset.id ? p.dataset.b : p.dataset.a)?.classList.add("on");
+          }
         }
       }
-      grid.addEventListener("pointerover", e => highlight(e.target.closest?.(".fnode") || null));
-      grid.addEventListener("pointerleave", () => highlight(null));
-      grid.addEventListener("focusin", e => highlight(e.target.closest?.(".fnode") || null));
-      grid.addEventListener("focusout", () => highlight(null));
+      // Hovering or focusing a card shows its references for the moment when they are not all
+      // shown; the cards stay where they are.
+      function point(node) {
+        const id = node && !state.refs ? node.dataset.id : "";
+        if (id !== peek) { peek = id; draw(); }
+        highlight(node);
+      }
+      canvas.addEventListener("pointerover", e => point(e.target.closest?.(".fnode") || null));
+      canvas.addEventListener("pointerleave", () => point(null));
+      canvas.addEventListener("focusin", e => point(e.target.closest?.(".fnode") || null));
+      canvas.addEventListener("focusout", () => point(null));
       $("zoom-in").addEventListener("click", () => step(1));
       $("zoom-out").addEventListener("click", () => step(-1));
       $("zoom-reset").addEventListener("click", () => { zoom = 1; applyZoom(); });
@@ -529,11 +621,18 @@
       $("flow-archived").addEventListener("change", event => { state.arch = event.target.checked; renderAll(); });
       $("flow-legend").addEventListener("change", event => {
         const rel = event.target.dataset?.rel;
-        if (!rel) return;
-        state.hide = event.target.checked ? state.hide.filter(r => r !== rel) : [...state.hide, rel];
+        if (rel === "ref") state.refs = event.target.checked;
+        else if (rel === "fu") state.hide = event.target.checked ? [] : ["fu"];
+        else return;
         renderAll();
       });
-      window.addEventListener("resize", () => draw());
+      pane.addEventListener("change", event => {
+        if (event.target.name !== "flow-shape") return;
+        state.shape = event.target.value === "curve" ? "curve" : "poly";
+        renderAll();
+      });
+      // The page is at its size before the first draw (the cards measure nothing, but the zoom does).
+      window.addEventListener("resize", () => applyZoom());
       return {
         render,
         scroll: () => `${scroller.scrollLeft},${scroller.scrollTop}`,
@@ -580,10 +679,10 @@
       tile.addEventListener("click", () => {
         if (tile.dataset.tileArchived) {
           state = {...parse(""), sort: state.sort, group: state.group, view: "flow", arch: true,
-            hide: state.hide};
+            hide: state.hide, refs: state.refs, shape: state.shape};
         } else {
           state = {...parse(""), sort: state.sort, group: state.group, view: state.view, arch: state.arch,
-            hide: state.hide, st: (tile.dataset.tileSt || "").split(",").filter(Boolean), flag: tile.dataset.tileFlag || ""};
+            hide: state.hide, refs: state.refs, shape: state.shape, st: (tile.dataset.tileSt || "").split(",").filter(Boolean), flag: tile.dataset.tileFlag || ""};
         }
         render();
         tools.scrollIntoView({block: "start"});

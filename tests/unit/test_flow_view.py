@@ -10,116 +10,15 @@ from typing import Any
 import pytest
 
 from tests.support import flow_layouts
-from tsw.host.flow import (
-    FIRST_COLUMN,
-    FIRST_ROW,
-    LANE_CAPACITY,
-    RELATIONS,
-    FlowTask,
-    lane_order,
-    layout_key,
-    place,
-    relation_choices,
-)
-from tsw.host.flow import flow_layouts as flow_layouts_of
+from tsw.host.flow import CARD_W, layout_key, relation_choices
 from tsw.host.status import TITLE, AppView, render
 from tsw.host.status_assets import CSS, SCRIPT
 from tsw.projection import SCHEMA_SQL
 
 mark = pytest.mark
 
-
-def task(n: int, repo: str = "a", status: str = "in_progress", activity: str = "") -> FlowTask:
-    return FlowTask(
-        f"T{n:03d}", f"title {n}", repo, "code", status, n, activity or f"2026-11-{n:02d}"
-    )
-
-
-def columns(tasks: list[FlowTask], deps: dict[str, list[str]], **kw: Any) -> dict[str, int]:
-    layout = place(tasks, deps, **kw)
-    return {tid: cell[0] - FIRST_COLUMN for tid, cell in layout.cells.items()}
-
-
-# ---------------------------------------------------------------------- the layout
-
-
-@mark.use_case("UC-DIRECT-004")
-def test_unrelated_tasks_share_the_first_column_newest_on_top() -> None:
-    layout = place([task(1), task(2), task(3)], {})
-    assert {c for c, _ in layout.cells.values()} == {FIRST_COLUMN}
-    rows = {tid: row for tid, (_, row) in layout.cells.items()}
-    assert rows["T003"] < rows["T002"] < rows["T001"]
-    assert layout.columns == 1
-
-
-@mark.use_case("UC-DIRECT-004")
-def test_a_dependency_is_right_of_every_task_depending_on_it() -> None:
-    tasks = [task(n) for n in range(1, 7)]
-    deps = {"T006": ["T004"], "T005": ["T004"], "T004": ["T001"], "T003": ["T002"]}
-    col = columns(tasks, deps)
-    for dependent, ds in deps.items():
-        for d in ds:
-            assert col[d] > col[dependent], (dependent, d)
-    # Newest left: an older task is never left of a newer one (the column only moves right).
-    ordered = [col[f"T{n:03d}"] for n in range(6, 0, -1)]
-    assert ordered == sorted(ordered)
-
-
-@mark.use_case("UC-DIRECT-004")
-def test_a_dependency_registered_after_its_dependent_still_goes_right() -> None:
-    # Imported records can name a dependency with a later registration.
-    col = columns([task(1), task(2), task(3)], {"T001": ["T003"]})
-    assert col["T003"] > col["T001"]
-
-
-@mark.use_case("UC-DIRECT-004")
-def test_a_lane_holds_a_bounded_number_of_tasks_per_column() -> None:
-    tasks = [task(n) for n in range(1, 2 * LANE_CAPACITY + 2)]
-    layout = place(tasks, {})
-    per_column: dict[int, int] = {}
-    for c, _ in layout.cells.values():
-        per_column[c] = per_column.get(c, 0) + 1
-    assert max(per_column.values()) == LANE_CAPACITY
-    assert layout.columns == 3
-    # Another repository is not pushed by a full lane: it shares the columns.
-    mixed = columns([task(1, "a"), task(2, "b"), task(3, "a")], {}, capacity=1)
-    assert mixed["T002"] == 0 and mixed["T003"] == 0 and mixed["T001"] == 1
-
-
-@mark.use_case("UC-DIRECT-004")
-def test_lanes_follow_the_repositories_latest_activity_and_cross_lane_edges_keep_order() -> None:
-    tasks = [
-        task(1, "old", activity="2026-11-01"),
-        task(2, "new", activity="2026-11-09"),
-        task(3, "mid", activity="2026-11-05"),
-        task(4, "old", activity="2026-11-02"),
-    ]
-    assert lane_order(tasks) == ["new", "mid", "old"]
-    layout = place(tasks, {"T002": ["T001"]})
-    assert [(lane.repo, lane.first_row) for lane in layout.lanes] == [
-        ("new", FIRST_ROW),
-        ("mid", FIRST_ROW + 1),
-        ("old", FIRST_ROW + 2),
-    ]
-    # T001 goes right of T002 in another lane, so it shares its lane's row with T004.
-    assert layout.lanes[-1].end_row == FIRST_ROW + 3
-    assert layout.cells["T001"][0] > layout.cells["T002"][0]
-    assert layout.cells["T001"][1] == layout.cells["T004"][1]
-
-
-@mark.use_case("UC-DIRECT-004")
-def test_a_task_takes_the_row_of_the_tasks_depending_on_it() -> None:
-    tasks = [task(1), task(2), task(3), task(4)]
-    # T004 is alone at the top of column 0; T003 and T002 sit below it; T001 follows T002.
-    layout = place(tasks, {"T002": ["T001"]})
-    assert layout.cells["T001"][1] == layout.cells["T002"][1]
-
-
-@mark.use_case("UC-DIRECT-004")
-def test_a_cycle_and_unknown_tasks_do_not_stop_the_layout() -> None:
-    layout = place([task(1), task(2)], {"T001": ["T002", "T404"], "T002": ["T001"]})
-    assert set(layout.cells) == {"T001", "T002"}
-    assert place([], {}).columns == 0
+# The layout itself (dependencies first, newest left, ports and channels) is tested in
+# test_flow_layout.py; this file tests the page that carries it.
 
 
 # ---------------------------------------------------------------------- the page
@@ -194,7 +93,7 @@ def test_the_flow_has_a_node_per_task_with_its_relations_and_two_layouts(
     t4 = _node(flow, "T004")
     assert 'data-deps="T003"' in t4 and 'data-from="T003"' in t4 and 'data-repo="beta"' in t4
     assert "&lt;b&gt;flow&lt;/b&gt;" in flow and "<b>flow</b>" not in flow
-    # The nodes carry no position: the page's layouts do (T280), one per choice of relations.
+    # The nodes carry no position: the page's layouts do, one per choice the page offers.
     assert "style=" not in t4
     layouts = flow_layouts(page)
     live, every = layouts["live:dep,fu,ref"], layouts["all:dep,fu,ref"]
@@ -202,15 +101,23 @@ def test_the_flow_has_a_node_per_task_with_its_relations_and_two_layouts(
     assert set(live["cells"]) == {"T001", "T003", "T004"}
     # ... an unrelated archived task only in the layout with every task.
     assert set(every["cells"]) == {"T001", "T002", "T003", "T004"}
-    # Dependencies are right of their dependents, across repositories too.
+    # Dependencies are right of their dependents, across repositories too (T304).
     gc = {tid: live["cells"][tid][0] for tid in ("T001", "T003", "T004")}
     assert gc["T004"] < gc["T003"] < gc["T001"]
+    # Each card shows its latest ledger record (the time is written by the script).
+    assert 'data-when="2026-11-01T08:00:00Z"' in t4 and '<span class="ftime"></span>' in flow
+    # The lines run from the task depended on to the task depending on it, ending at its right.
+    lines = {(src, dst): pts for kind, src, dst, pts in live["lines"] if kind == "dep"}
+    assert set(lines) == {("T001", "T003"), ("T003", "T004")}
+    x4 = live["xs"][live["cells"]["T004"][0]]
+    assert lines[("T003", "T004")][-1][0] == x4 + CARD_W
     # The static page links a board task to its card; an archived one has no card to go to.
     assert t4.startswith("<a ") and 'href="#task-T004"' in t4
     assert _node(flow, "T001").startswith("<span ")
     # Lanes: one per repository, alpha (no newer activity) after beta by name.
     assert re.findall(r'<div class="lane" data-repo="(\w+)"', flow) == ["alpha", "beta"]
     assert set(live["lanes"]) == set(every["lanes"]) == {"alpha", "beta"}
+    assert re.findall(r'<div class="lane-name" data-repo="(\w+)"', flow) == ["alpha", "beta"]
     assert "A 依赖 B" in flow and "follow-up 转来" in flow
 
 
@@ -311,73 +218,10 @@ def test_archived_only_repositories_and_kinds_can_be_chosen_in_the_task_flow(
 def test_the_lane_names_stick_to_the_scrolling_area() -> None:
     # overflow:hidden on the box inside the scroller would capture the sticky lane names.
     assert ".flow-size{position:relative;overflow:clip}" in CSS
-    assert re.search(r"\.flow-grid>\.lane-name\{[^}]*position:sticky;left:0", CSS)
+    assert re.search(r"\.flow-names\{position:sticky;left:0", CSS)
 
 
-# ---------------------------------------------------------------------- the relations shown (T280)
-
-Relation = dict[str, list[str]]
-
-
-def _relations_board() -> tuple[list[FlowTask], Relation, Relation, Relation]:
-    tasks = [task(1, status="archived"), task(2, status="archived"), task(3, status="archived")]
-    tasks += [task(n) for n in range(4, 11)]
-    deps = {"T004": ["T001"], "T007": ["T009"]}  # T009 is newer than T007
-    follow_ups = {"T005": ["T002"]}
-    refs = {"T006": ["T003"], "T008": ["T010"]}  # T010 is newer than T008
-    return tasks, deps, follow_ups, refs
-
-
-@mark.use_case("UC-DIRECT-004")
-@pytest.mark.parametrize("chosen", relation_choices(), ids=lambda c: ",".join(c) or "none")
-def test_a_relation_not_shown_neither_moves_cards_nor_makes_context(
-    chosen: tuple[str, ...],
-) -> None:
-    tasks, deps, follow_ups, refs = _relations_board()
-    layouts = flow_layouts_of(tasks, deps, follow_ups, refs)
-    live = layouts[layout_key(False, chosen)]
-    every = layouts[layout_key(True, chosen)]
-    assert set(every.cells) == {t.task_id for t in tasks}
-    # The archived tasks are context only through the relations shown.
-    expected = {f"T{n:03d}" for n in range(4, 11)}
-    expected |= {
-        tid for rel, tid in (("dep", "T001"), ("fu", "T002"), ("ref", "T003")) if rel in chosen
-    }
-    assert set(live.cells) == expected
-    for layout in (live, every):
-        col = {tid: c for tid, (c, _) in layout.cells.items()}
-        # A dependency or a reference shown puts its target right, even a newer task; hidden,
-        # the newer task keeps its place by registration (left or in the same column).
-        assert (col["T009"] > col["T007"]) is ("dep" in chosen)
-        assert (col["T010"] > col["T008"]) is ("ref" in chosen)
-    if not chosen:
-        assert not live.tracks and not every.tracks
-        assert {c for c, _ in every.cells.values()} == {FIRST_COLUMN, FIRST_COLUMN + 1}
-
-
-@mark.use_case("UC-DIRECT-004")
-def test_tracks_and_shared_columns_follow_the_relations_shown() -> None:
-    tasks = [task(n) for n in (101, 102, 103)]
-    refs = {"T103": ["T102"], "T102": ["T101"]}
-    fus = {"T103": ["T101"]}  # two columns away while the references set the columns
-    layouts = flow_layouts_of(tasks, {}, fus, refs)
-    tracks = {
-        c: [tr.source for tr in layouts[layout_key(False, c)].tracks] for c in relation_choices()
-    }
-    assert tracks[("dep", "fu", "ref")] == tracks[("fu", "ref")] == ["T103"]
-    assert tracks[("dep", "ref")] == []  # the follow-up's line is not drawn, so holds no row
-    assert tracks[("dep", "fu")] == []  # without the references the three share a column
-    full = layouts[layout_key(False, ("fu", "ref"))]
-    bare = layouts[layout_key(False, ("ref",))]
-    assert full.lanes[0].end_row > bare.lanes[0].end_row  # the track's row
-    # A dependency keeps tasks referencing each other apart only while it is shown.
-    pair = [task(301), task(302)]
-    mutual = {"T301": ["T302"], "T302": ["T301"]}
-    layouts = flow_layouts_of(pair, {"T301": ["T302"]}, {}, mutual)
-    apart = layouts[layout_key(False, RELATIONS)].cells
-    together = layouts[layout_key(False, ("ref",))].cells
-    assert apart["T301"][0] < apart["T302"][0]
-    assert together["T301"][0] == together["T302"][0]
+# ---------------------------------------------------------------------- the choices (T280, T304)
 
 
 @mark.use_case("UC-DIRECT-004")
@@ -390,21 +234,33 @@ def test_the_page_carries_every_layout_once_and_the_legend_ticks_the_relations(
     assert set(layouts) == {
         layout_key(everything, c) for everything in (False, True) for c in relation_choices()
     }
-    # With no reference on the board, showing references or not gives the same layout: once.
+    # Dependencies are always laid out; the references never move a card, so with none on the
+    # board, showing them or not gives the same layout: once.
+    assert all(":dep" in key for key in layouts)
     assert layouts["live:dep,fu,ref"]["set"] == layouts["live:dep,fu"]["set"]
-    assert layouts["live:dep,fu,ref"]["set"] != layouts["live:"]["set"]
-    # Unticking the dependencies and the follow-ups leaves the archived T001 out.
-    assert "T001" not in layouts["live:ref"]["cells"] and "T001" in layouts["all:ref"]["cells"]
+    assert layouts["live:dep,fu,ref"]["set"] != layouts["live:dep"]["set"]
+    assert "T001" in layouts["live:dep"]["cells"]  # the archived task depended on: context
     legend = page.split('id="flow-legend"')[1].split('id="flow-layouts"')[0]
-    boxes = re.findall(r'<input type="checkbox" data-rel="(\w+)" checked>', legend)
-    assert boxes == list(RELATIONS)
-    assert "与筛选结果直接相连的上下文" in legend
-    # The choice is kept with the filters, so a reload keeps it; reset and tiles keep it too.
+    # No checkbox for the dependencies; the follow-ups ticked, the references not (T304).
+    assert re.findall(r'<input type="checkbox" data-rel="(\w+)"( checked)?>', legend) == [
+        ("fu", " checked"),
+        ("ref", ""),
+    ]
+    assert "A 依赖 B" in legend and "与筛选结果直接相连的上下文" in legend
+    # Polyline or curve, polyline by default.
+    bar = page.split('class="flow-bar"')[1].split('id="flow-legend"')[0]
+    assert re.findall(r'name="flow-shape" value="(\w+)"( checked)?', bar) == [
+        ("poly", " checked"),
+        ("curve", ""),
+    ]
+    # The choices are kept with the filters, so a reload keeps them; reset and tiles too.
     assert 'if (s.hide.length) p.set("hide", s.hide.join(","));' in SCRIPT
-    assert 'hide: list("hide")' in SCRIPT
-    assert SCRIPT.count("hide: state.hide") == 3
-    assert 'const key = (state.arch ? "all" : "live") + ":" + showing().join(",");' in SCRIPT
-    assert ".flow-grid>.out{display:none}" in CSS
+    assert 'if (s.refs) p.set("refs", "1");' in SCRIPT
+    assert 'if (s.shape === "curve") p.set("line", "curve");' in SCRIPT
+    assert 'hide: list("hide").filter(r => r === "fu")' in SCRIPT  # an old hide=dep is ignored
+    assert SCRIPT.count("hide: state.hide, refs: state.refs, shape: state.shape") == 3
+    assert 'layouts.pick[(state.arch ? "all" : "live") + ":" + showing().join(",")]' in SCRIPT
+    assert ".flow-canvas>.out{display:none}" in CSS
 
 
 @mark.use_case("UC-DIRECT-004")
@@ -413,4 +269,4 @@ def test_the_layout_data_cannot_end_its_block(conn: sqlite3.Connection) -> None:
     page = render(conn)
     block = page.split('id="flow-layouts">')[1].split("</script>")[0]
     assert "<" not in block and ">" not in block
-    assert flow_layouts(page)["live:dep,fu,ref"]["lanes"] == {"</script><b>x</b>": (2, 3)}
+    assert list(flow_layouts(page)["live:dep,fu,ref"]["lanes"]) == ["</script><b>x</b>"]

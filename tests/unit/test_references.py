@@ -12,7 +12,7 @@ import pytest
 
 from tests.support import flow_layouts
 from tsw.context.index import IndexedCard, outputs_digest
-from tsw.host.flow import FIRST_COLUMN, FlowTask, place
+from tsw.host.flow import CARD_W, FlowTask, lay_out
 from tsw.host.relations import find_references, label, mentions, references
 from tsw.host.status import AppView, render
 from tsw.host.status_assets import CSS, SCRIPT
@@ -154,19 +154,31 @@ def test_the_flow_draws_references_and_keeps_referenced_archived_tasks_as_contex
     assert 'data-refs="T001 T004"' in t5 and 'data-deps=""' in t5
     assert 'data-refs="T004"' in _node(flow, "T002")
     assert 'data-refs="T005"' in _node(flow, "T006")
-    # Archived tasks joined to a board task by a reference, either way, are in the default
-    # layout, like those joined by a dependency or a follow-up; an unrelated one is not.
-    live = flow_layouts(page)["live:dep,fu,ref"]["cells"]
+    # Archived tasks joined to a board task by a reference, either way, are in the layout
+    # without the archived tasks, like those joined by a dependency or a follow-up; an
+    # unrelated one is not. The script shows them as context only while the references are
+    # shown (they are not by default), and keeps their places either way.
+    layouts = flow_layouts(page)
+    live = layouts["live:dep,fu,ref"]["cells"]
     assert {"T001", "T002", "T006"} <= set(live) and "T003" not in live
-    # A reference puts the referencing task left of the one it references (revision 3).
-    gc = {tid: live[tid][0] for tid in ("T001", "T002", "T004", "T005", "T006")}
-    assert gc["T006"] < gc["T005"] < gc["T004"] and gc["T005"] < gc["T001"]
-    assert gc["T002"] < gc["T004"]
+    # References never move a card (T304): one layout whether shown or not.
+    assert layouts["live:dep,fu,ref"]["set"] == layouts["live:dep,fu"]["set"]
+    assert layouts["all:dep,fu,ref"]["set"] == layouts["all:dep,fu"]["set"]
+    assert "for (const id of joined.ref.get(n.dataset.id))" in SCRIPT
+    # Their routes run from the referenced task to the one referencing it, in the hover routes
+    # (the gaps as they are) and in the shown ones (the gaps widened).
+    for group in ("peek", "wide"):
+        refs = {(src, dst) for kind, src, dst, _ in layouts["all:dep,fu"][group] if kind == "ref"}
+        assert refs == {("T001", "T005"), ("T004", "T005"), ("T004", "T002"), ("T005", "T006")}
+    assert not [ln for ln in layouts["all:dep,fu"]["lines"] if ln[0] == "ref"]
     # The legend tells the three lines apart; the script draws and highlights references.
     assert "A 依赖 B" in flow and "follow-up 转来" in flow and "A 引用 B" in flow
     assert 'class="lg ref"' in flow
     assert 'const ATTR = {dep: "deps", fu: "from", ref: "refs"};' in SCRIPT
-    assert "paths.push(edge(n, to, kind))" in SCRIPT
+    assert (
+        'if (drawn && kind === "ref" && !wide && peek !== a.dataset.id && peek !== b.dataset.id)'
+        in SCRIPT
+    )
     assert ".edge.ref .line{stroke-dasharray" in CSS and ".lg.ref{" in CSS
 
 
@@ -325,260 +337,48 @@ def test_no_card_for_an_unknown_task_and_none_read(conn: sqlite3.Connection) -> 
     assert "没有读取检索索引" in _section(render_task(conn, "T001", APP, []) or "", "card")
 
 
-# ---------------------------------------------------------------------- the layout
+# ---------------------------------------------------------------------- the layout (T304)
 
 
 def _t(n: int, repo: str = "a") -> FlowTask:
     return FlowTask(f"T{n:03d}", f"t{n}", repo, "code", "in_progress", n, f"2026-11-{n:02d}")
 
 
-def _columns(
-    tasks: list[FlowTask], deps: dict[str, list[str]], refs: dict[str, list[str]], **kw: Any
-) -> dict[str, int]:
-    layout = place(tasks, deps, references=refs, **kw)
-    return {tid: cell[0] - FIRST_COLUMN for tid, cell in layout.cells.items()}
+@mark.use_case("UC-DIRECT-005")
+def test_references_do_not_take_part_in_the_layout() -> None:
+    # Before T304 a reference put the referencing task left and tasks referencing each other
+    # shared a column; now the cards stay where the dependencies and the time put them.
+    tasks = [_t(1), _t(2), _t(3)]
+    bare = lay_out(tasks, {})
+    for refs in (
+        {"T003": ["T001"]},
+        {"T001": ["T003"], "T003": ["T001"]},
+        {"T001": ["T002"], "T002": ["T003"], "T003": ["T001"]},
+    ):
+        layout = lay_out(tasks, {}, references=refs)
+        assert layout.cards == bare.cards and layout.columns == bare.columns, refs
+        assert {(ln.source, ln.target) for ln in layout.wide} == {
+            (b, a) for a, bs in refs.items() for b in bs
+        }
 
 
 @mark.use_case("UC-DIRECT-005")
-def test_a_referencing_task_is_left_of_what_it_references() -> None:
-    # T001 (older) references T003 (newer): T003 moves right of it, like a dependency would.
-    col = _columns([_t(1), _t(2), _t(3)], {}, {"T001": ["T003"], "T003": ["T002"]})
-    assert col["T001"] < col["T003"] < col["T002"]
-    # Across repositories as well, and together with dependencies.
-    col = _columns(
-        [_t(1, "x"), _t(2, "y"), _t(3, "x"), _t(4, "y")],
-        {"T004": ["T003"]},
-        {"T003": ["T002"], "T002": ["T001"]},
-    )
+def test_a_reference_across_columns_runs_clear_of_cards_and_lines() -> None:
+    # T004 depends on T001 two columns away and references T002 past the middle column.
+    tasks = [_t(1), _t(2, "b"), _t(3), _t(4)]
+    deps = {"T004": ["T003"], "T003": ["T002"], "T002": ["T001"]}
+    layout = lay_out(tasks, deps, references={"T004": ["T001"]})
+    col = {t: c for t, (c, _) in layout.cards.items()}
     assert col["T004"] < col["T003"] < col["T002"] < col["T001"]
-
-
-@mark.use_case("UC-DIRECT-005")
-def test_only_tasks_referencing_each_other_share_a_column() -> None:
-    tasks = [_t(n) for n in range(1, 6)]
-    # T005 <-> T004 mutual; T004 -> T003 one way; T002 <-> T001 mutual and T003 -> T002.
-    refs = {
-        "T005": ["T004"],
-        "T004": ["T005", "T003"],
-        "T003": ["T002"],
-        "T002": ["T001"],
-        "T001": ["T002"],
-    }
-    col = _columns(tasks, {}, refs)
-    assert col["T005"] == col["T004"] < col["T003"] < col["T002"] == col["T001"]
-    # A chain of mutual references is one group: one column.
-    col = _columns(tasks[:3], {}, {"T001": ["T002"], "T002": ["T001", "T003"], "T003": ["T002"]})
-    assert col["T001"] == col["T002"] == col["T003"]
-    # A one-way reference alone never shares a column, even between unrelated neighbours.
-    col = _columns(tasks[:2], {}, {"T002": ["T001"]})
-    assert col["T002"] < col["T001"]
-
-
-@mark.use_case("UC-DIRECT-005")
-def test_a_group_moves_together_and_never_splits() -> None:
-    # The group's member T001 must be right of T003 (which references it): T002 follows it.
-    col = _columns(
-        [_t(1), _t(2), _t(3)], {}, {"T003": ["T001"], "T001": ["T002"], "T002": ["T001"]}
-    )
-    assert col["T003"] < col["T001"] == col["T002"]
-    # Seven tasks of one repository all referencing each other: one column, a taller lane.
-    tasks = [_t(n) for n in range(1, 8)]
-    everyone = {t.task_id: [o.task_id for o in tasks if o is not t] for t in tasks}
-    layout = place(tasks, {}, references=everyone)
-    assert len({c for c, _ in layout.cells.values()}) == 1
-    assert len({r for _, r in layout.cells.values()}) == 7
-    # A task placed after it in the same column goes right: that lane is full there.
-    col = _columns([*tasks, _t(8, "a")], {}, everyone)
-    assert col["T008"] < col["T001"]
-    col = _columns([_t(0, "a"), *tasks], {}, everyone)
-    assert col["T000"] > col["T001"]
-    # Members in other lanes keep the group's column when theirs has room.
-    tasks = [_t(1, "x"), _t(2, "y"), _t(3, "x")]
-    col = _columns(tasks, {}, {"T001": ["T002"], "T002": ["T001"]}, capacity=1)
-    assert col["T001"] == col["T002"]
-
-
-@mark.use_case("UC-DIRECT-005")
-def test_dependencies_win_over_references() -> None:
-    # T003 depends on T001, and T003 <-> T002 <-> T001 reference each other: T003 stays left
-    # of T001, so it does not join the group of T001 and T002.
-    tasks = [_t(1), _t(2), _t(3)]
-    mutual = {"T003": ["T002"], "T002": ["T003", "T001"], "T001": ["T002"]}
-    col = _columns(tasks, {"T003": ["T001"]}, mutual)
-    assert col["T003"] < col["T001"] == col["T002"]
-    # A cycle of a dependency and references gives up a reference, never the dependency.
-    col = _columns(tasks, {"T001": ["T003"]}, {"T003": ["T002"], "T002": ["T001"]})
-    assert col["T001"] < col["T003"]
-    # A dependency through a task outside the pair keeps the pair apart too.
-    col = _columns(
-        [_t(1), _t(2), _t(3)],
-        {"T002": ["T003"], "T003": ["T001"]},
-        {"T001": ["T002"], "T002": ["T001"]},
-    )
-    assert col["T002"] < col["T003"] < col["T001"]
-
-
-@mark.use_case("UC-DIRECT-005")
-def test_a_reference_cycle_is_broken_by_registration_order() -> None:
-    # T001 -> T002 -> T003 -> T001 (none mutual): every task placed, the newest leftmost.
-    col = _columns(
-        [_t(1), _t(2), _t(3)], {}, {"T001": ["T002"], "T002": ["T003"], "T003": ["T001"]}
-    )
-    assert set(col) == {"T001", "T002", "T003"}
-    assert col["T003"] < col["T001"] < col["T002"]
-    # The same column arrows go round the side, so the script checks for it.
-    assert "const sameColumn =" in SCRIPT
-    # Same-column arrows bulge no further than the nodes' side margin (14px).
-    assert "c1 = x1 - sign * 12;" in SCRIPT and "margin:7px 14px" in CSS
-
-
-@mark.use_case("UC-DIRECT-005")
-def test_a_large_unrelated_history_is_laid_out_in_order() -> None:
-    # Ordering uses heaps: thousands of tasks, with and without relations, place quickly and
-    # newest first.
-    tasks = [
-        FlowTask(f"T{n:05d}", "t", f"r{n % 7}", "code", "accepted", n, "x") for n in range(4000)
-    ]
-    refs = {f"T{n:05d}": [f"T{n - 3:05d}"] for n in range(3, 4000, 5)}
-    col = _columns(tasks, {}, refs)
-    assert len(col) == 4000
-    assert all(col[f"T{n:05d}"] < col[f"T{n - 3:05d}"] for n in range(3, 4000, 5))
-
-
-# ---------------------------------------------------------------------- tracks (revision 4)
-
-
-def _cells_of_tracks(layout: Any) -> set[tuple[str, int, int]]:
-    """(lane, grid column, grid row) of every cell a track holds."""
-    return {(tr.repo, col, tr.row) for tr in layout.tracks for col in range(tr.first, tr.end)}
-
-
-def _card_cells(layout: Any, tasks: list[FlowTask]) -> set[tuple[str, int, int]]:
-    repo = {t.task_id: t.repo for t in tasks}
-    return {(repo[tid], col, row) for tid, (col, row) in layout.cells.items()}
-
-
-@mark.use_case("UC-DIRECT-005")
-def test_a_line_spanning_columns_runs_on_a_row_no_card_holds() -> None:
-    # T003 references T001 two columns to its right; T002 sits between them.
-    tasks = [_t(1), _t(2), _t(3)]
-    layout = place(tasks, {}, references={"T003": ["T002", "T001"], "T002": ["T001"]})
-    col = {tid: c - FIRST_COLUMN for tid, (c, _) in layout.cells.items()}
-    assert col == {"T003": 0, "T002": 1, "T001": 2}
-    [track] = layout.tracks
-    assert (track.source, track.first - FIRST_COLUMN, track.end - FIRST_COLUMN) == ("T003", 1, 2)
-    # The card in the column it passes gives way: the track holds the top row there.
-    assert layout.cells["T002"][1] != track.row
-    assert not _cells_of_tracks(layout) & _card_cells(layout, tasks)
-    # Neighbouring columns need no track; the lane is as tall as cards and tracks need.
-    assert place(tasks[:2], {}, references={"T002": ["T001"]}).tracks == []
-    lane = layout.lanes[0]
-    assert lane.end_row - lane.first_row == 2
-
-
-@mark.use_case("UC-DIRECT-005")
-def test_the_screenshot_lane_keeps_every_line_off_the_cards() -> None:
-    # T279–T272 as on the user's Dashboard (2026-11-14), with T274 in another lane and an older
-    # task T262 to the right that T278 and T277 reference.
-    ids = [279, 278, 277, 276, 275, 274, 273, 272, 262]
-    tasks = [
-        FlowTask(
-            f"T{n}", "t", "workdeck" if n == 274 else "task-steward", "code", "accepted", n, "x"
-        )
-        for n in ids
-    ]
-    refs = {
-        "T279": ["T278", "T276", "T275"],
-        "T278": ["T277", "T276", "T275", "T273", "T272", "T262"],
-        "T277": ["T276", "T262"],
-        "T276": ["T275", "T272", "T274"],
-        "T275": ["T273", "T272", "T274"],
-        "T273": ["T272"],
-    }
-    layout = place(tasks, {"T272": ["T262"]}, references=refs)
-    assert not _cells_of_tracks(layout) & _card_cells(layout, tasks)
-    sources = {tr.source for tr in layout.tracks}
-    assert {"T279", "T278", "T277", "T276", "T275"} <= sources and "T273" not in sources
-    # A track ends before the column of its farthest target and starts right of its task.
-    col = {tid: c for tid, (c, _) in layout.cells.items()}
-    for tr in layout.tracks:
-        assert tr.first == col[tr.source] + 1 and tr.repo == "task-steward"
-    t278 = next(tr for tr in layout.tracks if tr.source == "T278")
-    assert t278.end == col["T262"]
-    # Follow-ups take a track too (they do not move cards; the references set the columns).
-    chain = {"T279": ["T278"], "T278": ["T277"]}
-    layout = place(tasks[:3], {}, references=chain, follow_ups={"T279": ["T277"]})
-    assert [tr.source for tr in layout.tracks] == ["T279"]
-
-
-@mark.use_case("UC-DIRECT-005")
-def test_the_page_carries_the_tracks_of_both_layouts_and_the_script_follows_them(
-    conn: sqlite3.Connection,
-) -> None:
-    _referring_board(conn)
-    # T006 references T005 next to it and T004 two columns away: a track over T005's column.
-    conn.execute("UPDATE tasks SET goal = '后续见 T005 与 T004' WHERE task_id = 'T006'")
-    layouts = flow_layouts(render(conn))
-    for key in ("live:dep,fu,ref", "all:dep,fu,ref"):
-        mine = [tr for tr in layouts[key]["tracks"] if tr[0] == "T006"]
-        assert mine and not mine[0][4], key  # running right
-        cells = layouts[key]["cells"]
-        assert mine[0][1] == cells["T006"][0] + 1 and mine[0][2] == cells["T004"][0]
-    # Without the references shown, T006 has no line and so no track (T280).
-    assert not [tr for tr in layouts["live:dep,fu"]["tracks"] if tr[0] == "T006"]
-    assert "function routed(from, to, kind, track, y1, y2, sign)" in SCRIPT
-    assert 't.dataset.dir = back ? "back" : "on";' in SCRIPT
-    assert "t.hidden = !shown.has(nodeById.get(t.dataset.src))" in SCRIPT
-    assert re.search(r"\.ftrack\{grid-column:var\(--c0\)/var\(--c1\);grid-row:var\(--r\)", CSS)
-
-
-@mark.use_case("UC-DIRECT-005")
-def test_lines_running_left_across_columns_get_a_track_too() -> None:
-    # A reference cycle T004 -> T003 -> T002 -> T001 -> T004: one reference is given up and
-    # runs left across the two columns between.
-    tasks = [_t(1), _t(2), _t(3), _t(4)]
-    cycle = {"T004": ["T003"], "T003": ["T002"], "T002": ["T001"], "T001": ["T004"]}
-    layout = place(tasks, {}, references=cycle)
-    back = [tr for tr in layout.tracks if tr.back]
-    assert len(back) == 1
-    col = {tid: c for tid, (c, _) in layout.cells.items()}
-    (tr,) = back
-    target = next(t for t in cycle[tr.source] if col[t] < col[tr.source])
-    assert (tr.first, tr.end) == (col[target] + 1, col[tr.source])
-    assert not _cells_of_tracks(layout) & _card_cells(layout, tasks)
-    # A follow-up to a newer task two columns left of it.
-    chain = {"T003": ["T002"], "T002": ["T001"]}
-    layout = place(tasks[:3], {}, references=chain, follow_ups={"T001": ["T003"]})
-    assert [(tr.source, tr.back) for tr in layout.tracks] == [("T001", True)]
-    assert not _cells_of_tracks(layout) & _card_cells(layout, tasks[:3])
-
-
-@mark.use_case("UC-DIRECT-005")
-def test_a_long_sparse_chain_is_laid_out_in_one_pass() -> None:
-    # Rows come from per-column buckets: 8000 tasks in a chain of references place quickly.
-    tasks = [FlowTask(f"T{n:05d}", "t", "r", "code", "accepted", n, "x") for n in range(8000)]
-    chain = {f"T{n:05d}": [f"T{n - 1:05d}"] for n in range(1, 8000)}
-    layout = place(tasks, {}, references=chain)
-    assert len(layout.cells) == 8000 and layout.tracks == []
-
-
-@mark.use_case("UC-DIRECT-005")
-def test_long_tracks_are_held_as_intervals() -> None:
-    # Each task depends on the one before and references the oldest: the tracks are long, yet
-    # each is held once (an interval per row), and no card shares a cell with a track.
-    n = 300
-    tasks = [FlowTask(f"T{k:04d}", "t", "r", "code", "accepted", k, "x") for k in range(n)]
-    deps = {f"T{k:04d}": [f"T{k - 1:04d}"] for k in range(1, n)}
-    refs = {f"T{k:04d}": ["T0000"] for k in range(2, n)}
-    layout = place(tasks, deps, references=refs)
-    assert len(layout.tracks) == n - 2
-    col = {tid: c for tid, (c, _) in layout.cells.items()}
-    assert all(tr.end == col["T0000"] for tr in layout.tracks)
-    cards = {(c, r) for c, r in layout.cells.values()}
-    for tr in layout.tracks:
-        assert not any((k, tr.row) in cards for k in range(tr.first, tr.end))
-    rows = {}
-    for tr in layout.tracks:  # tracks sharing a row never overlap
-        for other in rows.get(tr.row, []):
-            assert tr.end <= other[0] or other[1] <= tr.first
-        rows.setdefault(tr.row, []).append((tr.first, tr.end))
+    (ref,) = [ln for ln in layout.wide if ln.kind == "ref"]
+    assert (ref.source, ref.target) == ("T001", "T004")
+    # It leaves T001's left side and enters T004's right side, the head pointing left.
+    assert ref.points[0][0] == layout.xs_wide[col["T001"]]
+    assert ref.points[-1][0] == layout.xs_wide[col["T004"]] + CARD_W
+    # Across the columns between, its run is off every card there.
+    for (x0, y0), (x1, y1) in zip(ref.points, ref.points[1:], strict=False):
+        for t in ("T002", "T003"):
+            left = layout.xs_wide[col[t]]
+            top = layout.cards[t][1]
+            if y0 == y1 and min(x0, x1) < left + CARD_W and max(x0, x1) > left:
+                assert not top <= y0 <= top + 62, (t, y0)

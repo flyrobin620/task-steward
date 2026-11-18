@@ -209,49 +209,48 @@ padding:4px 8px;white-space:nowrap}
 .views .ghost:first-child{border-radius:8px 0 0 8px;margin-left:0}
 .views .ghost:last-child{border-radius:0 8px 8px 0}
 .tools[data-view=flow] .board-only{display:none}
-/* The task flow (DN006 §8.10, T273): lanes by repository, newest on the left, arrows to what a
-   task depends on. The script sets each node's grid cell from the layout of the relations shown
-   and whether the archived tasks are in (T280); .out leaves a node or lane out of that layout. */
+/* The task flow (DN006 §8.10): lanes by repository, dependencies first and the newest further
+   left; tsw places every card and routes every line for the choices made (T304), the script
+   sets their positions; .out leaves a card out of the layout of the current choice. */
 .flow{display:grid;gap:8px}
 .flow-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:12px;color:var(--muted)}
 .flow-bar label{display:flex;align-items:center;gap:5px;color:var(--ink);font-size:13px}
+.flow-bar .shape{display:inline-flex;gap:10px}
 .zoom{min-width:3.5em}
-.legend{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 8px}
+.legend{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 10px}
 .legend svg{vertical-align:middle}
-.legend .lg-rel{gap:3px;font-size:12px;color:var(--muted);cursor:pointer}
+.legend .lg-rel,.legend .lg-item{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:var(--muted)}
+.legend .lg-rel{cursor:pointer}
 .legend .lg-rel:has(input:not(:checked)){opacity:.55}
-.lg-item{display:inline-flex;align-items:center;gap:5px}
+.lg-dir{font-size:12px;color:var(--muted)}
 .lg{stroke:var(--muted);stroke-width:2}.lg.fu{stroke:#0891b2;stroke-dasharray:4 3}
 .lg.ref{stroke:#a855f7;stroke-dasharray:1 3;stroke-linecap:round}
-.lg-h{fill:var(--muted)}
+.lg-h{fill:var(--muted)}.lg-h.fu{fill:#0891b2}.lg-h.ref{fill:#a855f7}
 .lg-ctx{display:inline-block;width:18px;height:11px;border:1px dashed var(--muted);border-radius:3px;opacity:.6}
 .flow-scroll{overflow:auto;max-height:78vh;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
 /* clip, not hidden: the lane names stick to the scrolling area, not to this box. */
 .flow-size{position:relative;overflow:clip}
-.flow-grid{position:relative;display:grid;width:max-content;transform-origin:0 0;
-grid-template-columns:minmax(110px,max-content) repeat(var(--cols),auto);grid-auto-rows:auto;padding:0 12px 12px 0}
-.flow-grid>.lane{grid-column:1/-1;grid-row:var(--r0)/var(--r1);border-top:1px solid var(--line);
-background:hsl(var(--h) 60% 50%/.05);z-index:0}
-.flow-grid>.lane-name{grid-column:1;grid-row:var(--r0)/var(--r1);position:sticky;left:0;z-index:4;
-padding:8px 10px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:650;
-color:hsl(var(--h) 62% 40%);background:var(--panel);border-top:1px solid var(--line);
-border-right:3px solid hsl(var(--h) 62% 46%)}
-.flow-grid>.col-h{grid-row:1;position:relative;z-index:2;padding:6px 10px 4px;font:600 11px/1.3 ui-monospace,Consolas,monospace;
+.flow-grid{position:relative;display:flex;align-items:flex-start;width:max-content;transform-origin:0 0;padding:0 12px 12px 0}
+.flow-names{position:sticky;left:0;z-index:4;flex:none;width:130px;background:var(--panel)}
+.flow-names>.lane-name{position:absolute;left:0;right:0;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;
+white-space:nowrap;font-size:12px;font-weight:650;color:hsl(var(--h) 62% 40%);background:var(--panel);
+border-top:1px solid var(--line);border-right:3px solid hsl(var(--h) 62% 46%)}
+.flow-canvas{position:relative;flex:none}
+.flow-canvas>.lane{position:absolute;left:0;right:0;border-top:1px solid var(--line);background:hsl(var(--h) 60% 50%/.05);z-index:0}
+.flow-canvas>.col-h{position:absolute;top:0;z-index:2;padding:8px 0 0;font:600 11px/1.3 ui-monospace,Consolas,monospace;
 color:var(--muted);text-align:center;white-space:nowrap}
-.fnode{grid-column:var(--gc);grid-row:var(--gr);position:relative;z-index:2;display:grid;
-grid-template-columns:auto 1fr;gap:0 6px;align-content:start;width:178px;margin:7px 14px;padding:5px 8px;
+.fnode{position:absolute;z-index:2;display:grid;grid-template-columns:auto minmax(0,auto) minmax(0,1fr);grid-template-rows:auto 1fr;gap:0 6px;
+align-content:start;overflow:hidden;padding:5px 8px;
 border:1px solid color-mix(in srgb,var(--c) 45%,var(--line));border-left:4px solid var(--c);border-radius:8px;
 background:var(--card);color:var(--ink);text-decoration:none;font-size:12px;line-height:1.35;box-shadow:var(--shadow)}
-.flow-grid>.out{display:none}
+.flow-canvas>.out{display:none}
 a.fnode:hover{border-color:var(--c)}
-.fnode .fid{font:700 12px/1.35 ui-monospace,Consolas,monospace}
-.fnode .fst{justify-self:end;color:color-mix(in srgb,var(--c) 78%,var(--tint));font-size:11px;white-space:nowrap}
+.fnode .fid{font:700 12px/1.35 ui-monospace,Consolas,monospace;white-space:nowrap}
+.fnode .ftime{min-width:0;overflow:hidden;font:10px/1.6 ui-monospace,Consolas,monospace;color:var(--muted);white-space:nowrap}
+.fnode .fst{justify-self:end;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;color:color-mix(in srgb,var(--c) 78%,var(--tint));font-size:11px;white-space:nowrap}
 .fnode .ftitle{grid-column:1/-1;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .fnode.ctx{opacity:.5;border-style:dashed;box-shadow:none}
 .fnode.st-archived{background:var(--chip)}
-/* A track (T278 revision 4): an empty row a task's lines spanning columns run on; as tall as a
-   card, so the line runs at the height of a card's middle. */
-.ftrack{grid-column:var(--c0)/var(--c1);grid-row:var(--r);height:61px;margin:7px 0;pointer-events:none}
 .flow-edges{position:absolute;left:0;top:0;z-index:1;pointer-events:none;overflow:visible}
 .edge{--e:color-mix(in srgb,var(--muted) 75%,transparent)}
 .edge.fu{--e:#0891b2}
@@ -261,7 +260,7 @@ a.fnode:hover{border-color:var(--c)}
 .edge.ref .line{stroke-dasharray:1.5 3.5;stroke-linecap:round}
 .edge .head{fill:var(--e);stroke:none}
 .edge.ctx{opacity:.45}
-.flow-grid.hl>.fnode:not(.on){opacity:.22}
+.flow-grid.hl .fnode:not(.on){opacity:.22}
 .flow-grid.hl .edge:not(.on){opacity:.1}
 .flow-grid.hl .edge.on{--e:var(--link);opacity:1}
 .flow-grid.hl .edge.fu.on{--e:#0891b2}

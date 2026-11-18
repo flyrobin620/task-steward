@@ -89,8 +89,10 @@ def test_recorded_keywords_win_and_go_stale_with_a_new_revision_or_outputs(home:
         keywords=["CSV 导出", "流式写出", "下载链接过期"],
         stage="intake",
     )
-    # Describing a task is not activity in it.
+    # Describing a task is not activity in it, but it is the task's latest ledger record, which
+    # the task flow orders by (T304).
     assert h.task("T001")["last_activity"] == before
+    assert h.task("T001")["last_record"] == "2026-11-06T00:00:00Z"
     svc = service(h)
     card = svc.catalog(ORCH_READER, {"task_ids": ["T001"]})["pinned"][0]
     assert card["keywords"] == ["CSV 导出", "流式写出", "下载链接过期"]

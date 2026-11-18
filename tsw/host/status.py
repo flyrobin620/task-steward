@@ -772,6 +772,7 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
                 str(t["status"]),
                 int(t["registered_seq"]),
                 str(t["last_activity"]),
+                str(t["last_record"] or ""),
             )
             for t in tasks
         ],
