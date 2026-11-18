@@ -523,21 +523,25 @@
         const pt = ([x, y]) => `${X(x).toFixed(1)},${Y(y).toFixed(1)}`;
         let d = `M${pt(P[0])}`;
         if (state.shape === "curve") {
+          // Every turn (a horizontal run, a vertical one in the line's own channel, a horizontal
+          // run) becomes a curve from the gap's edge, through the channel, to the gap's other
+          // edge (the same edge for a U-turn); the runs between stay straight.
+          let pen = P[0];
+          const to = q => {
+            if (Math.abs(q[0] - pen[0]) > 0.05 || Math.abs(q[1] - pen[1]) > 0.05) d += ` L${pt(q)}`;
+            pen = q;
+          };
           for (let i = 1; i < n; i++) {
-            const [x0, y0] = P[i - 1], [x1] = P[i];
-            const turns = i + 1 < n && P[i + 1][0] === x1 && x0 !== x1;
-            if (!turns) { d += ` L${pt(at(i))}`; continue; }
-            // Out of the horizontal run at the gap's edge, through the channel, into the next
-            // run at the gap's other edge (the same edge for a U-turn).
-            const [g0, g1] = gapAt(x1);
-            const y1 = P[i + 1][1];
-            const next = P[i + 2] || P[i + 1];
-            const from = x0 < x1 ? g0 : g1, to = next[0] < x1 ? g0 : g1;
-            if (Math.abs(from - x0) > 0.05) d += ` L${pt([from, y0])}`;
-            const last = i + 2 === n - 1 && Math.abs(next[0] - to) < 0.05;
-            d += ` C${pt([x1, y0])} ${pt([x1, y1])} ${pt(last ? [tip, y1] : [to, y1])}`;
-            if (i + 2 < n && !last && Math.abs(next[0] - to) > 0.05) d += ` L${pt(at(i + 2))}`;
-            i += 2;
+            const [x, y] = P[i];
+            if (!(i + 1 < n && P[i + 1][0] === x && P[i - 1][1] === y)) { to(at(i)); continue; }
+            const [g0, g1] = gapAt(x);
+            const y1 = P[i + 1][1], next = P[i + 2] || P[i + 1];
+            const from = P[i - 1][0] < x ? g0 : g1, into = next[0] < x ? g0 : g1;
+            to([from, y]);
+            const end = i + 2 === n - 1 && Math.abs(next[0] - into) < 0.05 ? [tip, y1] : [into, y1];
+            d += ` C${pt([x, y])} ${pt([x, y1])} ${pt(end)}`;
+            pen = end;
+            i += 1;  // the next point starts the run after the turn (or the next turn)
           }
         } else {
           for (let i = 1; i < n - 1; i++) {
