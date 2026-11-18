@@ -205,7 +205,7 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一
 | 主会话 | `handoff_resolve` `input_relay` | 转交后的 T12 与转达（DN006 §8.1b） |
 | 主会话 | `follow_up_record` `follow_up_update` `follow_up_convert` `follow_up_dismiss` | follow-up 的记录、修改、转为任务（含 T01）与驳回（DN002 §5.7） |
 | 主会话 | `routine_start` `routine_bind` `routine_detached` `channel_sent` | 启动、绑定、分离例行会话；登记 Teams 卡片（DN006 §8.7、§8.9） |
-| 主会话 | `session_check` `session_record` | worker 会话的标题与验收后归档：比较当前标题、记录改名与归档回执（DN002 §5.8），不改变任务状态 |
+| 主会话 | `session_check` `session_record` | worker 会话的标题与归档：比较当前标题、记录改名与归档回执（DN002 §5.8），不改变任务状态 |
 | 例行会话 | `routine_board` `routine_run` `routine_armed` | 运行例行表：转交到期问题（`by: system`）、取出 Teams 答复转给主会话、定时任务的设定与续期（DN006 §8.9） |
 
 主会话的写工具都要求持有调度租约（G-LEASE）；worker 工具要求调用者就是该任务当前 attempt 绑定的会话；例行工具要求调用者就是当前代次绑定的例行会话。
