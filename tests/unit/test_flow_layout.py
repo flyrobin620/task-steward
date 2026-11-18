@@ -381,10 +381,12 @@ def test_the_choices_the_page_offers() -> None:
         live = layouts[layout_key(False, chosen)]
         every = layouts[layout_key(True, chosen)]
         assert set(every.cards) == {t.task_id for t in tasks}
-        # Without the archived tasks: those joined to a board task by any relation are in, so
-        # that showing a relation moves no card (the page shows them as the context of the
-        # relations shown only).
-        assert set(live.cards) == {f"T{n:03d}" for n in range(1, 9)}, chosen
+        # Without the archived tasks: those a dependency, or a follow-up shown, joins to a board
+        # task are context; a reference never makes context (the user's choice, T304).
+        expected = (
+            {f"T{n:03d}" for n in range(4, 9)} | {"T001"} | ({"T002"} if "fu" in chosen else set())
+        )
+        assert set(live.cards) == expected, chosen
         kinds = {ln.kind for ln in every.lines}
         assert kinds == ({"dep", "fu"} if "fu" in chosen else {"dep"}), chosen
     # References do not change where the cards are: one layout for both, four in all.
@@ -394,8 +396,7 @@ def test_the_choices_the_page_offers() -> None:
             is layouts[layout_key(everything, ("fu",))]
         )
         assert layouts[layout_key(everything, ("ref",))] is layouts[layout_key(everything, ())]
-    # Every archived task here is joined to a board task: with or without them is the same.
-    assert len({id(layout) for layout in layouts.values()}) == 2
+    assert len({id(layout) for layout in layouts.values()}) == 4
     # Unticked, a follow-up neither draws a line nor keeps its two ends apart.
     col = {t: c for t, (c, _) in layouts["all:dep"].cards.items()}
     assert col["T008"] == col["T007"]

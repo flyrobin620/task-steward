@@ -144,7 +144,7 @@ def _referring_board(db: sqlite3.Connection) -> None:
 
 
 @mark.use_case("UC-DIRECT-005")
-def test_the_flow_draws_references_and_keeps_referenced_archived_tasks_as_context(
+def test_the_flow_draws_references_but_they_make_no_context(
     conn: sqlite3.Connection,
 ) -> None:
     _referring_board(conn)
@@ -154,17 +154,16 @@ def test_the_flow_draws_references_and_keeps_referenced_archived_tasks_as_contex
     assert 'data-refs="T001 T004"' in t5 and 'data-deps=""' in t5
     assert 'data-refs="T004"' in _node(flow, "T002")
     assert 'data-refs="T005"' in _node(flow, "T006")
-    # Archived tasks joined to a board task by a reference, either way, are in the layout
-    # without the archived tasks, like those joined by a dependency or a follow-up; an
-    # unrelated one is not. The script shows them as context only while the references are
-    # shown (they are not by default), and keeps their places either way.
+    # References never make an archived task context, shown or not (the user's choice, T304):
+    # the archived tasks referenced are only in the layout with every task.
     layouts = flow_layouts(page)
     live = layouts["live:dep,fu,ref"]["cells"]
-    assert {"T001", "T002", "T006"} <= set(live) and "T003" not in live
-    # References never move a card (T304): one layout whether shown or not.
+    assert not {"T001", "T002", "T003", "T006"} & set(live)
+    assert {"T001", "T002", "T003", "T006"} <= set(layouts["all:dep,fu,ref"]["cells"])
+    # References never move a card: one layout whether shown or not.
     assert layouts["live:dep,fu,ref"]["set"] == layouts["live:dep,fu"]["set"]
     assert layouts["all:dep,fu,ref"]["set"] == layouts["all:dep,fu"]["set"]
-    assert "for (const id of joined.ref.get(n.dataset.id))" in SCRIPT
+    assert 'const kinds = showing().filter(r => r !== "ref");' in SCRIPT
     # Their routes run from the referenced task to the one referencing it, in the hover routes
     # (the gaps as they are) and in the shown ones (the gaps widened).
     for group in ("peek", "wide"):

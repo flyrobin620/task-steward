@@ -322,7 +322,7 @@
       const KIND = ["dep", "fu", "ref"];
       const ZOOMS = [0.3, 0.4, 0.5, 0.6, 0.75, 0.9, 1, 1.15, 1.3, 1.5];
       let zoom = Number(store.get("zoom")) || 1;
-      let shown = new Set(), room = new Set(), set = null, peek = "";
+      let shown = new Set(), set = null, peek = "";
       // Each card shows the time of its latest ledger record, in the browser's time zone.
       const clock = new Intl.DateTimeFormat(undefined, {month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false});
       const when = value => {
@@ -350,7 +350,8 @@
           box.checked = box.dataset.rel === "ref" ? state.refs : !state.hide.includes(box.dataset.rel);
         }
         for (const radio of pane.querySelectorAll("input[name=flow-shape]")) radio.checked = radio.value === state.shape;
-        const kinds = showing();
+        // References never make a task context (T304: showing them moves no card).
+        const kinds = showing().filter(r => r !== "ref");
         near = new Map(nodes.map(n => [n.dataset.id, new Set(kinds.flatMap(r => [...joined[r].get(n.dataset.id)]))]));
         const w = words();
         const matched = new Set(nodes.filter(n => inLayout(n)
@@ -364,17 +365,6 @@
           }
         }
         shown = new Set([...matched, ...context]);
-        // The places kept for the cards the references would add as context: showing the
-        // references (or not) never moves a card.
-        room = new Set(shown);
-        if (!state.refs) {
-          for (const n of matched) {
-            for (const id of joined.ref.get(n.dataset.id)) {
-              const other = nodeById.get(id);
-              if (inLayout(other)) room.add(other);
-            }
-          }
-        }
         for (const n of nodes) {
           n.hidden = !shown.has(n);
           n.classList.toggle("ctx", context.has(n));
@@ -396,14 +386,14 @@
         return {xs: wide ? set.xw : set.xs, gaps: wide ? set.gw : set.gaps, lines: decode(group, true),
           // Every line between cards shown, the references included whether drawn or not: what
           // closes up does not depend on them, so showing or hovering never moves a card.
-          every: decode(wide ? (set.wide || set.lines) : (set.peek || set.lines), false, room)};
+          every: decode(wide ? (set.wide || set.lines) : (set.peek || set.lines), false)};
       }
-      function decode(group, drawn, among = shown) {
+      function decode(group, drawn) {
         const wide = state.refs;
         const out = [];
         for (const row of group) {
           const kind = KIND[row[0]], a = order[row[1]], b = order[row[2]];
-          if (!among.has(a) || !among.has(b)) continue;
+          if (!shown.has(a) || !shown.has(b)) continue;
           if (drawn && kind === "ref" && !wide && peek !== a.dataset.id && peek !== b.dataset.id) continue;
           // x0, y0, then the coordinate each move changes: x, y, x, ...
           const pts = [[row[3], row[4]]];
@@ -431,11 +421,9 @@
       function draw() {
         if (pane.hidden || !set) return;
         const {xs, gaps, lines, every} = routes();
-        const cols = new Map(), used = new Set();
-        for (const n of room) {
+        const cols = new Map();
+        for (const n of shown) {
           const c = set.cards[index.get(n.dataset.id)][0];
-          used.add(c);
-          if (!shown.has(n)) continue;
           if (!cols.has(c)) cols.set(c, []);
           cols.get(c).push(n);
         }
@@ -444,17 +432,17 @@
         const reach = every.map(l => [Math.min(...l.pts.map(p => p[0])), Math.max(...l.pts.map(p => p[0]))]);
         const xSpans = [];
         for (let c = 0; c < xs.length; c++) {
-          if (used.has(c)) continue;
+          if (cols.has(c)) continue;
           const g0 = xs[c] + W, g1 = g0 + gaps[c];
           const crossed = reach.some(([lo, hi]) => lo < g1 && hi > g0);
           xSpans.push([xs[c], crossed ? g0 : g1]);
         }
-        const lanesShown = new Set(Array.from(room, n => n.dataset.repo));
+        const lanesShown = new Set(Array.from(shown, n => n.dataset.repo));
         // Heights: what a card shown, a line's horizontal run or a lane's name needs is kept,
         // with some room around it; the rest closes up (a lane without a card shown entirely).
         const PAD = 16;
         const kept = [[0, layouts.head]];
-        for (const n of room) {
+        for (const n of shown) {
           const top = set.cards[index.get(n.dataset.id)][1];
           kept.push([top - PAD, top + H + PAD]);
         }

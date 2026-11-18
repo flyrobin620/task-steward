@@ -409,13 +409,16 @@ def test_the_dashboard_renders_markdown_shows_references_and_the_index_card(
     h.run("task_dispatch", task_id="T003", workdir="~/wt/T003", user_turn=True, read_set=["T001"])
     handed_back(h)
     dashboard.cookie = f"tsw_status_{dashboard.port}={dashboard.token}"
-    # The flow draws the references; the archived tasks referenced are context by default.
+    # The flow draws the references; the archived tasks referenced are not context (T304),
+    # only in the layout with every task.
     page = dashboard.request("GET", "/")[2].decode("utf-8")
     node = re.search(r'<a class="fnode[^"]*" data-id="T003"[^>]*>', page)
     assert node and 'data-refs="T001 T002"' in node.group(0)
-    cells = flow_layouts(page)["live:dep,fu,ref"]["cells"]
+    layouts = flow_layouts(page)
     for tid in ("T001", "T002"):
-        assert re.search(rf'<a class="fnode[^"]*" data-id="{tid}"', page) and tid in cells, tid
+        assert re.search(rf'<a class="fnode[^"]*" data-id="{tid}"', page), tid
+        assert tid in layouts["all:dep,fu,ref"]["cells"], tid
+        assert tid not in layouts["live:dep,fu,ref"]["cells"], tid
     # The task view lists them, and its index card says the index is not built, without
     # building it.
     view = dashboard.request("GET", "/tasks/T003")[2].decode("utf-8")

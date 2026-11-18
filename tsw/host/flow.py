@@ -801,12 +801,12 @@ def flow_layouts(
 ) -> dict[str, Layout]:
     """The layouts of the task flow by :func:`layout_key`, for every choice the page offers.
 
-    A follow-up not shown does not keep its two ends apart; a reference never moves a card. The
-    layout without the archived tasks (``live``) has the tasks not archived and the archived
-    tasks any relation joins to one of them directly (the page shows such a task only while a
-    relation shown makes it context); the other (``all``) has every task. So there are four
-    layouts, the follow-ups shown or not, with or without the archived tasks; equal ones are
-    laid out once.
+    A follow-up not shown neither keeps its two ends apart nor makes an archived task context;
+    a reference never moves a card nor makes a task context (the user's choice of 2026-11-18,
+    T304). The layout without the archived tasks (``live``) has the tasks not archived and the
+    archived tasks a dependency, or a follow-up shown, joins to one of them directly; the other
+    (``all``) has every task. So there are four layouts, the follow-ups shown or not, with or
+    without the archived tasks; equal ones are laid out once.
     """
     relation: dict[str, Mapping[str, Iterable[str]]] = {
         "dep": depends_on,
@@ -826,16 +826,14 @@ def flow_layouts(
                     near[other].add(tid)
         joined[r] = near
     live = {t.task_id for t in tasks if t.status != "archived"}
-    context = frozenset(live | {o for near in joined.values() for t in live for o in near[t]})
     done: dict[tuple[frozenset[str], bool], Layout] = {}
     found: dict[str, Layout] = {}
     for chosen in relation_choices():
         for everything in (False, True):
-            # Without the archived tasks: those joined to a board task by any relation are in,
-            # so that showing a relation never moves a card; the page shows them only as the
-            # context of the relations shown.
-            ids = frozenset(known) if everything else context
             fu = "fu" in chosen
+            near = ("dep", "fu") if fu else ("dep",)
+            context = live | {o for r in near for t in live for o in joined[r][t]}
+            ids = frozenset(known) if everything else frozenset(context)
             key = (ids, fu)
             if key not in done:
                 done[key] = lay_out(

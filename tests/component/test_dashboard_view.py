@@ -62,12 +62,12 @@ def test_the_dispatch_read_set_and_the_goal_give_references_on_the_board(h: Harn
         r'<a class="fnode[^"]*" data-id="T004"[^>]*>', flow
     )
     assert node and 'data-refs="T001 T002"' in node.group(0)
-    # The archived tasks it references are context without the archived ones; T003 is not.
-    cells = flow_layouts(page)["live:dep,fu,ref"]["cells"]
-    for tid, live in (("T001", True), ("T002", True), ("T003", False)):
-        assert (tid in cells) is live, tid
-    # With the references unticked, they are no longer context (T280).
-    assert not {"T001", "T002"} & set(flow_layouts(page)["live:dep,fu"]["cells"])
+    # References never make the archived tasks they join context (T304): those are only in the
+    # layout with every task, references shown or not.
+    layouts = flow_layouts(page)
+    for key in ("live:dep,fu,ref", "live:dep,fu"):
+        assert not {"T001", "T002", "T003"} & set(layouts[key]["cells"]), key
+    assert {"T001", "T002", "T003"} <= set(layouts["all:dep,fu,ref"]["cells"])
 
 
 @mark.use_case("UC-DIRECT-005")
