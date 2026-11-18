@@ -1,7 +1,7 @@
 # Tool inputs and host tool results are untyped JSON walked field by field.
 # pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false
 # pyright: reportUnknownVariableType=false
-"""Worker session titles and the archive after acceptance (DN002 §5.8, T272).
+"""Worker session titles and their archive (DN002 §5.8, T272, T302).
 
 A session's title can only be changed by a session in the host, never by tsw itself, and the
 host does not tell whether the user set a title by hand: the Claude app only asks the user to
@@ -10,9 +10,9 @@ live test). So tsw records the title it gave each session, and the main session 
 session only while it still has that title. Any other title is the user's and is left alone.
 
 - ``base_title`` / ``creation_title``: the title ``attempt_start`` hands out.
-- ``wanted``: the title the task's state calls for; ``due`` lists the sessions whose title or
-  archive has not caught up (``attention`` ``sessions``, the routine job ``session-scan`` and
-  the orchestrator's Stop hook).
+- ``wanted``: the title the task's state calls for, a status prefix and the base; ``due``
+  lists the sessions whose title or archive has not caught up (``attention`` ``sessions``, the
+  routine job ``session-scan`` and the orchestrator's Stop hook).
 - ``session_check`` compares what ``get_session`` returned and says what to do next;
   ``session_record`` records what the host tool did. Neither changes a task's state.
 """
@@ -31,7 +31,6 @@ from tsw.events import EventDraft
 from tsw.machine.base import ToolEnv, flag, opt_text, text, tool
 from tsw.machine.model import attempt, task
 
-STANDBY_SUFFIX = "（待命）"
 BASE_LIMIT = 50  # characters of a default base title (task id and task title)
 # Attempt phases whose session may still be there and is tsw's to look after.
 WITH_SESSION = ("standby", "live", "stopped")
@@ -47,20 +46,23 @@ def base_title(task_id: str, task_title: str, given: str | None) -> str:
     return f"{task_id} {task_title}".strip()[:BASE_LIMIT].rstrip()
 
 
-def creation_title(base: str, purpose: str) -> str:
-    """The title a session is created with: a prestarted one says it is on standby."""
-    return f"{base}{STANDBY_SUFFIX}" if purpose == "prestart" else base
-
-
 def _prefixed(prefix: Any, base: str) -> str:
     chosen = str(prefix or "").strip()
     return f"{chosen} {base}" if chosen else base
 
 
+def creation_title(base: str, purpose: str, config: EffectiveConfig) -> str:
+    """The title a session is created with: a prestarted one says first that it is on standby
+    (``sessions.title_on_standby``, T302)."""
+    if purpose == "prestart":
+        return _prefixed(config.get("sessions.title_on_standby"), base)
+    return base
+
+
 def wanted(status: str, phase: str, base: str, config: EffectiveConfig) -> tuple[str, str]:
     """The title the task's state calls for, and why (DN002 §5.8)."""
     if phase == "standby":
-        return creation_title(base, "prestart"), "standby"
+        return creation_title(base, "prestart", config), "standby"
     if status == "accepted":
         return _prefixed(config.get("sessions.title_on_accept"), base), "accepted"
     if status == "cancelled":
@@ -80,38 +82,58 @@ def _rows(conn: sqlite3.Connection, where: str = "", args: tuple[Any, ...] = ())
     phases = ", ".join(f"'{p}'" for p in WITH_SESSION)
     # A closed attempt of a finished task may keep its session, for instance a standby session
     # closed before the task was cancelled (sessions.archive_on_archive false): it still gets
-    # its prefix. get_session tells whether it is still there.
+    # its prefix. get_session tells whether it is still there. An archived task's sessions
+    # still open are archived, never renamed (T302).
     return conn.execute(
         "SELECT s.*, a.phase, a.session_ref, t.status, t.revision FROM session_titles s "
         "JOIN attempts a ON a.task_id = s.task_id AND a.attempt = s.attempt "
         "JOIN tasks t ON t.task_id = s.task_id "
         f"WHERE a.session_ref IS NOT NULL AND (a.phase IN ({phases}) OR (a.phase = 'closed' "
         "AND t.status IN ('accepted', 'cancelled'))) "
-        f"AND t.status != 'archived' AND s.missing = 0 {where} "
+        f"AND s.missing = 0 {where} "
         "ORDER BY s.task_id, s.attempt",
         args,
     ).fetchall()
 
 
+def archive_via(row: Mapping[str, Any], config: EffectiveConfig) -> str | None:
+    """The setting that has this session archived now, if any (DN002 §5.8): an accepted task's
+    with ``sessions.archive_on_accept``, an archived task's with ``sessions.archive_on_archive``
+    (T302). A closed attempt's session was disposed of already."""
+    if row["phase"] == "closed":
+        return None
+    if row["status"] == "accepted" and config.get("sessions.archive_on_accept"):
+        return "sessions.archive_on_accept"
+    if row["status"] == "archived" and config.get("sessions.archive_on_archive"):
+        return "sessions.archive_on_archive"
+    return None
+
+
 def _next(row: Mapping[str, Any], config: EffectiveConfig) -> dict[str, Any] | None:
-    """What a session still needs, if anything: its title first, then (accepted tasks with
-    ``sessions.archive_on_accept``) the archive. ``state`` is ``failed`` once a host tool failed
-    on exactly this step."""
-    title, reason = wanted(str(row["status"]), str(row["phase"]), str(row["base"]), config)
+    """What a session still needs, if anything: its title first, then the archive
+    (``archive_via``). An archived task's session is only archived, never renamed. ``state``
+    is ``failed`` once a host tool failed on exactly this step."""
     item: dict[str, Any] = {
         "task_id": row["task_id"],
         "attempt": row["attempt"],
         "session_id": row["session_ref"],
-        "reason": reason,
     }
+    via = archive_via(row, config)
+    if row["status"] == "archived":
+        if via is None:
+            return None
+        state = "failed" if row["archive_failed"] else "due"
+        return {**item, "reason": "archived", "action": "archive", "via": via, "state": state}
+    title, reason = wanted(str(row["status"]), str(row["phase"]), str(row["base"]), config)
+    item["reason"] = reason
     title_item = {**item, "action": "title", "title": title}
     open_title = row["user_title"] is None and title != row["known"]
     if open_title and row["failed_title"] != title:
         return {**title_item, "state": "due"}
-    archive = row["status"] == "accepted" and row["phase"] != "closed"
-    if archive and config.get("sessions.archive_on_accept"):
+    if via is not None:
         # Archived whatever became of the title: the user turned the archive on.
-        return {**item, "action": "archive", "state": "failed" if row["archive_failed"] else "due"}
+        state = "failed" if row["archive_failed"] else "due"
+        return {**item, "action": "archive", "via": via, "state": state}
     if open_title:
         return {**title_item, "state": "failed"}
     return None
@@ -175,8 +197,8 @@ def _event(row: Mapping[str, Any], **data: Any) -> EventDraft:
     )
 
 
-def _closed(row: Mapping[str, Any], evidence: str, disposition: str) -> EventDraft:
-    """``attempt.closed`` after the archive ``sessions.archive_on_accept`` asks for."""
+def _closed(row: Mapping[str, Any], evidence: str, disposition: str, via: str) -> EventDraft:
+    """``attempt.closed`` after the archive ``via`` (a ``sessions`` setting) asks for."""
     return EventDraft(
         type="attempt.closed",
         task_id=str(row["task_id"]),
@@ -186,7 +208,7 @@ def _closed(row: Mapping[str, Any], evidence: str, disposition: str) -> EventDra
             "attempt": row["attempt"],
             "evidence": evidence,
             "disposition": disposition,
-            "via": "sessions.archive_on_accept",
+            "via": via,
         },
     )
 
@@ -204,7 +226,7 @@ def _cmd(env: ToolEnv, op: str, inp: Mapping[str, Any], build: Any) -> Command:
     "session_check",
     "orchestrator",
     description=(
-        "worker 会话的标题与验收后归档（DN002 §5.8）：交上 get_session 的返回原样，tsw 比较当前"
+        "worker 会话的标题与归档（DN002 §5.8）：交上 get_session 的返回原样，tsw 比较当前"
         "标题与它记下的标题，返回下一步（rename / archive / none）；用户改过的标题、会话不存在、"
         "已是应有标题时直接记录，不再调用宿主工具"
     ),
@@ -231,10 +253,11 @@ def session_check(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             )
         if gone or (seen is not None and seen.get("isArchived") is True):
             output.update(action="none", outcome="missing")
-            closed = _closed(row, f"会话已不存在或已归档：{_evidence(raw)}", "missing")
-            if item["action"] == "archive":
+            via = archive_via(row, env.config)
+            gone_note = f"会话已不存在或已归档：{_evidence(raw)}"
+            if item["action"] == "archive" and via is not None:
                 # Nothing left to archive: the receipt says why (DN002 §5.8).
-                return [closed]
+                return [_closed(row, gone_note, "missing", via)]
             missing = _event(
                 row,
                 action=item["action"],
@@ -244,9 +267,8 @@ def session_check(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             )
             # Gone before its title was done: the archive it was still due is settled too, or
             # the attempt would stay live with no receipt (PR #43 review).
-            archive_due = row["status"] == "accepted" and row["phase"] != "closed"
-            if archive_due and env.config.get("sessions.archive_on_accept"):
-                return [missing, closed]
+            if via is not None:
+                return [missing, _closed(row, gone_note, "missing", via)]
             return [missing]
         if seen is None:
             raise rejected(
@@ -364,7 +386,7 @@ def session_record(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             )
         if ok:
             # The tool receipt of the configured disposition (DN002 §5.8, §6).
-            return [_closed(row, result[:EVIDENCE_CHARS], "archived")]
+            return [_closed(row, result[:EVIDENCE_CHARS], "archived", str(item["via"]))]
         return [
             _event(
                 row,

@@ -424,13 +424,13 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 | 任务取消时（T25） | `sessions.archive_on_archive`（`true`） | 可控的待命会话，在取消前处置（§5.6）；执行中的会话按 T25 先停止，取消后加“[已取消]”前缀并保留 |
 | 任务归档后（T24 自动归档、T26） | `sessions.archive_on_archive`（`true`） | 归档时仍保留的会话：阶段为 `standby` / `live` / `stopped` 的 attempt 的会话（验收后保留以便回看的、取消时停止后保留的）；不再改标题 |
 
-成功记 `attempt.closed`（工具回执，附 `disposition: archived` 与所依据的配置 `via`），失败（例如宿主拒绝归档正在工作或显示在屏幕上的会话）记 `attempt.session_updated`（`action: archive`，`outcome: failed`），会话不存在或已归档时同样记 `attempt.closed`（附原因）。用户改过标题不影响归档：归档是用户自己打开（或保持默认）的配置。`sessions.archive_on_accept` 为 `false` 时，验收后的会话留在侧栏供用户回看，直到任务归档（`policies.auto_archive_days`，默认 7 天无业务变化）才归档。
+成功记 `attempt.closed`（工具回执，附 `disposition: archived` 与所依据的配置 `via`），失败（例如宿主拒绝归档正在工作或显示在屏幕上的会话）记 `attempt.session_updated`（`action: archive`，`outcome: failed`），会话不存在或已归档时同样记 `attempt.closed`（附原因）。验收后归档失败过的会话，任务归档时重新列入一次（新的时机）。用户改过标题不影响归档：归档是用户自己打开（或保持默认）的配置。`sessions.archive_on_accept` 为 `false` 时，验收后的会话留在侧栏供用户回看，直到任务归档（`policies.auto_archive_days`，默认 7 天无业务变化）才归档。
 
 **已归档任务的会话回执**：已归档的任务不可变（§8 第 5 条），指的是任务状态、revision、目标、产出与决定。会话处置的回执（`attempt.session_updated`、`attempt.closed`）不属于这些：它们只记录宿主中会话的去向，不改变任务状态与 revision，也不算业务变化，所以任务归档之后仍可记录。T24 由 tsw 在会话之外执行，会话只能在归档之后由主会话处置；先处置会话、再归档任务的做法见附录 C。
 
 **事件**：`attempt.session_updated`（主会话，经工具记录），`action` 为 `title` 或 `archive`，`outcome` 如上（另有 `asked`：检查返回改名时记下要改成的标题，当时读到的标题既已认定是 tsw 的，也成为 tsw 记下的标题），附应有的标题、当时读到的标题、原因（`standby`、`dispatch`、`accepted`、`cancelled`；归档另有 `archived`）与工具结果原文。它不改变任务状态与 attempt 阶段；`title` 的 `renamed` / `already` 更新 tsw 记下的标题，`user_title` 与 `missing` 让这个 attempt 不再处理。
 
-**待处置清单与幂等**：`attention` 的 `sessions` 列出应有的标题与 tsw 记下的标题不同（且没有 `user_title`、`missing`，同一应有标题没有记过 `failed`），或应当归档还没有回执（同样没有记过 `failed`）的 attempt：任务、attempt、会话、动作、应有的标题与原因；记过 `failed` 的单独标明，不再提醒，主会话可以再执行一次。清单从账本算出，所以验收来自哪个渠道都一样。重复执行是安全的：每次先读当前标题，已是应有标题的只记 `already`。改名成功之后、记录回执之前任务状态变了（例如用户这时在终端验收），回执照样记下刚改成的标题（须是记为 `asked` 的那个；原因记为 `superseded`），清单随后列出新的应有标题；用户改过标题之后不再接受改名回执。
+**待处置清单与幂等**：`attention` 的 `sessions` 列出应有的标题与 tsw 记下的标题不同（且没有 `user_title`、`missing`，同一应有标题没有记过 `failed`），或应当归档还没有回执（同样没有记过 `failed`）的 attempt：任务、attempt、会话、动作、应有的标题与原因（归档项另有所依据的配置 `via`）；记过 `failed` 的单独标明，不再提醒，主会话可以再执行一次。清单从账本算出，所以验收来自哪个渠道都一样。重复执行是安全的：每次先读当前标题，已是应有标题的只记 `already`。改名成功之后、记录回执之前任务状态变了（例如用户这时在终端验收），回执照样记下刚改成的标题（须是记为 `asked` 的那个；原因记为 `superseded`），清单随后列出新的应有标题；用户改过标题之后不再接受改名回执。
 
 **谁执行、何时执行**：主会话（持有调度租约时）按 `attention` 的 `sessions` 逐项执行，改名与归档都不需要用户 turn（不创建会话）：
 

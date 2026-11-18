@@ -40,14 +40,17 @@ def test_titles_handed_out() -> None:
     assert titles.base_title("T001", "任务", None) == "T001 任务"
     long = titles.base_title("T001", "很" * 80, "")
     assert long.startswith("T001 ") and len(long) == titles.BASE_LIMIT
-    assert titles.creation_title("T001 x", "prestart") == "T001 x（待命）"
-    assert titles.creation_title("T001 x", "dispatch") == "T001 x"
+    # The status comes first, like the other prefixes (T302).
+    assert titles.creation_title("T001 x", "prestart", config()) == "[待命] T001 x"
+    assert titles.creation_title("T001 x", "dispatch", config()) == "T001 x"
+    assert titles.creation_title("T001 x", "prestart", config(title_on_standby="")) == "T001 x"
 
 
 @pytest.mark.parametrize(
     ("status", "phase", "wanted"),
     [
-        ("ready", "standby", ("T001 x（待命）", "standby")),
+        ("ready", "standby", ("[待命] T001 x", "standby")),
+        ("waiting_dependency", "standby", ("[待命] T001 x", "standby")),
         ("in_progress", "live", ("T001 x", "dispatch")),
         ("done", "live", ("T001 x", "dispatch")),
         ("accepted", "live", ("[已验收] T001 x", "accepted")),
@@ -59,7 +62,8 @@ def test_the_title_a_state_calls_for(status: str, phase: str, wanted: tuple[str,
 
 
 def test_prefixes_come_from_the_configuration() -> None:
-    custom = config(title_on_accept="✅", title_on_cancel="")
+    custom = config(title_on_accept="✅", title_on_cancel="", title_on_standby="⏸")
+    assert titles.wanted("ready", "standby", "T001 x", custom) == ("⏸ T001 x", "standby")
     assert titles.wanted("accepted", "live", "T001 x", custom) == ("✅ T001 x", "accepted")
     assert titles.wanted("cancelled", "live", "T001 x", custom) == ("T001 x", "cancelled")
 
@@ -95,8 +99,54 @@ def test_what_a_session_still_needs() -> None:
         row(status="accepted", known="[已验收] T001 短标题", archive_failed=1), archive
     )
     assert gave_up is not None and gave_up["state"] == "failed"
-    # Only accepted tasks are archived.
+    assert then["via"] == "sessions.archive_on_accept"
+    # A cancelled task's session is not archived until the task is.
     assert titles._next(row(status="cancelled", known="[已取消] T001 短标题"), archive) is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_an_archived_tasks_session_is_archived_not_renamed() -> None:
+    # T302: once the task is archived its sessions still open are archived
+    # (sessions.archive_on_archive, on by default), whatever their title.
+    plain = config()
+    for kept in (
+        {"phase": "live", "known": "[已验收] T001 短标题"},
+        {"phase": "live", "known": "T001 短标题"},  # its prefix never came: no rename now
+        {"phase": "stopped", "user_title": "我的"},
+        {"phase": "standby", "known": "T001 短标题（待命）"},
+    ):
+        item = titles._next(row(status="archived", **kept), plain)  # pyright: ignore[reportPrivateUsage]
+        assert item is not None
+        assert (item["action"], item["reason"], item["via"], item["state"]) == (
+            "archive",
+            "archived",
+            "sessions.archive_on_archive",
+            "due",
+        )
+        assert "title" not in item
+    failed = titles._next(row(status="archived", archive_failed=1), plain)  # pyright: ignore[reportPrivateUsage]
+    assert failed is not None and failed["state"] == "failed"
+    # Turned off, or disposed of already (closed): nothing.
+    off = config(archive_on_archive=False)
+    assert titles._next(row(status="archived"), off) is None  # pyright: ignore[reportPrivateUsage]
+    assert titles._next(row(status="archived", phase="closed"), plain) is None  # pyright: ignore[reportPrivateUsage]
+    # archive_on_accept alone does not archive an archived task's session.
+    only_accept = config(archive_on_accept=True, archive_on_archive=False)
+    assert titles._next(row(status="archived"), only_accept) is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_standby_title_of_the_old_form_is_renamed() -> None:
+    # A standby session from before T302 still shows the title tsw gave it, "<base>（待命）": it
+    # is renamed to the prefixed form; a title the user set stays.
+    old = titles._next(row(status="ready", phase="standby", known="T001 短标题（待命）"), config())  # pyright: ignore[reportPrivateUsage]
+    assert old is not None
+    assert (old["action"], old["title"], old["state"]) == ("title", "[待命] T001 短标题", "due")
+    assert (
+        titles._next(  # pyright: ignore[reportPrivateUsage]
+            row(status="ready", phase="standby", known="T001 短标题（待命）", user_title="我的"),
+            config(),
+        )
+        is None
+    )
 
 
 def test_what_get_session_returned() -> None:
@@ -128,12 +178,22 @@ def test_the_session_scan_message() -> None:
                 "session_id": "w-2",
                 "action": "archive",
                 "reason": "accepted",
+                "via": "sessions.archive_on_accept",
+            },
+            {
+                "task_id": "T003",
+                "attempt": "a1",
+                "session_id": "w-3",
+                "action": "archive",
+                "reason": "archived",
+                "via": "sessions.archive_on_archive",
             },
         ]
     )
     assert text.startswith("TaskSteward 例行项 session-scan")
     assert "T001 a1，worker 会话 w-1：改标题为“[已验收] T001 x”（任务已验收）" in text
     assert "T002 a2，worker 会话 w-2：按 sessions.archive_on_accept 归档（任务已验收）" in text
+    assert "T003 a1，worker 会话 w-3：按 sessions.archive_on_archive 归档（任务已归档）" in text
 
 
 def test_titles_that_count_as_tsws() -> None:

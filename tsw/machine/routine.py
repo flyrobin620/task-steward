@@ -1321,7 +1321,9 @@ def run_next(chat_id: str, step: Mapping[str, Any] | None, host: str) -> dict[st
 
 
 def _scan_key(item: Mapping[str, Any]) -> str:
-    return "/".join(str(item.get(k) or "") for k in ("task_id", "attempt", "action", "title"))
+    key = "/".join(str(item.get(k) or "") for k in ("task_id", "attempt", "action", "title"))
+    # An archive due for a new reason (the task archived after acceptance) is new (T302).
+    return f"{key}/{item['via']}" if item.get("via") else key
 
 
 def session_scan(
@@ -1373,20 +1375,22 @@ def session_scan_text(items: Sequence[Mapping[str, Any]]) -> str:
         "cancelled": "任务已取消",
         "dispatch": "已派发",
         "standby": "待命",
+        "archived": "任务已归档",
     }
     lines = [
         f"- {item['task_id']} {item['attempt']}，worker 会话 {item['session_id']}："
         + (
             f"改标题为“{item['title']}”"
             if item["action"] == "title"
-            else "按 sessions.archive_on_accept 归档"
+            else f"按 {item.get('via') or 'sessions.archive_on_accept'} 归档"
         )
         + f"（{reasons.get(str(item['reason']), str(item['reason']))}）"
         for item in items
     ]
     head = (
         "TaskSteward 例行项 session-scan：以下 worker 会话的标题或归档还没跟上任务状态"
-        "（例如用户在终端或 STATUS 应用中验收、取消了任务）。按 orchestrate skill 逐个处理："
+        "（例如用户在终端或 STATUS 应用中验收、取消了任务，或任务已自动归档）。"
+        "按 orchestrate skill 逐个处理："
         "get_session → session_check → 按返回改名或归档 → session_record；"
         "用户改过的标题 session_check 会直接跳过。"
     )

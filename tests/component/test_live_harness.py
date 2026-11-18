@@ -772,8 +772,8 @@ def test_change_e2e_checks_pass_on_a_real_change_and_fail_without_it(
 def test_title_e2e_checks_read_the_receipts_not_the_requests(
     home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Checks T, D, U, F, A and X of title-e2e against the ledger the real tools write; a rename
-    asked for but never recorded (``asked``) is not a done rename (PR #43 review)."""
+    """Checks T, D, U, F, A, X and R of title-e2e against the ledger the real tools write; a
+    rename or archive asked for but never recorded is not done (PR #43 review)."""
     from tsw import direct  # noqa: PLC0415
 
     monkeypatch.setattr(lease, "this_machine", lambda: MACHINE)
@@ -816,7 +816,7 @@ def test_title_e2e_checks_read_the_receipts_not_the_requests(
         h.run("task_dispatch", task_id=task, workdir=f"work/{task}/a1")
         h.run("attempt_deliver", task_id=task)
         workers[task] = Caller(role="worker", session_id=f"w-{task}", machine=MACHINE)
-        renamed(task, f"w-{task}", f"{task} 短标题（待命）")
+        renamed(task, f"w-{task}", f"[待命] {task} 短标题")
     h.finalize(workers["T001"], "T001")
     h.submit(workers["T001"], "T001")
     h.accept("T001")
@@ -837,6 +837,9 @@ def test_title_e2e_checks_read_the_receipts_not_the_requests(
         worker_stopped=True,
     )
     h.run("session_check", task_id="T002", attempt="a1", observed=seen("w-T002", "我的 T002"))
+    h.run("task_archive", task_id="T002", user_source=h.source("T002", 1, "archive"))
+    out = h.run("session_check", task_id="T002", attempt="a1", observed=seen("w-T002", "我的 T002"))
+    assert out["action"] == "archive"
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     forward = {
@@ -869,7 +872,7 @@ def test_title_e2e_checks_read_the_receipts_not_the_requests(
         ]
         return {c["id"]: c["status"] for c in live.title_checks(run, evs)}
 
-    # Asked for, not yet done: A waits for the receipt.
+    # Asked for, not yet done: A and R wait for the receipts.
     assert ids() == {
         "T": "passed",
         "D": "passed",
@@ -877,6 +880,7 @@ def test_title_e2e_checks_read_the_receipts_not_the_requests(
         "F": "passed",
         "A": "failed",
         "X": "passed",
+        "R": "failed",
     }
     h.run(
         "session_record",
@@ -886,5 +890,13 @@ def test_title_e2e_checks_read_the_receipts_not_the_requests(
         title="[已验收] T001 短标题",
         ok=True,
         result='Renamed session w-T001 to "[已验收] T001 短标题" (was "T001 短标题").',
+    )
+    h.run(
+        "session_record",
+        task_id="T002",
+        attempt="a1",
+        action="archive",
+        ok=True,
+        result="Archived session w-T002.",
     )
     assert set(ids().values()) == {"passed"}

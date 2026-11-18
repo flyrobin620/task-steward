@@ -785,7 +785,7 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         # The title the session is created with, and the base the later titles are made of
         # (DN002 §5.8): tsw renames a session only while it still has the title tsw gave it.
         base = _titles.base_title(task_id, str(row["title"]), given_title)
-        session_title = _titles.creation_title(base, purpose)
+        session_title = _titles.creation_title(base, purpose, env.config)
         data: dict[str, Any] = {
             "attempt": attempt_id,
             "generation": generation,
