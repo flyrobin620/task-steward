@@ -59,21 +59,21 @@ worker 先在自己的会话里直接问用户（`ask_user`），你看不到问
 - 全部满足时 `task_accept`：逐项列出验收要求的结论与证据；同时 `task_summary`（`stage: acceptance`）按已读的任务书与交付补全关键词，`summary` 用一两句话写实际成果（做了什么、在哪里、PR / 产出）。之后告诉用户任务完成、等待人工验收，同时列出任务 `open` 的 follow-up（`task_read` 的 `follow_ups`：编号、类别、严重度、标题），问用户哪些转成任务、哪些驳回、哪些暂不处理；并按下一条把偏好候选交给用户。
 - 偏好候选（DN007 §6.3）：核验提交时看 `task_read` 的 `preference_scan`，`missing` 或 `stale` 时在 `task_accept` 之前自己补做：`preference_sources`（`task_id`，`report_path` 为提交中的报告），用 `Agent` 工具启动子代理（`subagent_type: "general-purpose"`，`prompt` 原样用返回的 `prompt`），再 `preference_candidates_record`（没有候选也调用）。`task_accept` 之后，把本任务 `preference_candidates` 中 `open` 的候选逐条交给用户：编号、原话、来源编号、建议的范围与主题，有 `supersedes` 建议的写出被替代偏好的原文；交给用户前按“配置与维护”中偏好的定义再看一遍，不符合的说明后建议不记。用户答复后：记录用 `preference_record`（`candidate` 为候选编号；`scope` / `topic` 按用户的意思，没说就用建议值；`supersedes` 只在用户同意替代时给；`user_source` 是用户这次答复的原话、target 为 `["preference", <scope>, "standing"]`；用户改了说法时 `text` 写新说法，否则不写）；不记用 `preference_candidate_dismiss`（`user_source` target 为 `["preference", <候选编号>, "dismiss"]`）。一条答复处理多条候选时逐条调用、引用同一段原话。用户没有答复的候选留在 `attention` 的 `preference_candidates` 中，下次再问；不代用户决定，也不因为没有答复就拒绝。
 - 用户明确验收或退回时 `user_accept` / `user_reject`，附用户原话与消息引用；不能以 worker 回执、自评或超时代替。用户也可以不经你，自己在终端运行 `tsw task accept` / `reject` / `cancel` 或在 STATUS 应用（`tsw status serve`）中点按钮：账本中会出现渠道为 `user-cli` / `status-app` 的 `task.user_accepted` 等事件，你不需要再登记；这两个渠道你不能使用。
-- 验收（`user_accept`）、取消（`task_cancel`）之后，同一轮按“会话的标题与归档”给 worker 会话加前缀（必要时归档）。用户在终端或 STATUS 应用中验收、取消的，例行会话的 `session-scan` 会发来消息，Stop hook 也会提醒，同样处理。
+- 验收（`user_accept`）、取消（`task_cancel`）、归档（`task_archive`）之后，同一轮按“会话的标题与归档”给 worker 会话加前缀或归档。用户在终端或 STATUS 应用中验收、取消的，以及 tsw 自动归档（T24）的任务，例行会话的 `session-scan` 会发来消息，Stop hook 也会提醒，同样处理。
 
 ## 会话的标题与归档（DN002 §5.8）
 
-tsw 记下它让每个 worker 会话使用的标题，并按任务状态算出应有的标题：待命“<基准>（待命）”，派发后“<基准>”，验收后“[已验收] <基准>”，取消后“[已取消] <基准>”（前缀取自 `sessions.title_on_accept` / `title_on_cancel`）；`sessions.archive_on_accept` 为 true 时，验收后还要归档会话。`attention` 的 `sessions` 列出还没跟上的会话（`state: due`；`failed` 的是宿主工具失败过的，不再提醒，可以再试一次）。改名与归档都不需要用户 turn。逐个处理 `state: due` 的项（一个会话可能先改标题、再归档，处理完一步后再看一次 `attention`）；`state: failed` 的项不自动重试，用户要求时才再试一次：
+tsw 记下它让每个 worker 会话使用的标题，并按任务状态算出应有的标题：状态都写在前面，待命“[待命] <基准>”，派发后“<基准>”，验收后“[已验收] <基准>”，取消后“[已取消] <基准>”（前缀取自 `sessions.title_on_standby` / `title_on_accept` / `title_on_cancel`）。会话的归档：`sessions.archive_on_accept` 为 true 时验收后归档；任务归档（自动归档或 `task_archive`）后按 `sessions.archive_on_archive`（默认 true）归档它还保留的会话，这时不再改标题。`attention` 的 `sessions` 列出还没跟上的会话（`state: due`；`failed` 的是宿主工具失败过的，不再提醒，可以再试一次）。改名与归档都不需要用户 turn。逐个处理 `state: due` 的项（一个会话可能先改标题、再归档，处理完一步后再看一次 `attention`）；`state: failed` 的项不自动重试，用户要求时才再试一次：
 
 1. `mcp__ccd_session_mgmt__get_session(session_id)`，把返回原样作为 `observed` 交给 `session_check`（`task_id`、`attempt`）；会话不存在时把报错原文作为 `observed` 并给 `missing: true`。
 2. 按 `session_check` 的 `action`：
    - `rename`：`mcp__ccd_session_mgmt__set_session_title(session_id, title)`，`title` 用返回的原样；再 `session_record`（`action: title`、同一个 `title`、`ok` 为是否改名成功、`result` 为工具返回原文）。
-   - `archive`：`mcp__ccd_session_mgmt__archive_session(session_id, reason: "任务已验收（sessions.archive_on_accept）")`，再 `session_record`（`action: archive`、`ok`、`result`）。
+   - `archive`：`mcp__ccd_session_mgmt__archive_session(session_id, reason)`，`reason` 按清单项写“任务已验收（sessions.archive_on_accept）”或“任务已归档（sessions.archive_on_archive）”（项的 `via`），再 `session_record`（`action: archive`、`ok`、`result`）。
    - `none`：tsw 已经记录（已是应有标题、用户改过标题、会话不存在），不用再做什么。
 3. 用户改过的标题（`outcome: user_title`）一律不动：不要自己改名，也不要问用户要不要改。宿主弹出确认、用户拒绝时，`session_record` 记 `ok: false`。工具失败、记了 `ok: false` 之后，这一项就停下，不要在同一轮反复重试。
 4. 改名成功后任务状态又变了（例如用户这时在终端验收），`session_record` 照样记下刚才改成的标题；之后 `attention` 会再列出新的应有标题。
 
-本版本之前创建的会话 tsw 没有记下标题，不在列表中，不要自己去改它们。
+T272 之前创建的会话 tsw 没有记下标题，不在列表中，不要自己去改或归档它们。T302 更新后，还用着旧标题“<基准>（待命）”的待命会话会列为改名，已归档任务保留的会话会一次列出较多归档项，照常逐个处理。
 
 ## follow-up（DN002 §5.7）
 

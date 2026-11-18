@@ -153,8 +153,9 @@ DEFAULTS: dict[str, Any] = {
         "name_pattern": "{task_id_lower}-{attempt}-g{generation}",
         "archive_on_accept": False,
         "archive_on_archive": True,
-        # Prefixes of a worker session's title once its task is accepted / cancelled (DN002 §5.8);
-        # an empty string adds none.
+        # Prefixes of a worker session's title while it is on standby and once its task is
+        # accepted / cancelled (DN002 §5.8); an empty string adds none.
+        "title_on_standby": "[待命]",
         "title_on_accept": "[已验收]",
         "title_on_cancel": "[已取消]",
     },
@@ -290,6 +291,7 @@ SCHEMA: dict[str, Any] = _obj(
         name_pattern=S,
         archive_on_accept=B,
         archive_on_archive=B,
+        title_on_standby=S,
         title_on_accept=S,
         title_on_cancel=S,
     ),

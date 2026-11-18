@@ -74,7 +74,7 @@ def delivered(tmp_path: Path) -> Path:
         user_turn=True,
         session_title=BASE,
     )
-    assert begun["session_title"] == f"{BASE}（待命）"
+    assert begun["session_title"] == f"[待命] {BASE}"
     ok(
         "attempt_reconcile",
         ORCH,
@@ -96,7 +96,7 @@ def test_the_orchestrator_renames_through_its_mcp_server(delivered: Path) -> Non
     assert (
         "attention 的 sessions" in reminder["reason"] and "T001 a1（改标题）" in reminder["reason"]
     )
-    session = {"sessionId": "w-1", "title": f"{BASE}（待命）", "isArchived": False}
+    session = {"sessionId": "w-1", "title": f"[待命] {BASE}", "isArchived": False}
     replies = mcp(
         home,
         "orch-1",
@@ -123,7 +123,7 @@ def test_the_orchestrator_renames_through_its_mcp_server(delivered: Path) -> Non
             action="title",
             title=BASE,
             ok=True,
-            result=f'Renamed session w-1 to "{BASE}" (was "{BASE}（待命）").',
+            result=f'Renamed session w-1 to "{BASE}" (was "[待命] {BASE}").',
         ),
         call(2, "attention"),
     )

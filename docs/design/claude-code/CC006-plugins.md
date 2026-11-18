@@ -1,6 +1,6 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`；T283 §11 自我更新的载入时机与生效方式，§12 Dashboard 常驻服务；T287 §10.2 受理与派发时检查长期偏好；T293 §6.2 teams-replies 列出最后修改时间、已判定消息记在 `teams_checked`）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T302 §9.2 待命前缀、任务归档后归档会话；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`；T283 §11 自我更新的载入时机与生效方式，§12 Dashboard 常驻服务；T287 §10.2 受理与派发时检查长期偏好；T293 §6.2 teams-replies 列出最后修改时间、已判定消息记在 `teams_checked`）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -269,18 +269,18 @@ DN002 §5.8 在 Claude app 上的做法（T272）。
 
 ### 9.2 主会话的做法
 
-- 创建会话：`start_session` 的 `title` 用 `attempt_start` 返回的 `session_title`（预启动带“（待命）”）。
+- 创建会话：`start_session` 的 `title` 用 `attempt_start` 返回的 `session_title`（预启动带“[待命]”前缀）。
 - 逐项处理 `attention` 的 `sessions`：
   1. `mcp__ccd_session_mgmt__get_session(session_id)`，原样交给 `session_check`（任务、attempt、`observed`）。不存在或已归档时 tsw 记 `missing`；当前标题已是应有标题时记 `already`；与 tsw 记下的标题不同时记 `user_title`。这三种都不再调用改名工具。
   2. `session_check` 返回 `rename` 时，`mcp__ccd_session_mgmt__set_session_title(session_id, title)`，再 `session_record`（`action: title`，`ok` 与工具结果原文）。
-  3. 返回 `archive` 时（`sessions.archive_on_accept`），`mcp__ccd_session_mgmt__archive_session(session_id, reason)`，再 `session_record`（`action: archive`）；成功记 `attempt.closed`。
+  3. 返回 `archive` 时（任务已验收且 `sessions.archive_on_accept`，或任务已归档且 `sessions.archive_on_archive`），`mcp__ccd_session_mgmt__archive_session(session_id, reason)`，`reason` 按清单项的原因写“任务已验收（sessions.archive_on_accept）”或“任务已归档（sessions.archive_on_archive）”，再 `session_record`（`action: archive`）；成功记 `attempt.closed`。
 - 数据目录的允许规则（CC008 §6）加入 `set_session_title`。会话工具由 app 的分类器把关，实测中改 Claude 设定的标题没有被拦，所以不新增 auto 模式规则。
 
 ### 9.3 待验证
 
 | 编号 | 假设 | 不成立时 |
 | --- | --- | --- |
-| R6 | auto 模式下主会话按 `sessions.archive_on_accept` 归档它启动的、已验收任务的会话不被分类器拦下（工具说明：auto 模式“may approve without asking”；会话正在工作或显示在屏幕上时 app 拒绝） | 拒绝记为 `failed`，`attention` 中标明，由用户决定；必要时在 install hint 的 “TaskSteward Worker Dispatch” 规则中加入按配置归档已验收任务的会话 |
+| R6 | auto 模式下主会话按 `sessions.archive_on_accept` / `archive_on_archive` 归档它启动的、已验收或已归档任务的会话不被分类器拦下（工具说明：auto 模式“may approve without asking”；会话正在工作或显示在屏幕上时 app 拒绝） | 拒绝记为 `failed`，`attention` 中标明，由用户决定；必要时在 install hint 的 “TaskSteward Worker Dispatch” 规则中加入按配置归档已验收任务的会话 |
 
 ## 10. gh 账号 skill 与受理与写任务书 skill（T279）
 

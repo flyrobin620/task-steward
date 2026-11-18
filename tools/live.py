@@ -1219,9 +1219,10 @@ def title_prepare(args: argparse.Namespace) -> int:
 
 
 def title_verify(args: argparse.Namespace) -> int:
-    """Worker session titles (DN002 §5.8, T272): prestarted with the standby mark, which the
-    orchestrator drops on dispatch; accepted in the user's terminal, passed on by the routine
-    session and prefixed by the orchestrator; renamed by the user, so left alone on cancel."""
+    """Worker session titles (DN002 §5.8, T272, T302): prestarted with the standby prefix,
+    which the orchestrator drops on dispatch; accepted in the user's terminal, passed on by the
+    routine session and prefixed by the orchestrator; renamed by the user, so left alone on
+    cancel; archived with the task once the user archives it."""
     run = Run.open(args.run_id)
     evs = events(run)
     marker = json.loads((run.home / "tsw-home.json").read_text(encoding="utf-8"))
@@ -1241,7 +1242,8 @@ def title_verify(args: argparse.Namespace) -> int:
         *title_checks(run, evs),
         check(
             "O",
-            "操作者观察：T001 改为“[已验收] …”，T002 保持用户的标题，没有出现改名确认",
+            "操作者观察：T001 改为“[已验收] …”，T002 保持用户的标题，没有出现改名确认，"
+            "归档 T002 后它的会话被归档",
             args.observed == "yes",
             {"observed": args.observed or "未记录", "evidence": "操作者在 app 中的观察"},
         ),
@@ -1255,7 +1257,7 @@ def title_verify(args: argparse.Namespace) -> int:
 
 
 def title_checks(run: Run, evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Checks T, D, U, F, A and X of ``title-e2e``."""
+    """Checks T, D, U, F, A, X and R of ``title-e2e``."""
 
     def updates(task: str, after: int = 0) -> list[dict[str, Any]]:
         return [
@@ -1282,9 +1284,9 @@ def title_checks(run: Run, evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     checks = [
         check(
             "T",
-            "标题：预启动记下 title_base 与以“（待命）”结尾的 session_title",
+            "标题：预启动记下 title_base 与以“[待命]”开头的 session_title",
             all(
-                s["title_base"] and s["session_title"] == f"{s['title_base']}（待命）"
+                s["title_base"] and s["session_title"] == f"[待命] {s['title_base']}"
                 for s in started
             ),
             started,
@@ -1316,7 +1318,7 @@ def title_checks(run: Run, evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     checks.append(
         check(
             "D",
-            "派发：投递任务书之后主会话去掉了“（待命）”",
+            "派发：投递任务书之后主会话去掉了“[待命]”",
             all(
                 d["delivered"]
                 and d["outcome"] in ("renamed", "already")
@@ -1396,6 +1398,37 @@ def title_checks(run: Run, evs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "user_title": left and left["sequence"],
                 "observed": left and left["data"].get("observed"),
                 "renamed_after": renamed_after,
+            },
+        )
+    )
+    archived = first(evs, "task.archived", "T002")
+    closed = next(
+        (
+            e
+            for e in evs
+            if e["type"] == "attempt.closed"
+            and e["task_id"] == "T002"
+            and archived is not None
+            and e["sequence"] > archived["sequence"]
+        ),
+        None,
+    )
+    closing = (closed or {}).get("data") or {}
+    checks.append(
+        check(
+            "R",
+            "归档：用户归档 T002 之后，主会话按 sessions.archive_on_archive 归档它的会话"
+            "（attempt.closed，disposition archived）",
+            closed is not None
+            and closed["actor"].get("role") == "orchestrator"
+            and closing.get("via") == "sessions.archive_on_archive"
+            and closing.get("disposition") == "archived",
+            {
+                "archived": archived and archived["sequence"],
+                "closed": closed and closed["sequence"],
+                "via": closing.get("via"),
+                "disposition": closing.get("disposition"),
+                "evidence": closing.get("evidence"),
             },
         )
     )
@@ -2490,7 +2523,8 @@ def main(argv: list[str] | None = None) -> int:
     titled_ver.add_argument(
         "--observed",
         choices=("yes", "no"),
-        help="操作者观察：T001 改为“[已验收] …”、T002 保持用户的标题、没有出现改名确认",
+        help="操作者观察：T001 改为“[已验收] …”、T002 保持用户的标题、没有出现改名确认、"
+        "归档 T002 后它的会话被归档",
     )
     titled_ver.set_defaults(handler=title_verify)
     clean = sub.add_parser("cleanup", help="记录已归档的会话并报告剩余对象")

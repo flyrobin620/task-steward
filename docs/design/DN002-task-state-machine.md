@@ -1,6 +1,6 @@
 # DN002 任务状态机
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T251 §5.6 开始时为仓库任务创建 worktree；T262 §5.1a worker 登记会话中的需求变更；T270 §5.7 follow-up；T276 §5.7 follow-up 的定义与边界；T272 §5.8 worker 会话的标题与验收后归档；T292 §5.1 等待用户时的需求变更不作废待答问题）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T251 §5.6 开始时为仓库任务创建 worktree；T262 §5.1a worker 登记会话中的需求变更；T270 §5.7 follow-up；T276 §5.7 follow-up 的定义与边界；T272 §5.8 worker 会话的标题与验收后归档；T292 §5.1 等待用户时的需求变更不作废待答问题；T302 §5.8 待命标题改为前缀、任务归档后归档会话）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN006 插件层](DN006-plugin-layer.md)
 
@@ -96,9 +96,9 @@
 | T22 | done | accepted | `task.user_accepted` | U | G-USER；revision 与当前一致；没有未解决的 `stale` 标记（已有来源记录 `dependency.stale_cleared`）；没有待答输入请求 | 记录 `accepted_at` 与用户原话 |
 | T23 | done | intake | `task.user_rejected` / `task.requirement_changed` | U / W | G-USER（退回、选择重新验证 stale 成果）或用户实质修改需求；worker 登记的变更（G-CHANGE）只在 T28 的 G-RES 或 G-DEP 不满足时经此迁移（§5.1a） | `revision+1`，旧主控验收失效；下游传播 `dependency.invalidated`；原 attempt 保留供 R-ATTEMPT 续用 |
 | T28 | done | in_progress | `task.requirement_changed` | W | G-CHANGE（用户在该 worker 会话中输入、由宿主记录的消息，§5.1a）；当前 attempt 为调用者的 live 会话；G-RES、G-DEP（不满足时改经 T23）；不检查 G-SLOT | `revision+1`，写入用户原话、新目标与验收，重写任务卡片与本 attempt 的任务书；旧主控验收失效（清除完成时间与提交证据）；重新占用独占资源；开启新的提交周期；下游传播 `dependency.invalidated`（§5.2）；`task.requirement_changed` 进入主会话 inbox |
-| T24 | accepted | archived | `task.archived` | S | 已验收且连续 7×24 小时无业务变化；无活动 worker（没有创建结果未知的 `starting` attempt；验收后保留的会话不算活动，归档后按配置处置）、无待答输入；没有 `open` 的 follow-up（§5.7） | 退役；按配置处置子会话（须有工具回执） |
+| T24 | accepted | archived | `task.archived` | S | 已验收且连续 7×24 小时无业务变化；无活动 worker（没有创建结果未知的 `starting` attempt；验收后保留的会话不算活动，归档后按配置处置）、无待答输入；没有 `open` 的 follow-up（§5.7） | 退役；按 `sessions.archive_on_archive` 归档保留的 worker 会话（主会话执行，须有工具回执，§5.8） |
 | T25 | intake、waiting_dependency、ready、dispatching、in_progress、waiting_user、paused、verifying、done | cancelled | `task.cancelled` | U | 用户删除或关闭；活动 worker 已停；进行中的集成已撤回 | 释放名额；资源停止事实未知时保留占用 |
-| T26 | cancelled | archived | `task.archived` | S / U | 用户指定归档或保留期满；没有 `open` 的 follow-up（§5.7） | 退役 |
+| T26 | cancelled | archived | `task.archived` | S / U | 用户指定归档或保留期满；没有 `open` 的 follow-up（§5.7） | 退役；按 `sessions.archive_on_archive` 归档保留的 worker 会话（同 T24） |
 
 ### 3.3 执行中的 worker 内部子状态
 
@@ -382,15 +382,17 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 
 **展示**：`task_read` 返回任务的 `follow_ups`（全部条目）与 `follow_up_of`（本任务由哪些 follow-up 转来）；`attention` 的 `follow_ups` 列出 `open` 且没有复查日期或已到复查日期的条目（编号、任务、类别、严重度、标题）；Dashboard 页面的卡片显示 `open` 条目数，单任务视图列出全部条目、状态与转成的任务（DN006 §8.10）。
 
-### 5.8 worker 会话的标题与验收后归档
+### 5.8 worker 会话的标题与归档
 
-用户 2026-11-11 要求（T272）：任务验收后，对应 worker 会话的标题加上“[已验收]”前缀，验收来自主会话、终端命令（`user-cli`）还是 STATUS 应用（`status-app`）都要处理；用户手动改过标题的会话不自动改名（“我手工改名的你就不能自动改了”）。2026-11-12 用户决定：由主会话执行；同一机制顺带做取消的任务加“[已取消]”前缀、派发给待命会话时去掉“（待命）”，以及 `sessions.archive_on_accept` 的验收后归档。
+用户 2026-11-11 要求（T272）：任务验收后，对应 worker 会话的标题加上“[已验收]”前缀，验收来自主会话、终端命令（`user-cli`）还是 STATUS 应用（`status-app`）都要处理；用户手动改过标题的会话不自动改名（“我手工改名的你就不能自动改了”）。2026-11-12 用户决定：由主会话执行；同一机制顺带做取消的任务加“[已取消]”前缀、派发给待命会话时去掉待命标记，以及 `sessions.archive_on_accept` 的验收后归档。
+
+用户 2026-11-18 要求（T302）：“（待命）等状态也放前面。。另外archived task也自动archive session”。待命标记与“[已验收]”一样作为前缀（“[待命] <基准>”），便于在侧栏按前缀辨认；任务归档（含 T24 自动归档）后，按 `sessions.archive_on_archive` 归档它保留的 worker 会话。
 
 会话标题只能由宿主中的会话调用会话工具修改（Claude Code 见 [CC006 §9](claude-code/CC006-plugins.md)），终端命令与 STATUS 应用不在会话中，所以由 tsw 从账本算出“哪些会话的标题或归档还没跟上任务状态”，由主会话执行并记录回执。标题与归档不是任务状态：不改变任务状态与 revision，不进入状态图，也不算业务变化（不推迟自动归档，T24）。
 
 **基准标题与 tsw 记下的标题**
 
-- `attempt_start` 接受主会话给的简短标题 `session_title`（不给时为“<任务> <任务标题>”，截到 50 个字符），作为这个 attempt 的**基准标题**，并返回创建会话时要用的标题：预启动为“<基准>（待命）”，派发为“<基准>”。二者记在 `attempt.start_requested` 上。主会话创建会话时原样使用；实际用了别的标题时，`attempt_reconcile` 带回实际的标题。
+- `attempt_start` 接受主会话给的简短标题 `session_title`（不给时为“<任务> <任务标题>”，截到 50 个字符），作为这个 attempt 的**基准标题**，并返回创建会话时要用的标题：预启动为“`sessions.title_on_standby` <基准>”（默认“[待命] <基准>”），派发为“<基准>”。二者记在 `attempt.start_requested` 上。主会话创建会话时原样使用；实际用了别的标题时，`attempt_reconcile` 带回实际的标题。
 - **tsw 记下的标题**是 tsw 最近一次让会话使用的标题：创建时的标题，之后每次改名成功（或核实已是应有标题）后更新。
 - 本版本之前创建的 attempt 没有基准标题：不自动改名，也不列入待处置；是否一次性补加由用户决定（T272 报告）。
 
@@ -398,12 +400,12 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 
 | 情形 | 应有的标题 |
 | --- | --- |
-| attempt 处于 `standby` | “<基准>（待命）” |
+| attempt 处于 `standby` | “`sessions.title_on_standby` <基准>”（默认“[待命] <基准>”） |
 | 任务为 `accepted` | “`sessions.title_on_accept` <基准>”（默认“[已验收] <基准>”） |
 | 任务为 `cancelled` | “`sessions.title_on_cancel` <基准>”（默认“[已取消] <基准>”） |
-| 其他 | “<基准>”（因此投递给待命会话后要去掉“（待命）”） |
+| 其他 | “<基准>”（因此投递给待命会话后要去掉“[待命]”前缀） |
 
-前缀配置为空字符串时，对应情形的应有标题就是“<基准>”。只处理会话可能还在的 attempt：阶段为 `standby`、`live` 或 `stopped`，有会话引用；任务已验收或已取消时也包括 `closed` 的 attempt（例如 `sessions.archive_on_archive` 为 `false` 时，取消前关闭的待命会话留在宿主中，同样加“[已取消]”前缀；会话已归档时读取结果会说明，记为 `missing`）。`replaced` 的会话不再处理。已归档的任务（`archived`）不可变，不再处理。
+三种状态标记都是前缀，与基准标题之间隔一个空格；前缀配置为空字符串时，对应情形的应有标题就是“<基准>”。只处理会话可能还在的 attempt：阶段为 `standby`、`live` 或 `stopped`，有会话引用；任务已验收或已取消时也包括 `closed` 的 attempt（例如 `sessions.archive_on_archive` 为 `false` 时，取消前关闭的待命会话留在宿主中，同样加“[已取消]”前缀；会话已归档时读取结果会说明，记为 `missing`）。`replaced` 的会话不再处理。任务已归档（`archived`）时不再改标题，只按下文“任务归档后归档”处理。
 
 **用户改过的标题**：宿主不告诉 tsw 标题是不是用户设定的（Claude app 只在改名时弹出确认，T272 实测），所以执行前先读取会话当前的标题，与 tsw 记下的标题比较：
 
@@ -414,19 +416,35 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 | 其他（包括看起来像 tsw 会起、但 tsw 从没让主会话改成的标题，例如用户自己加的“[已取消]”） | 认定用户（或 tsw 之外的人）改过：不改名，也不尝试（不弹确认）；这个 attempt 之后不再自动改名 | `user_title`（附当时的标题） |
 | 会话不存在或已归档 | 不改名；这个 attempt 之后不再处理标题与归档（还应归档的，同时记 `attempt.closed`，附原因） | `missing` |
 
-**验收后归档**：`sessions.archive_on_accept` 为 `true` 时，任务为 `accepted`、标题已处理完（任何结果）的会话随后归档；成功记 `attempt.closed`（工具回执，附 `disposition: archived`），失败（例如宿主拒绝归档正在工作或显示在屏幕上的会话）记 `attempt.session_updated`（`action: archive`，`outcome: failed`），会话不存在时同样记 `attempt.closed`（附原因）。用户改过标题不影响归档：归档是用户自己打开的配置。取消的任务不在这里归档（待命会话按 `sessions.archive_on_archive` 在取消前处置，§5.6）。
+**会话的归档**：tsw 在三个时机归档 worker 会话，都由主会话调用宿主工具执行：
 
-**事件**：`attempt.session_updated`（主会话，经工具记录），`action` 为 `title` 或 `archive`，`outcome` 如上（另有 `asked`：检查返回改名时记下要改成的标题，当时读到的标题既已认定是 tsw 的，也成为 tsw 记下的标题），附应有的标题、当时读到的标题、原因（`standby`、`dispatch`、`accepted`、`cancelled`）与工具结果原文。它不改变任务状态与 attempt 阶段；`title` 的 `renamed` / `already` 更新 tsw 记下的标题，`user_title` 与 `missing` 让这个 attempt 不再处理。
+| 时机 | 配置（默认） | 哪些会话 |
+| --- | --- | --- |
+| 任务验收后（`accepted`） | `sessions.archive_on_accept`（`false`） | 阶段为 `standby` / `live` / `stopped` 的 attempt 的会话，标题处理完（任何结果）之后 |
+| 任务取消时（T25） | `sessions.archive_on_archive`（`true`） | 可控的待命会话，在取消前处置（§5.6）；执行中的会话按 T25 先停止，取消后加“[已取消]”前缀并保留 |
+| 任务归档后（T24 自动归档、T26） | `sessions.archive_on_archive`（`true`） | 归档时仍保留的会话：阶段为 `standby` / `live` / `stopped` 的 attempt 的会话（验收后保留以便回看的、取消时停止后保留的）；不再改标题 |
 
-**待处置清单与幂等**：`attention` 的 `sessions` 列出应有的标题与 tsw 记下的标题不同（且没有 `user_title`、`missing`，同一应有标题没有记过 `failed`），或应当归档还没有回执（同样没有记过 `failed`）的 attempt：任务、attempt、会话、动作、应有的标题与原因；记过 `failed` 的单独标明，不再提醒，主会话可以再执行一次。清单从账本算出，所以验收来自哪个渠道都一样。重复执行是安全的：每次先读当前标题，已是应有标题的只记 `already`。改名成功之后、记录回执之前任务状态变了（例如用户这时在终端验收），回执照样记下刚改成的标题（须是记为 `asked` 的那个；原因记为 `superseded`），清单随后列出新的应有标题；用户改过标题之后不再接受改名回执。
+成功记 `attempt.closed`（工具回执，附 `disposition: archived` 与所依据的配置 `via`），失败（例如宿主拒绝归档正在工作或显示在屏幕上的会话）记 `attempt.session_updated`（`action: archive`，`outcome: failed`），会话不存在或已归档时同样记 `attempt.closed`（附原因）。验收后归档失败过的会话，任务归档后仍标为 `failed`（不改变投影的归约规则，旧投影不需要重建），主会话可以再执行一次。用户改过标题不影响归档：归档是用户自己打开（或保持默认）的配置。`sessions.archive_on_accept` 为 `false` 时，验收后的会话留在侧栏供用户回看，直到任务归档（`policies.auto_archive_days`，默认 7 天无业务变化）才归档。
+
+**已归档任务的会话回执**：已归档的任务不可变（§8 第 5 条），指的是任务状态、revision、目标、产出与决定。会话处置的回执（`attempt.session_updated`、`attempt.closed`）不属于这些：它们只记录宿主中会话的去向，不改变任务状态与 revision，也不算业务变化，所以任务归档之后仍可记录。T24 由 tsw 在会话之外执行，会话只能在归档之后由主会话处置；先处置会话、再归档任务的做法见附录 C。
+
+**事件**：`attempt.session_updated`（主会话，经工具记录），`action` 为 `title` 或 `archive`，`outcome` 如上（另有 `asked`：检查返回改名时记下要改成的标题，当时读到的标题既已认定是 tsw 的，也成为 tsw 记下的标题），附应有的标题、当时读到的标题、原因（`standby`、`dispatch`、`accepted`、`cancelled`；归档另有 `archived`）与工具结果原文。它不改变任务状态与 attempt 阶段；`title` 的 `renamed` / `already` 更新 tsw 记下的标题，`user_title` 与 `missing` 让这个 attempt 不再处理。
+
+**待处置清单与幂等**：`attention` 的 `sessions` 列出应有的标题与 tsw 记下的标题不同（且没有 `user_title`、`missing`，同一应有标题没有记过 `failed`），或应当归档还没有回执（同样没有记过 `failed`）的 attempt：任务、attempt、会话、动作、应有的标题与原因（归档项另有所依据的配置 `via`）；记过 `failed` 的单独标明，不再提醒，主会话可以再执行一次。清单从账本算出，所以验收来自哪个渠道都一样。重复执行是安全的：每次先读当前标题，已是应有标题的只记 `already`。改名成功之后、记录回执之前任务状态变了（例如用户这时在终端验收），回执照样记下刚改成的标题（须是记为 `asked` 的那个；原因记为 `superseded`），清单随后列出新的应有标题；用户改过标题之后不再接受改名回执。
 
 **谁执行、何时执行**：主会话（持有调度租约时）按 `attention` 的 `sessions` 逐项执行，改名与归档都不需要用户 turn（不创建会话）：
 
-- 在主会话中验收（`user_accept`）、取消（`task_cancel`）或投递任务书（`attempt_deliver`）后，同一轮执行；
-- 终端命令与 STATUS 应用的验收与取消：例行表的默认例行项 `session-scan` 发现新的待处置项后转给主会话（DN006 §8.9.4a），主会话被唤醒后执行；
+- 在主会话中验收（`user_accept`）、取消（`task_cancel`）、归档（`task_archive`）或投递任务书（`attempt_deliver`）后，同一轮执行；
+- 终端命令与 STATUS 应用的验收与取消、tsw 的自动归档（T24）：例行表的默认例行项 `session-scan` 发现新的待处置项后转给主会话（DN006 §8.9.4a），主会话被唤醒后执行；
 - 兜底：清单中有待处置项时，主会话的 Stop hook 在任何一轮结束前提醒一次（Claude Code 见 CC008 的 CC-S4），例行会话不在时也能在主会话的下一轮处理。
 
-所以终端命令与 STATUS 应用的验收在一个例行间隔内、或主会话的下一轮被处理。
+所以终端命令与 STATUS 应用的验收、自动归档在一个例行间隔内、或主会话的下一轮被处理。
+
+**已有会话（T302 之前创建）**：规则对已记下标题的会话同样适用，不另做迁移步骤：
+
+- 待命会话：tsw 记下的标题是旧格式“<基准>（待命）”，应有的标题变为“[待命] <基准>”，按上文的比较规则改名（会话还用着 tsw 记下的标题才改，用户改过的不动）；派发时直接从旧格式改为“<基准>”。
+- 已归档任务的会话：更新后 `attention` 的 `sessions` 列出已归档任务仍保留的会话（`sessions.archive_on_archive` 为 `true` 时），主会话逐个归档；可能一次出现较多项，按清单逐个处理即可，宿主拒绝的记 `failed`。
+- tsw 没记下标题的会话（T272 之前创建）仍不处理。
 
 ## 6. attempt 阶段（属性）
 
@@ -440,7 +458,7 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 | `live` | 子会话存在且绑定；平台事实 working / idle / awaiting_input 只作观察，不改变任务状态 | in_progress、waiting_user、verifying、done（验收后会话处置前）（续用时也可在 ready、waiting_dependency、intake 中保持） | T08、`attempt.continued` |
 | `stopped` | 子会话被停止但仍存在；可控时可续用 | paused、ready、waiting_dependency | 会话适配器的 `stop` 或用户停止 |
 | `replaced` | 已核实停止或已不存在，由新 attempt 接手同一执行目录；也用于待命会话丢失、取消时会话已不存在或不可控 | — | R-ATTEMPT、T15、§5.6（丢失；T25 取消时会话不可控或已不存在） |
-| `closed` | 任务验收、归档或取消后按配置处置会话（须有工具回执）：验收后按 `sessions.archive_on_accept` 归档（§5.8），取消时可控的待命会话按 `sessions.archive_on_archive` 处置后进入此阶段 | done、accepted、archived、cancelled | T22 之后（§5.8）、T24、T25（§5.6） |
+| `closed` | 任务验收、归档或取消后按配置处置会话（须有工具回执）：验收后按 `sessions.archive_on_accept` 归档，任务归档后按 `sessions.archive_on_archive` 归档（§5.8），取消时可控的待命会话按 `sessions.archive_on_archive` 处置后进入此阶段 | done、accepted、archived、cancelled | T22 之后（§5.8）、T24、T25（§5.6） |
 
 ## 7. 事件类型
 
@@ -469,7 +487,7 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 2. 每个任务至多一个处于 `standby` / `starting` / `live` / `stopped` 的 attempt；每个 attempt 只绑定一个子会话，子会话不跨任务复用。
 3. 进入 `verifying` 必须满足 G-SUBMIT。评审器不可用时由主会话判断（改用回退评审器、稍后重试或交给人类），任何情况下都不能跳过评审。需求变更会把 `verifying` 撤回到 `in_progress`（T17），因此不存在“已提交但评审已失效”的状态。
 4. `done` 必有主会话写的 `review.md` 与逐项验收结论；`accepted` 必有 G-USER 来源。
-5. `accepted` 只能迁移到 `archived`；`archived` 不可变；只读导入的任务不能产生 attempt。
+5. `accepted` 只能迁移到 `archived`；`archived` 不可变（会话处置的回执除外，它们不改变任务状态与 revision，§5.8）；只读导入的任务不能产生 attempt。
 6. revision 增加时，旧 revision 的评审与主控验收全部失效，并向下游传播 `dependency.invalidated`（§5.2）。
 7. worker 一轮结束、子会话 idle、平台通知、超时都不是完成、批准或答复。
 8. 占用名额的状态恰为 `dispatching`、`in_progress`、`waiting_user`、`verifying`。
@@ -510,3 +528,12 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 | B | 同 A，另加主会话的显式恢复工具，把没有待答请求的 `waiting_user` 任务送回 `in_progress` | 多一步人工操作，漏做时仍会卡住 |
 | C | 新增迁移 T29（`waiting_user` → `in_progress`，`task.requirement_changed`）：变更作废全部待答问题，同一事件回到执行并开启新周期，worker 按需重新提问 | 与问题无关的变更不应作废问题；变更本身就是回答时，应作为用户的答复登记并转告 worker，而不是把问题作废后再问 |
 | D（采用） | 变更不作废待答问题；与问题无关时继续等待，是回答时先 `input_resolve` 再 `task_update`；不新增迁移 | — |
+
+## 附录 C：任务归档后归档会话的备选方案（T302，存档）
+
+§5.8 采用方案 A：任务先归档，会话随后由主会话归档，回执记在已归档的任务上。
+
+| 方案 | 内容 | 未采用的原因 |
+| --- | --- | --- |
+| A（采用） | 任务按 T24 / T26 照常归档；`attention` 的 `sessions` 随后列出它保留的会话，主会话归档并记回执；§8 第 5 条写明会话回执不属于“不可变”的内容 | — |
+| B | 任务到达自动归档期限时先列出待归档的会话，会话归档（或确认不存在）之后才记 T24 | 自动归档依赖主会话与宿主：主会话不在、或宿主拒绝归档显示在屏幕上的会话时，任务一直停在 `accepted`；T26 也要同样处理，规则更多 |
