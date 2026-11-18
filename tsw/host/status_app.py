@@ -9,14 +9,17 @@ a button runs :func:`tsw.direct.perform` on the ``status-app`` channel, the same
 (:mod:`tsw.host.markdown`) for the page's document dialog (T278). The standing preferences have
 their own page at ``/preferences`` (:mod:`tsw.host.preference_view`), whose forms record, replace
 and revoke them as the user on the same channel, the same implementation as ``tsw preference
-record`` / ``revoke`` (DN007 §6.2, T290).
+record`` / ``revoke`` (DN007 §6.2, T290). An embedding portal asks ``POST /workdeck/labels``
+which of its sessions are this data directory's workers, orchestrators and routine sessions
+(:mod:`tsw.host.session_labels`, T297).
 
 Requests are admitted only with this run's token (DN006 §8.10, DN008 §9; the hosted service
 checks tokens against the hashes ``tsw dashboard open`` stored, T283): it is printed in the
 terminal and put in the address the browser is opened with; the first visit trades it for an
 HttpOnly, SameSite=Strict cookie and drops it from the address. A button request must also carry
 the token in a header, and ``Host`` and ``Origin`` must name this server, so neither another page
-nor a rebound host name can press a button.
+nor a rebound host name can press a button. The label query only reads, so it needs the cookie
+and ``Host`` but not the header token, which an embedding portal's proxy does not add.
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ from tsw.events import Event, utc_now
 from tsw.home import Home
 from tsw.host.markdown import MAX_SOURCE_CHARS, render_markdown
 from tsw.host.preference_view import parse_filter, render_preferences
+from tsw.host.session_labels import LABELS_PATH, MAX_LABELS_BODY, answer, requested_ids
 from tsw.host.status import AppView, Revision, render
 from tsw.host.task_view import card_state, not_found, render_task, timeline
 from tsw.ledger import Ledger
@@ -221,6 +225,13 @@ class StatusApp:
             view = AppView(token=token or self.token, actions={})
             return render_preferences(conn, view, parse_filter(query))
 
+    def labels(self, body: Any) -> dict[str, Any]:
+        """The session labels an embedding portal asked for (DN006 §8.10, T297); reads only."""
+        ids = requested_ids(body)
+        ledger, _ = self.ledger()
+        with ledger.view() as conn:
+            return answer(conn, ids)
+
     def preference(self, action: str, ref: str | None, body: dict[str, Any]) -> dict[str, Any]:
         """Record (``ref`` None; with ``supersedes`` a replacement) or revoke ``ref`` as the user
         on the ``status-app`` channel (DN007 §6.2): the words typed on the page are the source's
@@ -300,6 +311,9 @@ class StatusApp:
             revision=revision,
             reason=reason,
         )
+
+
+_REFUSED = object()  # a request body that was not read: the response is already sent
 
 
 def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
@@ -463,6 +477,9 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             if not (self._host_ok() and self._origin_ok()):
                 self._json(HTTPStatus.FORBIDDEN, {"ok": False, "message": "只接受本页面的请求"})
                 return
+            if urlsplit(self.path).path == LABELS_PATH:
+                self._labels()
+                return
             given = self.headers.get(TOKEN_HEADER) or ""
             token = self._cookie_token()
             if token is None or not hmac.compare_digest(given, token):
@@ -478,20 +495,9 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             if not (task or record or revoke):
                 self._json(HTTPStatus.NOT_FOUND, {"ok": False, "message": "没有这个操作"})
                 return
-            if "application/json" not in (self.headers.get("Content-Type") or ""):
-                self._json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"ok": False, "message": "需要 JSON"})
+            body = self._json_body(MAX_BODY)
+            if body is _REFUSED:
                 return
-            try:
-                length = int(self.headers.get("Content-Length") or "0")
-            except ValueError:
-                length = -1
-            if not 0 <= length <= MAX_BODY:
-                self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": "请求体过大或无效"})
-                return
-            try:
-                body = json.loads(self.rfile.read(length) or b"{}")
-            except ValueError:
-                body = None
             if not isinstance(body, dict):
                 self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": "请求体应为 JSON 对象"})
                 return
@@ -517,6 +523,44 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 flush=True,
             )
             self._json(HTTPStatus.OK, {"ok": True, **result})
+
+        def _json_body(self, limit: int) -> Any:
+            """The request's JSON body, or ``_REFUSED`` after answering why it is not read."""
+            if "application/json" not in (self.headers.get("Content-Type") or ""):
+                self._json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"ok": False, "message": "需要 JSON"})
+                return _REFUSED
+            try:
+                length = int(self.headers.get("Content-Length") or "0")
+            except ValueError:
+                length = -1
+            if not 0 <= length <= limit:
+                self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": "请求体过大或无效"})
+                return _REFUSED
+            try:
+                return json.loads(self.rfile.read(length) or b"{}")
+            except ValueError:
+                return None
+
+        def _labels(self) -> None:
+            """``POST /workdeck/labels`` (DN006 §8.10, T297): the page's cookie and ``Host``
+            (checked by the caller with ``Origin``), no header token: it only reads."""
+            if self._cookie_token() is None:
+                self._json(HTTPStatus.FORBIDDEN, {"ok": False, "message": "令牌无效"})
+                return
+            body = self._json_body(MAX_LABELS_BODY)
+            if body is _REFUSED:
+                return
+            try:
+                result = app.labels(body)
+            except TswError as exc:
+                status = (
+                    HTTPStatus.BAD_REQUEST
+                    if exc.details.get("reason") == "invalid_input"
+                    else HTTPStatus.SERVICE_UNAVAILABLE
+                )
+                self._json(status, {"ok": False, "code": exc.code.value, "message": exc.message})
+                return
+            self._json(HTTPStatus.OK, result)
 
         def _preference(self, action: str, ref: str | None, body: dict[str, Any]) -> None:
             try:

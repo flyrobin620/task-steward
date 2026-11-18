@@ -518,3 +518,58 @@ def test_the_dashboard_manages_standing_preferences_as_the_user(h: Harness, dash
     assert "/api/preferences/record" in APP_SCRIPT and "connect-src 'self'" in page.replace(
         "&#x27;", "'"
     )
+
+
+@mark.use_case("UC-DIRECT-008")
+def test_the_dashboard_labels_an_embedding_portals_sessions(h: Harness, dashboard: App) -> None:
+    h.register("T001")
+    h.plan("T001")
+    h.dispatch("T001", session="local_w1")
+    ask = {"sessions": [{"id": "local_w1"}, {"id": "orch-1"}, {"id": "local_none"}]}
+    path = "/workdeck/labels"
+    # The page's admission: the cookie and this server's host name; a foreign origin is refused.
+    assert dashboard.request("POST", path, ask)[0] == 403
+    dashboard.cookie = f"tsw_status_{dashboard.port}={dashboard.token}"
+    assert (
+        dashboard.request("POST", path, ask, {"Host": f"evil.example:{dashboard.port}"})[0] == 403
+    )
+    assert dashboard.request("POST", path, ask, {"Origin": "http://evil.example"})[0] == 403
+    # JSON only, a session list, within the size limit.
+    status, _, raw = dashboard.request("POST", path, None, {"Content-Type": "text/plain"})
+    assert status == 415 and json.loads(raw)["ok"] is False
+    assert dashboard.request("POST", path, {"session": []})[0] == 400
+    too_long = {"Content-Length": str((1 << 20) + 1)}  # refused before the body is read
+    assert dashboard.request("POST", path, {}, too_long)[0] == 400
+    assert dashboard.request("GET", path)[0] == 404
+    # No header token needed (an embedding portal's proxy adds none); the proxy's origin is ours.
+    tail = h.ledger.storage.tail()
+    status, sent, raw = dashboard.request(
+        "POST", path, ask, {"Origin": f"http://127.0.0.1:{dashboard.port}"}
+    )
+    assert (status, sent["Content-Type"]) == (200, "application/json; charset=utf-8")
+    assert json.loads(raw) == {
+        "labels": {
+            "local_w1": [
+                {
+                    "text": "T001 · a1 · worker",
+                    "title": "task: T001\nattempt: a1\nphase: live\nrole: worker",
+                    "link": "/tasks/T001",
+                }
+            ],
+            "orch-1": [
+                {
+                    "text": "orchestrator",
+                    "title": "role: orchestrator\nlease: scheduler",
+                    "link": "/",
+                }
+            ],
+            "local_none": [],
+        }
+    }
+    assert h.ledger.storage.tail() == tail
+    # A full refresh of a long session list is not held to the buttons' body limit.
+    many = {"sessions": [{"id": f"local_{n:060}"} for n in range(2000)]}
+    status, _, raw = dashboard.request("POST", path, many)
+    assert status == 200 and len(json.loads(raw)["labels"]) == 2000
+    # The link is the task view's address in the app.
+    assert dashboard.request("GET", "/tasks/T001")[0] == 200

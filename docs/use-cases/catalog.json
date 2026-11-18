@@ -1293,6 +1293,27 @@
         "conformance": "不经过插件接口",
         "live": "页面与接口在本机由 surface 层的独立进程覆盖，不依赖宿主会话；浏览器中的确认框与表单另以本机截图核对"
       }
+    },
+    {
+      "id": "UC-DIRECT-008",
+      "title": "Dashboard 的会话标签端点：嵌入方门户查询会话属于哪个任务、attempt 与角色（T297，DN006 §8.10，workdeck DN005 §10）",
+      "actor": "嵌入 Dashboard 应用的门户（workdeck daemon 经插件代理）",
+      "acceptance": "Dashboard 应用（tsw status serve、tsw dashboard 与常驻服务）提供 POST /workdeck/labels：与页面同样核对令牌 cookie 与本机 Host，Origin 缺省或为本应用，不要求 X-TSW-Token；请求体须为 JSON（否则 415）、至多 1 MiB（否则 400）、为带 sessions 数组的对象（否则 400）；忽略不认识的字段，id 不是 1–512 个字符的字符串的条目跳过，重复的只算一次；回答 {labels: {<会话 ID>: [...]}}，请求中的每个会话一项（按请求顺序，没有标签为空数组）：attempts.session_ref 为 <任务> · <attempt> · worker（title 为 task、attempt、phase、role 四行，link 为 /tasks/<任务>，任务 ID 按路径段编码），leases.holder_session 为 orchestrator（title 为 role、lease 两行，link 为 /），routine_sessions.session_ref 为 routine g<代>（title 为 role、generation、phase 三行，无 link）；一个会话的多个标签按 worker、orchestrator、routine 排列；text 与 title 至多 256 个字符，每个会话至多 64 个标签；每次请求从追上账本末尾的投影读取，账本变化后下一次查询即反映（例如让出租约后主会话不再有标签）；查询不写账本；GET 该路径 404",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；与 workdeck annotator 的一致性由 unit / component 按 annotator 的规则断言，另在本机对同一投影运行 workdeck 的 readAnnotations 对照，记在任务报告中"
+      }
     }
   ]
 }
