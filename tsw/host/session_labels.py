@@ -44,8 +44,8 @@ def requested_ids(body: Any) -> list[str]:
     """The session ids asked for, in order and without repeats.
 
     Unknown fields are ignored (the contract only grows); an entry whose ``id`` is not a string of
-    1-512 characters is skipped. A body that is not an object with a ``sessions`` array is
-    refused, so the portal keeps the labels it had.
+    1-512 characters of text (no unpaired surrogate) is skipped. A body that is not an object
+    with a ``sessions`` array is refused, so the portal keeps the labels it had.
     """
     fields = cast("dict[str, Any]", body) if isinstance(body, dict) else {}
     sessions: Any = fields.get("sessions")
@@ -54,9 +54,19 @@ def requested_ids(body: Any) -> list[str]:
     out: dict[str, None] = {}
     for entry in cast("list[Any]", sessions):
         found: Any = cast("dict[str, Any]", entry).get("id") if isinstance(entry, dict) else None
-        if isinstance(found, str) and 0 < len(found) <= MAX_ID:
+        if isinstance(found, str) and 0 < len(found) <= MAX_ID and _text(found):
             out[found] = None
     return list(out)
+
+
+def _text(value: str) -> bool:
+    """Whether ``value`` is text UTF-8 can carry: JSON lets an unpaired surrogate (``"\\ud800"``)
+    through, which names no session and could not be written back (PR #57 review)."""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _title(detail: Iterable[tuple[str, Any]]) -> str:

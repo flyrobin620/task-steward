@@ -571,5 +571,9 @@ def test_the_dashboard_labels_an_embedding_portals_sessions(h: Harness, dashboar
     many = {"sessions": [{"id": f"local_{n:060}"} for n in range(2000)]}
     status, _, raw = dashboard.request("POST", path, many)
     assert status == 200 and len(json.loads(raw)["labels"]) == 2000
+    # An id JSON allows but UTF-8 cannot carry does not cost the batch its answer (PR #57 review).
+    odd = {"sessions": [{"id": "\ud800"}, {"id": "orch-1"}]}
+    status, _, raw = dashboard.request("POST", path, odd)
+    assert status == 200 and list(json.loads(raw)["labels"]) == ["orch-1"]
     # The link is the task view's address in the app.
     assert dashboard.request("GET", "/tasks/T001")[0] == 200

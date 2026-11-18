@@ -114,6 +114,8 @@ def test_the_answer_has_every_session_asked_for_within_the_limits(
             {"sessions": [{"id": ""}, {"id": 7}, {}, "c", {"id": "x" * 513}, {"id": "x" * 512}]},
             ["x" * 512],
         ),
+        # An unpaired surrogate names no session and could not be written back (PR #57 review).
+        ({"sessions": [{"id": "\ud800"}, {"id": "a\udfff"}, {"id": "会话-✓"}]}, ["会话-✓"]),
     ],
 )
 def test_the_request_lists_session_ids(body: Any, ids: list[str]) -> None:

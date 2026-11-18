@@ -619,7 +619,7 @@ Dashboard 应用：
 - 会话标签端点（与嵌入方的约定，用户 2026-11-18 要求，T297）：嵌入方的门户列出 agent 会话时，由本应用告诉它哪些会话属于 TaskSteward、是哪个任务的哪个 attempt、什么角色。契约由嵌入方 workdeck 定义（workdeck DN005 §10、决定 0023：插件给会话加标签，workdeck 不认识任务工具），取代 workdeck 中直接读本数据目录 `cache/state.sqlite` 的 tsw annotator；端点上线后 workdeck 删除 annotator。
   1. 路径：`POST /workdeck/labels`（应用根下）。嵌入方在插件配置中声明 `"labels": {"path": "/workdeck/labels", "refreshSeconds": 10}`，经同一个插件代理（同一上游、同样的改写、插件自己的登录）请求；`tsw status serve` 与常驻服务（`tsw dashboard service`）都提供。
   2. 准入：与页面相同的令牌 cookie 与 `Host` 核对（嵌入方的代理用 `query-token` 换得的 cookie，workdeck DN005 §7），`Origin` 缺省或为本应用，`Content-Type` 为 JSON，请求体至多 1 MiB。不要求 `X-TSW-Token`：代理不添加它（workdeck DN005 §7），而端点只读、不写账本，返回的是看板上已经显示的信息（会话 ID、任务、attempt、阶段、角色）。其他网页不能利用它：跨站请求不带 `SameSite=Strict` 的 cookie，JSON 请求要先经 CORS 预检而应用不回答预检，响应也不带 CORS 头；DNS 重绑定由 `Host` 核对挡住。
-  3. 请求：`{"sessions": [{"id": "<会话 ID>"}, ...]}`。会话 ID 是宿主的会话 ID，即 attempt 的 `session_ref`（Claude app 为 `local_…`）。按契约忽略不认识的字段；`id` 不是 1–512 个字符的字符串的条目跳过；请求体不是带 `sessions` 数组的 JSON 对象时返回 400（嵌入方保留上次的标签）。
+  3. 请求：`{"sessions": [{"id": "<会话 ID>"}, ...]}`。会话 ID 是宿主的会话 ID，即 attempt 的 `session_ref`（Claude app 为 `local_…`）。按契约忽略不认识的字段；`id` 不是 1–512 个字符的字符串（或含不成对的代理字符，不能以 UTF-8 写回）的条目跳过；请求体不是带 `sessions` 数组的 JSON 对象时返回 400（嵌入方保留上次的标签）。
   4. 数据来源：每次请求从账本投影读取三类记录（与页面同一读取：投影先追上账本末尾；不写账本）：
 
      | 会话 | 来源 | `text` | `title` | `link` |
