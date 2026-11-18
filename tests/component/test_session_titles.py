@@ -785,9 +785,11 @@ def test_archive_on_archive_off_keeps_the_session(home: Home) -> None:
 
 
 @mark.use_case("UC-SESSION-001")
-def test_an_archive_that_failed_after_acceptance_is_listed_again_when_archived(
+def test_an_archive_that_failed_after_acceptance_stays_failed_when_archived(
     home: Home,
 ) -> None:
+    # No reduction rule changed (T302 review r1 F1): the failure stays recorded, the item names
+    # the new setting, and the main session may try once more.
     h = Harness(home, {"sessions": {"archive_on_accept": True}})
     session = delivered_and_done(h)
     accept_from_terminal(h)
@@ -798,7 +800,14 @@ def test_an_archive_that_failed_after_acceptance_is_listed_again_when_archived(
     ]
     h.clock.now = "2026-12-01T00:00:00Z"
     h.run("sync")
-    assert [(i["via"], i["state"]) for i in sessions(h)] == [("sessions.archive_on_archive", "due")]
+    assert [(i["via"], i["state"]) for i in sessions(h)] == [
+        ("sessions.archive_on_archive", "failed")
+    ]
+    assert not reminded(h)
+    out = h.run(
+        "session_record", task_id="T001", attempt="a1", action="archive", ok=True, result="ok"
+    )
+    assert out["events"][0]["data"]["via"] == "sessions.archive_on_archive"
 
 
 @mark.use_case("UC-SESSION-001")

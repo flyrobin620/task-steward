@@ -424,7 +424,7 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 | 任务取消时（T25） | `sessions.archive_on_archive`（`true`） | 可控的待命会话，在取消前处置（§5.6）；执行中的会话按 T25 先停止，取消后加“[已取消]”前缀并保留 |
 | 任务归档后（T24 自动归档、T26） | `sessions.archive_on_archive`（`true`） | 归档时仍保留的会话：阶段为 `standby` / `live` / `stopped` 的 attempt 的会话（验收后保留以便回看的、取消时停止后保留的）；不再改标题 |
 
-成功记 `attempt.closed`（工具回执，附 `disposition: archived` 与所依据的配置 `via`），失败（例如宿主拒绝归档正在工作或显示在屏幕上的会话）记 `attempt.session_updated`（`action: archive`，`outcome: failed`），会话不存在或已归档时同样记 `attempt.closed`（附原因）。验收后归档失败过的会话，任务归档时重新列入一次（新的时机）。用户改过标题不影响归档：归档是用户自己打开（或保持默认）的配置。`sessions.archive_on_accept` 为 `false` 时，验收后的会话留在侧栏供用户回看，直到任务归档（`policies.auto_archive_days`，默认 7 天无业务变化）才归档。
+成功记 `attempt.closed`（工具回执，附 `disposition: archived` 与所依据的配置 `via`），失败（例如宿主拒绝归档正在工作或显示在屏幕上的会话）记 `attempt.session_updated`（`action: archive`，`outcome: failed`），会话不存在或已归档时同样记 `attempt.closed`（附原因）。验收后归档失败过的会话，任务归档后仍标为 `failed`（不改变投影的归约规则，旧投影不需要重建），主会话可以再执行一次。用户改过标题不影响归档：归档是用户自己打开（或保持默认）的配置。`sessions.archive_on_accept` 为 `false` 时，验收后的会话留在侧栏供用户回看，直到任务归档（`policies.auto_archive_days`，默认 7 天无业务变化）才归档。
 
 **已归档任务的会话回执**：已归档的任务不可变（§8 第 5 条），指的是任务状态、revision、目标、产出与决定。会话处置的回执（`attempt.session_updated`、`attempt.closed`）不属于这些：它们只记录宿主中会话的去向，不改变任务状态与 revision，也不算业务变化，所以任务归档之后仍可记录。T24 由 tsw 在会话之外执行，会话只能在归档之后由主会话处置；先处置会话、再归档任务的做法见附录 C。
 

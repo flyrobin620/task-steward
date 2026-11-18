@@ -893,9 +893,6 @@ def task_cancelled(conn: sqlite3.Connection, event: Event) -> None:
 
 def task_archived(conn: sqlite3.Connection, event: Event) -> None:
     _move(conn, event)
-    # Archiving the task is a new reason to archive its sessions (sessions.archive_on_archive,
-    # DN002 §5.8): an archive that failed after acceptance is listed once more.
-    conn.execute("UPDATE session_titles SET archive_failed = 0 WHERE task_id = ?", (_tid(event),))
     _touch(conn, event)
 
 
