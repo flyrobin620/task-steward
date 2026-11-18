@@ -831,8 +831,8 @@ def flow_layouts(
     for chosen in relation_choices():
         for everything in (False, True):
             fu = "fu" in chosen
-            near = ("dep", "fu") if fu else ("dep",)
-            context = live | {o for r in near for t in live for o in joined[r][t]}
+            making = ("dep", "fu") if fu else ("dep",)  # the relations that make context
+            context = live | {o for r in making for t in live for o in joined[r][t]}
             ids = frozenset(known) if everything else frozenset(context)
             key = (ids, fu)
             if key not in done:
