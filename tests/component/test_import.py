@@ -63,8 +63,9 @@ def test_every_class_is_imported_with_its_history(home: Home, tmp_path: Path) ->
     assert tasks["T003"]["accepted_at"] == "2026-10-01T00:00:00Z"
     assert tasks["T004"]["last_activity"] == "2026-10-04T12:00:00Z"  # business time kept
     # The latest ledger record of an imported task is its import (the task flow's time, T304).
-    imported = next(e for e in ledger.storage.read() if e.type == "import.task_imported")
-    assert tasks["T004"]["last_record"] == imported.time
+    latest = [e for e in ledger.storage.read() if e.task_id == "T004"][-1]
+    assert latest.type == "import.task_imported"
+    assert tasks["T004"]["last_record"] == latest.time
     assert tasks["T004"]["done_at"] == "2026-10-20T00:00:00Z"
     assert tasks["T007"]["attempt_count"] == 2  # a new attempt there is a3
     pauses = {t: json.loads(tasks[t]["pause"])["category"] for t in ("T006", "T007", "T008")}
