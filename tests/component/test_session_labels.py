@@ -4,13 +4,17 @@ workdeck's tsw annotator gave them, and asking writes nothing."""
 
 from __future__ import annotations
 
+import http.client
+import json
+import threading
+
 import pytest
 
 from tests.machine_harness import MACHINE, ORCH, Harness
 from tsw import lease
 from tsw.errors import TswError
 from tsw.home import Home
-from tsw.host.status_app import StatusApp
+from tsw.host.status_app import StatusApp, make_server
 
 mark = pytest.mark
 
@@ -93,3 +97,33 @@ def test_a_body_without_sessions_is_refused(home: Home) -> None:
     with pytest.raises(TswError) as exc:
         StatusApp(home, token="tok").labels({"session": []})
     assert exc.value.details["reason"] == "invalid_input"
+
+
+@mark.use_case("UC-DIRECT-008")
+def test_an_unreadable_projection_answers_503_over_http(home: Home) -> None:
+    Harness(home)
+    app = StatusApp(home, token="tok")
+    server = make_server(app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        home.path("cache/state.sqlite").write_bytes(b"not a database" * 100)
+        conn = http.client.HTTPConnection("127.0.0.1", app.port, timeout=30)
+        conn.request(
+            "POST",
+            "/workdeck/labels",
+            body=json.dumps({"sessions": [{"id": "orch-1"}]}),
+            headers={
+                "Host": f"127.0.0.1:{app.port}",
+                "Cookie": f"tsw_status_{app.port}=tok",
+                "Content-Type": "application/json",
+            },
+        )
+        response = conn.getresponse()
+        body = json.loads(response.read())
+        conn.close()
+        assert response.status == 503 and body["ok"] is False
+        assert str(home.root) not in body["message"]
+    finally:
+        server.shutdown()
+        server.server_close()

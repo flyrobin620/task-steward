@@ -29,6 +29,7 @@ import json
 import mimetypes
 import re
 import secrets
+import sqlite3
 import sys
 import threading
 import webbrowser
@@ -559,6 +560,13 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                     else HTTPStatus.SERVICE_UNAVAILABLE
                 )
                 self._json(status, {"ok": False, "code": exc.code.value, "message": exc.message})
+                return
+            except (sqlite3.Error, OSError) as exc:
+                # An unreadable projection: the portal keeps its last labels (no local paths).
+                self._json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"ok": False, "message": f"无法读取投影（{type(exc).__name__}）"},
+                )
                 return
             self._json(HTTPStatus.OK, result)
 
