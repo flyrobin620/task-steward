@@ -58,8 +58,10 @@ def install(known: dict) -> None:
     if not copy.exists():
         shutil.copytree(Path(repo) / "plugin", copy)
     records = load(installed_file, {"version": 2, "plugins": {}})
+    others = [r for r in records["plugins"].get(PLUGIN_ID, []) if r.get("scope") != "user"]
     records["plugins"][PLUGIN_ID] = [
-        {"scope": "user", "installPath": str(copy), "version": sha[:12], "gitCommitSha": sha}
+        *others,
+        {"scope": "user", "installPath": str(copy), "version": sha[:12], "gitCommitSha": sha},
     ]
     save(installed_file, records)
 
@@ -90,7 +92,11 @@ elif verb in ("plugin install", "plugin update"):
     install(known)
 elif verb == "plugin uninstall":
     records = load(installed_file, {"version": 2, "plugins": {}})
-    records["plugins"].pop(PLUGIN_ID, None)
+    left = [r for r in records["plugins"].get(PLUGIN_ID, []) if r.get("scope") != "user"]
+    if left:
+        records["plugins"][PLUGIN_ID] = left
+    else:
+        records["plugins"].pop(PLUGIN_ID, None)
     save(installed_file, records)
 else:
     print(f"unknown: {args}")

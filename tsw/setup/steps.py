@@ -308,9 +308,9 @@ def _plugin(ctx: Context, apply: bool) -> dict[str, Any]:
         "actions": planned,
         "marketplace": state["marketplace"],
     }
-    if apply and planned:
-        if ctx.claude is None:
-            raise rejected("找不到 claude 命令行，不能安装插件", reason="claude_missing")
+    if apply:
+        # Ownership first, even with nothing to do: an uninstall leaves alone what was the
+        # user's before (DN009 §10, T308 review r1 F2).
         ctx.record.begin(
             "plugin",
             {
@@ -318,6 +318,11 @@ def _plugin(ctx: Context, apply: bool) -> dict[str, Any]:
                 "installed_before": state["installed"],
             },
         )
+    if apply and not planned:
+        ctx.record.finish("plugin")
+    if apply and planned:
+        if ctx.claude is None:
+            raise rejected("找不到 claude 命令行，不能安装插件", reason="claude_missing")
         report = claude_install.install_plugin(ctx.env, ctx.claude, ctx.checkout)
         if not report["ok"]:
             raise rejected(
@@ -463,6 +468,12 @@ def _dashboard(ctx: Context, apply: bool, *, open_browser: bool = True) -> dict[
         "state": "ok" if installed else "todo",
         "task": dashboard_service.task_name(key),
     }
+    entry = ctx.record.step("dashboard")
+    interrupted = entry.get("state") == "started" and not entry.get("installed")
+    # Interrupted after the task was created: it is ours unless it was there before.
+    if apply and installed and interrupted and not entry.get("installed_before"):
+        ctx.record.finish("dashboard", installed=True, port=_port(home))
+        result["recovered"] = True
     if apply and not installed:
         ctx.record.begin(
             "dashboard",
@@ -751,11 +762,18 @@ def uninstall(ctx: Context) -> dict[str, Any]:
         )
     done: dict[str, Any] = {}
     root = ctx.home_root
-    if ctx.record.step("dashboard").get("installed") and root and (root / MARKER).is_file():
+    board = ctx.record.step("dashboard")
+    ours = board.get("installed") or (
+        board.get("state") == "started" and not board.get("installed_before")
+    )
+    if ours and root and (root / MARKER).is_file():
         done["dashboard"] = dashboard_service.uninstall(open_home(root), ctx.env)
         ctx.record.finish("dashboard", installed=False)
-    if ctx.claude is not None:
-        done["plugin"] = claude_install.remove_plugin(ctx.env, ctx.claude)
+    plugin = ctx.record.step("plugin")
+    if not plugin:
+        done["plugin"] = {"ok": True, "note": "安装没有动过插件，保留"}
+    elif ctx.claude is not None:
+        done["plugin"] = claude_install.remove_plugin(ctx.env, ctx.claude, plugin)
     else:
         done["plugin"] = {"ok": False, "note": "找不到 claude 命令行，插件没有卸载"}
     owned = ctx.record.step("user_settings")

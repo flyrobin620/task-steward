@@ -21,14 +21,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/setup
 
 - `missing` 中有 `python` 或 `git`：问用户是否用 winget 安装（一项一问）。同意后运行 `... prereq.ps1 -Json -Install python`（或 `git`），再看新的输出；不同意或没有 winget 时，告诉用户自己安装后再来，停下。
 - `missing` 中有 `claude`：把 `notes` 转告用户，停下（Claude Code 的命令行要先装好）。
-- `notes` 都转告用户。之后一律用 `python.path` 的完整路径（新装的解释器不在当前进程的 PATH 中）。
+- `notes` 都转告用户。之后一律用 `python.path` 与 `git.path` 的完整路径（新装的解释器与 git 不在当前进程的 PATH 中）：下文的 `<git>` 是 `git.path`。
 
 ## 2. 取得产品检出
 
 先问用户产品检出放在哪里：默认 `%LOCALAPPDATA%\TaskSteward\task-steward`，已有检出时复用。然后：
 
 ```bash
-"<python>" -X utf8 "${CLAUDE_PLUGIN_ROOT}/setup/fetch_checkout.py" [--dest "<用户给的位置>"]
+"<python>" -X utf8 "${CLAUDE_PLUGIN_ROOT}/setup/fetch_checkout.py" --git "<git>" [--dest "<用户给的位置>"]
 ```
 
 它把产品仓库克隆到该位置并检出插件当前安装的那个提交；已有检出时只校验是同一仓库、工作区干净。`ok` 为 false 时把 `problem` 转告用户，停下。`checkout` 就是之后的 `<checkout>`，`launcher` 是 `<checkout>/plugin/bin/tsw_launch.py`。
@@ -36,7 +36,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/setup
 ## 3. 按问题清单提问
 
 ```bash
-"<python>" -X utf8 "<checkout>/plugin/bin/tsw_launch.py" setup check --questions --json
+"<python>" -X utf8 "<checkout>/plugin/bin/tsw_launch.py" setup check --questions --git "<git>" --json
 ```
 
 - `problems` 中除 `home：…`（还没有数据目录位置）以外的问题先转告用户，解决后重新运行。
@@ -51,7 +51,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/setup
 ## 4. 计划与确认
 
 ```bash
-"<python>" -X utf8 "<checkout>/plugin/bin/tsw_launch.py" setup plan --answers "<answers_file>" --python "<python>" --claude "<claude.path>" --json
+"<python>" -X utf8 "<checkout>/plugin/bin/tsw_launch.py" setup plan --answers "<answers_file>" --python "<python>" --claude "<claude.path>" --git "<git>" --json
 ```
 
 把 `steps` 中要做的（`state` 为 `todo`）与用户设置的差异（`user_settings` 一步的 `diff`）简要告诉用户：会写哪些文件、改哪些用户设置、在用户级 PATH 加哪一项、是否登记 Dashboard 计划任务。`problems` 非空时先解决。然后请用户确认（Claude app 中用 `wrap_up` 的提问与按钮，`blocked: true`）。
@@ -61,7 +61,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/setup
 用户确认后：
 
 ```bash
-"<python>" -X utf8 "<checkout>/plugin/bin/tsw_launch.py" setup install --answers "<answers_file>" --python "<python>" --claude "<claude.path>" --json
+"<python>" -X utf8 "<checkout>/plugin/bin/tsw_launch.py" setup install --answers "<answers_file>" --python "<python>" --claude "<claude.path>" --git "<git>" --json
 ```
 
 单独一条命令运行。Claude 可能请用户批准这条命令（它写用户设置与 PATH、登记计划任务）：这是用户本人的授权，不要设法绕过。把结果简要告诉用户：每一步做了什么、`verify` 的 `failed`（失败的核对项及原因）与 `pending_reload`（重启后才能确认，不算失败）。失败时按原因修正后重新运行同一条命令（它只做缺少或不一致的部分）。
@@ -79,7 +79,7 @@ tsw setup verify --after-reload --running <runtime.commit> --json
 用户要求卸载时，先说明会删除什么（Dashboard 常驻服务、插件与市场、安装脚本加入的用户设置、`tsw` 垫片与 PATH 项）、保留什么（数据目录永远不删；产品检出由用户自己删），请用户确认，再运行：
 
 ```bash
-"<python>" -X utf8 "<checkout>/plugin/bin/tsw_launch.py" setup uninstall --yes --json
+"<python>" -X utf8 "<checkout>/plugin/bin/tsw_launch.py" setup uninstall --yes --git "<git>" --json
 ```
 
 转告结果中的 `kept` 与 `note`。会话路径中由本 skill 克隆的检出，用户确认后可以删除。

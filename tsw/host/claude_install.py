@@ -114,7 +114,9 @@ def points_at(source: Mapping[str, Any] | None, checkout: Path) -> bool:
 
 def plugin_state(env: Mapping[str, str], checkout: Path) -> dict[str, Any]:
     source = marketplace_source(env)
-    copies = installed_copies(env)
+    # Only a user-scope install reaches every session in any folder (T308 review r1 F6); other
+    # scopes are left as they are.
+    copies = [c for c in installed_copies(env) if c.get("scope") == "user"]
     return {
         "marketplace": source,
         "points_at_checkout": points_at(source, checkout),
@@ -151,17 +153,34 @@ def install_plugin(env: Mapping[str, str], claude: str, checkout: Path) -> dict[
     }
 
 
-def remove_plugin(env: Mapping[str, str], claude: str) -> dict[str, Any]:
-    """Uninstall the plugin and remove its marketplace (DN009 §10); missing ones are skipped."""
+def remove_plugin(env: Mapping[str, str], claude: str, owned: Mapping[str, Any]) -> dict[str, Any]:
+    """Take back what the install did to the plugin, as ``owned`` (its record) says (DN009 §10).
+
+    Installed from a local directory before the install (a developer's own checkout): the
+    marketplace is pointed back there and the plugin stays. Otherwise the plugin and its
+    marketplace go: either the install added them, or they came from the product repository's
+    marketplace in the session path's first step (``/plugin install … --marketplace``), which
+    is part of the install.
+    """
+    before: Any = owned.get("marketplace_before")
+    source = cast("dict[str, Any]", before) if isinstance(before, dict) else None
     ran: list[dict[str, Any]] = []
-    if installed_copies(env):
-        ran.append(run_claude(claude, env, "plugin", "uninstall", PLUGIN_ID))
+    if owned.get("installed_before") and source and source.get("source") == "directory":
+        path = source.get("path")
+        if isinstance(path, str) and not points_at(marketplace_source(env), Path(path)):
+            ran.append(run_claude(claude, env, "plugin", "marketplace", "add", path))
+        return {
+            "ran": ran,
+            "kept": "安装前已从本机目录安装的插件保留，市场改指回原目录",
+            "ok": points_at(marketplace_source(env), Path(str(path))),
+        }
+    user = [c for c in installed_copies(env) if c.get("scope") == "user"]
+    if user:
+        ran.append(run_claude(claude, env, "plugin", "uninstall", PLUGIN_ID, "--scope", "user"))
     if marketplace_source(env) is not None:
         ran.append(run_claude(claude, env, "plugin", "marketplace", "remove", MARKETPLACE))
-    return {
-        "ran": ran,
-        "ok": not installed_copies(env) and marketplace_source(env) is None,
-    }
+    left = [c for c in installed_copies(env) if c.get("scope") == "user"]
+    return {"ran": ran, "ok": not left and marketplace_source(env) is None}
 
 
 # ---------------------------------------------------------------------- user settings

@@ -218,7 +218,7 @@ def test_an_interrupted_install_keeps_its_ownership_and_uninstall_takes_back_onl
     assert out["kept"]["home"] == str(home)
     calls = claude_calls(tmp_path)
     assert calls[-2:] == [
-        "plugin uninstall task-steward@task-steward",
+        "plugin uninstall task-steward@task-steward --scope user",
         "plugin marketplace remove task-steward",
     ]
     assert record(env)["status"] == "uninstalled"
@@ -352,3 +352,118 @@ def test_the_cmd_shim_an_uninstall_runs_through_is_deleted_after_it_exits(tmp_pa
     assert report == {"removed": ["tsw"], "deferred": ["tsw.cmd"]}
     assert (shims / "tsw.cmd").is_file() and not (shims / "tsw").exists()
     assert winenv.remove_shims(tmp_path / "none", {}) == {"removed": [], "deferred": []}
+
+
+def _claude(claude: Path, env: dict[str, str], *args: str) -> None:
+    import subprocess  # noqa: PLC0415
+
+    subprocess.run([str(claude), *args], env=env, check=True, capture_output=True)
+
+
+@pytest.mark.use_case(UC)
+def test_uninstall_leaves_a_plugin_the_install_found_from_a_local_directory(
+    tmp_path: Path,
+) -> None:
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    mine = make_product(tmp_path, "developer-checkout")
+    env = setup_env(tmp_path)
+    # A developer installed the plugin from another checkout of their own.
+    _claude(claude, env, "plugin", "marketplace", "add", str(mine))
+    _claude(claude, env, "plugin", "install", "task-steward@task-steward", "--scope", "user")
+    assert install(product, write_answers(tmp_path, tmp_path / "data"), env, claude)[0] == 0
+    assert record(env)["steps"]["plugin"]["marketplace_before"]["path"] == str(mine)
+    code, _, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
+    assert code == 0, text
+    assert claude_calls(tmp_path)[-1] == f"plugin marketplace add {mine}"  # pointed back
+    plugins = Path(env["CLAUDE_CONFIG_DIR"]) / "plugins"
+    known = json.loads((plugins / "known_marketplaces.json").read_text("utf-8"))
+    assert known["task-steward"]["source"]["path"] == str(mine)
+    installed = json.loads((plugins / "installed_plugins.json").read_text("utf-8"))
+    assert "task-steward@task-steward" in installed["plugins"]
+
+
+@pytest.mark.use_case(UC)
+def test_an_install_that_failed_before_the_plugin_step_leaves_the_plugin_alone(
+    tmp_path: Path,
+) -> None:
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    home = tmp_path / "data"
+    env = setup_env(tmp_path)
+    _claude(claude, env, "plugin", "install", "task-steward", "--marketplace", str(product))
+    # The user Path cannot be written (a folder where the value should be): the install stops.
+    Path(env["TSW_REG"]).mkdir(parents=True)
+    answers = write_answers(tmp_path, home)
+    code, _, _ = run_setup(
+        product,
+        "install",
+        "--answers",
+        str(answers),
+        "--claude",
+        str(claude),
+        "--no-browser",
+        env=env,
+    )
+    assert code != 0 and "plugin" not in record(env)["steps"]
+    Path(env["TSW_REG"]).rmdir()
+    code, out, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
+    assert code == 0, text
+    assert out["removed"]["plugin"]["note"] == "安装没有动过插件，保留"
+    assert not any("uninstall" in call for call in claude_calls(tmp_path))
+
+
+@pytest.mark.use_case(UC)
+def test_only_a_user_scope_install_counts_as_installed(tmp_path: Path) -> None:
+    import shutil  # noqa: PLC0415
+
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    env = setup_env(tmp_path)
+    plugins = Path(env["CLAUDE_CONFIG_DIR"]) / "plugins"
+    plugins.mkdir(parents=True)
+    copy = plugins / "project-copy"
+    shutil.copytree(product / "plugin", copy)
+    records = {
+        "version": 2,
+        "plugins": {
+            "task-steward@task-steward": [
+                {"scope": "project", "installPath": str(copy), "version": "x"}
+            ]
+        },
+    }
+    (plugins / "installed_plugins.json").write_text(json.dumps(records), encoding="utf-8")
+    code, out = install(product, write_answers(tmp_path, tmp_path / "data"), env, claude)
+    assert code == 0, out
+    assert "plugin install task-steward@task-steward --scope user" in claude_calls(tmp_path)
+    after = json.loads((plugins / "installed_plugins.json").read_text("utf-8"))
+    scopes = [r["scope"] for r in after["plugins"]["task-steward@task-steward"]]
+    assert scopes == ["project", "user"]  # the project install is left as it is
+
+
+@pytest.mark.use_case(UC)
+def test_a_dashboard_step_interrupted_after_the_task_was_created_is_recovered(
+    tmp_path: Path,
+) -> None:
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    home = tmp_path / "data"
+    env = setup_env(tmp_path)
+    answers = write_answers(tmp_path, home, dashboard=True)
+    install(product, answers, env, claude)
+    # As if the run stopped right after the task was created: the record still says started.
+    state = Path(env["TSW_STATE_DIR"]) / "install.json"
+    data = json.loads(state.read_text(encoding="utf-8"))
+    data["steps"]["dashboard"] = {
+        "task": data["steps"]["dashboard"]["task"],
+        "installed_before": False,
+        "state": "started",
+    }
+    state.write_text(json.dumps(data), encoding="utf-8")
+    _, out = install(product, answers, env, claude)
+    assert steps_by_name(out)["dashboard"].get("recovered") is True
+    assert record(env)["steps"]["dashboard"]["installed"] is True
+    # Interrupted again, then uninstalled directly: the task is still taken back.
+    data = json.loads(state.read_text(encoding="utf-8"))
+    data["steps"]["dashboard"].update(state="started", installed=False)
+    state.write_text(json.dumps(data), encoding="utf-8")
+    code, _, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
+    assert code == 0, text
+    tasks = json.loads((Path(env["TSW_STATE_DIR"]) / "fake-schtasks.json").read_text("utf-8"))
+    assert tasks["tasks"] == {}

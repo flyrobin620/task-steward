@@ -308,3 +308,58 @@ def test_the_session_entry_clones_the_installed_plugins_commit(tmp_path: Path) -
     other = make_product(tmp_path, "other")
     code, out = fetch("--dest", str(dest), "--url", str(other), env=env)
     assert code == 1 and "另一个仓库" in out["problem"]
+
+
+@pytest.mark.use_case(UC)
+def test_a_rerun_uses_the_saved_answers_and_manual_settings_are_shown(tmp_path: Path) -> None:
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    env = setup_env(tmp_path)
+    home = tmp_path / "data"
+    replies = [str(home), "", "claude-headless", "", "否", "", "否", "是"]
+    launcher = product / "plugin" / "bin" / "tsw_launch.py"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-X",
+            "utf8",
+            str(launcher),
+            "setup",
+            "install",
+            "--interactive",
+            "--no-browser",
+            "--claude",
+            str(claude),
+        ],
+        input="\n".join(replies) + "\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=300,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # The terminal shows what to merge by hand when the settings are not maintained.
+    assert '"TSW_HOME"' in proc.stdout and "settings.json" in proc.stdout
+    # update-plan's reinstall runs the bare command: the saved answers are used.
+    code, out, text = run_setup(
+        product, "install", "--claude", str(claude), "--no-browser", env=env
+    )
+    assert code == 0, text
+    assert {s["step"]: s["state"] for s in out["steps"]}["home"] == "ok"
+
+
+@pytest.mark.use_case(UC)
+def test_git_outside_path_is_given_by_the_probe(tmp_path: Path) -> None:
+    import shutil  # noqa: PLC0415
+
+    product = make_product(tmp_path)
+    git_path = shutil.which("git")
+    assert git_path
+    env = setup_env(tmp_path)
+    env["PATH"] = os.pathsep.join([str(Path(sys.executable).parent), bare_path()])
+    _, out, _ = run_setup(product, "check", env=env)
+    assert any(p.startswith("git：") for p in out["problems"])
+    _, out, _ = run_setup(product, "check", "--git", git_path, env=env)
+    assert not any(p.startswith("git：") for p in out["problems"])
+    assert out["checkout"]["head"] == git(product, "rev-parse", "HEAD")

@@ -60,7 +60,7 @@ from tsw.machine.runner import run_tool
 from tsw.review.run import run_round
 from tsw.setup import questions as setup_questions
 from tsw.setup import steps as setup_steps
-from tsw.setup.record import save_answers
+from tsw.setup.record import answers_path, save_answers
 from tsw.storage.fs import FsStorage, restore
 from tsw.tasks import KINDS, TaskSpec, list_tasks, note, register, task_row
 
@@ -628,6 +628,12 @@ def _cmd_host_install_hint(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _setup_context(args: argparse.Namespace, *, require: bool) -> setup_steps.Context:
+    git = getattr(args, "git", None)
+    if git:
+        # The probe found git outside PATH (newly installed): tsw and its children run it by
+        # name (T308 review r1 F5).
+        folder = str(Path(git).parent)
+        os.environ["PATH"] = os.pathsep.join([folder, os.environ.get("PATH", "")])
     return setup_steps.context(
         os.environ,
         answers_file=getattr(args, "answers", None),
@@ -649,10 +655,11 @@ def _cmd_setup_plan(args: argparse.Namespace) -> dict[str, Any]:
 def _cmd_setup_install(args: argparse.Namespace) -> dict[str, Any]:
     if args.interactive:
         return _setup_interactive(args)
-    if not args.answers:
+    if not args.answers and not answers_path(os.environ).is_file():
+        # A rerun (repair, update-plan's reinstall) uses the saved answers (DN009 §3).
         raise TswError(
             ErrorCode.REJECTED,
-            "须给出 --answers <答案文件>，或在终端用 --interactive 逐项回答",
+            "没有保存的答案：须给出 --answers <答案文件>，或在终端用 --interactive 逐项回答",
             reason="invalid_input",
         )
     ctx = _setup_context(args, require=True)
@@ -674,6 +681,10 @@ def _say_plan(planned: dict[str, Any]) -> None:
         changes: list[dict[str, Any]] = step.get("diff") or []
         for change in changes:
             print(f"      {change['key']}：{change['before']} → {change['after']}")
+        if step.get("manual"):
+            print(f"      {step.get('note', '')}")
+            print(f"      文件：{step.get('file')}")
+            print("\n".join(f"      {line}" for line in str(step["manual"]).splitlines()))
         if step.get("problem"):
             print(f"      {step['problem']}")
     for problem in planned["problems"]:
@@ -725,6 +736,10 @@ def _say_installed(result: dict[str, Any]) -> dict[str, Any]:
     print("\n安装结果：")
     for step in result["steps"]:
         print(f"  - {step['step']}：{step.get('state')}")
+        if step.get("manual"):
+            print(f"    {step.get('note', '')}")
+            print(f"    文件：{step.get('file')}")
+            print("\n".join(f"    {line}" for line in str(step["manual"]).splitlines()))
     verify = result["verify"]
     for check in verify["checks"]:
         mark = {True: "通过", False: "失败", None: "未核对"}[check["ok"]]
@@ -1010,6 +1025,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument(
             "--claude", help="claude 命令行的完整路径（默认先查 PATH 再查桌面 app）"
         )
+        command.add_argument("--git", help="git 的完整路径（不在 PATH 中时）")
 
     review = sub.add_parser("review", help="worker 自评审").add_subparsers(
         dest="review_command", required=True, metavar="<review command>"

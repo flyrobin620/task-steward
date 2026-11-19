@@ -323,6 +323,13 @@ def after_install(run: Run, original_path: str | None) -> None:
         hooked.returncode == 0 and "additionalContext" in hooked.stdout,
         hooked.returncode,
     )
+    runtime = main_session_runtime(run, env, settings["env"]["TSW_PYTHON"], copy)
+    running = str(runtime.get("commit") or "")
+    run.check(
+        "S6 主会话的 tsw MCP server：whoami 角色为 orchestrator，运行时为检出 HEAD",
+        runtime.get("role") == "orchestrator" and running == head,
+        {"role": runtime.get("role"), "commit": running[:12]},
+    )
     head_shim = str(run.shims / "tsw.cmd")
     found = run.run(["cmd", "/c", "where", "tsw"], env=env).stdout.splitlines()
     first = found[0].strip() if found else ""
@@ -349,7 +356,7 @@ def after_install(run: Run, original_path: str | None) -> None:
         run.scrub(found[0].strip() if found else ""),
     )
     verify = run.run(
-        ["cmd", "/c", "tsw", "setup", "verify", "--after-reload", "--running", head, "--json"],
+        ["cmd", "/c", "tsw", "setup", "verify", "--after-reload", "--running", running, "--json"],
         env=env,
     )
     result = last_json(verify.stdout)
@@ -377,6 +384,52 @@ def after_install(run: Run, original_path: str | None) -> None:
         and (run.home / "tsw-home.json").is_file(),
         {"exit": gone.returncode, "path_restored": after == original_path},
     )
+
+
+def main_session_runtime(run: Run, env: dict[str, str], python: str, copy: Path) -> dict[str, Any]:
+    """Start the plugin copy's MCP server as the host does (TSW_PYTHON, the session ID, the data
+    directory as the session's folder) and ask ``whoami``: the role and the runtime commit."""
+    messages = [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "setup-e2e", "version": "1"},
+            },
+        },
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "whoami", "arguments": {}},
+        },
+    ]
+    server_env = {
+        **env,
+        "TSW_HOME": str(run.home),
+        "CLAUDE_PLUGIN_ROOT": str(copy),
+        "CLAUDE_CODE_HOST_SESSION_ID": f"{run.id}-main",
+    }
+    proc = run.run(
+        [python, "-X", "utf8", "-u", str(copy / "bin" / "tsw_launch.py"), "mcp"],
+        env=server_env,
+        stdin="".join(json.dumps(m) + "\n" for m in messages),
+        cwd=run.home,
+    )
+    for line in proc.stdout.splitlines():
+        try:
+            reply = json.loads(line)
+        except ValueError:
+            continue
+        if reply.get("id") == 2:
+            text = reply["result"]["content"][0]["text"]
+            found = json.loads(text)
+            return {"role": found.get("role"), **(found.get("runtime") or {})}
+    return {}
 
 
 def _inside(path: str, folder: Path) -> bool:
