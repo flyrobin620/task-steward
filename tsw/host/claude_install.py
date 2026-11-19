@@ -160,47 +160,59 @@ def source_location(source: Mapping[str, Any] | None) -> str | None:
     kind = source.get("source")
     if kind == "directory" and isinstance(source.get("path"), str):
         return str(source["path"])
+    ref = source.get("ref")
+    suffix = f"#{ref}" if isinstance(ref, str) and ref else ""
     if kind in ("git", "url") and isinstance(source.get("url"), str):
-        return str(source["url"])
+        return f"{source['url']}{suffix}"
     if kind == "github" and isinstance(source.get("repo"), str):
-        return f"https://github.com/{source['repo']}.git"  # HTTPS, not SSH (CC009 §3)
+        return f"https://github.com/{source['repo']}.git{suffix}"  # HTTPS, not SSH (CC009 §3)
     return None
+
+
+def _same_source(a: Mapping[str, Any] | None, b: Mapping[str, Any] | None) -> bool:
+    return source_location(a) == source_location(b) if a and b else a is None and b is None
 
 
 def remove_plugin(env: Mapping[str, str], claude: str, owned: Mapping[str, Any]) -> dict[str, Any]:
     """Put the plugin back as the install found it, as ``owned`` (its record) says (DN009 §10).
 
-    The marketplace: one that existed before is registered again from its old source; one the
-    install added is removed. The user-scope plugin: one the install added is uninstalled; one
-    that was there before (a developer's own install, or the session path's first step
-    ``/plugin install … --marketplace``) stays, and the result says how to remove it. Installs in
-    other scopes are never touched.
+    The marketplace the install pointed at the checkout goes back to its old source, or is
+    removed when the install added it. Claude Code only re-points a marketplace with a
+    ``marketplace add`` of a source its settings accept, and removing a marketplace uninstalls
+    its plugins (T308 live), so a restore removes the marketplace, adds the old source and, when
+    the user-scope plugin was installed before, installs it again from there. A user-scope
+    plugin the install added is uninstalled. Installs in other scopes are never touched.
     """
     before: Any = owned.get("marketplace_before")
     source = cast("dict[str, Any]", before) if isinstance(before, dict) else None
+    had_plugin = bool(owned.get("installed_before"))
     ran: list[dict[str, Any]] = []
     notes: list[str] = []
-    user = [c for c in installed_copies(env) if c.get("scope") == "user"]
-    if user and not owned.get("installed_before"):
-        ran.append(run_claude(claude, env, "plugin", "uninstall", PLUGIN_ID, "--scope", "user"))
-    elif user:
-        notes.append(
-            f"插件在安装前就已安装（用户范围），保留；要移除时运行 clau"
-            f"de plugin uninstall {PLUGIN_ID}"
-        )
+    current = marketplace_source(env)
     location = source_location(source)
-    if source is None:
-        if marketplace_source(env) is not None:
+    if source is not None and location is None:
+        notes.append("安装前的插件市场来源无法识别，保持现状")
+    elif not _same_source(current, source):
+        if current is not None:
             ran.append(run_claude(claude, env, "plugin", "marketplace", "remove", MARKETPLACE))
-    elif location is not None and marketplace_source(env) != source:
-        ran.append(run_claude(claude, env, "plugin", "marketplace", "add", location))
-        notes.append(f"插件市场改回安装前的来源：{location}")
-    restored = marketplace_source(env)
-    ok = restored is None if source is None else location is None or restored is not None
-    left = [c for c in installed_copies(env) if c.get("scope") == "user"]
-    if not owned.get("installed_before"):
-        ok = ok and not left
-    return {"ran": ran, "notes": notes, "ok": ok}
+        if location is not None:
+            ran.append(run_claude(claude, env, "plugin", "marketplace", "add", location))
+            notes.append(f"插件市场改回安装前的来源：{location}")
+    user = [c for c in installed_copies(env) if c.get("scope") == "user"]
+    if had_plugin and not user and location is not None:
+        ran.append(run_claude(claude, env, "plugin", "install", PLUGIN_ID, "--scope", "user"))
+    elif not had_plugin and user:
+        ran.append(run_claude(claude, env, "plugin", "uninstall", PLUGIN_ID, "--scope", "user"))
+    if had_plugin:
+        notes.append(
+            "插件在安装前就已安装（用户范围），已按原来的来源保留；要完全移除时运行 "
+            f"claude plugin uninstall {PLUGIN_ID} 与 claude plugin marketplace remove {MARKETPLACE}"
+        )
+    user = [c for c in installed_copies(env) if c.get("scope") == "user"]
+    restored = (source is not None and location is None) or _same_source(
+        marketplace_source(env), source
+    )
+    return {"ran": ran, "notes": notes, "ok": restored and bool(user) == had_plugin}
 
 
 # ---------------------------------------------------------------------- user settings

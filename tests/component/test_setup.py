@@ -217,10 +217,13 @@ def test_an_interrupted_install_keeps_its_ownership_and_uninstall_takes_back_onl
     assert (home / "tsw-home.json").is_file()
     assert out["kept"]["home"] == str(home)
     calls = claude_calls(tmp_path)
-    assert calls[-2:] == [
-        "plugin uninstall task-steward@task-steward --scope user",
-        "plugin marketplace remove task-steward",
-    ]
+    # The install added both: removing the marketplace also uninstalls its plugin.
+    assert calls[-1] == "plugin marketplace remove task-steward"
+    assert (
+        not (Path(env["CLAUDE_CONFIG_DIR"]) / "plugins" / "known_marketplaces.json")
+        .read_text("utf-8")
+        .count("task-steward")
+    )
     assert record(env)["status"] == "uninstalled"
 
 
@@ -374,7 +377,11 @@ def test_uninstall_leaves_a_plugin_the_install_found_from_a_local_directory(
     assert record(env)["steps"]["plugin"]["marketplace_before"]["path"] == str(mine)
     code, _, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
     assert code == 0, text
-    assert claude_calls(tmp_path)[-1] == f"plugin marketplace add {mine}"  # pointed back
+    assert claude_calls(tmp_path)[-3:] == [  # its old source again, and its plugin
+        "plugin marketplace remove task-steward",
+        f"plugin marketplace add {mine}",
+        "plugin install task-steward@task-steward --scope user",
+    ]
     plugins = Path(env["CLAUDE_CONFIG_DIR"]) / "plugins"
     known = json.loads((plugins / "known_marketplaces.json").read_text("utf-8"))
     assert known["task-steward"]["source"]["path"] == str(mine)
@@ -478,14 +485,20 @@ def test_a_dashboard_step_interrupted_after_the_task_was_created_is_recovered(
 def test_uninstall_restores_a_remote_install_that_was_there_before(tmp_path: Path) -> None:
     product, claude = make_product(tmp_path), fake_claude(tmp_path)
     env = setup_env(tmp_path)
-    # The session path's first step, or an earlier install from the product repository.
-    _claude(claude, env, "plugin", "install", "task-steward", "--marketplace", str(product))
+    # The session path's first step, or an earlier install from the product repository (its
+    # address written differently from the checkout's folder, as a remote URL would be).
+    remote = str(product) + "/"
+    _claude(claude, env, "plugin", "install", "task-steward", "--marketplace", remote)
     assert install(product, write_answers(tmp_path, tmp_path / "data"), env, claude)[0] == 0
     code, out, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
     assert code == 0, text
     calls = claude_calls(tmp_path)
     assert not any(call.startswith("plugin uninstall") for call in calls)
-    assert calls[-1] == f"plugin marketplace add {product}"  # its old source again
+    assert calls[-3:] == [  # its old source again, and the plugin installed from it
+        "plugin marketplace remove task-steward",
+        f"plugin marketplace add {remote}",
+        "plugin install task-steward@task-steward --scope user",
+    ]
     notes = out["removed"]["plugin"]["notes"]
     assert any("claude plugin uninstall task-steward@task-steward" in n for n in notes)
 
@@ -508,7 +521,7 @@ def test_uninstall_restores_a_marketplace_that_had_no_user_install(tmp_path: Pat
     code, _, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
     assert code == 0, text
     assert claude_calls(tmp_path)[-2:] == [
-        "plugin uninstall task-steward@task-steward --scope user",  # the one the install added
+        "plugin marketplace remove task-steward",  # also takes the user install it added
         f"plugin marketplace add {mine}",  # the developer's marketplace, as it was
     ]
     after = json.loads((plugins / "installed_plugins.json").read_text("utf-8"))

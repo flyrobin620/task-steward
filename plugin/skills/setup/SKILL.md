@@ -82,4 +82,4 @@ tsw setup verify --after-reload --running <runtime.commit> --json
 "<python>" -X utf8 "<checkout>/plugin/bin/tsw_launch.py" setup uninstall --yes --git "<git>" --json
 ```
 
-转告结果中的 `kept` 与 `note`。会话路径中由本 skill 克隆的检出，用户确认后可以删除。
+转告结果中的 `kept`、`note` 与 `removed.plugin.notes`：卸载把插件恢复到安装前的状态，插件在运行本 skill 之前就已安装（例如用 `/plugin install` 装的）时它会保留，用户要完全移除时按 notes 运行那两条命令（会话中为 `/plugin uninstall task-steward@task-steward` 与 `/plugin marketplace remove task-steward`）。会话路径中由本 skill 克隆的检出，用户确认后可以删除。

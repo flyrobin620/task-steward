@@ -81,8 +81,16 @@ if verb == "plugin marketplace add":
     save(known_file, known)
     print("Marketplace 'task-steward' now points at dir:" + path if before else "added")
 elif verb == "plugin marketplace remove":
+    # As Claude Code does: removing a marketplace also uninstalls its (user-scope) plugin.
     known.pop(args[3], None)
     save(known_file, known)
+    records = load(installed_file, {"version": 2, "plugins": {}})
+    left = [r for r in records["plugins"].get(PLUGIN_ID, []) if r.get("scope") != "user"]
+    if left:
+        records["plugins"][PLUGIN_ID] = left
+    else:
+        records["plugins"].pop(PLUGIN_ID, None)
+    save(installed_file, records)
 elif verb == "plugin install" and "--marketplace" in args:
     url = args[args.index("--marketplace") + 1]
     known["task-steward"] = {"source": {"source": "git", "url": url}, "installLocation": url}
