@@ -1,6 +1,6 @@
 # CC009 Claude Code 上的安装
 
-- 状态：已确认（T305；用户 2026-11-19 确认）
+- 状态：已确认（T305；用户 2026-11-19 确认；同日决定数据目录必填、setup 不配置仓库，DN009 §6）
 - 日期：2026-11-19
 - 实现：[DN009 分发与安装](../DN009-distribution-and-install.md)
 - 相关：[CC006 Claude Code 插件](CC006-plugins.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -22,7 +22,7 @@ git clone https://github.com/flyrobin620/task-steward.git "$env:LOCALAPPDATA\Tas
 & "$env:LOCALAPPDATA\TaskSteward\task-steward\setup.ps1"
 ```
 
-脚本会问几个问题，做完后请用户重启 Claude app，在所选的数据目录中打开一个会话。
+脚本会问几个问题（数据目录位置必须由用户给出，没有默认值），做完后请用户重启 Claude app，在这个数据目录中打开一个会话。
 
 **在 Claude 中安装**（在任意一个会话中逐条输入）：
 
@@ -32,9 +32,9 @@ git clone https://github.com/flyrobin620/task-steward.git "$env:LOCALAPPDATA\Tas
 /task-steward:setup
 ```
 
-setup 在会话中提问并做完，最后请用户重启 Claude app。过程中 Claude 会请用户批准几条命令（克隆仓库、写用户设置与 PATH、登记 Dashboard 计划任务等）。
+setup 在会话中提问（同样要求用户给出数据目录位置）并做完，最后请用户重启 Claude app。过程中 Claude 会请用户批准几条命令（克隆仓库、写用户设置与 PATH、登记 Dashboard 计划任务等）。
 
-两条路径的前提相同：Python 3.10+、git、Claude Code（桌面 app 与 `claude` CLI）。
+两条路径的前提相同：Python 3.10+、git、Claude Code（桌面 app 与 `claude` CLI）。安装不配置要管理的仓库；重启后在主会话中告诉它要管理哪些仓库，由主会话逐个加入配置（DN009 §6.1）。
 
 ## 3. 插件与市场
 
