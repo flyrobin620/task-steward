@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="tsw-source-sha256" content="e98b29181d6c58e85535b309be799d14848eef12252e61569a725d4167410f76">
+<title>CC009 Claude Code 上的安装</title>
+<style>
+:root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.7 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--fg);background:#fff}
+.layout{display:grid;grid-template-columns:260px minmax(0,1fr);max-width:1400px;margin:0 auto}
+nav.toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:28px 18px;border-right:1px solid var(--line);font-size:13px}
+nav.toc h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
+nav.toc a{display:block;color:var(--fg);text-decoration:none;padding:2px 0}
+nav.toc a.l3{padding-left:14px;color:var(--muted)}
+nav.toc a:hover{color:var(--accent)}
+main{padding:32px 48px 64px;min-width:0}
+h1{font-size:28px;margin:0 0 16px;border-bottom:3px solid var(--accent);padding-bottom:10px}
+h2{font-size:21px;margin:36px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:17px;margin:26px 0 10px}
+h4{font-size:15px;margin:20px 0 8px}
+a{color:var(--accent)}
+code{font-family:Consolas,"Cascadia Mono",monospace;font-size:13px;background:var(--code);padding:1px 5px;border-radius:4px}
+pre{background:#1e2230;color:#e8eaf2;padding:14px 16px;border-radius:8px;overflow:auto;line-height:1.5}
+pre code{background:none;padding:0;color:inherit}
+table{border-collapse:collapse;width:100%;margin:12px 0 18px;font-size:13.5px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:var(--bg-soft);white-space:nowrap}
+tr:nth-child(even) td{background:#fbfcfe}
+blockquote{margin:12px 0;padding:8px 16px;border-left:4px solid var(--accent);background:var(--bg-soft)}
+figure{margin:18px 0 8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff}
+figure svg{display:block;width:100%;height:auto;max-height:none}
+figcaption{font-size:13px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between;gap:12px}
+.meta{color:var(--muted);font-size:13px}
+footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:10px}
+@media (max-width:900px){.layout{grid-template-columns:1fr}nav.toc{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line)}main{padding:20px}}
+@media print{nav.toc{display:none}.layout{display:block}main{padding:0}a{color:inherit;text-decoration:none}
+ pre{white-space:pre-wrap;background:#f3f4f8;color:#111}figure,table,pre{break-inside:avoid}h2,h3{break-after:avoid}
+ body{font-size:11pt}@page{margin:16mm 14mm}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc"><h2>目录</h2><a class="l2" href="#1-范围">1. 范围</a><a class="l2" href="#2-给用户的安装说明">2. 给用户的安装说明</a><a class="l2" href="#3-插件与市场">3. 插件与市场</a><a class="l2" href="#4-setup-skill-与会话入口">4. setup skill 与会话入口</a><a class="l2" href="#5-用户设置与-auto-模式规则apply_user_settings">5. 用户设置与 auto 模式规则（apply_user_settings）</a><a class="l2" href="#6-会话中的例外dn009-8">6. 会话中的例外（DN009 §8）</a><a class="l2" href="#7-重新加载">7. 重新加载</a><a class="l2" href="#8-windows-上的入口与垫片">8. Windows 上的入口与垫片</a><a class="l2" href="#9-待验证live">9. 待验证（live）</a></nav>
+<main>
+<h1>CC009 Claude Code 上的安装</h1>
+<ul><li>状态：已确认（T305；用户 2026-11-19 确认）</li><li>日期：2026-11-19</li><li>实现：<a href="../DN009-distribution-and-install.html">DN009 分发与安装</a></li><li>相关：<a href="CC006-plugins.html">CC006 Claude Code 插件</a> · <a href="CC008-guardrails.html">CC008 Claude Code 上的护栏</a></li></ul>
+<h2 id="1-范围">1. 范围</h2>
+<p>DN009 的两条安装路径在 Claude Code（Windows 上的 Claude 桌面 app 与 <code>claude</code> CLI）中的做法：插件与市场、一步安装、把市场改指本机检出、setup skill、用户设置与 auto 模式规则、会话中的例外、重新加载，以及 Windows 上的入口与垫片。依据是 T305 的实测（Claude Code 2.1.302，独立的 <code>CLAUDE_CONFIG_DIR</code>）与官方文档（<a href="https://code.claude.com/docs/en/plugin-marketplaces">Create a marketplace</a>、<a href="https://code.claude.com/docs/en/plugins/host-marketplace.md">Host and maintain a marketplace</a>、<a href="https://code.claude.com/docs/en/plugins/manifest-reference">Plugin manifest reference</a>）。</p>
+<p>插件名、市场名与插件 ID 保持 <code>task-steward</code> / <code>task-steward@task-steward</code>（用户 2026-11-19 决定不改名）。</p>
+<h2 id="2-给用户的安装说明">2. 给用户的安装说明</h2>
+<figure><svg xmlns="http://www.w3.org/2000/svg" width="2800" height="2200" viewBox="0 0 2800 2200">
+<title>在 Claude Code 上安装 TaskSteward：两条各自在一处完成的路径</title>
+<desc>两条安装路径进入共用安装脚本，验证后完成，验证未通过则修正后重跑。</desc>
+<defs>
+<marker id="arrow-main" markerWidth="12" markerHeight="10" refX="11" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L11 5 L0 10 Z" fill="#2867B3"/></marker>
+<marker id="arrow-loop" markerWidth="12" markerHeight="10" refX="11" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L11 5 L0 10 Z" fill="#7857A7"/></marker>
+</defs>
+<rect x="0" y="0" width="2800" height="2200" fill="white"/>
+<g font-family="Segoe UI, &quot;Microsoft YaHei&quot;, Arial, sans-serif">
+<rect x="60" y="65" width="72" height="7" rx="3" fill="#2867B3"/>
+<text x="60" y="142" font-size="44" font-weight="700" fill="#24384B" text-anchor="start">在 Claude Code 上安装 TaskSteward：两条各自在一处完成的路径</text>
+<g data-boundary="Terminal path" data-box="60 230 2680 440">
+<rect x="60" y="230" width="2680" height="440" rx="20" fill="#EEF4FC" stroke="#B6C7D6" stroke-width="2" stroke-dasharray="9 8"/>
+<rect x="300" y="255" width="5" height="36" rx="2" fill="#2867B3"/>
+<text x="330" y="282" font-size="26" font-weight="700" fill="#24384B" text-anchor="start">终端路径（全在终端）</text>
+<rect x="2580" y="254" width="120" height="40" rx="20" fill="#FFFFFF" stroke="#B6C7D6" stroke-width="2" />
+<text x="2640" y="281" font-size="20" font-weight="600" fill="#24384B" text-anchor="middle">泳道</text>
+</g>
+<g data-boundary="Session path" data-box="60 710 2680 460">
+<rect x="60" y="710" width="2680" height="460" rx="20" fill="#EEF8F1" stroke="#B6C7D6" stroke-width="2" stroke-dasharray="9 8"/>
+<rect x="300" y="735" width="5" height="36" rx="2" fill="#3C8D5A"/>
+<text x="330" y="762" font-size="26" font-weight="700" fill="#24384B" text-anchor="start">会话路径（全在 Claude 会话）</text>
+<rect x="2580" y="734" width="120" height="40" rx="20" fill="#FFFFFF" stroke="#B6C7D6" stroke-width="2" />
+<text x="2640" y="761" font-size="20" font-weight="600" fill="#24384B" text-anchor="middle">泳道</text>
+</g>
+<g data-boundary="Shared installer (script)" data-box="60 1210 2680 640">
+<rect x="60" y="1210" width="2680" height="640" rx="20" fill="#FFF7E8" stroke="#B6C7D6" stroke-width="2" stroke-dasharray="9 8"/>
+<rect x="300" y="1235" width="5" height="36" rx="2" fill="#B5873A"/>
+<text x="330" y="1262" font-size="26" font-weight="700" fill="#24384B" text-anchor="start">共用的安装脚本（由发起的那一处运行）</text>
+<rect x="2580" y="1234" width="120" height="40" rx="20" fill="#FFFFFF" stroke="#B6C7D6" stroke-width="2" />
+<text x="2640" y="1261" font-size="20" font-weight="600" fill="#24384B" text-anchor="middle">泳道</text>
+</g>
+<path d="M760 410 H940" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<path data-flow="1" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M760 410 H940" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1490 410 H1730" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<path data-flow="2" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M1490 410 H1730" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M2450 410 H2610 V590 H130 V1565 H330" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<path data-flow="3" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M2450 410 H2610 V590 H130 V1565 H330" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M760 930 H940" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<path data-flow="4" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M760 930 H940" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1490 930 H1730" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<path data-flow="5" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M1490 930 H1730" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M2450 930 H2530 V1110 H220 V1460 H330" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<path data-flow="6" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M2450 930 H2530 V1110 H220 V1460 H330" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M900 1565 H1030" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<path data-flow="7" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M900 1565 H1030" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1380 1565 H1490" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<path data-flow="8" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M1380 1565 H1490" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1600 1455 V1330 H615 V1380" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<path data-flow="9" data-category="loop" stroke="#7857A7" marker-end="url(#arrow-loop)" d="M1600 1455 V1330 H615 V1380" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M1710 1565 H1910" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<path data-flow="10" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M1710 1565 H1910" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M2450 1565 H2560" fill="none" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+<path data-flow="11" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M2450 1565 H2560" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<g data-node="Start in a terminal" data-kind="start" data-box="330 350 430 120">
+<rect x="330" y="350" width="430" height="120" rx="60.0" fill="#EAF6EE" stroke="#3C8D5A" stroke-width="2" />
+<text x="545.0" y="418.16" font-size="24" font-weight="600" fill="#24384B" text-anchor="middle" xml:space="preserve"><tspan x="545.0" y="418.16">开始（终端）</tspan></text>
+</g>
+<g data-node="git clone the product repository" data-kind="step" data-box="940 330 550 160">
+<rect x="940" y="330" width="550" height="160" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" />
+<text x="1215.0" y="419.52" font-size="28" font-weight="600" fill="#24384B" text-anchor="middle" xml:space="preserve"><tspan x="1215.0" y="419.52">git clone 产品仓库</tspan></text>
+</g>
+<g data-node="Run setup.ps1" data-kind="step" data-box="1730 300 720 220">
+<rect x="1730" y="300" width="720" height="220" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" />
+<text x="2090.0" y="379.0" font-size="28" font-weight="600" fill="#24384B" text-anchor="middle" xml:space="preserve"><tspan x="2090.0" y="379.0">运行 setup.ps1</tspan></text>
+<text x="2090.0" y="435.0" font-size="21" font-weight="400" fill="#506174" text-anchor="middle" xml:space="preserve"><tspan x="2090.0" y="435.0">探测 Python、git 与 claude，在终端中提问</tspan><tspan x="2090.0" y="466.0"></tspan></text>
+</g>
+<g data-node="Start in a Claude session" data-kind="start" data-box="330 870 430 120">
+<rect x="330" y="870" width="430" height="120" rx="60.0" fill="#EAF6EE" stroke="#3C8D5A" stroke-width="2" />
+<text x="545.0" y="938.16" font-size="24" font-weight="600" fill="#24384B" text-anchor="middle" xml:space="preserve"><tspan x="545.0" y="938.16">开始（Claude 会话）</tspan></text>
+</g>
+<g data-node="/plugin install task-steward" data-kind="step" data-box="940 820 550 220">
+<rect x="940" y="820" width="550" height="220" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" />
+<text x="1215.0" y="899.0" font-size="28" font-weight="600" fill="#24384B" text-anchor="middle" xml:space="preserve"><tspan x="1215.0" y="899.0">/plugin install task-steward</tspan></text>
+<text x="1215.0" y="955.0" font-size="21" font-weight="400" fill="#506174" text-anchor="middle" xml:space="preserve"><tspan x="1215.0" y="955.0">从 GitHub 插件市场，</tspan><tspan x="1215.0" y="986.0">再 /reload-plugins</tspan></text>
+</g>
+<g data-node="/task-steward:setup" data-kind="step" data-box="1730 820 720 220">
+<rect x="1730" y="820" width="720" height="220" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" />
+<text x="2090.0" y="899.0" font-size="28" font-weight="600" fill="#24384B" text-anchor="middle" xml:space="preserve"><tspan x="2090.0" y="899.0">/task-steward:setup</tspan></text>
+<text x="2090.0" y="955.0" font-size="21" font-weight="400" fill="#506174" text-anchor="middle" xml:space="preserve"><tspan x="2090.0" y="955.0">探测前提、克隆检出，在会话中提问</tspan><tspan x="2090.0" y="986.0"></tspan></text>
+</g>
+<g data-node="tsw setup install" data-kind="subprocess" data-box="330 1380 570 370">
+<rect x="330" y="1380" width="570" height="370" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" /><line x1="342" y1="1380" x2="342" y2="1750" stroke="#2867B3" stroke-width="2"/><line x1="888" y1="1380" x2="888" y2="1750" stroke="#2867B3" stroke-width="2"/>
+<text x="615.0" y="1487.5" font-size="28" font-weight="600" fill="#24384B" text-anchor="middle" xml:space="preserve"><tspan x="615.0" y="1487.5">tsw setup install</tspan></text>
+<text x="615.0" y="1543.5" font-size="21" font-weight="400" fill="#506174" text-anchor="middle" xml:space="preserve"><tspan x="615.0" y="1543.5">同一套确定步骤：PATH 垫片、</tspan><tspan x="615.0" y="1574.5">市场改指检出、数据目录与配置、</tspan><tspan x="615.0" y="1605.5">用户设置（先备份）、</tspan><tspan x="615.0" y="1636.5">host render、Dashboard</tspan><tspan x="615.0" y="1667.5"></tspan></text>
+</g>
+<g data-node="tsw setup verify" data-kind="subprocess" data-box="1030 1505 350 120">
+<rect x="1030" y="1505" width="350" height="120" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" /><line x1="1042" y1="1505" x2="1042" y2="1625" stroke="#2867B3" stroke-width="2"/><line x1="1368" y1="1505" x2="1368" y2="1625" stroke="#2867B3" stroke-width="2"/>
+<text x="1205.0" y="1574.52" font-size="28" font-weight="600" fill="#24384B" text-anchor="middle" xml:space="preserve"><tspan x="1205.0" y="1574.52">tsw setup verify</tspan></text>
+</g>
+<g data-node="Verified?" data-kind="decision" data-box="1490 1455 220 220">
+<polygon points="1600.0,1455 1710,1565.0 1600.0,1675 1490,1565.0" fill="#FFF7E8" stroke="#B5873A" stroke-width="2"/>
+<text x="1600.0" y="1573.16" font-size="24" font-weight="600" fill="#24384B" text-anchor="middle" xml:space="preserve"><tspan x="1600.0" y="1573.16">验证通过？</tspan></text>
+</g>
+<g data-node="Restart Claude app, open the main session in the data directory" data-kind="step" data-box="1910 1465 540 200">
+<rect x="1910" y="1465" width="540" height="200" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" />
+<text x="2180.0" y="1538.52" font-size="28" font-weight="600" fill="#24384B" text-anchor="middle" xml:space="preserve"><tspan x="2180.0" y="1538.52">重启 Claude app，</tspan><tspan x="2180.0" y="1574.52">在数据目录打开主会话</tspan><tspan x="2180.0" y="1610.52"></tspan></text>
+</g>
+<g data-node="Done" data-kind="end" data-box="2560 1520 130 90">
+<rect x="2560" y="1520" width="130" height="90" rx="45.0" fill="#F0F3F6" stroke="#708294" stroke-width="2" />
+<text x="2625.0" y="1573.16" font-size="24" font-weight="600" fill="#24384B" text-anchor="middle" xml:space="preserve"><tspan x="2625.0" y="1573.16">完成</tspan></text>
+</g>
+<g data-badge="9" data-box="1035 1313 250 34">
+<rect x="1035" y="1313" width="250" height="34" rx="17" fill="#FFFFFF" stroke="#7857A7" stroke-width="2" />
+<text x="1160.0" y="1337" font-size="20" font-weight="600" fill="#7857A7" text-anchor="middle">否：修正后重跑</text>
+</g>
+<g data-badge="10" data-box="1760 1548 100 34">
+<rect x="1760" y="1548" width="100" height="34" rx="17" fill="#FFFFFF" stroke="#2867B3" stroke-width="2" />
+<text x="1810.0" y="1572" font-size="20" font-weight="600" fill="#2867B3" text-anchor="middle">是</text>
+</g>
+<text x="60" y="1932" font-size="32" font-weight="700" fill="#24384B" text-anchor="start">图例</text>
+<rect x="60" y="1973" width="84" height="48" rx="24.0" fill="#EAF6EE" stroke="#3C8D5A" stroke-width="2" />
+<text x="168" y="2004" font-size="20" font-weight="400" fill="#24384B" text-anchor="start">开始</text>
+<rect x="560" y="1973" width="84" height="48" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" />
+<text x="668" y="2004" font-size="20" font-weight="400" fill="#24384B" text-anchor="start">步骤</text>
+<rect x="1060" y="1973" width="84" height="48" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" /><line x1="1072" y1="1973" x2="1072" y2="2021" stroke="#2867B3" stroke-width="2"/><line x1="1132" y1="1973" x2="1132" y2="2021" stroke="#2867B3" stroke-width="2"/>
+<text x="1168" y="2004" font-size="20" font-weight="400" fill="#24384B" text-anchor="start">子流程</text>
+<polygon points="1702.0,1973 1744,1997.0 1702.0,2021 1660,1997.0" fill="#FFF7E8" stroke="#B5873A" stroke-width="2"/>
+<text x="1768" y="2004" font-size="20" font-weight="400" fill="#24384B" text-anchor="start">判断</text>
+<rect x="2260" y="1973" width="84" height="48" rx="24.0" fill="#F0F3F6" stroke="#708294" stroke-width="2" />
+<text x="2368" y="2004" font-size="20" font-weight="400" fill="#24384B" text-anchor="start">结束</text>
+<path d="M60 2090 H144" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-main)"/>
+<text x="168" y="2097" font-size="20" font-weight="400" fill="#24384B" text-anchor="start">主路径</text>
+<path d="M560 2090 H644" fill="none" stroke="#7857A7" stroke-width="3" stroke-linejoin="round" marker-end="url(#arrow-loop)"/>
+<text x="668" y="2097" font-size="20" font-weight="400" fill="#24384B" text-anchor="start">重试与循环</text>
+</g></svg><figcaption><span>在 Claude Code 上安装 TaskSteward：两条各自在一处完成的路径</span><a href="CC009-install-paths.svg" target="_blank">在新窗口打开 SVG</a></figcaption></figure>
+<p><strong>在终端安装</strong>（PowerShell）：</p>
+<pre><code class="lang-powershell">git clone https://github.com/flyrobin620/task-steward.git &quot;$env:LOCALAPPDATA\TaskSteward\task-steward&quot;
+&amp; &quot;$env:LOCALAPPDATA\TaskSteward\task-steward\setup.ps1&quot;</code></pre>
+<p>脚本会问几个问题，做完后请用户重启 Claude app，在所选的数据目录中打开一个会话。</p>
+<p><strong>在 Claude 中安装</strong>（在任意一个会话中逐条输入）：</p>
+<pre><code class="lang-text">/plugin install task-steward --marketplace https://github.com/flyrobin620/task-steward.git
+/reload-plugins
+/task-steward:setup</code></pre>
+<p>setup 在会话中提问并做完，最后请用户重启 Claude app。过程中 Claude 会请用户批准几条命令（克隆仓库、写用户设置与 PATH、登记 Dashboard 计划任务等）。</p>
+<p>两条路径的前提相同：Python 3.10+、git、Claude Code（桌面 app 与 <code>claude</code> CLI）。</p>
+<h2 id="3-插件与市场">3. 插件与市场</h2>
+<table><thead><tr><th>项</th><th>做法</th><th>依据</th></tr></thead><tbody><tr><td>一步安装</td><td><code>claude plugin install task-steward --marketplace https://github.com/flyrobin620/task-steward.git</code> 先添加市场再安装（会话中为 <code>/plugin install … --marketplace …</code>）；公开仓库不需要凭据</td><td>实测（CLI）：添加市场并安装成功，安装记录的 <code>gitCommitSha</code> 为来源提交</td></tr><tr><td>HTTPS 写法</td><td>用 <code>https://…git</code>，不用 <code>owner/repo</code>：<code>owner/repo</code> 先探测 SSH，会话中的 <code>/plugin</code> 与插件更新不会回退到 HTTPS，没有 SSH key 的用户会失败</td><td>文档</td></tr><tr><td>缓存中没有运行时</td><td>市场条目的来源是 <code>./plugin</code>，缓存副本只有 <code>plugin/</code> 的内容；启动器 <code>bin/tsw_launch.py</code> 经数据目录的 <code>product_repo</code> 加载检出中的运行时（CC006 §2）</td><td>实测：只装插件、没有检出时 <code>tsw_launch.py</code> 报告找不到运行时</td></tr><tr><td>改指检出（<code>install_plugin</code>）</td><td><code>claude plugin marketplace add &lt;检出&gt;</code>：同名市场已存在时 Claude Code 把它改指新来源，已安装的插件不卸载，之后从新来源更新</td><td>实测：输出 “Marketplace 'task-steward' was already added from git:… and now points at dir:&lt;检出&gt;. Plugins already installed from it now update from the new source.”；<code>enabledPlugins</code> 不变；检出提交后 <code>claude plugin update</code> 换上新副本</td></tr><tr><td>第一次注册（终端路径）</td><td><code>claude plugin marketplace add &lt;检出&gt;</code>，再 <code>claude plugin install task-steward@task-steward</code>（用户范围）</td><td>实测：副本版本等于检出 HEAD</td></tr><tr><td>更新</td><td>不变：<code>tsw host render</code> 运行 <code>claude plugin update task-steward@task-steward</code>（CC006 §2），副本跟随检出</td><td>实测</td></tr><tr><td>后台自动更新</td><td>不打开：本地目录市场没有远端可查，更新只经主会话的自我更新</td><td>文档：第三方市场默认关闭</td></tr><tr><td>宿主命令行的路径</td><td><code>claude</code> 不一定在 PATH 中（桌面 app 的安装位置为 <code>%LOCALAPPDATA%\Programs\ClaudeCode\claude.exe</code>）；入口探测时先查 PATH 再查这个位置，路径记进 <code>install.json</code>，tsw 之后（含 <code>host render</code> 的插件更新）用它</td><td>本机核对；<code>tsw/host/plugin_copy.py</code> 现在找不到 <code>claude</code> 时只报告、不更新</td></tr></tbody></table>
+<h2 id="4-setup-skill-与会话入口">4. setup skill 与会话入口</h2>
+<ul><li><code>plugin/skills/setup/SKILL.md</code>，会话中为 <code>/task-steward:setup</code>。插件 skill 在每个会话中都可见（CC006 §8.2），描述写明“只在用户要求安装、修复、升级或卸载 TaskSteward 时使用”。</li><li>skill 正文用 <code>${CLAUDE_PLUGIN_ROOT}</code> 引用插件中的脚本（Claude Code 在载入 skill 时代入路径，文档）：<ul><li><code>${CLAUDE_PLUGIN_ROOT}/setup/prereq.ps1</code>：探测 Python、git、<code>claude</code>，与仓库根 <code>setup.ps1</code> 共用同一段代码；</li><li><code>${CLAUDE_PLUGIN_ROOT}/setup/fetch_checkout.py</code>（标准库）：克隆产品仓库到固定目录，检出 <code>installed_plugins.json</code> 中本插件安装记录的 <code>gitCommitSha</code>。</li></ul></li><li>之后 skill 运行检出中的 <code>tsw setup check --questions</code>、<code>plan</code>、<code>install</code>（DN009 §4.2）。skill 只解释、提问与调用。</li><li><code>/plugin install</code> 之后要 <code>/reload-plugins</code> 或新会话，skill 才出现（文档：插件在新会话或重新加载后生效）；桌面 app 中能否省掉这一步待 live 验证。</li><li><code>plugin/</code> 顶层有 <code>bin/</code>：claude.ai 组织同步会拒绝这样的插件（文档）。本设计不经组织同步分发，不改。</li></ul>
+<h2 id="5-用户设置与-auto-模式规则apply_user_settings">5. 用户设置与 auto 模式规则（<code>apply_user_settings</code>）</h2>
+<ul><li>文件：用户设置 <code>~/.claude/settings.json</code>（设置了 <code>CLAUDE_CONFIG_DIR</code> 时用其中的 <code>settings.json</code>）。</li><li>写入：<code>env.TSW_HOME</code>（会话从这里得到数据目录，DN006 §9.1）与 <code>autoMode.allow</code> 中 install hint 的三条规则（TaskSteward Worker Dispatch、Worker Merge、Routine；CC008 §6），按规则开头的名称识别并替换旧文本；先备份为带时间的副本。</li><li>移除（<code>remove</code>）：删除自己加入的 <code>env.TSW_HOME</code>（值仍等于安装时写入的值才删）与这三条规则，先备份。</li><li>Claude Code 自动重新载入设置文件（CC006 §11.1）。</li></ul>
+<h2 id="6-会话中的例外dn009-8">6. 会话中的例外（DN009 §8）</h2>
+<ul><li>会话的判断与现有命令相同（CC008 §5.2、§5.7）：Claude Code 给会话中的进程设置 <code>CLAUDE_CODE_HOST_SESSION_ID</code> 与 <code>CLAUDECODE</code>；<code>tsw</code> 按账本解析会话 ID。还没有数据目录时，或会话不在任何数据目录中、也没有绑定 attempt 时，角色为 none（无关会话）。</li><li><code>tsw setup install</code> / <code>uninstall</code>：会话外的终端、角色为 none 的会话与主会话允许；worker、例行会话、已撤销与待绑定的会话以 <code>host_session_cli</code> 拒绝。它们内部运行的 <code>dashboard install</code> / <code>open</code> / <code>uninstall</code> 与 <code>host render</code> 随之放行；直接运行这些命令的规则不变（CC008 §5.7）。</li><li>无关会话不经 tsw hooks（CC008 §3），所以第一次安装时没有 hook 拦截；CLI 的判断是唯一的门。worker 与例行会话另由 PreToolUse 按命令分词拦下 <code>tsw setup</code>（与 <code>host render</code> 相同的做法，CC008 §5.7）。</li><li>auto 模式下，写用户设置（改 agent 自己的权限规则）与登记计划任务可能被分类器拦下或要求确认；<code>default</code> 模式下宿主会逐条请用户批准。这是用户本人的授权，tsw 不为 <code>tsw setup</code> 生成允许规则，也不在 install hint 中加规则。</li></ul>
+<h2 id="7-重新加载">7. 重新加载</h2>
+<ul><li>tsw MCP server 只在会话启动时载入，<code>/reload-plugins</code> 不换 MCP（CC006 §11.1）：两条路径最后都请用户重启 Claude app。</li><li>会话路径在 <code>/plugin install</code> 之后先 <code>/reload-plugins</code>（§4）。</li><li>安装过程中插件的 tsw MCP server 因为还没有数据目录而报错退出；hooks 对无关会话不生效。重启 app 后在数据目录打开的会话是主会话。</li></ul>
+<h2 id="8-windows-上的入口与垫片">8. Windows 上的入口与垫片</h2>
+<ul><li><code>setup.ps1</code>（Windows PowerShell 5.1 自带）：<ul><li>Python：<code>Get-Command python</code>，版本不低于 3.10，路径不在 <code>WindowsApps</code> 下（Microsoft Store 占位程序）；缺少时问用户是否 <code>winget install Python.Python.3.12</code>，装好后用完整路径继续（新装的解释器不在当前进程的 PATH 中），并提示在“应用执行别名”中关闭 <code>python.exe</code> / <code>python3.exe</code>；</li><li>git：<code>git --version</code>；缺少时问是否 <code>winget install Git.Git</code>；</li><li><code>claude</code>：先查 PATH，再查 <code>%LOCALAPPDATA%\Programs\ClaudeCode\claude.exe</code>；缺少时给出 Claude Code 的安装方法并停止；</li><li>然后运行 <code>python -X utf8 -m tsw setup install --interactive --python &lt;路径&gt; --claude &lt;路径&gt;</code>。</li></ul></li><li>垫片写在 <code>%LOCALAPPDATA%\TaskSteward\bin</code>，并加入 <code>HKCU\Environment</code> 的 <code>Path</code>：<ul><li><code>tsw.cmd</code>：<code>@&quot;&lt;python&gt;&quot; -X utf8 &quot;&lt;检出&gt;\plugin\bin\tsw_launch.py&quot; %*</code>（cmd、PowerShell）；</li><li><code>tsw</code>（无扩展名的 sh 脚本）：<code>exec &quot;&lt;python&gt;&quot; -X utf8 &quot;&lt;检出&gt;/plugin/bin/tsw_launch.py&quot; &quot;$@&quot;</code>（Git Bash，即 Claude 的 Bash 工具）。</li><li>实测：只有 <code>.cmd</code> 时 Git Bash 找不到命令；两个都有时 Git Bash、cmd、PowerShell 都能找到。</li></ul></li><li>Dashboard 常驻服务：复用 <code>tsw dashboard install</code>（CC006 §12）。</li><li>实测环境注意：在数据目录之下用独立的 <code>CLAUDE_CONFIG_DIR</code> 添加 GitHub 市场，Claude Code 最后一步的目录重命名会以 <code>EPERM</code> 失败（同一操作在 <code>%TEMP%</code> 下成功）；live 场景的临时配置放在 <code>%TEMP%</code> 下。</li></ul>
+<h2 id="9-待验证live">9. 待验证（live）</h2>
+<ul><li>桌面 app 会话中 <code>/plugin install task-steward --marketplace …</code> 的写法，以及是否必须 <code>/reload-plugins</code>；</li><li>auto 模式下 <code>tsw setup install</code> 写用户设置、登记计划任务时的批准提示；</li><li>Claude app 的 Terminal 面板中运行的命令是否带 <code>CLAUDECODE</code>（若不带，setup skill 也可以把 <code>install</code> 交给 Terminal 面板，由用户批准运行）；</li><li>两条路径在干净的 <code>CLAUDE_CONFIG_DIR</code> 与临时 HOME 中各从零走到主会话可用。</li></ul>
+<footer>本页由同目录的 <a href="CC009-install.md">CC009-install.md</a> 生成，内容与 Markdown 版本一致。</footer>
+</main>
+</div>
+</body>
+</html>

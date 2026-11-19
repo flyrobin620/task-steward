@@ -25,11 +25,13 @@
 | DN006 插件层 | [md](docs/design/DN006-plugin-layer.md) | [html](docs/design/DN006-plugin-layer.html) | 宿主集成、会话适配器（含一次性评审）、人类渠道、存储后端四类插件的职责与接口；委托操作；主会话判断；数据目录；组合示例 |
 | DN007 账本与上下文检索 | [md](docs/design/DN007-ledger-and-context.md) | [html](docs/design/DN007-ledger-and-context.html) | 三层存储、写读路径与重建；任务卡片、检索工具、用户决定与偏好；主会话与 worker 的历史读取方式 |
 | DN008 校验原则 | [md](docs/design/DN008-guardrails.md) | [html](docs/design/DN008-guardrails.html) | 安全边界与信任假设；护栏只防诚实 agent 出错：确定性死规则、易用性优先、block list、escape |
+| DN009 分发与安装 | [md](docs/design/DN009-distribution-and-install.md) | [html](docs/design/DN009-distribution-and-install.html) | 两条各自在一处完成的安装路径（终端、宿主会话）、共用的安装脚本 `tsw setup`、安装后单一来源、用户设置与会话例外 |
 | CC001 Claude Code 上的会话与 hooks | [md](docs/design/claude-code/CC001-sessions-and-hooks.md) | [html](docs/design/claude-code/CC001-sessions-and-hooks.html) | DN001 在 Claude Code 上的实现：主会话指令、会话创建参数与平台约束、hooks、平台 PoC |
 | CC004 Claude Code 评审器 | [md](docs/design/claude-code/CC004-reviewer.md) | [html](docs/design/claude-code/CC004-reviewer.html) | `claude-headless` 只读评审的调用约定 |
 | CC006 Claude Code 插件 | [md](docs/design/claude-code/CC006-plugins.md) | [html](docs/design/claude-code/CC006-plugins.html) | 宿主集成、会话适配器与 in-session 渠道在 Claude Code 上的做法 |
 | CC007 Claude Code 中的任务上下文 | [md](docs/design/claude-code/CC007-context.md) | [html](docs/design/claude-code/CC007-context.html) | 任务结束时由子代理搜集偏好候选：启动方式、说明来源、worker 与主会话的步骤、用户确认 |
 | CC008 Claude Code 上的护栏 | [md](docs/design/claude-code/CC008-guardrails.md) | [html](docs/design/claude-code/CC008-guardrails.html) | block list 规则与 escape、现有校验逐项归类、允许规则 |
+| CC009 Claude Code 上的安装 | [md](docs/design/claude-code/CC009-install.md) | [html](docs/design/claude-code/CC009-install.html) | 一步安装插件、改指本机检出、`/task-steward:setup`、用户设置与 auto 模式规则、Windows 入口与垫片 |
 | CX004 Codex 评审器 | [md](docs/design/codex/CX004-reviewer.md) | [html](docs/design/codex/CX004-reviewer.html) | `codex-app-server` 一次性线程与 `codex-exec` 回退 |
 
 图的结构来源是 `docs/design/diagrams/*.mmd`（状态、迁移编号与标签的权威来源），文档引用同名 `.svg`：

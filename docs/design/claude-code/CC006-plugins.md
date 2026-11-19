@@ -1,9 +1,9 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T302 §9.2 待命前缀、任务归档后归档会话；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`；T283 §11 自我更新的载入时机与生效方式，§12 Dashboard 常驻服务；T287 §10.2 受理与派发时检查长期偏好；T293 §6.2 teams-replies 列出最后修改时间、已判定消息记在 `teams_checked`）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T302 §9.2 待命前缀、任务归档后归档会话；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`；T283 §11 自我更新的载入时机与生效方式，§12 Dashboard 常驻服务；T287 §10.2 受理与派发时检查长期偏好；T293 §6.2 teams-replies 列出最后修改时间、已判定消息记在 `teams_checked`；T305 §2 安装与改指插件来源见 CC009）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
-- 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
+- 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md) · [CC009 Claude Code 上的安装](CC009-install.md)
 
 ## 1. 范围
 
@@ -40,6 +40,8 @@ worker 的说明不是 skill，也不在插件里加载（Claude Code 不加载�
 - 主会话的 SessionStart 比较 Claude Code 给 hooks 的 `CLAUDE_PLUGIN_ROOT` 与产品仓库的 `plugin/`，内容不一致时在注入的上下文中写明不一致的文件，并让主会话向用户说明、请用户确认运行 `tsw host render`：用户确认后由主会话运行（CC008 §5.7，T282；此前让用户在终端运行），之后请用户重启 Claude 会话（会话不能重启自己）；原地加载（二者是同一目录）或一致时不提示。只读。
 
 已在运行的会话重启后才用上新副本与新的 tsw 运行时（MCP server 在会话开始时载入）。
+
+用户的安装（终端或会话中的 `/task-steward:setup`）、把插件市场改指本机检出、写用户设置与 auto 模式规则见 [CC009](CC009-install.md)（DN009）。
 
 规则执行：hooks 调用 `tsw guard`，按 [CC008](CC008-guardrails.md) 的 block list 拦截已知的错误动作；tsw 已把关的动作在主会话由数据目录中生成的允许规则放行，在 worker 由用户设置中的 auto 模式规则放行（执行目录不带权限规则，CC008 §6）。
 

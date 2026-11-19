@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2800" height="2200" viewBox="0 0 2800 2200">
+<title>两条各自在一处完成的安装路径</title>
+<desc>终端路径与会话路径汇入共用安装脚本；验证未通过时修正后重跑。</desc>
+<defs>
+<marker id="arrow-main" markerWidth="12" markerHeight="12" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L10 5 L0 10 Z" fill="#2867B3"/></marker>
+<marker id="arrow-loop" markerWidth="12" markerHeight="12" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L10 5 L0 10 Z" fill="#7857A7"/></marker>
+</defs>
+<rect x="0" y="0" width="2800" height="2200" fill="white"/>
+<g font-family="Segoe UI, &quot;Microsoft YaHei&quot;, Arial, sans-serif">
+<rect x="60" y="63" width="8" height="57" rx="4" fill="#2867B3"/>
+<text x="92" y="105" font-size="44" font-weight="700" fill="#22364B" text-anchor="start">两条各自在一处完成的安装路径</text>
+<g data-boundary="Terminal path" data-box="60 190 2680 380">
+<rect x="60" y="190" width="2680" height="380" rx="20" fill="#EEF4FC" stroke="#B6C7D6" stroke-width="2" stroke-dasharray="9 8"/>
+<rect x="82" y="219" width="5" height="30" rx="2" fill="#2867B3"/>
+<text x="100" y="243" font-size="26" font-weight="700" fill="#22364B" text-anchor="start">终端路径（全在终端）</text>
+<rect x="2520" y="212" width="130" height="42" rx="21" fill="#FFFFFF" stroke="#B6C7D6"/>
+<text x="2585" y="240" font-size="20" font-weight="600" fill="#22364B" text-anchor="middle">泳道</text>
+</g>
+<g data-boundary="Session path" data-box="60 640 2680 390">
+<rect x="60" y="640" width="2680" height="390" rx="20" fill="#EEF8F1" stroke="#B6C7D6" stroke-width="2" stroke-dasharray="9 8"/>
+<rect x="82" y="669" width="5" height="30" rx="2" fill="#2867B3"/>
+<text x="100" y="693" font-size="26" font-weight="700" fill="#22364B" text-anchor="start">会话路径（全在宿主会话）</text>
+<rect x="2520" y="662" width="130" height="42" rx="21" fill="#FFFFFF" stroke="#B6C7D6"/>
+<text x="2585" y="690" font-size="20" font-weight="600" fill="#22364B" text-anchor="middle">泳道</text>
+</g>
+<g data-boundary="Shared installer (script)" data-box="60 1100 2680 710">
+<rect x="60" y="1100" width="2680" height="710" rx="20" fill="#FFF7E8" stroke="#B6C7D6" stroke-width="2" stroke-dasharray="9 8"/>
+<rect x="192" y="1129" width="5" height="30" rx="2" fill="#2867B3"/>
+<text x="210" y="1153" font-size="26" font-weight="700" fill="#22364B" text-anchor="start">共用的安装脚本（由发起的那一处运行）</text>
+<rect x="2520" y="1122" width="130" height="42" rx="21" fill="#FFFFFF" stroke="#B6C7D6"/>
+<text x="2585" y="1150" font-size="20" font-weight="600" fill="#22364B" text-anchor="middle">泳道</text>
+</g>
+<path d="M630 400 H850" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="1" data-category="main" d="M630 400 H850" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M1400 400 H1640" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="2" data-category="main" d="M1400 400 H1640" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M2370 400 H2700 V1240 H640 V1370" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="3" data-category="main" d="M2370 400 H2700 V1240 H640 V1370" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M630 855 H850" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="4" data-category="main" d="M630 855 H850" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M1400 855 H1640" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="5" data-category="main" d="M1400 855 H1640" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M2005 975 V1060 H120 V1545 H180" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="6" data-category="main" d="M2005 975 V1060 H120 V1545 H180" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M830 1545 H1000" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="7" data-category="main" d="M830 1545 H1000" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M1350 1545 H1500" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="8" data-category="main" d="M1350 1545 H1500" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M1635 1435 V1290 H800 V1370" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="9" data-category="loop" d="M1635 1435 V1290 H800 V1370" fill="none" stroke="#7857A7" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-loop)"/>
+<path d="M1770 1545 H1930" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="10" data-category="main" d="M1770 1545 H1930" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M2380 1545 H2530" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="11" data-category="main" d="M2380 1545 H2530" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<g data-node="Start in a terminal" data-kind="start" data-box="200 345 430 110">
+<rect x="200" y="345" width="430" height="110" rx="55.0" fill="#EAF6EE" stroke="#3C8D5A" stroke-width="2"/>
+<text x="415.0" y="406.0" font-size="24" font-weight="600" fill="#22364B" text-anchor="middle">开始（终端）</text>
+</g>
+<g data-node="git clone the product repository" data-kind="step" data-box="850 315 550 170">
+<rect x="850" y="315" width="550" height="170" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/>
+<text x="1125.0" y="410.0" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">git clone 产品仓库</text>
+</g>
+<g data-node="Run the terminal entry" data-kind="step" data-box="1640 290 730 220">
+<rect x="1640" y="290" width="730" height="220" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/>
+<text x="2005.0" y="385.5" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">运行终端入口</text>
+<text x="2005.0" y="436.5" font-size="21" font-weight="400" fill="#4B6073" text-anchor="middle">探测前提，在终端中提问</text>
+</g>
+<g data-node="Start in a host session" data-kind="start" data-box="200 800 430 110">
+<rect x="200" y="800" width="430" height="110" rx="55.0" fill="#EAF6EE" stroke="#3C8D5A" stroke-width="2"/>
+<text x="415.0" y="861.0" font-size="24" font-weight="600" fill="#22364B" text-anchor="middle">开始（宿主会话）</text>
+</g>
+<g data-node="Install the host plugin" data-kind="step" data-box="850 750 550 210">
+<rect x="850" y="750" width="550" height="210" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/>
+<text x="1125.0" y="840.5" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">安装宿主插件</text>
+<text x="1125.0" y="891.5" font-size="21" font-weight="400" fill="#4B6073" text-anchor="middle">用宿主自己的插件命令</text>
+</g>
+<g data-node="Run the plugin&#x27;s setup entry" data-kind="step" data-box="1640 735 730 240">
+<rect x="1640" y="735" width="730" height="240" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/>
+<text x="2005.0" y="840.5" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">运行插件的 setup 入口</text>
+<text x="2005.0" y="891.5" font-size="21" font-weight="400" fill="#4B6073" text-anchor="middle">探测前提、取得检出，在会话中提问</text>
+</g>
+<g data-node="tsw setup install" data-kind="subprocess" data-box="180 1370 650 350">
+<rect x="180" y="1370" width="650" height="350" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/><line x1="192" y1="1370" x2="192" y2="1720" stroke="#2867B3" stroke-width="2"/><line x1="818" y1="1370" x2="818" y2="1720" stroke="#2867B3" stroke-width="2"/>
+<text x="505.0" y="1501.5" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">tsw setup install</text>
+<text x="505.0" y="1552.5" font-size="21" font-weight="400" fill="#4B6073" text-anchor="middle">同一套确定步骤：PATH 垫片、插件来源改为检出、数据目录</text>
+<text x="505.0" y="1581.5" font-size="21" font-weight="400" fill="#4B6073" text-anchor="middle">与配置、宿主用户设置（先备份）、host render、</text>
+<text x="505.0" y="1610.5" font-size="21" font-weight="400" fill="#4B6073" text-anchor="middle">Dashboard</text>
+</g>
+<g data-node="tsw setup verify" data-kind="subprocess" data-box="1000 1480 350 130">
+<rect x="1000" y="1480" width="350" height="130" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/><line x1="1012" y1="1480" x2="1012" y2="1610" stroke="#2867B3" stroke-width="2"/><line x1="1338" y1="1480" x2="1338" y2="1610" stroke="#2867B3" stroke-width="2"/>
+<text x="1175.0" y="1555.0" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">tsw setup verify</text>
+</g>
+<g data-node="Verified?" data-kind="decision" data-box="1500 1435 270 220">
+<polygon points="1635.0,1435 1770,1545.0 1635.0,1655 1500,1545.0" fill="#FFF7E8" stroke="#B5873A" stroke-width="2"/>
+<text x="1635.0" y="1551.0" font-size="24" font-weight="600" fill="#22364B" text-anchor="middle">验证通过？</text>
+</g>
+<g data-node="Reload the host, open the main session in the data directory" data-kind="step" data-box="1930 1440 450 210">
+<rect x="1930" y="1440" width="450" height="210" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/>
+<text x="2155.0" y="1537.0" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">重新加载宿主，在数据目录打</text>
+<text x="2155.0" y="1573.0" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">开主会话</text>
+</g>
+<g data-node="Done" data-kind="end" data-box="2530 1490 160 110">
+<rect x="2530" y="1490" width="160" height="110" rx="55.0" fill="#F0F3F6" stroke="#708294" stroke-width="2"/>
+<text x="2610.0" y="1551.0" font-size="24" font-weight="600" fill="#22364B" text-anchor="middle">完成</text>
+</g>
+<g data-badge="9" data-box="1050 1273 240 34">
+<rect x="1050" y="1273" width="240" height="34" rx="17" fill="white" stroke="#7857A7" stroke-width="1.5"/>
+<text x="1170.0" y="1297" font-size="20" font-weight="600" fill="#7857A7" text-anchor="middle">否：修正后重跑</text>
+</g>
+<g data-badge="10" data-box="1813 1528 74 34">
+<rect x="1813" y="1528" width="74" height="34" rx="17" fill="white" stroke="#2867B3" stroke-width="1.5"/>
+<text x="1850.0" y="1552" font-size="20" font-weight="600" fill="#2867B3" text-anchor="middle">是</text>
+</g>
+<text x="80" y="1890" font-size="32" font-weight="700" fill="#22364B" text-anchor="start">图例</text>
+<rect x="90" y="1934" width="90" height="56" rx="28.0" fill="#EAF6EE" stroke="#3C8D5A" stroke-width="2"/>
+<text x="202" y="1970" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">开始</text>
+<rect x="600" y="1934" width="90" height="56" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/>
+<text x="712" y="1970" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">步骤</text>
+<rect x="1110" y="1934" width="90" height="56" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/><line x1="1122" y1="1934" x2="1122" y2="1990" stroke="#2867B3" stroke-width="2"/><line x1="1188" y1="1934" x2="1188" y2="1990" stroke="#2867B3" stroke-width="2"/>
+<text x="1222" y="1970" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">子流程</text>
+<polygon points="1665.0,1934 1710,1962.0 1665.0,1990 1620,1962.0" fill="#FFF7E8" stroke="#B5873A" stroke-width="2"/>
+<text x="1732" y="1970" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">判断</text>
+<rect x="2130" y="1934" width="90" height="56" rx="28.0" fill="#F0F3F6" stroke="#708294" stroke-width="2"/>
+<text x="2242" y="1970" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">结束</text>
+<path d="M90 2070 H200" fill="none" stroke="#2867B3" stroke-width="3" marker-end="url(#arrow-main)"/>
+<text x="225" y="2077" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">主路径</text>
+<path d="M810 2070 H920" fill="none" stroke="#7857A7" stroke-width="3" marker-end="url(#arrow-loop)"/>
+<text x="945" y="2077" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">重试与循环</text>
+</g>
+</svg>

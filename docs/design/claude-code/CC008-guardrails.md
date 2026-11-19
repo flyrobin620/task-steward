@@ -1,6 +1,6 @@
 # CC008 Claude Code 上的护栏
 
-- 状态：设计草案（T242 r2；T243 增加例行会话的规则；T251 Worker Merge 规则覆盖仓库 worktree；T276 §6 worker 会话的 prompt 以 worker 说明开头，Worker Dispatch 规则随之更新；T272 CC-S4 提醒处置 worker 会话的标题与归档，主会话允许 `set_session_title`；T279 §6 Worker Merge 认可 `gh-account` skill 规定的单个环境变量前缀，§3 命令替换的分词；T282 §5.7 主会话自我更新：在会话中运行 `tsw host render`，其他会话仍拒绝；T284 实现 §5.1 中文本兜底与 `import tsw` 拒绝两项删除；T283 CC-B9 对接班主会话例外、新增 CC-B12（Dashboard 令牌）、§5.7 主会话可运行 `dashboard restart`）
+- 状态：设计草案（T242 r2；T243 增加例行会话的规则；T251 Worker Merge 规则覆盖仓库 worktree；T276 §6 worker 会话的 prompt 以 worker 说明开头，Worker Dispatch 规则随之更新；T272 CC-S4 提醒处置 worker 会话的标题与归档，主会话允许 `set_session_title`；T279 §6 Worker Merge 认可 `gh-account` skill 规定的单个环境变量前缀，§3 命令替换的分词；T282 §5.7 主会话自我更新：在会话中运行 `tsw host render`，其他会话仍拒绝；T284 实现 §5.1 中文本兜底与 `import tsw` 拒绝两项删除；T283 CC-B9 对接班主会话例外、新增 CC-B12（Dashboard 令牌）、§5.7 主会话可运行 `dashboard restart`；T305 §5.8 安装脚本 `tsw setup` 的会话例外）
 - 日期：2026-11-08
 - 实现：[DN008 校验原则](../DN008-guardrails.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC006 Claude Code 插件](CC006-plugins.md)
@@ -165,6 +165,19 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 **auto 模式与允许规则**：不新增。主会话在用户确认后运行，确认就在对话中，分类器按用户意图判断，应当放行；`default` 模式下宿主还会弹一次权限确认，这是宿主自己的保护。tsw 不为它生成 `Bash` 允许规则：render 会改写数据目录的 `.claude/settings.json`，tsw 不预先放行改写权限设置的命令。live 中若出现误拦，按 §6 的原则在 install hint 中加一条只描述“主会话在用户确认后运行单独的 `tsw host render`”的规则。
 
 **render 之后**：Claude Code 在会话开始时加载 `CLAUDE.md`、skill、插件的 hooks 与 MCP server，MCP server 载入的是当时的 tsw 运行时（CC006 §2），所以已在运行的会话看不到 render 的结果。会话不能重启自己：render 的输出带 `restart` 写明这一点，主会话据此告诉用户：本会话之后仍按旧的说明与运行时工作，请用户方便时重启 Claude 会话（插件副本有更新时 `plugin.next` 给出同样的提示）。worker 说明 `roles/worker.md` 已在磁盘上更新：之后创建的 worker 直接使用，已有 worker 由 hook 在下一轮提示重读（DN006 §6.2）。
+
+### 5.8 安装脚本 `tsw setup`（T305）
+
+用户 2026-11-19 决定（DN009 §8）：安装要能全在会话中完成。`tsw setup install` / `uninstall`（其中运行 `dashboard install` / `open` / `uninstall` 与 `host render`）按下表放行；直接运行这些命令的规则（§5.7）不变。实现见 [CC009 §6](CC009-install.md)。
+
+| 调用者 | `tsw setup install` / `uninstall` |
+| --- | --- |
+| 会话外的终端 | 运行 |
+| 角色为 none 的会话（第一次安装时还没有数据目录，或会话不在任何数据目录中） | 运行 |
+| 主会话 | 运行（升级、修复、卸载） |
+| worker、例行会话、已撤销、待绑定 | 拒绝（`host_session_cli`）；PreToolUse 对已登记会话的 Bash 命令同样识别并拦下 `tsw setup`（与 §5.7 识别 `host render` 的做法相同） |
+
+只读的 `tsw setup check` / `plan` / `verify` 任何会话都可以运行。令牌仍不出现在任何输出中（CC006 §12），会话拿不到能登录 Dashboard 的东西。写用户设置与登记计划任务时由宿主请用户批准，tsw 不为 `tsw setup` 生成允许规则。
 
 ## 6. 允许规则与 auto 模式规则
 

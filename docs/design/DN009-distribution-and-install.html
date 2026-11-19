@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="tsw-source-sha256" content="001d6db6b4839a3d7c782be2a6ddfb08d94a645c2a59bbe00ffedfce2c2db159">
+<title>DN009 分发与安装</title>
+<style>
+:root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.7 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--fg);background:#fff}
+.layout{display:grid;grid-template-columns:260px minmax(0,1fr);max-width:1400px;margin:0 auto}
+nav.toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:28px 18px;border-right:1px solid var(--line);font-size:13px}
+nav.toc h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
+nav.toc a{display:block;color:var(--fg);text-decoration:none;padding:2px 0}
+nav.toc a.l3{padding-left:14px;color:var(--muted)}
+nav.toc a:hover{color:var(--accent)}
+main{padding:32px 48px 64px;min-width:0}
+h1{font-size:28px;margin:0 0 16px;border-bottom:3px solid var(--accent);padding-bottom:10px}
+h2{font-size:21px;margin:36px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:17px;margin:26px 0 10px}
+h4{font-size:15px;margin:20px 0 8px}
+a{color:var(--accent)}
+code{font-family:Consolas,"Cascadia Mono",monospace;font-size:13px;background:var(--code);padding:1px 5px;border-radius:4px}
+pre{background:#1e2230;color:#e8eaf2;padding:14px 16px;border-radius:8px;overflow:auto;line-height:1.5}
+pre code{background:none;padding:0;color:inherit}
+table{border-collapse:collapse;width:100%;margin:12px 0 18px;font-size:13.5px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:var(--bg-soft);white-space:nowrap}
+tr:nth-child(even) td{background:#fbfcfe}
+blockquote{margin:12px 0;padding:8px 16px;border-left:4px solid var(--accent);background:var(--bg-soft)}
+figure{margin:18px 0 8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff}
+figure svg{display:block;width:100%;height:auto;max-height:none}
+figcaption{font-size:13px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between;gap:12px}
+.meta{color:var(--muted);font-size:13px}
+footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:10px}
+@media (max-width:900px){.layout{grid-template-columns:1fr}nav.toc{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line)}main{padding:20px}}
+@media print{nav.toc{display:none}.layout{display:block}main{padding:0}a{color:inherit;text-decoration:none}
+ pre{white-space:pre-wrap;background:#f3f4f8;color:#111}figure,table,pre{break-inside:avoid}h2,h3{break-after:avoid}
+ body{font-size:11pt}@page{margin:16mm 14mm}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc"><h2>目录</h2><a class="l2" href="#1-目标与范围">1. 目标与范围</a><a class="l2" href="#2-原则">2. 原则</a><a class="l2" href="#3-组成">3. 组成</a><a class="l2" href="#4-两条路径">4. 两条路径</a><a class="l3" href="#41-终端路径">4.1 终端路径</a><a class="l3" href="#42-会话路径">4.2 会话路径</a><a class="l3" href="#43-不可避免的重新加载">4.3 不可避免的重新加载</a><a class="l2" href="#5-tsw-setup-install-的步骤">5. tsw setup install 的步骤</a><a class="l2" href="#6-要问用户的配置">6. 要问用户的配置</a><a class="l2" href="#7-用户设置与-pathd2">7. 用户设置与 PATH（D2）</a><a class="l2" href="#8-会话中的例外d3">8. 会话中的例外（D3）</a><a class="l2" href="#9-验证">9. 验证</a><a class="l2" href="#10-幂等升级修复与卸载">10. 幂等、升级、修复与卸载</a><a class="l2" href="#11-产品仓库的位置d1">11. 产品仓库的位置（D1）</a><a class="l2" href="#12-操作系统">12. 操作系统</a><a class="l2" href="#13-对其他文档的影响">13. 对其他文档的影响</a><a class="l2" href="#14-待验证">14. 待验证</a><a class="l2" href="#附录-a备选方案存档">附录 A：备选方案存档</a></nav>
+<main>
+<h1>DN009 分发与安装</h1>
+<ul><li>状态：已确认（T305；用户 2026-11-19 确认两条安装路径与本文的 D1–D3，插件名不改）</li><li>日期：2026-11-19</li><li>相关：<a href="DN001-architecture.html">DN001 总体架构</a> · <a href="DN003-unified-config.html">DN003 统一配置</a> · <a href="DN006-plugin-layer.html">DN006 插件层</a> · <a href="DN008-guardrails.html">DN008 校验原则</a> · 实现：<a href="claude-code/CC009-install.html">CC009 Claude Code 上的安装</a></li></ul>
+<h2 id="1-目标与范围">1. 目标与范围</h2>
+<p>让没有产品检出的用户从零用上 TaskSteward：拿到运行时、在宿主中挂上 tsw、建好自己的数据目录与配置，最后在数据目录中打开主会话。</p>
+<ul><li><strong>两条路径，各自在一处完成</strong>：用户可以全在终端里装，也可以全在宿主会话里装，中途不需要换到另一处。</li><li><strong>确定的步骤只有一份</strong>：两条路径调用同一个安装脚本 <code>tsw setup</code>，入口只负责提问并把答案交给它。</li><li><strong>安装之后只有一个来源</strong>：宿主运行的插件副本与 tsw 运行时都来自同一个本机产品检出，之后的更新走现有的自我更新流程（DN006 §9.8）。</li><li>不发布到任何包仓库，不需要令牌。</li><li>本文与宿主无关；各宿主的命令、插件形式与限制写在各自的实现文档中（见开头的“实现”）。</li></ul>
+<h2 id="2-原则">2. 原则</h2>
+<ol><li><strong>运行时来自产品的 git 检出</strong>。数据目录、宿主插件、自我更新、运行版本的记录与 Dashboard 计划任务都以检出为前提：<code>tsw host update-plan</code> 按两个提交之间改动的文件决定步骤，<code>rendered.commit</code> 与运行时提交来自检出（DN006 §9.8、§9.9）。运行时只用标准库，检出即可运行，不需要包管理器。宿主插件的缓存副本里没有运行时，插件中的启动器从数据目录记录的 <code>product_repo</code> 加载它（DN006 §9.1）。</li><li><strong>宿主插件仍然需要</strong>。它是把 tsw 的工具注册与规则执行挂到每个宿主会话上的打包形式（DN006 §6），可以整体启用、停用与更新，也是会话路径中 setup 入口所在的地方。</li><li><strong>安装后插件来源指向本机检出</strong>。不论从哪条路径开始，安装结束时宿主的插件来源都是本机检出，插件副本的版本就是检出的 HEAD；检出前进后由 <code>host render</code> 更新副本（DN006 §6.2 的 <code>update_plugin</code>）。所以检出与插件副本不会落在不同提交，不需要另设发布分支。</li><li><strong>确定的执行序列由脚本完成</strong>。探测前提、克隆、写垫片与 PATH、注册插件来源、初始化数据目录、写用户设置、render、登记 Dashboard、验证都在 <code>tsw setup</code> 与两个不依赖 Python 的探测脚本中；宿主的模型只解释、提问与调用，不拼路径、不判断某一步该不该做。</li><li><strong>问题清单只有一份</strong>。问哪些问题、默认值与写到哪里定义在 <code>tsw setup</code> 中；终端入口逐项问，会话入口按同一份清单在对话中问。</li><li><strong>幂等</strong>。每一步先比较现状与目标，已满足就跳过；中途失败修正后重跑；已有安装时只做缺少或不一致的部分。</li><li><strong>不替用户登录</strong>。不问、不保存任何令牌或密码；宿主、gh、评审器等的登录由用户在各自工具中完成，<code>check</code> 只检查结果。</li></ol>
+<h2 id="3-组成">3. 组成</h2>
+<table><thead><tr><th>部分</th><th>位置</th><th>职责</th></tr></thead><tbody><tr><td>安装脚本 <code>tsw setup</code></td><td>tsw 运行时中的子命令</td><td><code>check</code>（只读：前提、已有安装与数据目录、宿主侧状态；<code>--questions</code> 输出问题清单）、<code>plan</code>（只读：将要执行的动作与用户设置的差异）、<code>install</code>（<code>--interactive</code> 在终端提问，或 <code>--answers &lt;文件&gt;</code>）、<code>verify</code>（只读）、<code>uninstall</code></td></tr><tr><td>终端入口</td><td>仓库根 <code>setup.ps1</code>（Windows）、<code>setup.sh</code>（macOS / Linux）</td><td>不依赖 Python：探测前提，缺少时经用户同意用系统包管理器安装，然后用找到的解释器运行 <code>tsw setup install --interactive</code></td></tr><tr><td>会话入口</td><td>宿主插件中的 setup 说明（宿主的 skill 或等价物）、探测脚本与取检出脚本</td><td>在宿主会话中探测前提、取得检出、按问题清单提问，再运行 <code>tsw setup plan</code> 与 <code>install</code></td></tr><tr><td>安装记录</td><td>用户级状态目录中的 <code>install.json</code>（Windows 为 <code>%LOCALAPPDATA%\TaskSteward\</code>）</td><td>每一步改了什么：检出路径、解释器与宿主命令行的完整路径、垫片目录、是否由它加入 PATH、加入的用户设置键与规则名、计划任务名、备份文件；供重跑、升级与卸载使用</td></tr><tr><td>答案文件</td><td>同一目录的 <code>setup-answers.json</code></td><td>用户的回答，不含凭据；重跑时不必再问</td></tr></tbody></table>
+<p>宿主集成（DN006 §6.2）为此增加三个操作，由各宿主实现：</p>
+<table><thead><tr><th>操作</th><th>作用</th></tr></thead><tbody><tr><td><code>install_plugin(checkout)</code></td><td>把检出注册为插件来源并安装插件；插件已从别的来源安装时，改指检出而不卸载；幂等</td></tr><tr><td><code>apply_user_settings(home, rules, backup)</code></td><td>在宿主的用户设置中写入数据目录位置与宿主侧放行规则（DN006 §9.8 的 <code>host_rules</code>）；先备份，只改自己加入的键，按规则名替换旧文本</td></tr><tr><td><code>remove(install_record)</code></td><td>卸载插件、移除插件来源与自己加入的用户设置</td></tr></tbody></table>
+<h2 id="4-两条路径">4. 两条路径</h2>
+<figure><svg xmlns="http://www.w3.org/2000/svg" width="2800" height="2200" viewBox="0 0 2800 2200">
+<title>两条各自在一处完成的安装路径</title>
+<desc>终端路径与会话路径汇入共用安装脚本；验证未通过时修正后重跑。</desc>
+<defs>
+<marker id="arrow-main" markerWidth="12" markerHeight="12" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L10 5 L0 10 Z" fill="#2867B3"/></marker>
+<marker id="arrow-loop" markerWidth="12" markerHeight="12" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L10 5 L0 10 Z" fill="#7857A7"/></marker>
+</defs>
+<rect x="0" y="0" width="2800" height="2200" fill="white"/>
+<g font-family="Segoe UI, &quot;Microsoft YaHei&quot;, Arial, sans-serif">
+<rect x="60" y="63" width="8" height="57" rx="4" fill="#2867B3"/>
+<text x="92" y="105" font-size="44" font-weight="700" fill="#22364B" text-anchor="start">两条各自在一处完成的安装路径</text>
+<g data-boundary="Terminal path" data-box="60 190 2680 380">
+<rect x="60" y="190" width="2680" height="380" rx="20" fill="#EEF4FC" stroke="#B6C7D6" stroke-width="2" stroke-dasharray="9 8"/>
+<rect x="82" y="219" width="5" height="30" rx="2" fill="#2867B3"/>
+<text x="100" y="243" font-size="26" font-weight="700" fill="#22364B" text-anchor="start">终端路径（全在终端）</text>
+<rect x="2520" y="212" width="130" height="42" rx="21" fill="#FFFFFF" stroke="#B6C7D6"/>
+<text x="2585" y="240" font-size="20" font-weight="600" fill="#22364B" text-anchor="middle">泳道</text>
+</g>
+<g data-boundary="Session path" data-box="60 640 2680 390">
+<rect x="60" y="640" width="2680" height="390" rx="20" fill="#EEF8F1" stroke="#B6C7D6" stroke-width="2" stroke-dasharray="9 8"/>
+<rect x="82" y="669" width="5" height="30" rx="2" fill="#2867B3"/>
+<text x="100" y="693" font-size="26" font-weight="700" fill="#22364B" text-anchor="start">会话路径（全在宿主会话）</text>
+<rect x="2520" y="662" width="130" height="42" rx="21" fill="#FFFFFF" stroke="#B6C7D6"/>
+<text x="2585" y="690" font-size="20" font-weight="600" fill="#22364B" text-anchor="middle">泳道</text>
+</g>
+<g data-boundary="Shared installer (script)" data-box="60 1100 2680 710">
+<rect x="60" y="1100" width="2680" height="710" rx="20" fill="#FFF7E8" stroke="#B6C7D6" stroke-width="2" stroke-dasharray="9 8"/>
+<rect x="192" y="1129" width="5" height="30" rx="2" fill="#2867B3"/>
+<text x="210" y="1153" font-size="26" font-weight="700" fill="#22364B" text-anchor="start">共用的安装脚本（由发起的那一处运行）</text>
+<rect x="2520" y="1122" width="130" height="42" rx="21" fill="#FFFFFF" stroke="#B6C7D6"/>
+<text x="2585" y="1150" font-size="20" font-weight="600" fill="#22364B" text-anchor="middle">泳道</text>
+</g>
+<path d="M630 400 H850" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="1" data-category="main" d="M630 400 H850" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M1400 400 H1640" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="2" data-category="main" d="M1400 400 H1640" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M2370 400 H2700 V1240 H640 V1370" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="3" data-category="main" d="M2370 400 H2700 V1240 H640 V1370" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M630 855 H850" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="4" data-category="main" d="M630 855 H850" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M1400 855 H1640" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="5" data-category="main" d="M1400 855 H1640" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M2005 975 V1060 H120 V1545 H180" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="6" data-category="main" d="M2005 975 V1060 H120 V1545 H180" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M830 1545 H1000" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="7" data-category="main" d="M830 1545 H1000" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M1350 1545 H1500" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="8" data-category="main" d="M1350 1545 H1500" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M1635 1435 V1290 H800 V1370" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="9" data-category="loop" d="M1635 1435 V1290 H800 V1370" fill="none" stroke="#7857A7" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-loop)"/>
+<path d="M1770 1545 H1930" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="10" data-category="main" d="M1770 1545 H1930" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<path d="M2380 1545 H2530" fill="none" stroke="white" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path data-flow="11" data-category="main" d="M2380 1545 H2530" fill="none" stroke="#2867B3" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-main)"/>
+<g data-node="Start in a terminal" data-kind="start" data-box="200 345 430 110">
+<rect x="200" y="345" width="430" height="110" rx="55.0" fill="#EAF6EE" stroke="#3C8D5A" stroke-width="2"/>
+<text x="415.0" y="406.0" font-size="24" font-weight="600" fill="#22364B" text-anchor="middle">开始（终端）</text>
+</g>
+<g data-node="git clone the product repository" data-kind="step" data-box="850 315 550 170">
+<rect x="850" y="315" width="550" height="170" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/>
+<text x="1125.0" y="410.0" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">git clone 产品仓库</text>
+</g>
+<g data-node="Run the terminal entry" data-kind="step" data-box="1640 290 730 220">
+<rect x="1640" y="290" width="730" height="220" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/>
+<text x="2005.0" y="385.5" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">运行终端入口</text>
+<text x="2005.0" y="436.5" font-size="21" font-weight="400" fill="#4B6073" text-anchor="middle">探测前提，在终端中提问</text>
+</g>
+<g data-node="Start in a host session" data-kind="start" data-box="200 800 430 110">
+<rect x="200" y="800" width="430" height="110" rx="55.0" fill="#EAF6EE" stroke="#3C8D5A" stroke-width="2"/>
+<text x="415.0" y="861.0" font-size="24" font-weight="600" fill="#22364B" text-anchor="middle">开始（宿主会话）</text>
+</g>
+<g data-node="Install the host plugin" data-kind="step" data-box="850 750 550 210">
+<rect x="850" y="750" width="550" height="210" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/>
+<text x="1125.0" y="840.5" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">安装宿主插件</text>
+<text x="1125.0" y="891.5" font-size="21" font-weight="400" fill="#4B6073" text-anchor="middle">用宿主自己的插件命令</text>
+</g>
+<g data-node="Run the plugin&#x27;s setup entry" data-kind="step" data-box="1640 735 730 240">
+<rect x="1640" y="735" width="730" height="240" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/>
+<text x="2005.0" y="840.5" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">运行插件的 setup 入口</text>
+<text x="2005.0" y="891.5" font-size="21" font-weight="400" fill="#4B6073" text-anchor="middle">探测前提、取得检出，在会话中提问</text>
+</g>
+<g data-node="tsw setup install" data-kind="subprocess" data-box="180 1370 650 350">
+<rect x="180" y="1370" width="650" height="350" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/><line x1="192" y1="1370" x2="192" y2="1720" stroke="#2867B3" stroke-width="2"/><line x1="818" y1="1370" x2="818" y2="1720" stroke="#2867B3" stroke-width="2"/>
+<text x="505.0" y="1501.5" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">tsw setup install</text>
+<text x="505.0" y="1552.5" font-size="21" font-weight="400" fill="#4B6073" text-anchor="middle">同一套确定步骤：PATH 垫片、插件来源改为检出、数据目录</text>
+<text x="505.0" y="1581.5" font-size="21" font-weight="400" fill="#4B6073" text-anchor="middle">与配置、宿主用户设置（先备份）、host render、</text>
+<text x="505.0" y="1610.5" font-size="21" font-weight="400" fill="#4B6073" text-anchor="middle">Dashboard</text>
+</g>
+<g data-node="tsw setup verify" data-kind="subprocess" data-box="1000 1480 350 130">
+<rect x="1000" y="1480" width="350" height="130" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/><line x1="1012" y1="1480" x2="1012" y2="1610" stroke="#2867B3" stroke-width="2"/><line x1="1338" y1="1480" x2="1338" y2="1610" stroke="#2867B3" stroke-width="2"/>
+<text x="1175.0" y="1555.0" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">tsw setup verify</text>
+</g>
+<g data-node="Verified?" data-kind="decision" data-box="1500 1435 270 220">
+<polygon points="1635.0,1435 1770,1545.0 1635.0,1655 1500,1545.0" fill="#FFF7E8" stroke="#B5873A" stroke-width="2"/>
+<text x="1635.0" y="1551.0" font-size="24" font-weight="600" fill="#22364B" text-anchor="middle">验证通过？</text>
+</g>
+<g data-node="Reload the host, open the main session in the data directory" data-kind="step" data-box="1930 1440 450 210">
+<rect x="1930" y="1440" width="450" height="210" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/>
+<text x="2155.0" y="1537.0" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">重新加载宿主，在数据目录打</text>
+<text x="2155.0" y="1573.0" font-size="28" font-weight="600" fill="#22364B" text-anchor="middle">开主会话</text>
+</g>
+<g data-node="Done" data-kind="end" data-box="2530 1490 160 110">
+<rect x="2530" y="1490" width="160" height="110" rx="55.0" fill="#F0F3F6" stroke="#708294" stroke-width="2"/>
+<text x="2610.0" y="1551.0" font-size="24" font-weight="600" fill="#22364B" text-anchor="middle">完成</text>
+</g>
+<g data-badge="9" data-box="1050 1273 240 34">
+<rect x="1050" y="1273" width="240" height="34" rx="17" fill="white" stroke="#7857A7" stroke-width="1.5"/>
+<text x="1170.0" y="1297" font-size="20" font-weight="600" fill="#7857A7" text-anchor="middle">否：修正后重跑</text>
+</g>
+<g data-badge="10" data-box="1813 1528 74 34">
+<rect x="1813" y="1528" width="74" height="34" rx="17" fill="white" stroke="#2867B3" stroke-width="1.5"/>
+<text x="1850.0" y="1552" font-size="20" font-weight="600" fill="#2867B3" text-anchor="middle">是</text>
+</g>
+<text x="80" y="1890" font-size="32" font-weight="700" fill="#22364B" text-anchor="start">图例</text>
+<rect x="90" y="1934" width="90" height="56" rx="28.0" fill="#EAF6EE" stroke="#3C8D5A" stroke-width="2"/>
+<text x="202" y="1970" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">开始</text>
+<rect x="600" y="1934" width="90" height="56" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/>
+<text x="712" y="1970" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">步骤</text>
+<rect x="1110" y="1934" width="90" height="56" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2"/><line x1="1122" y1="1934" x2="1122" y2="1990" stroke="#2867B3" stroke-width="2"/><line x1="1188" y1="1934" x2="1188" y2="1990" stroke="#2867B3" stroke-width="2"/>
+<text x="1222" y="1970" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">子流程</text>
+<polygon points="1665.0,1934 1710,1962.0 1665.0,1990 1620,1962.0" fill="#FFF7E8" stroke="#B5873A" stroke-width="2"/>
+<text x="1732" y="1970" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">判断</text>
+<rect x="2130" y="1934" width="90" height="56" rx="28.0" fill="#F0F3F6" stroke="#708294" stroke-width="2"/>
+<text x="2242" y="1970" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">结束</text>
+<path d="M90 2070 H200" fill="none" stroke="#2867B3" stroke-width="3" marker-end="url(#arrow-main)"/>
+<text x="225" y="2077" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">主路径</text>
+<path d="M810 2070 H920" fill="none" stroke="#7857A7" stroke-width="3" marker-end="url(#arrow-loop)"/>
+<text x="945" y="2077" font-size="20" font-weight="400" fill="#22364B" text-anchor="start">重试与循环</text>
+</g>
+</svg>
+<figcaption><span>两条各自在一处完成的安装路径</span><a href="DN009-install-paths.svg" target="_blank">在新窗口打开 SVG</a></figcaption></figure>
+<h3 id="41-终端路径">4.1 终端路径</h3>
+<ol><li>用户克隆产品仓库到固定目录（已有检出时跳过）。</li><li>运行终端入口：探测解释器（版本不低于 3.10，不是系统占位程序）、git 与宿主的命令行；缺少的逐项问用户是否用系统包管理器安装，否则给出安装方法并停止。</li><li>入口用找到的解释器运行 <code>tsw setup install --interactive</code>：先 <code>check</code>，再在终端逐项提问（§6），显示 <code>plan</code> 并请用户确认，然后执行 §5 的全部步骤，最后 <code>verify</code>。</li><li>告诉用户重新加载宿主，在数据目录中打开主会话。</li></ol>
+<h3 id="42-会话路径">4.2 会话路径</h3>
+<ol><li>用户在宿主会话中用宿主自己的命令安装 task-steward 插件（来源是产品仓库），按宿主的要求重新加载插件，使 setup 入口可用。此时 tsw 的工具服务因为还没有数据目录而报错退出，规则执行对无关会话不生效，不影响会话。</li><li>用户运行插件的 setup 入口：<ol><li>运行探测脚本（与终端入口共用同一段探测）；缺少的项经用户同意用系统包管理器安装，之后用解释器的完整路径继续；</li><li>运行取检出脚本：把产品仓库克隆到固定目录，检出插件当前安装的那个提交；已有检出时校验是同一仓库、工作区干净；</li><li>运行 <code>tsw setup check --questions</code>，按清单在对话中逐项提问；</li><li>写答案文件，运行 <code>tsw setup plan --answers &lt;文件&gt;</code>，把计划与用户设置的差异给用户看，请用户确认；</li><li>运行 <code>tsw setup install --answers &lt;文件&gt;</code>（§5，含 <code>verify</code>），把结果告诉用户；</li><li>请用户重新加载宿主，在数据目录打开主会话。</li></ol></li><li>用户要做的只是回答问题、批准宿主提示的命令，最后重新加载宿主。</li></ol>
+<h3 id="43-不可避免的重新加载">4.3 不可避免的重新加载</h3>
+<p>tsw 的工具服务在会话启动时载入（DN006 §9.8），用户级 PATH 的改动只对新进程生效，所以两条路径的最后一步都是重新加载宿主；会话路径在安装插件之后还要按宿主的要求重新加载一次插件。这是宿主的限制，安装脚本不能替用户做。</p>
+<h2 id="5-tsw-setup-install-的步骤">5. <code>tsw setup install</code> 的步骤</h2>
+<p>两条路径相同，每步先判断已满足就跳过：</p>
+<ol><li><strong>机器级安装项</strong>：记下解释器与宿主命令行的完整路径；写 <code>tsw</code> 垫片（内容与当前目标不同时重写）；把垫片目录加入用户级 PATH。</li><li><strong>插件</strong>：<code>install_plugin(检出)</code>（§3）：终端路径中是第一次注册与安装；会话路径中把已安装插件的来源改指检出。</li><li><strong>数据目录</strong>：<code>tsw init --home &lt;数据目录&gt; --remember</code>；新数据目录写初始配置（语言、仓库、账号、评审器、人类渠道、Dashboard 端口）并 <code>tsw config validate</code>；已有数据目录不改配置，只报告与答案的差异。</li><li><strong>用户设置</strong>（D2，用户同意时）：<code>apply_user_settings</code>；不同意时输出要手工加入的文本。</li><li>**<code>tsw host render</code>**：生成数据目录中的主会话说明、skill、设置与 worker 说明，并更新插件副本（DN006 §6.2）。</li><li><strong>Dashboard</strong>（用户选择且操作系统已支持时）：<code>tsw dashboard install</code>，然后 <code>tsw dashboard open</code>（DN006 §8.10；令牌不出现在任何输出中）。</li><li>写 <code>install.json</code>，运行 <code>verify</code>。</li></ol>
+<h2 id="6-要问用户的配置">6. 要问用户的配置</h2>
+<table><thead><tr><th>问题</th><th>默认</th><th>写到哪里</th></tr></thead><tbody><tr><td>数据目录位置</td><td>用户主目录下的 <code>tsw-home</code></td><td><code>tsw init</code>、宿主用户设置中的数据目录位置</td></tr><tr><td>产品检出位置；已有检出时是否复用</td><td>用户级程序目录下的固定位置（Windows：<code>%LOCALAPPDATA%\TaskSteward\task-steward</code>）</td><td><code>install.json</code>、<code>product_repo</code></td></tr><tr><td>交流语言</td><td><code>zh-CN</code></td><td><code>control.language</code></td></tr><tr><td>要管理的仓库：本机检出路径、托管位置、交付授权（推送、开 PR、worker 合并）</td><td>无</td><td><code>repositories.*</code></td></tr><tr><td>每个仓库使用的代码托管账号（从已登录的账号中选）</td><td>与仓库 owner 同名的账号</td><td><code>accounts.*</code>、<code>repositories.*.auth_profile</code></td></tr><tr><td>评审器</td><td>检测到可用的独立评审器时用它，否则用宿主自己的只读形态（DN006 §10.2）</td><td><code>roles.reviewer</code></td></tr><tr><td>人类渠道：只在会话中，或另加外部渠道</td><td>只在会话中</td><td><code>plugins.human_channels</code>、<code>input.channels</code></td></tr><tr><td>宿主（session provider）</td><td>列出已实现宿主集成的宿主，只有一个时直接选定</td><td><code>plugins.host_integration</code>、<code>plugins.sessions</code></td></tr><tr><td>是否把 Dashboard 装成登录时启动的服务；端口</td><td>操作系统支持时是，<code>47800</code></td><td><code>tsw dashboard install</code>、<code>dashboard.port</code></td></tr><tr><td>是否允许安装脚本维护宿主用户设置</td><td>是（备份后合并）</td><td><code>install.json</code></td></tr></tbody></table>
+<h2 id="7-用户设置与-pathd2">7. 用户设置与 PATH（D2）</h2>
+<p>用户 2026-11-19 决定：<code>tsw setup install</code> 可以修改宿主的用户设置与用户级 PATH。此前 install hint 写明“tsw 不修改任何全局设置”（DN006 §6.2），由用户手工合并；改为由安装脚本做，约束是：</p>
+<ul><li>先在 <code>plan</code> 中展示改动前后的差异，用户确认后才写；</li><li>写之前备份原文件，备份路径记在 <code>install.json</code>；</li><li>只改自己加入的键：数据目录位置与宿主侧放行规则（按规则名识别，旧文本替换为新文本），不动其他内容；</li><li>PATH 只追加垫片目录一项，只改用户级、不改系统级；</li><li>卸载时按 <code>install.json</code> 移除自己加入的内容。</li></ul>
+<p><code>tsw host install-hint</code> 保留给手工安装的人，内容与 <code>tsw setup plan</code> 同源。</p>
+<h2 id="8-会话中的例外d3">8. 会话中的例外（D3）</h2>
+<p>会话路径要在宿主会话中完成全部步骤，而现有规则在会话中拒绝两类命令：<code>tsw dashboard install</code> / <code>open</code> / <code>uninstall</code> 是用户本人的操作，在任何会话中拒绝（DN006 §8.10）；<code>tsw host render</code> 只有主会话可以运行（DN006 §9.7）。用户 2026-11-19 决定为安装脚本开例外：</p>
+<table><thead><tr><th>调用者</th><th><code>tsw setup install</code> / <code>uninstall</code>（含其中的 <code>dashboard install</code> / <code>open</code> / <code>uninstall</code> 与 <code>host render</code>）</th></tr></thead><tbody><tr><td>会话外的终端</td><td>允许</td></tr><tr><td>没有绑定任何数据目录的会话（第一次安装时，tsw 把它解析为无关会话）</td><td>允许</td></tr><tr><td>主会话（升级、修复、卸载）</td><td>允许</td></tr><tr><td>worker、例行会话、已撤销、待绑定的会话</td><td>拒绝</td></tr></tbody></table>
+<ul><li>直接运行的 <code>tsw dashboard install</code> / <code>open</code> / <code>uninstall</code> 与 <code>tsw host render</code> 的规则不变。</li><li>理由：原来防的是会话替用户做“用户本人的决定”，并拿到能登录 Dashboard 的令牌。安装是用户在自己的那一轮中运行 setup 入口发起的；<code>open</code> 不输出令牌，只保存摘要（DN006 §8.10），会话仍拿不到能登录的东西；Dashboard 上的验收、退回、取消仍要用户在浏览器中操作。</li><li>worker 与例行会话仍拒绝：它们不应安装或更新宿主（防误认，DN008）。</li><li>宿主可能为写用户设置、登记计划任务等命令请用户批准，这正是用户本人的授权，安装脚本不绕过。</li></ul>
+<h2 id="9-验证">9. 验证</h2>
+<p><code>tsw setup verify</code>（只读）检查：</p>
+<ul><li>垫片存在，其中的解释器与检出路径等于 <code>install.json</code> 的当前目标；PATH 中的 <code>tsw</code> 解析到这些垫片；</li><li>插件来源指向检出，插件副本等于检出 HEAD；</li><li><code>tsw home</code> 找到数据目录，<code>tsw config validate</code> 通过；</li><li><code>tsw host update-plan</code> 的 <code>pending</code> 为空，宿主侧放行规则没有缺失；</li><li><code>tsw dashboard status</code>（已安装时）；</li><li>不加载用户 site-packages 时运行时仍能加载，工具服务能完成一次握手。</li></ul>
+<p>有失败项时说明原因，修正后重跑 <code>install</code>。</p>
+<h2 id="10-幂等升级修复与卸载">10. 幂等、升级、修复与卸载</h2>
+<ul><li><strong>升级</strong>：在主会话中要求更新，主会话按现有的自我更新流程做（DN006 §9.8）：拉取并快进检出、<code>update-plan</code>、<code>host render</code>（含插件副本）、重启 Dashboard、按配置重新加载。<code>update-plan</code> 的 <code>install</code> 类别改为：垫片模板或安装步骤改变时，重新运行 <code>tsw setup install</code>（主会话中按 §8 可以直接运行，或在终端运行）；<code>host_rules</code> 在用户同意由安装脚本维护时同样重跑安装。</li><li><strong>修复</strong>：重跑任一路径；已有安装时先 <code>check</code>，只做缺少或不一致的部分。</li><li><strong>卸载</strong>：<code>tsw setup uninstall</code>（终端，或主会话中的 setup 入口）：<code>tsw dashboard uninstall</code>；<code>remove(install_record)</code>；删除垫片与它加入的 PATH 项。<strong>数据目录永远不删</strong>（账本是用户的数据），只告诉用户位置与 <code>tsw backup</code> 的用法；检出由用户自己删除（会话路径中 setup 克隆的检出，经用户确认后可删）。</li></ul>
+<h2 id="11-产品仓库的位置d1">11. 产品仓库的位置（D1）</h2>
+<p>用户 2026-11-19 决定：产品仓库留在现在的公开仓库。</p>
+<ul><li>两条路径都只需要从公开仓库克隆：不需要账号、令牌或单点登录。</li><li>不发布到任何包仓库（PyPI、npm 等）；release.md 的发布规则在第一次正式发布时再定版本号与标签。</li><li>若以后迁到组织的内部仓库，每个用户都要先在 git 凭据助手中存好有权读取该仓库的账号凭据，宿主克隆插件来源时不会提示输入凭据；这会成为两条路径的新前提，届时更新本节。</li></ul>
+<h2 id="12-操作系统">12. 操作系统</h2>
+<table><thead><tr><th>项</th><th>Windows</th><th>macOS / Linux</th></tr></thead><tbody><tr><td>终端入口与探测</td><td><code>setup.ps1</code>（Windows PowerShell 5.1 自带）；winget</td><td><code>setup.sh</code>（POSIX sh）；Homebrew / 发行版包管理器</td></tr><tr><td>解释器命令名</td><td><code>python</code></td><td>常见只有 <code>python3</code>：插件中写死的解释器命令要改为可配置</td></tr><tr><td>垫片与 PATH</td><td><code>tsw.cmd</code> 与无扩展名的 sh 脚本（Git Bash 用）；用户级 <code>Path</code></td><td><code>~/.local/bin/tsw</code> 一个 sh 脚本；不在 PATH 时提示用户改 shell 配置，不自动改</td></tr><tr><td>Dashboard 常驻</td><td>已实现（DN006 §8.10）</td><td>未实现</td></tr><tr><td>安装记录与令牌目录</td><td><code>%LOCALAPPDATA%\TaskSteward\</code></td><td>待定（如 <code>~/Library/Application Support/TaskSteward</code>、<code>$XDG_STATE_HOME/TaskSteward</code>）</td></tr></tbody></table>
+<p>先实现 Windows。</p>
+<h2 id="13-对其他文档的影响">13. 对其他文档的影响</h2>
+<ul><li>DN006 §6.2：宿主集成增加 §3 的三个操作；install hint 与 <code>tsw setup plan</code> 同源，不再写“不修改全局设置”。</li><li>DN006 §8.10、§9.7：会话中的例外见 §8。</li><li>DN006 §9.1：运行时的定位写明安装脚本管理的检出与垫片，可编辑安装只对开发者保留。</li><li>DN006 §9.8：<code>install</code> 与 <code>host_rules</code> 动作改为重跑 <code>tsw setup install</code>。</li><li>release.md：分发方式的 <code>TODO(decision)</code> 由本文决定。</li></ul>
+<h2 id="14-待验证">14. 待验证</h2>
+<ul><li>两条路径在干净环境中各从零走到主会话可用（live）；</li><li>一位没有产品检出的用户真实试装；</li><li>没有解释器或 git 的机器上的探测与安装；</li><li>macOS / Linux 全部。</li></ul>
+<h2 id="附录-a备选方案存档">附录 A：备选方案存档</h2>
+<ul><li><strong>终端与会话交替</strong>：克隆 → 终端引导（垫片、PATH、插件）→ 会话中提问并生成计划 → 回到终端应用 → 验证。动机是现有规则不让会话运行 Dashboard 登记与 render。用户认为在两处来回切换太绕，改为本文的两条路径，并为安装脚本开 §8 的例外。</li><li><strong>只经远端插件来源分发</strong>：插件来自远端插件来源，检出另行快进，二者可能落在不同提交，需要发布分支、固定单次目标与更新后的收敛规则。本文的会话路径同样从远端来源开始，但安装时改指检出，之后只有一个来源。</li><li><strong>不用插件，直接把检出注册到宿主的用户级配置</strong>：升级要逐条改写用户的配置，失去插件的整体启用 / 停用 / 更新与副本一致性检查，setup 入口也没有地方放。</li><li><strong>运行时随插件进缓存</strong>：缓存没有 git 历史、目录随版本变化，<code>update-plan</code>、运行版本记录与 Dashboard 工作目录都要改为基于版本文件；收益是不需要 git，而 git 本来就是 worktree 与评审的前提。</li><li><strong>用包管理器从 git 安装运行时</strong>：插件与 skill 的来源不在包里，没有 git 历史，仍需要包索引。</li><li><strong>发布到包仓库（PyPI、GitHub Packages 等）</strong>：需要令牌或包权限，用户不采用。</li><li>**插件改名为 <code>tsw</code>**：命令更短，但要改插件 ID、工具前缀与生成的规则；用户决定不改（<code>tsw</code> 只是命令行名）。</li></ul>
+<footer>本页由同目录的 <a href="DN009-distribution-and-install.md">DN009-distribution-and-install.md</a> 生成，内容与 Markdown 版本一致。</footer>
+</main>
+</div>
+</body>
+</html>
