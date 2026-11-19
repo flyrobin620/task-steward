@@ -676,11 +676,19 @@ def verify(
         checks.append(_check("runtime_handshake", **_handshake_check(python, ctx, root)))
     on_path = shutil.which("tsw", path=ctx.env.get("PATH"))
     effective = on_path is not None and _inside(Path(on_path), ctx.shims)
+    detail: Any = on_path
+    if on_path is not None and not effective:
+        # A developer's pip install (Python's Scripts) or another copy comes first (T308 live).
+        detail = {
+            "found": on_path,
+            "note": "PATH 中先找到的 tsw 不是安装脚本的垫片：删除另一个 tsw（例如 pip uninstall "
+            "task-steward），或把垫片目录移到 PATH 的前面",
+        }
     checks.append(
         _check(
             "path_effective",
             effective if after_reload else (True if effective else None),
-            on_path,
+            detail,
             pending=not effective and not after_reload,
         )
     )

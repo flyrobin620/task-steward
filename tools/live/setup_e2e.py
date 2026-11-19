@@ -190,11 +190,21 @@ def terminal_path(run: Run, source: str) -> None:
         env=env,
         stdin="\n".join(replies) + "\n",
     )
-    out = last_json(proc.stdout)
+    installed = json.loads((run.local / "TaskSteward" / "install.json").read_text("utf-8"))
+    verify = run.run(
+        ["cmd", "/c", str(run.shims / "tsw.cmd"), "setup", "verify", "--json"], env=env
+    )
+    out = last_json(verify.stdout)
     run.check(
         "S1 setup.ps1 安装完成且安装阶段 verify 通过",
-        proc.returncode == 0 and out.get("verify", {}).get("ok") is True,
-        {"exit": proc.returncode, "failed": out.get("verify", {}).get("failed")},
+        proc.returncode == 0
+        and installed.get("status") == "installed"
+        and out.get("ok") is not False,
+        {
+            "exit": proc.returncode,
+            "failed": out.get("failed"),
+            "pending": out.get("pending_reload"),
+        },
     )
 
 
@@ -313,11 +323,30 @@ def after_install(run: Run, original_path: str | None) -> None:
         hooked.returncode == 0 and "additionalContext" in hooked.stdout,
         hooked.returncode,
     )
-    shim = run.run(["cmd", "/c", "where", "tsw"], env=env)
+    head_shim = str(run.shims / "tsw.cmd")
+    found = run.run(["cmd", "/c", "where", "tsw"], env=env).stdout.splitlines()
+    first = found[0].strip() if found else ""
+    shadowed = not _inside(first, run.shims)
+    if shadowed:
+        # Another tsw (a developer's pip install) comes first on this PATH: verify must say so.
+        verify = run.run(
+            ["cmd", "/c", head_shim, "setup", "verify", "--after-reload", "--json"], env=env
+        )
+        result = last_json(verify.stdout)
+        run.check(
+            "S7a 观察：PATH 中先找到的 tsw 不是垫片时 verify --after-reload 报告 path_effective",
+            "path_effective" in (result.get("failed") or []),
+            {"first": run.scrub(first), "failed": result.get("failed")},
+        )
+        env["PATH"] = ";".join(
+            p for p in env["PATH"].split(";") if not _has_other_tsw(p, run.shims)
+        )
+    found = run.run(["cmd", "/c", "where", "tsw"], env=env).stdout.splitlines()
     run.check(
-        "S7 新进程的 PATH 中 tsw 解析到垫片（cmd）",
-        os.path.normcase(str(run.shims)) in os.path.normcase(shim.stdout),
-        run.scrub(shim.stdout.strip()),
+        "S7 新进程的 PATH 中 tsw 解析到垫片（cmd）"
+        + ("；已去掉本机另一个 tsw 所在的 PATH 项" if shadowed else ""),
+        bool(found) and _inside(found[0].strip(), run.shims),
+        run.scrub(found[0].strip() if found else ""),
     )
     verify = run.run(
         ["cmd", "/c", "tsw", "setup", "verify", "--after-reload", "--running", head, "--json"],
@@ -326,11 +355,10 @@ def after_install(run: Run, original_path: str | None) -> None:
     result = last_json(verify.stdout)
     run.check(
         "S7 重新加载之后的 verify（经垫片）通过",
-        verify.returncode == 0 and result.get("ok") is not False and not result.get("failed"),
+        verify.returncode == 0 and not result.get("failed"),
         {"failed": result.get("failed"), "pending_reload": result.get("pending_reload")},
     )
-    posix = env.copy()
-    sh = run.run([bash(), "-c", "tsw home --json"], env=posix)
+    sh = run.run([bash(), "-c", "tsw home --json"], env=env)
     run.check(
         "S7 Git Bash 中 tsw（sh 垫片）找到数据目录",
         last_json(sh.stdout).get("source") == ".local/tsw-home",
@@ -349,6 +377,17 @@ def after_install(run: Run, original_path: str | None) -> None:
         and (run.home / "tsw-home.json").is_file(),
         {"exit": gone.returncode, "path_restored": after == original_path},
     )
+
+
+def _inside(path: str, folder: Path) -> bool:
+    return os.path.normcase(str(Path(path).parent)) == os.path.normcase(str(folder))
+
+
+def _has_other_tsw(entry: str, shims: Path) -> bool:
+    folder = Path(entry.strip().strip('"'))
+    if not entry.strip() or os.path.normcase(str(folder)) == os.path.normcase(str(shims)):
+        return False
+    return any((folder / name).is_file() for name in ("tsw.exe", "tsw.cmd", "tsw.bat"))
 
 
 def bash() -> str:

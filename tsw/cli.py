@@ -714,7 +714,32 @@ def _setup_interactive(args: argparse.Namespace) -> dict[str, Any]:
     reply = input("\n按上面的计划安装？[是 / 否]：").strip().lower()
     if reply not in ("y", "yes", "是", "好"):
         return {"installed": False, "answers_file": str(path), "note": "没有安装；答案已保存"}
-    return setup_steps.install(ctx, open_browser=not args.no_browser)
+    result = setup_steps.install(ctx, open_browser=not args.no_browser)
+    if args.json:
+        return result
+    return _say_installed(result)
+
+
+def _say_installed(result: dict[str, Any]) -> dict[str, Any]:
+    """The terminal's summary of an install: each step, the checks, what to do next."""
+    print("\n安装结果：")
+    for step in result["steps"]:
+        print(f"  - {step['step']}：{step.get('state')}")
+    verify = result["verify"]
+    for check in verify["checks"]:
+        mark = {True: "通过", False: "失败", None: "未核对"}[check["ok"]]
+        extra = "（重启后生效）" if check.get("pending_reload") else ""
+        print(f"  核对 {check['check']}：{mark}{extra}")
+    out: dict[str, Any] = {
+        "installed": True,
+        "record": result["record"],
+        "next": result["next"],
+        "repositories": result["repositories"],
+    }
+    if not verify["ok"]:
+        out["ok"] = False
+        out["failed"] = verify["failed"]
+    return out
 
 
 def _cmd_setup_verify(args: argparse.Namespace) -> dict[str, Any]:
