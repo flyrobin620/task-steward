@@ -95,9 +95,19 @@ setup 在会话中提问（同样要求用户给出数据目录位置）并做�
 - Dashboard 常驻服务：复用 `tsw dashboard install`（CC006 §12）。
 - 实测环境注意：在数据目录之下用独立的 `CLAUDE_CONFIG_DIR` 添加 GitHub 市场，Claude Code 最后一步的目录重命名会以 `EPERM` 失败（同一操作在 `%TEMP%` 下成功）；live 场景的临时配置放在 `%TEMP%` 下。
 
-## 9. 待验证（live）
+## 9. 待验证（live）与 T308 的结论
 
-- 桌面 app 会话中 `/plugin install task-steward --marketplace …` 的写法，以及是否必须 `/reload-plugins`；
-- auto 模式下 `tsw setup install` 写用户设置、登记计划任务时的批准提示；
-- Claude app 的 Terminal 面板中运行的命令是否带 `CLAUDECODE`（若不带，setup skill 也可以把 `install` 交给 Terminal 面板，由用户批准运行）；
-- 两条路径在干净的 `CLAUDE_CONFIG_DIR` 与临时 HOME 中各从零走到主会话可用。
+T308 在本机（Windows 11，Claude Code 2.1.302）用 live 场景 `setup-e2e`（`python tools/live.py setup-e2e run --path terminal|session`）验证：每次运行有自己的 `HOME`、`LOCALAPPDATA` 与 `CLAUDE_CONFIG_DIR`（在 `%TEMP%` 下），真实的 PowerShell、Python、git、`claude` 插件命令（不调用模型）与 HKCU 用户级 PATH（运行后核对恢复原值）。
+
+| 待验证项 | 结论 |
+| --- | --- |
+| 两条路径在干净的 `CLAUDE_CONFIG_DIR` 与临时 HOME 中各从零走到主会话可用 | 通过（本机）：终端路径经 `setup.ps1` 交互；会话路径从插件市场一步安装（`--marketplace <URL>#<分支>` 也可用）、探测、取检出、问题清单、计划与安装（带会话标记 `CLAUDECODE` 与新的会话 ID，属模拟）。两条路径之后都核对：市场改指检出、副本为检出 HEAD；`claude mcp list` 显示插件的 tsw MCP server 已连接（`TSW_PYTHON`、`TSW_HOME` 来自用户设置）；插件副本的 SessionStart hook 命令在 Git Bash 中运行并给主会话注入；新进程中 `tsw` 解析到垫片（cmd 与 Git Bash），`verify --after-reload` 通过；`tsw setup uninstall` 恢复 PATH 原值、移除插件与用户设置、保留数据目录。真实 app 中的会话与重启由用户在另一台机器上试装验证 |
+| Claude app 的 Terminal 面板中运行的命令是否带 `CLAUDECODE` | 不带（实测：Terminal 面板的 PowerShell 中没有 `CLAUDECODE` 与 `CLAUDE_CODE_HOST_SESSION_ID`）：在那里运行的 `tsw` 是会话外的终端。setup skill 仍在会话的 Bash 中运行安装（§6 已放行），不需要换到 Terminal 面板 |
+| 插件的 `.mcp.json` 与 hooks 中 `${TSW_PYTHON:-python}` | 两处都按 `TSW_PYTHON` 运行指定的解释器，未设置时回落到 `python`（`--plugin-dir` 加载的探针插件，§5） |
+| 桌面 app 会话中 `/plugin install task-steward --marketplace …` 的写法，以及是否必须 `/reload-plugins` | 待用户试装（CLI 的同一写法已通过） |
+| auto 模式下 `tsw setup install` 写用户设置、登记计划任务时的批准提示 | 待用户试装 |
+
+live 中另外发现并已处理：
+
+- 开发者机器上 pip 可编辑安装的 `tsw.exe`（Python 的 `Scripts`）在 PATH 中排在垫片之前时，`tsw` 不是垫片；`verify --after-reload` 的 `path_effective` 报告失败并写明原因（删除另一个 `tsw`，或把垫片目录移前）。没有产品检出的用户不受影响。
+- `tsw setup uninstall` 经 `tsw.cmd` 运行时，cmd 在命令结束后还会再读这个文件：卸载时立刻删除它会以 “The system cannot find the path specified” 与退出码 1 结束。垫片设置 `TSW_SHIM`，卸载把正在运行的 `tsw.cmd` 交给一个分离的 cmd 稍后删除（也跳出调用者的作业对象）。
