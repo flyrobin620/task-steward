@@ -117,17 +117,25 @@ def _delete_later(path: Path) -> None:
         f'del /f /q "{path}" & rmdir "{path.parent}" 2>nul'
     )
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    # Outside a job that kills its processes when the terminal or tool that ran tsw closes.
+    breakaway = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
     # Kept referenced: the cleanup outlives this call (and usually this process).
-    _DETACHED.append(
-        subprocess.Popen(
-            ["cmd", "/d", "/c", script],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=flags,
-            close_fds=True,
-        )
-    )
+    for extra in (breakaway, 0):
+        try:
+            _DETACHED.append(
+                subprocess.Popen(
+                    # One command line as cmd reads it: /s keeps the inner quotes as written.
+                    f'cmd /d /s /c "{script}"',
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=flags | extra,
+                    close_fds=True,
+                )
+            )
+        except OSError:
+            continue  # the job does not allow breaking away
+        return
 
 
 # ---------------------------------------------------------------------- the user's Path
