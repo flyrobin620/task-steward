@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -26,6 +27,9 @@ from tsw.errors import rejected
 from tsw.setup.record import norm
 
 REG_ENV = "TSW_REG"
+SHIM_ENV = "TSW_SHIM"
+DEFER_SECONDS = 5
+_DETACHED: list[subprocess.Popen[bytes]] = []
 ENV_KEY = r"HKCU\Environment"
 EXPAND = 2  # winreg.REG_EXPAND_SZ
 
@@ -36,9 +40,9 @@ def shim_texts(python: str, checkout: Path) -> dict[str, str]:
     posix_python = python.replace("\\", "/")
     posix_launcher = str(launcher).replace("\\", "/")
     return {
-        # "& exit /b" on the same line: cmd never reads the file again, so an uninstall that
-        # deletes this shim while it runs still returns tsw's exit code.
-        "tsw.cmd": f'@"{python}" -X utf8 "{launcher}" %* & exit /b\r\n',
+        # TSW_SHIM tells an uninstall run through this file that cmd will read it again after
+        # tsw exits: deleting it now would make cmd fail (T308 live).
+        "tsw.cmd": f'@setlocal & set "{SHIM_ENV}=%~f0" & "{python}" -X utf8 "{launcher}" %*\r\n',
         "tsw": f'#!/bin/sh\nexec "{posix_python}" -X utf8 "{posix_launcher}" "$@"\n',
     }
 
@@ -75,16 +79,55 @@ def write_shims(directory: Path, python: str, checkout: Path) -> list[str]:
     return written
 
 
-def remove_shims(directory: Path) -> list[str]:
+def remove_shims(directory: Path, env: Mapping[str, str]) -> dict[str, list[str]]:
+    """Delete the shims and their folder when it is left empty.
+
+    cmd reads a batch file again after each command, so the ``tsw.cmd`` this uninstall runs
+    through (``TSW_SHIM``) is deleted a few seconds later by a detached cmd, after this process and
+    its cmd have exited; deleting it at once would end the user's command with "The system cannot
+    find the path specified" and exit code 1.
+    """
     removed: list[str] = []
-    for name in ("tsw.cmd", "tsw"):
+    deferred: list[str] = []
+    running = env.get(SHIM_ENV)
+    for name in ("tsw", "tsw.cmd"):
         path = directory / name
-        if path.is_file():
-            path.unlink()
-            removed.append(name)
-    with contextlib.suppress(OSError):
-        directory.rmdir()  # only when empty
-    return removed
+        if not path.is_file():
+            continue
+        if running and _same(Path(running), path) and sys.platform == "win32":
+            _delete_later(path)
+            deferred.append(name)
+            continue
+        path.unlink()
+        removed.append(name)
+    if not deferred:
+        with contextlib.suppress(OSError):
+            directory.rmdir()  # only when empty
+    return {"removed": removed, "deferred": deferred}
+
+
+def _same(a: Path, b: Path) -> bool:
+    return norm(a) == norm(b)
+
+
+def _delete_later(path: Path) -> None:
+    """Delete ``path`` (and its folder when empty) from a detached cmd after a short wait."""
+    script = (
+        f"ping -n {DEFER_SECONDS + 1} 127.0.0.1 >nul & "
+        f'del /f /q "{path}" & rmdir "{path.parent}" 2>nul'
+    )
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    # Kept referenced: the cleanup outlives this call (and usually this process).
+    _DETACHED.append(
+        subprocess.Popen(
+            ["cmd", "/d", "/c", script],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=flags,
+            close_fds=True,
+        )
+    )
 
 
 # ---------------------------------------------------------------------- the user's Path

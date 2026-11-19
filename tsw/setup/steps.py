@@ -762,7 +762,7 @@ def uninstall(ctx: Context) -> dict[str, Any]:
     if owned:
         done["user_settings"] = claude_install.remove_user_settings(ctx.env, owned, ctx.backups)
     shims = Path(str(ctx.record.step("shim").get("dir") or ctx.shims))
-    done["shims"] = winenv.remove_shims(shims)
+    done["shims"] = winenv.remove_shims(shims, ctx.env)
     path_entry = ctx.record.step("path")
     if path_entry.get("added"):
         value, kind = winenv.read_user_path(ctx.env)

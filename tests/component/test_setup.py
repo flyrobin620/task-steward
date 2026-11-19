@@ -339,3 +339,16 @@ def test_verify_after_reload_needs_the_shim_on_path_and_nothing_pending(tmp_path
     checks = {c["check"]: c for c in out["checks"]}
     assert checks["path_effective"]["ok"] is True
     assert checks["update_plan"]["detail"]["pending"] == []
+
+
+@pytest.mark.use_case(UC)
+def test_the_cmd_shim_an_uninstall_runs_through_is_deleted_after_it_exits(tmp_path: Path) -> None:
+    from tsw.setup import winenv  # noqa: PLC0415
+
+    shims = tmp_path / "bin"
+    winenv.write_shims(shims, "python", tmp_path / "product")
+    report = winenv.remove_shims(shims, {"TSW_SHIM": str(shims / "tsw.cmd")})
+    # cmd reads tsw.cmd again after tsw exits: it is deleted later, the sh shim at once.
+    assert report == {"removed": ["tsw"], "deferred": ["tsw.cmd"]}
+    assert (shims / "tsw.cmd").is_file() and not (shims / "tsw").exists()
+    assert winenv.remove_shims(tmp_path / "none", {}) == {"removed": [], "deferred": []}

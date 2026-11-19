@@ -128,8 +128,8 @@ def test_path_entries_are_appended_and_removed_without_touching_the_rest() -> No
 def test_the_shims_run_the_checkout_launcher_with_the_interpreter() -> None:
     texts = winenv.shim_texts(r"C:\Py\python.exe", Path(r"C:\TSW\task-steward"))
     assert texts["tsw.cmd"] == (
-        r'@"C:\Py\python.exe" -X utf8 "C:\TSW\task-steward\plugin\bin\tsw_launch.py" %* & exit /b'
-        + "\r\n"
+        r'@setlocal & set "TSW_SHIM=%~f0" & "C:\Py\python.exe" -X utf8 '
+        r'"C:\TSW\task-steward\plugin\bin\tsw_launch.py" %*' + "\r\n"
     )
     assert texts["tsw"] == (
         '#!/bin/sh\nexec "C:/Py/python.exe" -X utf8 '
