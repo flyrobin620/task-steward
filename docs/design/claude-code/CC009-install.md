@@ -78,6 +78,7 @@ setup 在会话中提问并做完，最后请用户重启 Claude app。过程中
 - tsw MCP server 只在会话启动时载入，`/reload-plugins` 不换 MCP（CC006 §11.1）：两条路径最后都请用户重启 Claude app。
 - 会话路径在 `/plugin install` 之后先 `/reload-plugins`（§4）。
 - 安装过程中插件的 tsw MCP server 因为还没有数据目录而报错退出；hooks 对无关会话不生效。重启 app 后在数据目录打开的会话是主会话。
+- 重启 app 之后的验证（DN009 §9 的 `tsw setup verify --after-reload`）：在主会话中运行，核对 `whoami` 的 `runtime.commit` 等于检出 HEAD、`update-plan` 的 `pending` 为空；PATH 在新开的终端中核对。
 
 ## 8. Windows 上的入口与垫片
 
