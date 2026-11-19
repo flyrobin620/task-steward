@@ -456,8 +456,13 @@ def test_a_dashboard_step_interrupted_after_the_task_was_created_is_recovered(
         "state": "started",
     }
     state.write_text(json.dumps(data), encoding="utf-8")
+    calls = Path(env["TSW_STATE_DIR"]) / "fake-schtasks.json"
+    before = len(json.loads(calls.read_text("utf-8"))["calls"])
     _, out = install(product, answers, env, claude)
     assert steps_by_name(out)["dashboard"].get("recovered") is True
+    # The task may never have been started: the recovery starts it (End, then Run).
+    later = [c[0] for c in json.loads(calls.read_text("utf-8"))["calls"][before:]]
+    assert "/Run" in later
     assert record(env)["steps"]["dashboard"]["installed"] is True
     # Interrupted again, then uninstalled directly: the task is still taken back.
     data = json.loads(state.read_text(encoding="utf-8"))
@@ -467,3 +472,44 @@ def test_a_dashboard_step_interrupted_after_the_task_was_created_is_recovered(
     assert code == 0, text
     tasks = json.loads((Path(env["TSW_STATE_DIR"]) / "fake-schtasks.json").read_text("utf-8"))
     assert tasks["tasks"] == {}
+
+
+@pytest.mark.use_case(UC)
+def test_uninstall_restores_a_remote_install_that_was_there_before(tmp_path: Path) -> None:
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    env = setup_env(tmp_path)
+    # The session path's first step, or an earlier install from the product repository.
+    _claude(claude, env, "plugin", "install", "task-steward", "--marketplace", str(product))
+    assert install(product, write_answers(tmp_path, tmp_path / "data"), env, claude)[0] == 0
+    code, out, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
+    assert code == 0, text
+    calls = claude_calls(tmp_path)
+    assert not any(call.startswith("plugin uninstall") for call in calls)
+    assert calls[-1] == f"plugin marketplace add {product}"  # its old source again
+    notes = out["removed"]["plugin"]["notes"]
+    assert any("claude plugin uninstall task-steward@task-steward" in n for n in notes)
+
+
+@pytest.mark.use_case(UC)
+def test_uninstall_restores_a_marketplace_that_had_no_user_install(tmp_path: Path) -> None:
+    import shutil  # noqa: PLC0415
+
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    mine = make_product(tmp_path, "developer-checkout")
+    env = setup_env(tmp_path)
+    _claude(claude, env, "plugin", "marketplace", "add", str(mine))
+    plugins = Path(env["CLAUDE_CONFIG_DIR"]) / "plugins"
+    copy = plugins / "project-copy"
+    shutil.copytree(product / "plugin", copy)
+    project = {"scope": "project", "installPath": str(copy), "version": "x"}
+    records = {"version": 2, "plugins": {"task-steward@task-steward": [project]}}
+    (plugins / "installed_plugins.json").write_text(json.dumps(records), encoding="utf-8")
+    assert install(product, write_answers(tmp_path, tmp_path / "data"), env, claude)[0] == 0
+    code, _, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
+    assert code == 0, text
+    assert claude_calls(tmp_path)[-2:] == [
+        "plugin uninstall task-steward@task-steward --scope user",  # the one the install added
+        f"plugin marketplace add {mine}",  # the developer's marketplace, as it was
+    ]
+    after = json.loads((plugins / "installed_plugins.json").read_text("utf-8"))
+    assert after["plugins"]["task-steward@task-steward"] == [project]

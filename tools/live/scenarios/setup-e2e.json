@@ -17,7 +17,7 @@
     "S5 claude mcp list 显示插件的 tsw MCP server 已连接",
     "S6 插件副本的 SessionStart hook 命令在 Git Bash 中运行，主会话得到注入",
     "S7 新进程的 PATH 中 tsw 解析到垫片（cmd 与 Git Bash），verify --after-reload 通过",
-    "S8 tsw setup uninstall：PATH 恢复原值，用户设置与插件移除，数据目录保留",
+    "S8 tsw setup uninstall：PATH 恢复原值，用户设置移除，插件回到安装前的状态（终端路径移除；会话路径保留并改回远端来源），数据目录保留",
     "S9 清理：用户级 PATH 与运行前相同"
   ]
 }

@@ -41,6 +41,7 @@ TIMEOUT = 900
 class Run:
     def __init__(self, path: str) -> None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        self.path = path
         self.id = f"live-setup-{path}-{stamp}-{secrets.token_hex(3)}"
         self.root = Path(tempfile.gettempdir()) / "tsw-live-setup" / self.id
         self.user = self.root / "user"
@@ -375,14 +376,23 @@ def after_install(run: Run, original_path: str | None) -> None:
     after, _ = user_path()
     left = json.loads((run.config / "settings.json").read_text("utf-8"))
     plugins = json.loads((run.config / "plugins" / "installed_plugins.json").read_text("utf-8"))
+    known = json.loads((run.config / "plugins" / "known_marketplaces.json").read_text("utf-8"))
+    remote = known.get("task-steward", {}).get("source", {}).get("source") in ("git", "github")
+    # The terminal path installed the plugin: it goes. The session path's plugin was there
+    # before the install (its first step): it stays, its marketplace back on the remote source.
+    plugin_ok = (
+        PLUGIN_ID not in plugins.get("plugins", {}) and "task-steward" not in known
+        if run.path == "terminal"
+        else PLUGIN_ID in plugins.get("plugins", {}) and remote
+    )
     run.check(
-        "S8 卸载：PATH 恢复原值，用户设置与插件移除，数据目录保留",
+        "S8 卸载：PATH 恢复原值，用户设置移除，插件回到安装前的状态，数据目录保留",
         gone.returncode == 0
         and after == original_path
         and "TSW_HOME" not in left.get("env", {})
-        and PLUGIN_ID not in plugins.get("plugins", {})
+        and plugin_ok
         and (run.home / "tsw-home.json").is_file(),
-        {"exit": gone.returncode, "path_restored": after == original_path},
+        {"exit": gone.returncode, "path_restored": after == original_path, "plugin": plugin_ok},
     )
 
 

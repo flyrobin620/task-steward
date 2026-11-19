@@ -472,8 +472,13 @@ def _dashboard(ctx: Context, apply: bool, *, open_browser: bool = True) -> dict[
     interrupted = entry.get("state") == "started" and not entry.get("installed")
     # Interrupted after the task was created: it is ours unless it was there before.
     if apply and installed and interrupted and not entry.get("installed_before"):
-        ctx.record.finish("dashboard", installed=True, port=_port(home))
+        # The task may have been created but never started: start it and wait for it as the
+        # install would have (T308 review r2 F8), then record the step as done.
+        port = _port(home)
+        restarted = dashboard_service.restart(home, ctx.env, port)
+        ctx.record.finish("dashboard", installed=True, port=port)
         result["recovered"] = True
+        result["running"] = restarted.get("running")
     if apply and not installed:
         ctx.record.begin(
             "dashboard",
