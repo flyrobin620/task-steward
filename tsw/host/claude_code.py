@@ -16,8 +16,9 @@ prompt starts with them (CC006 §2). It also generates the permission rules
 for the actions tsw guards itself (CC008 §6): ``.claude/settings.json`` in the data directory for
 the orchestrator. A worker's execution directory gets no settings file: a folder that brings its
 own permission rules asks for trust again even under a trusted data directory, so a worker relies
-on the user's auto-mode rules instead (decision 0003). It explains how to install the plugin and
-never changes global settings by itself.
+on the user's auto-mode rules instead (decision 0003). It explains how to install the plugin
+(``install-hint``, the same steps as ``tsw setup``) and never changes global settings by itself:
+the install script does, through :mod:`tsw.host.claude_install`, when the user agrees (DN009 §7).
 """
 
 from __future__ import annotations
@@ -263,47 +264,39 @@ AUTO_MODE_RULES = (AUTO_MODE_WORKER_DISPATCH, AUTO_MODE_WORKER_MERGE, AUTO_MODE_
 
 
 def install_hint(home: Home) -> str:
-    plugin = PLUGIN_DIR.parent
+    """The manual install steps for those who install by hand: the same steps as
+    ``tsw setup plan`` / ``install`` (DN009 §7: the same source), then the auto mode rules."""
+    from tsw.setup.steps import manual_steps  # noqa: PLC0415  (the command line's install steps)
+
     auto_mode = json.dumps(
         {"autoMode": {"allow": list(AUTO_MODE_RULES)}}, ensure_ascii=False, indent=2
     )
     return "\n".join(
         [
-            "TaskSteward 的 Claude Code 插件安装步骤（只需一次）：",
-            f"0. 在产品仓库 {PLUGIN_DIR.parent} 中运行 python -m pip install -e .，之后任何",
-            f"   终端都能直接运行 tsw；再运行 tsw init --home {home.root} --remember，",
-            "   终端就不必设置 TSW_HOME（人工运行的命令见 README）。",
-            f"1. 在 Claude Code 中添加本地插件市场：/plugin marketplace add {plugin}",
-            "2. 安装插件：/plugin install task-steward@task-steward",
-            "   Claude Code 运行的是插件的缓存副本：产品仓库更新（git pull）后运行",
-            "   tsw host render，它会更新插件副本（claude plugin update）并报告是否与产品仓库的",
-            "   plugin/ 一致；然后重启会话。也可以让主会话运行它：主会话先向你说明并请你确认，",
-            "   确认后自己运行，再请你重启会话（只有主会话可以，其他会话会被拒绝）。",
-            f"3. 设置环境变量 TSW_HOME={home.root}（或在仓库的 .local/tsw-home 中写入该路径），",
-            "   让 worktree 中的 worker 会话也能找到数据目录。",
-            "4. 运行 tsw host render，在数据目录生成主会话的 CLAUDE.md 与项目 skill",
-            "   .claude/skills/orchestrate/、handle-input/、task-intake/、teams-chat/、",
-            "   tsw-update/（自我更新：按改动决定步骤），",
-            "   主会话与 worker 共用的 gh-account/（按仓库选 gh 账号，只对一条命令生效），",
-            "   以及 worker 说明",
-            "   roles/worker.md（来自 plugin/roles/worker.md，每个 worker 会话的提示语以它开头；",
-            "   产品更新后重新运行，否则创建 worker 会话会因说明缺失或不一致被拒绝）。",
-            "   worker 会话中的提问不受配置影响；超时转交后需要你决定的问题怎样交给你，由配置",
-            "   plugins.human_channels 决定：in-session 在主会话中直接问，teams-chat 经 Teams。",
-            f"5. 在数据目录 {home.root} 中打开一个会话作为主会话。",
-            "插件只提供 tsw MCP server 与 hooks，在任何目录的会话里都生效。数据目录的",
-            "项目 skill 由数据目录及其下不在 git 仓库中的会话加载；仓库任务的 worker 在仓库",
-            "worktree 中工作，宿主加载仓库自己的配置，任务书列出数据目录的 skill 供它直接读取。",
-            "数据目录的项目插件（.claude/settings.json 的 enabledPlugins）只对主会话生效：",
-            "要给所有会话用的插件装在用户范围。tsw 不修改任何全局设置。",
-            "6. auto 权限模式下，Claude Code 的分类器会把主会话派发 worker、worker 自行合并 PR、",
-            "   例行会话的定时任务与转发当作未经授权。worker 与例行会话的目录不带权限规则",
-            "   （带规则的目录会再次要求信任），它们的放行都来自这里。由你在用户设置",
-            "   （~/.claude/settings.json，",
-            "   与已有的 autoMode 合并）中加入下面的 auto 模式规则（不采用 worker 合并时可省略",
-            "   合并那一条；它认可 gh-account skill 规定的一个账号前缀，已有的旧规则按下面的文本",
-            "   更新）；",
-            "   Claude Code 不读取项目设置中的 autoMode，tsw 也不会替你修改用户设置：",
+            "TaskSteward 在 Claude Code 上的安装步骤（与 tsw setup plan 的步骤同源，DN009）：",
+            *manual_steps(str(home.root)),
+            "Claude Code 运行的是插件的缓存副本：产品检出"
+            "更新后运行 tsw host render，它更新插件副本",
+            "（claude plugin update）并报告是否与检出的 plugin/ 一致；主会话经你确认后也可以运行它",
+            "（只有主会话可以，其他会话会被拒绝），然后重启会话。",
+            "插件只提供 tsw MCP server 与 hooks，在任何目录的会话里都生效。数据目录的项目 skill 由",
+            "数据目录及其下不在 git 仓库中的会话加载；仓库任务"
+            "的 worker 在仓库 worktree 中工作，宿主",
+            "加载仓库自己的配置，任务书列出数据目录的 skill 供它直接读取。数据目录的项目插件",
+            "（.claude/settings.json 的 enabled"
+            "Plugins）只对主会话生效：要给所有会话用的插件装在用户范围。",
+            "worker 会话中的提问不受配置影响；超时转交后需要你决定的问题怎样交给你，由配置",
+            "plugins.human_channels 决定：in-session 在主会话中直接问，teams-chat 经 Teams。",
+            "auto 权限模式下，Claude Code 的分类器会把主"
+            "会话派发 worker、worker 自行合并 PR、例行会话",
+            "的定时任务与转发当作未经授权。worker 与例"
+            "行会话的目录不带权限规则（带规则的目录会再次要求",
+            "信任），它们的放行都来自用户设置中的下面三条 aut"
+            "o 模式规则（不采用 worker 合并时可省略合并",
+            "那一条；它认可 gh-account skill 规定的一个账号前缀）。Claude Code 不读取项目设置中的",
+            "autoMode。tsw setup install 在"
+            "你同意时替你写入（先备份，同名的旧规则换成新文本）；本命令",
+            "只显示，不修改任何设置：",
             auto_mode,
         ]
     )

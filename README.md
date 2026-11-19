@@ -62,32 +62,47 @@
 
 ## 开始使用（开发中）
 
-需要 Python 3.10+ 与 git。运行时只依赖标准库。
+前提：Windows、Python 3.10+、git、Claude Code（桌面 app 与 `claude` 命令行）。运行时只依赖标准库，不需要 pip。两条安装路径任选其一，各自在一处做完（[DN009](docs/design/DN009-distribution-and-install.md)、[CC009](docs/design/claude-code/CC009-install.md)）。
 
-### 安装 `tsw` 命令（只需一次）
+**在终端安装**（PowerShell）：
 
-在本仓库根目录运行：
-
-```text
-python -m pip install -e .
-tsw init --home <数据目录> --remember
+```powershell
+git clone https://github.com/flyrobin620/task-steward.git "$env:LOCALAPPDATA\TaskSteward\task-steward"
+& "$env:LOCALAPPDATA\TaskSteward\task-steward\setup.ps1"
 ```
 
-第一行把 `tsw` 装进 Python 的 `Scripts` 目录（Windows 的 PowerShell、cmd 与 Git Bash 都能直接运行 `tsw`）。这是可编辑安装，运行的就是本仓库当前的代码，`git pull` 后不用重装；请保留 `-e`：`host render` 等宿主命令要用仓库中的 `plugin/`，它不在 Python 包里。第二行初始化（或打开已有的）数据目录，并把它记在本仓库的 `.local/tsw-home` 中，之后终端不需要设置 `TSW_HOME`。不想安装时，在仓库根目录用 `python -m tsw` 代替 `tsw`。
+脚本先探测 Python、git 与 Claude Code（缺少 Python 或 git 时问你是否用 winget 安装），再问几个问题（数据目录位置必须由你给出，没有默认值），显示计划请你确认，然后做完全部步骤并核对。做完后重启 Claude app，在这个数据目录中打开一个会话，它就是主会话。
+
+**在 Claude 中安装**（在任意一个会话中逐条输入）：
+
+```text
+/plugin install task-steward --marketplace https://github.com/flyrobin620/task-steward.git
+/reload-plugins
+/task-steward:setup
+```
+
+setup 在会话中提问（同样要求你给出数据目录位置）并做完，最后请你重启 Claude app。过程中 Claude 会请你批准几条命令（克隆仓库、写用户设置与 PATH、登记 Dashboard 计划任务等）。
+
+两条路径做的事相同（`tsw setup install`）：在 `%LOCALAPPDATA%\TaskSteward\bin` 放 `tsw` 垫片并加入用户级 PATH、把插件来源指向本机检出、建好数据目录与基础配置、在 Claude Code 用户设置中写入数据目录位置（`env.TSW_HOME`）、插件使用的解释器（`env.TSW_PYTHON`）与三条 auto 模式规则（先备份）、生成主会话的说明与 skill、按你的选择登记 Dashboard 常驻服务。安装记录在 `%LOCALAPPDATA%\TaskSteward\install.json`；重跑任一路径只做缺少或不一致的部分。要管理的仓库不在安装中配置：重启后在主会话中告诉它要管理哪些仓库，由主会话逐个加入配置。之后的更新在主会话中说“更新 tsw”。卸载用 `tsw setup uninstall`（数据目录永远不删）。
+
+开发者也可以在本仓库中用可编辑安装代替垫片：`python -m pip install -e .`，再 `tsw init --home <数据目录> --remember`（把数据目录记在本仓库的 `.local/tsw-home`，终端不必设置 `TSW_HOME`）；插件与用户设置的安装步骤见 `tsw host install-hint`。
 
 ### 哪些命令在哪里运行
 
-- **运行时**（tsw 的代码）在本仓库：安装后 `tsw` 在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw，不需要这一步。
+- **运行时**（tsw 的代码）在产品检出中：安装后 PATH 中的 `tsw` 垫片运行检出中的启动器，在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw。
 - **数据目录**（账本、任务书、报告）按顺序定位：当前目录所在的、声明了 `claim_sessions` 的数据目录（只用于 live 测试隔离）→ 环境变量 `TSW_HOME` → 本仓库的 `.local/tsw-home` → `~/.tsw`。`tsw home` 显示找到的目录和依据。
 - **当前目录**只影响两件事：上面的 `claim_sessions`，以及 `tsw review run`（在 worker 的 worktree 中评审当前 HEAD）。其他命令在哪个目录运行都一样；`backup`、`restore` 的相对路径按当前目录解析。
-- 这些命令由你在**会话外的终端**中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 Dashboard 应用在任何会话中都会被拒绝，以免会话替你做决定（[DN006 §8.10](docs/design/DN006-plugin-layer.md)）。例外是自我更新：你在主会话中说“更新 tsw”，主会话按 `tsw-update` skill 拉取、运行 `tsw host update-plan` 与 `tsw host render`、重启 Dashboard 常驻服务（`tsw dashboard restart`），再按配置 `update` 请你重启 Claude app（或换到接班主会话、输入 `/compact`）；其他会话运行这些命令会被拒绝（[DN006 §9.8](docs/design/DN006-plugin-layer.md)）。
+- 这些命令由你在**会话外的终端**中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 Dashboard 应用在任何会话中都会被拒绝，以免会话替你做决定（[DN006 §8.10](docs/design/DN006-plugin-layer.md)）。例外是自我更新：你在主会话中说“更新 tsw”，主会话按 `tsw-update` skill 拉取、运行 `tsw host update-plan` 与 `tsw host render`、重启 Dashboard 常驻服务（`tsw dashboard restart`），再按配置 `update` 请你重启 Claude app（或换到接班主会话、输入 `/compact`）；其他会话运行这些命令会被拒绝（[DN006 §9.8](docs/design/DN006-plugin-layer.md)）。安装脚本 `tsw setup install` / `uninstall` 也可以在还没有绑定数据目录的会话（第一次安装）与主会话中运行，worker 与例行会话会被拒绝（[DN009 §8](docs/design/DN009-distribution-and-install.md)）。
 
 ### 需要你运行的命令
 
 ```text
 tsw home                                     显示数据目录与定位依据
+tsw setup install --interactive              安装或修复（与 setup.ps1 相同；只做缺少或不一致的部分）
+tsw setup verify [--after-reload]            核对安装结果（重启 Claude app 之后加 --after-reload）
+tsw setup uninstall                          卸载安装脚本加入的内容（数据目录与产品检出保留）
 tsw init --home <目录> --remember            初始化数据目录并记为本仓库的数据目录
-tsw host install-hint                        显示 Claude Code 插件的安装步骤
+tsw host install-hint                        显示手工安装的步骤（与 tsw setup 同源）
 tsw host render                              更新主会话的 CLAUDE.md、skill、worker 说明与插件副本（产品更新后；
                                              主会话经你确认后也可以运行）
 tsw host update-plan                         自我更新要做什么：从运行中的版本到 HEAD 的改动类别与动作（只读）

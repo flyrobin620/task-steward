@@ -116,12 +116,20 @@ def _tail(text: str, lines: int = 10) -> list[str]:
     return [line for line in text.splitlines() if line.strip()][-lines:]
 
 
+def claude_command(env: Mapping[str, str]) -> str | None:
+    """The ``claude`` command line: the one ``tsw setup`` recorded in ``install.json`` (it may
+    not be on ``PATH``, CC009 §3), else the one on ``PATH``."""
+    from tsw.setup.record import recorded_claude  # noqa: PLC0415  (command line only)
+
+    return recorded_claude(env) or shutil.which("claude", path=env.get("PATH"))
+
+
 def update(env: Mapping[str, str]) -> dict[str, Any]:
     """Run Claude Code's plugin update for task-steward and report each install before and after.
 
     Idempotent: an install that is already current stays as it is. Nothing runs when Claude Code
-    has no install record of the plugin (installing it is the user's step, ``install-hint``) or
-    the ``claude`` command is not found; the report then says what to do.
+    has no install record of the plugin (installing it is ``tsw setup``'s step, or the user's,
+    ``install-hint``) or the ``claude`` command is not found; the report then says what to do.
     """
     before = installed_copies(env)
     report: dict[str, Any] = {"source": str(PLUGIN_DIR), "installed": before}
@@ -131,7 +139,7 @@ def update(env: Mapping[str, str]) -> dict[str, Any]:
             "安装步骤见 tsw host install-hint"
         )
         return report
-    executable = shutil.which("claude", path=env.get("PATH"))
+    executable = claude_command(env)
     if executable is None:
         report["update"] = {"ran": False, "reason": "找不到 claude 命令", "command": UPDATE_COMMAND}
         return report

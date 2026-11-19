@@ -57,6 +57,10 @@ NOT_IN_MCP = frozenset(
 # Files whose output ``host render`` writes into the data directory or the plugin copy.
 RENDER_SOURCES = frozenset({"tsw/host/claude_code.py", "tsw/roles.py"})
 CLAUDE_CODE = "tsw/host/claude_code.py"
+# The install script and its entries (DN009 §10): a change reruns ``tsw setup install``. The
+# MCP server never imports ``tsw/setup/`` (checked with NOT_IN_MCP's test), so no reload.
+INSTALL_FILES = frozenset({"pyproject.toml", "setup.ps1"})
+INSTALL_PREFIXES = ("tsw/setup/",)
 PROJECTION = "tsw/projection.py"
 INDEX = "tsw/context/index.py"
 DOC_SUFFIXES = (".md", ".html")
@@ -90,7 +94,7 @@ def classify(path: str) -> list[str]:
         "/" not in path and path.endswith(DOC_SUFFIXES)
     ):
         return ["docs"]
-    if path == "pyproject.toml":
+    if path in INSTALL_FILES or path.startswith(INSTALL_PREFIXES):
         return ["install"]
     if top == "plugin":
         return ["rendered"] if path.startswith("plugin/roles/") else ["plugin"]
@@ -234,13 +238,22 @@ def actions(
                 "pending": projection != "readable",
             }
         )
+    setup = cast("Mapping[str, Any]", state.get("setup") or {})
+    installed_by_setup = bool(setup.get("installed"))
     if "install" in categories:
         out.append(
             {
                 "action": "reinstall",
                 "impact": "user",
-                "who": "user",
-                "how": f"在产品仓库 {REPO_ROOT} 中运行 python -m pip install -e .",
+                "who": "orchestrator" if installed_by_setup else "user",
+                "how": (
+                    "重新运行 tsw setup install（安装"
+                    "脚本改变了：垫片、PATH、插件来源、用户设置等只做"
+                    "缺少或不一致的部分；主会话中可以直接运行，单独一条命令，DN009 §8、§10）"
+                    if installed_by_setup
+                    else "重新运行 tsw setup install；仍用可编辑安装的开发者在产品仓库 "
+                    f"{REPO_ROOT} 中重新运行 python -m pip install -e ."
+                ),
                 # No state shows a reinstall; the main session confirms it with the user.
                 "pending": False,
                 "manual": True,
@@ -300,8 +313,13 @@ def actions(
             {
                 "action": "host_rules",
                 "impact": "user",
-                "who": "user",
-                "how": "请用户按 tsw host install-hint 的文本更新用户设置中的 auto 模式规则",
+                "how": (
+                    "重新运行 tsw setup install：用户同意由安装脚本维护用户设置，它按规则名替换"
+                    "旧文本（先备份，DN009 §7）"
+                    if setup.get("user_settings")
+                    else "请用户按 tsw host install-hint 的文本更新用户设置中的 auto 模式规则"
+                ),
+                "who": "orchestrator" if setup.get("user_settings") else "user",
                 "rules": rules,
                 "pending": True,
             }
@@ -456,6 +474,13 @@ def build(
         for task in task_ids(subjects)
     ]
     allowed = user_auto_rules(env)
+    from tsw.setup.record import InstallRecord  # noqa: PLC0415  (command line only)
+
+    record = InstallRecord.load(env)
+    setup_state = {
+        "installed": record.get("status") == "installed",
+        "user_settings": bool(record.step("user_settings")),
+    }
     rules = [] if allowed is None else missing_rules(allowed, AUTO_MODE_RULES)
     state: dict[str, Any] = {
         "render": rendered if isinstance(rendered, dict) else None,
@@ -469,6 +494,7 @@ def build(
         "host_rules_readable": allowed is not None,
         "running": [s["commit"] for s in sources if s["source"] == "running"],
         "projection": "readable" if conn is not None else "rebuild_required",
+        "setup": setup_state,
     }
     planned = actions(categories, config=config, state=state, to=target)
     return {

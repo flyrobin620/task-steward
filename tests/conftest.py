@@ -2,8 +2,9 @@
 
 Every test runs with its own data directory and a scrubbed environment: no inherited
 ``CLAUDE*`` / ``ANTHROPIC*`` / ``CODEX*`` variables, and ``HOME`` / ``USERPROFILE`` /
-``CLAUDE_CONFIG_DIR`` / ``CODEX_HOME`` / ``TSW_STATE_DIR`` point into the test's temporary
-directory; ``schtasks`` is the stand-in ``tests/fixtures/fake_schtasks.py``. tsw looks
+``CLAUDE_CONFIG_DIR`` / ``CODEX_HOME`` / ``TSW_STATE_DIR`` / ``LOCALAPPDATA`` / ``ProgramFiles``
+point into the test's temporary directory; ``schtasks`` is the stand-in
+``tests/fixtures/fake_schtasks.py`` and the user ``Path`` the JSON file ``TSW_REG`` names. tsw looks
 for a data directory that claims the current directory before ``TSW_HOME``
 (``tsw.home.claiming_home``), so the tests refuse to run from a checkout inside one: they and
 the processes they start would use that data directory.
@@ -43,6 +44,11 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("TSW_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("TSW_SCHTASKS", str(FAKE_SCHTASKS))
     monkeypatch.setenv("TSW_DASHBOARD_WAIT_SECONDS", "0.5")
+    # The install script's user Path is a JSON file standing in for HKCU\Environment, and the
+    # per-user program folders are the test's (T308): no test reads or writes the real ones.
+    monkeypatch.setenv("TSW_REG", str(tmp_path / "state" / "fake-reg.json"))
+    for key in ("LOCALAPPDATA", "ProgramFiles"):
+        monkeypatch.setenv(key, str(tmp_path / key.lower()))
     return data_home
 
 

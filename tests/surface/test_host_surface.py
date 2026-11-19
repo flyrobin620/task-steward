@@ -259,9 +259,20 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     for entries in hooks.values():
         for entry in entries:
             assert "tsw_launch.py" in entry["hooks"][0]["command"]
+    # The interpreter is configurable (T308): TSW_PYTHON from the user settings, else python.
+    assert servers["tsw"]["command"] == "${TSW_PYTHON:-python}"
+    for entries in hooks.values():
+        for entry in entries:
+            assert entry["hooks"][0]["command"].startswith('"${TSW_PYTHON:-python}" -X utf8 ')
     # The plugin is enabled at user scope, so a skill in it would reach every session in any
-    # directory. The orchestrator's skill is rendered into the data directory instead.
-    assert not (PLUGIN / "skills").exists()
+    # directory: the orchestrator's skills are rendered into the data directory instead. The one
+    # plugin skill is the session install entry (CC009 §4), used only when asked to install.
+    assert sorted(p.parent.name for p in (PLUGIN / "skills").glob("*/SKILL.md")) == ["setup"]
+    setup_skill = (PLUGIN / "skills" / "setup" / "SKILL.md").read_text(encoding="utf-8")
+    assert setup_skill.startswith("---\nname: setup\ndescription: ")
+    assert "只在用户要求安装、修复、升级或卸载 TaskSteward 时使用" in setup_skill
+    assert "${CLAUDE_PLUGIN_ROOT}/setup/prereq.ps1" in setup_skill
+    assert "${CLAUDE_PLUGIN_ROOT}/setup/fetch_checkout.py" in setup_skill
     worker = (PLUGIN / "roles" / "worker.md").read_text(encoding="utf-8")
     # T279: merges may carry the gh-account skill's one account prefix, nothing joined; every
     # turn ends with wrap_up, without ask once a question no longer waits on the user.
@@ -378,8 +389,10 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert text.startswith("---\nname: orchestrate\ndescription: ")
     assert "\n---\n\n# TaskSteward 主会话\n" in text
     code, hint = run_json("host", "install-hint")
-    assert code == 0 and "/plugin install task-steward@task-steward" in hint["hint"]
+    assert code == 0 and "claude plugin install task-steward@task-steward" in hint["hint"]
     assert "tsw host render" in hint["hint"]
+    # The same steps as tsw setup (DN009 §7): the install script is recommended first.
+    assert "setup.ps1" in hint["hint"] and "env.TSW_PYTHON" in hint["hint"]
     # The auto-mode rule is shown, never written: Claude Code reads it from user settings only.
     rules = json.loads(hint["hint"][hint["hint"].index("{") :])["autoMode"]["allow"]
     assert [r.split(":")[0] for r in rules] == [

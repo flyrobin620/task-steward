@@ -38,11 +38,11 @@ description: "TaskSteward 自我更新：拉取产品仓库、按改动决定步
 按 `actions` 的顺序：
 
 - `ledger_rebuild`（`blocking`）：投影版本变了。新的命令行与 hooks 已拒绝旧投影，而本会话旧的 MCP 会拒绝重建后的投影，所以按这个顺序：先在旧投影还可读时做第 5 步中需要账本的部分（第 7 步的生效前记录；`new_session` 时先建接班会话、分离并 `lease_release`）；再请用户在会话外的终端运行 `tsw ledger rebuild`；然后必须重新加载会话（按 `update.reload`），由新的 MCP 做第 6、7 步。重建之前不做其他写入。
-- `reinstall`：请用户在产品仓库运行 `python -m pip install -e .`。
+- `reinstall`：安装脚本或包元数据改变了，重新运行 `tsw setup install`（单独一条命令；它只做缺少或不一致的部分：垫片、PATH、插件来源、用户设置等，DN009 §10）。`who` 为 `orchestrator` 时（这台机器由 `tsw setup` 安装）你自己运行，把结果简要告诉用户；为 `user` 时（开发者的可编辑安装）请用户在终端运行 `tsw setup install --interactive`，或在产品仓库重新运行 `python -m pip install -e .`。
 - `render`：运行 `tsw host render`（单独一条命令），把 `written` 与 `plugin` 的结果简要告诉用户。`plugin.next` 要求先卸载再安装时转告用户。
 - `reread_skills`：用 Read 重读 `skills` 中你在本会话已经调用过的 skill（`.claude/skills/<名>/SKILL.md`），之后按新的内容工作；没调用过的不用读。
 - `dashboard_restart`：运行 `tsw dashboard restart`，确认结果的 `current` 为 true；没有安装时跳过。
-- `host_rules`：用户设置中的 auto 模式规则缺少或过期（`rules` 列出名称）：请用户按 `tsw host install-hint` 的文本更新 `~/.claude/settings.json`。tsw 不修改用户设置。
+- `host_rules`：用户设置中的 auto 模式规则缺少或过期（`rules` 列出名称）。`who` 为 `orchestrator` 时（用户同意由安装脚本维护用户设置）重新运行 `tsw setup install`，它先备份再按规则名替换旧文本；为 `user` 时请用户按 `tsw host install-hint` 的文本更新 `~/.claude/settings.json`。
 
 ## 5. 有影响的动作（按配置）
 
@@ -74,4 +74,4 @@ description: "TaskSteward 自我更新：拉取产品仓库、按改动决定步
 2. 告诉用户：更新到哪个提交、做了什么、验证结果，以及还需要用户做的事。
 3. 本会话的 tsw 工具中还没有 `update_record`（MCP server 早于这个功能，例如第一次从 T282 之前的版本升级）时：生效前的记录跳过，在给用户的回复中写明起点与终点提交、已做的动作与待办；会话重新加载后（新的 MCP 已有这个工具）在验证之后补记一次完整的记录（`notes` 写明生效前记录因旧版本没有工具而跳过）。
 
-只有主会话可以运行 `tsw host render` 与 `tsw dashboard restart`；worker、例行会话与其他目录的会话运行会被拒绝（`host_session_cli`）。
+只有主会话可以运行 `tsw host render` 与 `tsw dashboard restart`；worker、例行会话与其他目录的会话运行会被拒绝（`host_session_cli`）。`tsw setup install` 在主会话中可以运行（升级与修复，DN009 §8）；worker 与例行会话运行会被拒绝。

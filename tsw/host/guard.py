@@ -30,6 +30,7 @@ from tsw.host.dashboard_service import SECRET_DIR
 from tsw.host.identity import (
     HOST_CLI_COMMANDS,
     MAIN_SESSION_CLI_COMMANDS,
+    SETUP_CLI_COMMANDS,
     Identity,
     resolve,
     within,
@@ -99,7 +100,17 @@ _GH_VALUE_OPTIONS = {
     "--preview",
     "--cache",
 }
-_TSW_GROUPS = {"task", "ledger", "config", "lease", "tool", "host", "review", "dashboard"}
+_TSW_GROUPS = {
+    "task",
+    "ledger",
+    "config",
+    "lease",
+    "tool",
+    "host",
+    "review",
+    "dashboard",
+    "setup",
+}
 # Path fields of the tools that read or write files (CC008 CC-B12).
 _PATH_FIELDS = ("file_path", "path", "notebook_path")
 SECRET_REASON = (
@@ -320,7 +331,15 @@ def bash_problem(
             # Hooks are run by the host, never from a session's shell: a hook records the user's
             # own words (DN006 §8.1a), so running it by hand would let a session invent them.
             return "hook 入口只由宿主调用，会话中不能运行 tsw guard"
-        if cli in MAIN_SESSION_CLI_COMMANDS:
+        if cli in SETUP_CLI_COMMANDS:
+            if not orchestrator:
+                # Workers and the routine session must not install or update the host (DN009 §8,
+                # CC008 §5.8); unrelated sessions never get here (no tsw hooks).
+                return (
+                    f"worker、例行会话、已撤销与待绑定的会话不能运行 tsw {cli}（安装与更新宿主）："
+                    "请交给主会话，或请用户在会话外的终端运行"
+                )
+        elif cli in MAIN_SESSION_CLI_COMMANDS:
             if not orchestrator:
                 return (
                     f"只有主会话可以在会话中运行 tsw {cli}：请交给主会话（它会先请用户确认），"

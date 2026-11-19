@@ -35,7 +35,13 @@ from tsw.home import (
 from tsw.host import dashboard_service
 from tsw.host.claude_code import install_hint, render_instructions
 from tsw.host.guard import run as run_guard
-from tsw.host.identity import HOST_CLI_COMMANDS, MAIN_SESSION_CLI_COMMANDS, SESSION_ENV, Identity
+from tsw.host.identity import (
+    HOST_CLI_COMMANDS,
+    MAIN_SESSION_CLI_COMMANDS,
+    SESSION_ENV,
+    SETUP_CLI_COMMANDS,
+    Identity,
+)
 from tsw.host.identity import resolve as resolve_identity
 from tsw.host.mcp import serve
 from tsw.host.plugin_copy import RENDER_RESTART
@@ -52,6 +58,9 @@ from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.config_tools import CONFIG_TOOLS
 from tsw.machine.runner import run_tool
 from tsw.review.run import run_round
+from tsw.setup import questions as setup_questions
+from tsw.setup import steps as setup_steps
+from tsw.setup.record import save_answers
 from tsw.storage.fs import FsStorage, restore
 from tsw.tasks import KINDS, TaskSpec, list_tasks, note, register, task_row
 
@@ -618,6 +627,111 @@ def _cmd_host_install_hint(args: argparse.Namespace) -> dict[str, Any]:
     return {"hint": install_hint(_home(args))}
 
 
+def _setup_context(args: argparse.Namespace, *, require: bool) -> setup_steps.Context:
+    return setup_steps.context(
+        os.environ,
+        answers_file=getattr(args, "answers", None),
+        python=getattr(args, "python", None),
+        claude=getattr(args, "claude", None),
+        require_answers=require,
+    )
+
+
+def _cmd_setup_check(args: argparse.Namespace) -> dict[str, Any]:
+    """Read-only (DN009 §3): prerequisites, the install and data directory, the host's state."""
+    return setup_steps.check(_setup_context(args, require=False), with_questions=args.questions)
+
+
+def _cmd_setup_plan(args: argparse.Namespace) -> dict[str, Any]:
+    return setup_steps.plan(_setup_context(args, require=True))
+
+
+def _cmd_setup_install(args: argparse.Namespace) -> dict[str, Any]:
+    if args.interactive:
+        return _setup_interactive(args)
+    if not args.answers:
+        raise TswError(
+            ErrorCode.REJECTED,
+            "须给出 --answers <答案文件>，或在终端用 --interactive 逐项回答",
+            reason="invalid_input",
+        )
+    ctx = _setup_context(args, require=True)
+    if not ctx.problems:
+        save_answers(ctx.env, ctx.answers)  # a rerun need not ask again (DN009 §3)
+    return setup_steps.install(ctx, open_browser=not args.no_browser)
+
+
+def _say_plan(planned: dict[str, Any]) -> None:
+    print("\n将要执行的步骤：")
+    for step in planned["steps"]:
+        state = {"ok": "已满足，跳过", "todo": "要做", "skipped": "不做", "manual": "手工"}.get(
+            step.get("state", ""), step.get("state", "")
+        )
+        print(f"  - {step['step']}：{state}")
+        actions: list[str] = step.get("actions") or []
+        for action in actions:
+            print(f"      {action}")
+        changes: list[dict[str, Any]] = step.get("diff") or []
+        for change in changes:
+            print(f"      {change['key']}：{change['before']} → {change['after']}")
+        if step.get("problem"):
+            print(f"      {step['problem']}")
+    for problem in planned["problems"]:
+        print(f"  问题：{problem}")
+
+
+def _setup_interactive(args: argparse.Namespace) -> dict[str, Any]:
+    """The terminal entry's flow (DN009 §4.1): check, ask, show the plan, confirm, install."""
+    first = _setup_context(args, require=False)
+    checked = setup_steps.check(first)
+    blocking = [p for p in checked["problems"] if not p.startswith("home：")]
+    print(f"产品检出：{checked['checkout']['path']}（{checked['checkout']['head']}）")
+    print(f"Python：{checked['python']['path']}（{checked['python']['version']}）")
+    print(f"Claude Code 命令行：{checked['claude']}")
+    if blocking:
+        raise TswError(
+            ErrorCode.REJECTED, "安装的前提不满足", reason="setup_preconditions", problems=blocking
+        )
+    print("\n请回答下面的问题（直接回车采用默认值）：")
+    answers = setup_questions.ask(first.questions, first.answers, input, print)
+    path = save_answers(first.env, answers)
+    ctx = setup_steps.context(
+        os.environ,
+        answers=answers,
+        python=args.python,
+        claude=args.claude,
+        require_answers=True,
+    )
+    planned = setup_steps.plan(ctx)
+    _say_plan(planned)
+    if not planned["ok"]:
+        raise TswError(
+            ErrorCode.REJECTED,
+            "安装的前提不满足",
+            reason="setup_preconditions",
+            problems=planned["problems"],
+        )
+    reply = input("\n按上面的计划安装？[是 / 否]：").strip().lower()
+    if reply not in ("y", "yes", "是", "好"):
+        return {"installed": False, "answers_file": str(path), "note": "没有安装；答案已保存"}
+    return setup_steps.install(ctx, open_browser=not args.no_browser)
+
+
+def _cmd_setup_verify(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _setup_context(args, require=False)
+    return setup_steps.verify(ctx, after_reload=args.after_reload, running=args.running or [])
+
+
+def _cmd_setup_uninstall(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _setup_context(args, require=False)
+    _confirm(
+        args,
+        "卸载 TaskSteward：删除 Dashboard 常驻服务、插件与市场、安装脚本加入的用户设置、tsw 垫片"
+        "与 PATH 项（数据目录与产品检出保留）？",
+    )
+    return setup_steps.uninstall(ctx)
+
+
 def _cmd_review_run(args: argparse.Namespace) -> dict[str, Any]:
     notes = args.notes
     if args.notes_file:
@@ -838,6 +952,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="主会话运行时（whoami 的 runtime.commit）的提交，可重复",
     )
 
+    setup = sub.add_parser("setup", help="安装脚本（DN009）").add_subparsers(
+        dest="setup_command", required=True, metavar="<setup command>"
+    )
+    check = add(setup, "check", _cmd_setup_check, "只读：前提、已有安装与数据目录、宿主侧状态")
+    check.add_argument("--questions", action="store_true", help="同时输出问题清单（会话入口用）")
+    setup_plan = add(setup, "plan", _cmd_setup_plan, "只读：将要执行的步骤与用户设置的差异")
+    setup_install = add(setup, "install", _cmd_setup_install, "安装或修复（幂等，逐步记录）")
+    setup_install.add_argument(
+        "--interactive", action="store_true", help="在终端逐项提问、显示计划并请你确认"
+    )
+    setup_install.add_argument(
+        "--no-browser", action="store_true", help="装好 Dashboard 后不打开浏览器"
+    )
+    setup_verify = add(setup, "verify", _cmd_setup_verify, "只读：核对安装结果")
+    setup_verify.add_argument(
+        "--after-reload", action="store_true", help="重新加载宿主之后的核对（PATH、运行时版本）"
+    )
+    setup_verify.add_argument(
+        "--running",
+        action="append",
+        metavar="COMMIT",
+        help="主会话运行时（whoami 的 runtime.commit）的提交，可重复",
+    )
+    setup_uninstall = add(
+        setup, "uninstall", _cmd_setup_uninstall, "卸载安装脚本加入的内容（数据目录保留）"
+    )
+    setup_uninstall.add_argument("--yes", action="store_true", help="不再询问，直接执行")
+    for command in (check, setup_plan, setup_install, setup_verify, setup_uninstall):
+        command.add_argument("--answers", help="答案文件（默认用保存的 setup-answers.json）")
+        command.add_argument("--python", help="解释器的完整路径（默认为运行本命令的解释器）")
+        command.add_argument(
+            "--claude", help="claude 命令行的完整路径（默认先查 PATH 再查桌面 app）"
+        )
+
     review = sub.add_parser("review", help="worker 自评审").add_subparsers(
         dest="review_command", required=True, metavar="<review command>"
     )
@@ -975,6 +1123,30 @@ def _check_main_session_command(args: argparse.Namespace) -> None:
     )
 
 
+def _check_setup_command(args: argparse.Namespace) -> None:
+    """``setup install`` / ``uninstall`` inside a session (DN009 §8, CC008 §5.8).
+
+    A session bound to no data directory (role none: the first install has no data directory
+    yet) and the main session may run them; a worker, the routine session, a revoked or a pending
+    session may not: they must not install or update the host. A process that is in a session
+    without saying which one cannot be resolved to any of those and counts as unrelated.
+    """
+    if not os.environ.get(SESSION_ENV):
+        return
+    who = _session_identity(args)
+    if who is None or (who.role in ("none", "orchestrator") and not who.pending):
+        return
+    command = command_path(args)
+    raise TswError(
+        ErrorCode.REJECTED,
+        f"worker、例行会话、已撤销与待绑定的会话不能运行 tsw {command}（安装与更新宿主）："
+        "请交给主会话，或请用户在会话外的终端运行",
+        reason="host_session_cli",
+        command=command,
+        role=who.role,
+    )
+
+
 def _check_host_session(args: argparse.Namespace) -> None:
     """Inside a TaskSteward session the caller is the session: no ``--role`` on the command line.
 
@@ -985,6 +1157,9 @@ def _check_host_session(args: argparse.Namespace) -> None:
     """
     if command_path(args) in MAIN_SESSION_CLI_COMMANDS:
         _check_main_session_command(args)
+        return
+    if command_path(args) in SETUP_CLI_COMMANDS:
+        _check_setup_command(args)
         return
     if not os.environ.get(SESSION_ENV) or command_path(args) in HOST_CLI_COMMANDS:
         return

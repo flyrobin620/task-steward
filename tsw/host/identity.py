@@ -40,6 +40,10 @@ HOST_CLI_COMMANDS = frozenset(
         "dashboard status",
         "lease show",
         "ledger audit",
+        # The install script's read-only commands run in any session (DN009 §8, CC008 §5.8).
+        "setup check",
+        "setup plan",
+        "setup verify",
     }
 )
 # The main session updates itself (T282, CC008 §5.7): inside a session only the orchestrator role
@@ -49,6 +53,11 @@ HOST_CLI_COMMANDS = frozenset(
 # ``dashboard restart`` (T283): the OS restarts the user's installed service, which reads its own
 # token; the session never sees it (DN006 §8.10).
 MAIN_SESSION_CLI_COMMANDS = frozenset({"host render", "dashboard restart"})
+# The install script (DN009 §8, CC008 §5.8, T305): a terminal, a session bound to no data
+# directory (the first install has none: tsw resolves it as an unrelated session) and the main
+# session (upgrade, repair, uninstall) may run these, including the Dashboard registration and the
+# render inside them; a worker, the routine session, a revoked or a pending session may not.
+SETUP_CLI_COMMANDS = frozenset({"setup install", "setup uninstall"})
 
 
 def _norm(path: Path) -> str:

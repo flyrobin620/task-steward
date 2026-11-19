@@ -9,6 +9,7 @@
                                                     one orchestrator hands over to another
     python tools/live.py title-e2e prepare | verify RUN_ID [--observed yes|no]
                                                     worker session titles (DN002 §5.8)
+    python tools/live.py setup-e2e run --path terminal|session      both install paths (T308)
     python tools/live.py cleanup RUN_ID [--archived SESSION ...]   finish a run's cleanup
     python tools/live.py list                                       runs and their state
 
@@ -2445,6 +2446,17 @@ def list_runs(args: argparse.Namespace) -> int:
     return 0
 
 
+def setup_scenario(args: argparse.Namespace) -> int:
+    """setup-e2e (T308): both install paths in a clean profile (tools/live/setup_e2e.py)."""
+    import importlib.util  # noqa: PLC0415
+
+    spec = importlib.util.spec_from_file_location("setup_e2e", LIVE / "setup_e2e.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return int(module.main(args.path, args.source))
+
+
 def main(argv: list[str] | None = None) -> int:
     utf8_stdio()
     parser = argparse.ArgumentParser(prog="live.py", description="live 场景（只在本机）")
@@ -2527,6 +2539,14 @@ def main(argv: list[str] | None = None) -> int:
         "归档 T002 后它的会话被归档",
     )
     titled_ver.set_defaults(handler=title_verify)
+    setup = sub.add_parser("setup-e2e", help="两条安装路径在干净的用户环境中从零安装（无人值守）")
+    setup_steps = setup.add_subparsers(dest="step", required=True)
+    setup_run = setup_steps.add_parser("run")
+    setup_run.add_argument("--path", choices=("terminal", "session"), required=True)
+    setup_run.add_argument(
+        "--source", help="终端路径：克隆的来源（默认本检出）；会话路径：插件市场地址（默认 GitHub）"
+    )
+    setup_run.set_defaults(handler=setup_scenario)
     clean = sub.add_parser("cleanup", help="记录已归档的会话并报告剩余对象")
     clean.add_argument("run_id")
     clean.add_argument("--archived", action="append", help="已归档并用 get_session 读回的会话 ID")

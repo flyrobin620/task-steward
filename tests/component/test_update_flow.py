@@ -198,7 +198,8 @@ def test_the_mcp_server_never_imports_the_command_line_only_modules() -> None:
     )
     code = (
         "import json, sys, tsw.host.mcp; "
-        f"print(json.dumps([m for m in {names!r} if m in sys.modules]))"
+        f"print(json.dumps([m for m in {names!r} if m in sys.modules] + "
+        "[m for m in sys.modules if m.startswith('tsw.setup')]))"
     )
     proc = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, cwd=REPO_ROOT, check=True

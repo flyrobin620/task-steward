@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="d39c5a70176f5bf6abac890f4d3af4e08d2724c42ea988dae3133c50787b86ab">
+<meta name="tsw-source-sha256" content="b84390d32dc7c9c540f653e6d36fec48bfebdc27edcd0028beed31c703fcaaa0">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -42,7 +42,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 </head>
 <body>
 <div class="layout">
-<nav class="toc"><h2>目录</h2><a class="l2" href="#设计文档">设计文档</a><a class="l2" href="#参与开发">参与开发</a><a class="l2" href="#开始使用开发中">开始使用（开发中）</a><a class="l3" href="#安装-tsw-命令只需一次">安装 tsw 命令（只需一次）</a><a class="l3" href="#哪些命令在哪里运行">哪些命令在哪里运行</a><a class="l3" href="#需要你运行的命令">需要你运行的命令</a><a class="l2" href="#仓库布局">仓库布局</a><a class="l2" href="#许可">许可</a></nav>
+<nav class="toc"><h2>目录</h2><a class="l2" href="#设计文档">设计文档</a><a class="l2" href="#参与开发">参与开发</a><a class="l2" href="#开始使用开发中">开始使用（开发中）</a><a class="l3" href="#哪些命令在哪里运行">哪些命令在哪里运行</a><a class="l3" href="#需要你运行的命令">需要你运行的命令</a><a class="l2" href="#仓库布局">仓库布局</a><a class="l2" href="#许可">许可</a></nav>
 <main>
 <h1>TaskSteward（任务管家）</h1>
 <p>一个可插拔宿主的任务编排器，默认宿主是 <strong>Claude Code 桌面 app</strong>，也可以经插件层接入 Codex、GitHub Copilot 或自建的远程会话中枢。</p>
@@ -58,18 +58,27 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p>所有改动遵循 <a href="AGENTS.md">AGENTS.md</a>：开始前先读它，再按其中的表读对应的专题文档。</p>
 <table><thead><tr><th>文档</th><th>内容</th></tr></thead><tbody><tr><td><a href="docs/development/workflow.md">开发流程</a></td><td>从改代码到合并的每一步：门禁、证据、失败处理</td></tr><tr><td><a href="docs/development/testing-layers.md">测试层级</a></td><td>unit、component、surface、conformance、live 五个层级与 live 场景</td></tr><tr><td><a href="docs/development/test-environments.md">测试环境</a></td><td>临时数据目录、子进程环境隔离、live 运行清单与清理</td></tr><tr><td><a href="docs/development/use-cases.md">use-case 目录</a></td><td>use case 与状态迁移清单、测试标记、目录检查</td></tr><tr><td><a href="docs/development/ci.md">CI</a></td><td>GitHub Actions（Windows）、阶段与汇总检查 <code>Gate</code></td></tr><tr><td><a href="docs/development/review.md">评审与合并</a></td><td>独立评审、PR 模板、合并条件与需要用户确认的范围</td></tr><tr><td><a href="docs/development/code-quality.md">代码质量</a></td><td>警告即错误、只依赖标准库、开发依赖</td></tr><tr><td><a href="docs/development/compatibility.md">兼容性</a></td><td>账本、配置、插件接口等契约的版本规则</td></tr><tr><td><a href="docs/development/docs.md">文档</a></td><td>语言与格式、HTML 生成、设计文档、公开仓库卫生</td></tr><tr><td><a href="docs/development/release.md">发布</a></td><td>版本与发布（v1 开发期间不发布）</td></tr><tr><td><a href="docs/decisions/README.md">决定记录</a></td><td>已确认的决定</td></tr></tbody></table>
 <h2 id="开始使用开发中">开始使用（开发中）</h2>
-<p>需要 Python 3.10+ 与 git。运行时只依赖标准库。</p>
-<h3 id="安装-tsw-命令只需一次">安装 <code>tsw</code> 命令（只需一次）</h3>
-<p>在本仓库根目录运行：</p>
-<pre><code class="lang-text">python -m pip install -e .
-tsw init --home &lt;数据目录&gt; --remember</code></pre>
-<p>第一行把 <code>tsw</code> 装进 Python 的 <code>Scripts</code> 目录（Windows 的 PowerShell、cmd 与 Git Bash 都能直接运行 <code>tsw</code>）。这是可编辑安装，运行的就是本仓库当前的代码，<code>git pull</code> 后不用重装；请保留 <code>-e</code>：<code>host render</code> 等宿主命令要用仓库中的 <code>plugin/</code>，它不在 Python 包里。第二行初始化（或打开已有的）数据目录，并把它记在本仓库的 <code>.local/tsw-home</code> 中，之后终端不需要设置 <code>TSW_HOME</code>。不想安装时，在仓库根目录用 <code>python -m tsw</code> 代替 <code>tsw</code>。</p>
+<p>前提：Windows、Python 3.10+、git、Claude Code（桌面 app 与 <code>claude</code> 命令行）。运行时只依赖标准库，不需要 pip。两条安装路径任选其一，各自在一处做完（<a href="docs/design/DN009-distribution-and-install.html">DN009</a>、<a href="docs/design/claude-code/CC009-install.html">CC009</a>）。</p>
+<p><strong>在终端安装</strong>（PowerShell）：</p>
+<pre><code class="lang-powershell">git clone https://github.com/flyrobin620/task-steward.git &quot;$env:LOCALAPPDATA\TaskSteward\task-steward&quot;
+&amp; &quot;$env:LOCALAPPDATA\TaskSteward\task-steward\setup.ps1&quot;</code></pre>
+<p>脚本先探测 Python、git 与 Claude Code（缺少 Python 或 git 时问你是否用 winget 安装），再问几个问题（数据目录位置必须由你给出，没有默认值），显示计划请你确认，然后做完全部步骤并核对。做完后重启 Claude app，在这个数据目录中打开一个会话，它就是主会话。</p>
+<p><strong>在 Claude 中安装</strong>（在任意一个会话中逐条输入）：</p>
+<pre><code class="lang-text">/plugin install task-steward --marketplace https://github.com/flyrobin620/task-steward.git
+/reload-plugins
+/task-steward:setup</code></pre>
+<p>setup 在会话中提问（同样要求你给出数据目录位置）并做完，最后请你重启 Claude app。过程中 Claude 会请你批准几条命令（克隆仓库、写用户设置与 PATH、登记 Dashboard 计划任务等）。</p>
+<p>两条路径做的事相同（<code>tsw setup install</code>）：在 <code>%LOCALAPPDATA%\TaskSteward\bin</code> 放 <code>tsw</code> 垫片并加入用户级 PATH、把插件来源指向本机检出、建好数据目录与基础配置、在 Claude Code 用户设置中写入数据目录位置（<code>env.TSW_HOME</code>）、插件使用的解释器（<code>env.TSW_PYTHON</code>）与三条 auto 模式规则（先备份）、生成主会话的说明与 skill、按你的选择登记 Dashboard 常驻服务。安装记录在 <code>%LOCALAPPDATA%\TaskSteward\install.json</code>；重跑任一路径只做缺少或不一致的部分。要管理的仓库不在安装中配置：重启后在主会话中告诉它要管理哪些仓库，由主会话逐个加入配置。之后的更新在主会话中说“更新 tsw”。卸载用 <code>tsw setup uninstall</code>（数据目录永远不删）。</p>
+<p>开发者也可以在本仓库中用可编辑安装代替垫片：<code>python -m pip install -e .</code>，再 <code>tsw init --home &lt;数据目录&gt; --remember</code>（把数据目录记在本仓库的 <code>.local/tsw-home</code>，终端不必设置 <code>TSW_HOME</code>）；插件与用户设置的安装步骤见 <code>tsw host install-hint</code>。</p>
 <h3 id="哪些命令在哪里运行">哪些命令在哪里运行</h3>
-<ul><li><strong>运行时</strong>（tsw 的代码）在本仓库：安装后 <code>tsw</code> 在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw，不需要这一步。</li><li><strong>数据目录</strong>（账本、任务书、报告）按顺序定位：当前目录所在的、声明了 <code>claim_sessions</code> 的数据目录（只用于 live 测试隔离）→ 环境变量 <code>TSW_HOME</code> → 本仓库的 <code>.local/tsw-home</code> → <code>~/.tsw</code>。<code>tsw home</code> 显示找到的目录和依据。</li><li><strong>当前目录</strong>只影响两件事：上面的 <code>claim_sessions</code>，以及 <code>tsw review run</code>（在 worker 的 worktree 中评审当前 HEAD）。其他命令在哪个目录运行都一样；<code>backup</code>、<code>restore</code> 的相对路径按当前目录解析。</li><li>这些命令由你在<strong>会话外的终端</strong>中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 Dashboard 应用在任何会话中都会被拒绝，以免会话替你做决定（<a href="docs/design/DN006-plugin-layer.html">DN006 §8.10</a>）。例外是自我更新：你在主会话中说“更新 tsw”，主会话按 <code>tsw-update</code> skill 拉取、运行 <code>tsw host update-plan</code> 与 <code>tsw host render</code>、重启 Dashboard 常驻服务（<code>tsw dashboard restart</code>），再按配置 <code>update</code> 请你重启 Claude app（或换到接班主会话、输入 <code>/compact</code>）；其他会话运行这些命令会被拒绝（<a href="docs/design/DN006-plugin-layer.html">DN006 §9.8</a>）。</li></ul>
+<ul><li><strong>运行时</strong>（tsw 的代码）在产品检出中：安装后 PATH 中的 <code>tsw</code> 垫片运行检出中的启动器，在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw。</li><li><strong>数据目录</strong>（账本、任务书、报告）按顺序定位：当前目录所在的、声明了 <code>claim_sessions</code> 的数据目录（只用于 live 测试隔离）→ 环境变量 <code>TSW_HOME</code> → 本仓库的 <code>.local/tsw-home</code> → <code>~/.tsw</code>。<code>tsw home</code> 显示找到的目录和依据。</li><li><strong>当前目录</strong>只影响两件事：上面的 <code>claim_sessions</code>，以及 <code>tsw review run</code>（在 worker 的 worktree 中评审当前 HEAD）。其他命令在哪个目录运行都一样；<code>backup</code>、<code>restore</code> 的相对路径按当前目录解析。</li><li>这些命令由你在<strong>会话外的终端</strong>中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 Dashboard 应用在任何会话中都会被拒绝，以免会话替你做决定（<a href="docs/design/DN006-plugin-layer.html">DN006 §8.10</a>）。例外是自我更新：你在主会话中说“更新 tsw”，主会话按 <code>tsw-update</code> skill 拉取、运行 <code>tsw host update-plan</code> 与 <code>tsw host render</code>、重启 Dashboard 常驻服务（<code>tsw dashboard restart</code>），再按配置 <code>update</code> 请你重启 Claude app（或换到接班主会话、输入 <code>/compact</code>）；其他会话运行这些命令会被拒绝（<a href="docs/design/DN006-plugin-layer.html">DN006 §9.8</a>）。安装脚本 <code>tsw setup install</code> / <code>uninstall</code> 也可以在还没有绑定数据目录的会话（第一次安装）与主会话中运行，worker 与例行会话会被拒绝（<a href="docs/design/DN009-distribution-and-install.html">DN009 §8</a>）。</li></ul>
 <h3 id="需要你运行的命令">需要你运行的命令</h3>
 <pre><code class="lang-text">tsw home                                     显示数据目录与定位依据
+tsw setup install --interactive              安装或修复（与 setup.ps1 相同；只做缺少或不一致的部分）
+tsw setup verify [--after-reload]            核对安装结果（重启 Claude app 之后加 --after-reload）
+tsw setup uninstall                          卸载安装脚本加入的内容（数据目录与产品检出保留）
 tsw init --home &lt;目录&gt; --remember            初始化数据目录并记为本仓库的数据目录
-tsw host install-hint                        显示 Claude Code 插件的安装步骤
+tsw host install-hint                        显示手工安装的步骤（与 tsw setup 同源）
 tsw host render                              更新主会话的 CLAUDE.md、skill、worker 说明与插件副本（产品更新后；
                                              主会话经你确认后也可以运行）
 tsw host update-plan                         自我更新要做什么：从运行中的版本到 HEAD 的改动类别与动作（只读）
