@@ -1,0 +1,620 @@
+"""JSON Schemas of the tool inputs, published by the MCP server (``tools/list``).
+
+The tools validate their input themselves; these schemas tell the model what to send.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+S: dict[str, Any] = {"type": "string"}
+INT: dict[str, Any] = {"type": "integer"}
+B: dict[str, Any] = {"type": "boolean"}
+OBJ: dict[str, Any] = {"type": "object"}
+STRS: dict[str, Any] = {"type": "array", "items": S}
+SOURCE: dict[str, Any] = {
+    "type": "object",
+    "description": "VerifiedSource：用户本人的来源（DN006 §8.5）",
+    "properties": {
+        "channel": S,
+        "principal": S,
+        "message_ref": S,
+        "text": S,
+        "request_id": S,
+        "target": {"type": "array", "description": "[任务 ID, revision, 决定类别]"},
+    },
+    "required": ["channel", "principal", "message_ref", "text", "target"],
+}
+FINDINGS: dict[str, Any] = {
+    "type": "array",
+    "items": {"type": "object", "properties": {"round": INT, "finding": S}},
+}
+FOLLOW_UP_KIND: dict[str, Any] = {
+    "enum": ["remaining", "out_of_scope", "idea"],
+    "description": "remaining 本任务未完成或延后的部分（默认）；out_of_scope 范围外发现；idea 建议",
+}
+SEVERITY: dict[str, Any] = {"enum": ["high", "medium", "low"]}
+FOLLOW_UP_SOURCE: dict[str, Any] = {
+    **SOURCE,
+    "description": '（主会话）用户在主会话中的原话；target 为 [来源任务, revision, "follow_up"]',
+}
+COMMON: dict[str, Any] = {
+    "command_id": {**S, "description": "幂等键：同一 ID 重复调用返回原结果"},
+    "expected_version": {**INT, "description": "乐观锁：任务版本不一致时拒绝"},
+}
+
+
+def schema(required: list[str], **properties: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {**properties, **COMMON},
+        "required": required,
+    }
+
+
+SCHEMAS: dict[str, dict[str, Any]] = {
+    "task_register": schema(
+        ["title", "repo", "kind", "goal", "acceptance"],
+        task_id=S,
+        title=S,
+        repo=S,
+        kind={"enum": ["research", "design", "code"]},
+        goal=S,
+        acceptance=STRS,
+    ),
+    "task_plan": schema(
+        ["task_id", "reason"],
+        task_id=S,
+        dependencies={
+            "type": "array",
+            "items": {"type": "object", "properties": {"task_id": S, "reason": S, "kind": S}},
+        },
+        resources=STRS,
+        reason=S,
+    ),
+    "intake_question": schema(["task_id", "question"], task_id=S, question=S),
+    "input_resolve": schema(
+        ["task_id", "request_id", "answer", "user_source"],
+        task_id=S,
+        request_id=S,
+        answer=S,
+        user_source=SOURCE,
+        extend_rounds=INT,
+    ),
+    "task_update": schema(
+        ["task_id", "goal", "acceptance", "user_source"],
+        task_id=S,
+        goal=S,
+        acceptance=STRS,
+        user_source=SOURCE,
+    ),
+    "dependency_rebind": schema(
+        ["task_id", "dep_id", "revalidate_scope"], task_id=S, dep_id=S, revalidate_scope=S
+    ),
+    "stale_keep": schema(["task_id", "user_source"], task_id=S, user_source=SOURCE),
+    "task_dispatch": schema(
+        ["task_id", "workdir", "user_turn"],
+        task_id=S,
+        workdir=S,
+        branch=S,
+        user_turn=B,
+        read_set={
+            **STRS,
+            "description": "推荐读取集合：任务 ID；也可以是受理后才出现的适用偏好编号 P-…"
+            "（DN007 §6.1，须现行并能到达本任务，写进任务书）",
+        },
+    ),
+    "attempt_start": schema(
+        ["task_id", "purpose", "user_turn"],
+        task_id=S,
+        purpose={"enum": ["dispatch", "prestart"]},
+        user_turn=B,
+        workdir=S,
+        session_title={
+            **S,
+            "description": "会话的简短基准标题（不给时为“<任务> <任务标题>”）；结果中的 "
+            "session_title 原样作为 start_session 的 title（DN002 §5.8）",
+        },
+    ),
+    "attempt_reconcile": schema(
+        ["task_id", "attempt", "generation", "outcome"],
+        task_id=S,
+        attempt=S,
+        generation=INT,
+        outcome={"enum": ["created", "not_created"]},
+        session_ref=S,
+        receipt=OBJ,
+        brief_delivered=B,
+        session_title={
+            **S,
+            "description": "实际创建会话用的标题，只在与 attempt_start 返回的不同时给出",
+        },
+    ),
+    "session_check": schema(
+        ["task_id", "attempt", "observed"],
+        task_id=S,
+        attempt=S,
+        observed={
+            "description": "get_session(会话 ID) 的返回原样（对象或文本）；"
+            "会话不存在时为工具的报错原文",
+        },
+        missing={**B, "description": "get_session 报告会话不存在时为 true"},
+    ),
+    "session_record": schema(
+        ["task_id", "attempt", "action", "ok", "result"],
+        task_id=S,
+        attempt=S,
+        action={"enum": ["title", "archive"]},
+        title={**S, "description": "action 为 title 时：session_check 给出的新标题"},
+        ok={**B, "description": "工具是否成功（改名或归档已生效）"},
+        result={**S, "description": "set_session_title / archive_session 的返回原文"},
+    ),
+    "attempt_deliver": schema(["task_id"], task_id=S),
+    "attempt_continue": schema(
+        ["task_id"],
+        task_id=S,
+        read_set={
+            **STRS,
+            "description": "扩大推荐读取集合：任务 ID 或适用偏好编号 P-…；补充偏好时立即重写"
+            "任务书（DN007 §6.1）",
+        },
+    ),
+    "attempt_update": schema(
+        ["task_id", "attempt", "event", "evidence"],
+        task_id=S,
+        attempt=S,
+        event={"enum": ["stopped", "replaced", "closed", "lost"]},
+        evidence=S,
+    ),
+    "task_pause": schema(
+        ["task_id", "category", "owner", "next_action", "resume_condition"],
+        task_id=S,
+        category=S,
+        owner=S,
+        next_action=S,
+        resume_condition=S,
+        worker_stopped=B,
+    ),
+    "task_resume": schema(["task_id", "condition_met", "note"], task_id=S, condition_met=B, note=S),
+    "judge": schema(
+        ["task_id", "decision", "rationale", "basis", "confidence", "items"],
+        task_id=S,
+        decision={"enum": ["answer", "extend", "overrule", "defer", "feedback", "escalate"]},
+        rationale=S,
+        basis=STRS,
+        confidence={"enum": ["high", "medium", "low"]},
+        items=STRS,
+        answer=S,
+        rounds=INT,
+        feedback=S,
+        question=S,
+        findings={
+            "type": "array",
+            "items": {"type": "object", "properties": {"round": INT, "finding": S}},
+        },
+    ),
+    "feedback": schema(["task_id", "items"], task_id=S, items=STRS),
+    "integrate": schema(
+        ["task_id", "repo", "status"],
+        task_id=S,
+        repo=S,
+        status={"enum": ["started", "conflict", "completed", "withdrawn"]},
+        detail=S,
+    ),
+    "output_link": schema(
+        ["task_id", "output_id", "type", "ref", "evidence"],
+        task_id=S,
+        output_id=S,
+        type=S,
+        ref=S,
+        role=S,
+        delivery=S,
+        evidence=STRS,
+        verified_at=S,
+    ),
+    "task_accept": schema(
+        ["task_id", "verified_head", "summary", "acceptance"],
+        task_id=S,
+        verified_head=S,
+        summary=S,
+        post_merge={
+            **S,
+            "description": "worker 已合并时必填：对 worker 所附合并证据（合并提交、CI 链接、live）"
+            "的核对结论",
+        },
+        acceptance={
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "item": S,
+                    "status": {"enum": ["done", "replaced_by_user"]},
+                    "evidence": S,
+                    "user_source": SOURCE,
+                },
+            },
+        },
+    ),
+    "user_accept": schema(["task_id", "user_source"], task_id=S, user_source=SOURCE),
+    "user_reject": schema(
+        ["task_id", "user_source", "reason"], task_id=S, user_source=SOURCE, reason=S
+    ),
+    "task_cancel": schema(
+        ["task_id", "user_source"], task_id=S, user_source=SOURCE, worker_stopped=B
+    ),
+    "task_archive": schema(["task_id", "user_source"], task_id=S, user_source=SOURCE),
+    "dependency_invalidate": schema(["task_id"], task_id=S, worker_stopped=B),
+    "resource_release": schema(
+        ["task_id", "resources", "evidence"], task_id=S, resources=STRS, evidence=S
+    ),
+    "progress_note": schema(["task_id", "text"], task_id=S, text=S),
+    "question": schema(["task_id", "text"], task_id=S, text=S, wants_human=B),
+    "review_start": schema(
+        ["task_id", "head", "reviewer"],
+        task_id=S,
+        head=S,
+        base=S,
+        reviewer={"type": "object", "properties": {"session": S, "model": S}},
+    ),
+    "review_fail": schema(["task_id", "round", "error"], task_id=S, round=INT, error=S),
+    "review_complete": schema(
+        ["task_id", "round", "result", "result_path"],
+        task_id=S,
+        round=INT,
+        result=OBJ,
+        result_path=S,
+    ),
+    "review_triage": schema(
+        ["task_id", "round", "items"],
+        task_id=S,
+        round=INT,
+        items={
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "finding": S,
+                    "action": {"enum": ["fix", "reject", "defer"]},
+                    "reason": S,
+                    "verification": S,
+                },
+            },
+        },
+    ),
+    "review_decide": schema(
+        ["task_id", "round", "decision", "head"],
+        task_id=S,
+        round=INT,
+        decision={"enum": ["iterate", "finalize", "escalate"]},
+        head=S,
+        escalate_kind={"enum": ["budget_exhausted", "defer_requested"]},
+        suggestion=S,
+    ),
+    "review_exhausted": schema(["task_id", "suggestion"], task_id=S, suggestion=S),
+    "self_check_failed": schema(["task_id", "reason"], task_id=S, reason=S),
+    "submit": schema(
+        ["task_id", "head", "report_md", "report_html", "worktree_clean"],
+        task_id=S,
+        head=S,
+        report_md=S,
+        report_html=S,
+        worktree_clean=B,
+        diff_note=S,
+        merge={
+            "type": "object",
+            "description": "worker 已合并 PR（仓库授权 delivery.merge）：合并记录、主分支上合并提交"
+            "的 CI 结果与 live 说明",
+            "properties": {
+                "pr": S,
+                "merge_commit": S,
+                "merged_head": S,
+                "ci": {
+                    "type": "object",
+                    "description": "主分支上合并提交的 CI 运行：commit 为合并提交，conclusion 为"
+                    " success，url 为运行链接",
+                    "properties": {"commit": S, "conclusion": S, "url": S},
+                },
+                "live": {
+                    **S,
+                    "description": "在最终 head 与（需要时）合并后的主分支上运行的 live 场景"
+                    "与结果，或不需要、不能运行的原因",
+                },
+            },
+        },
+        merge_skipped={**S, "description": "授权合并但没有合并时的原因（任务书或仓库规则）"},
+    ),
+    "sync": schema([]),
+    "ask_user": schema(
+        ["task_id", "question"],
+        task_id=S,
+        question={**S, "description": "问题全文；随后在本会话的回复里原样写给用户"},
+        items={**STRS, "description": "同时交给用户的待处理事项（review_exhausted 等记录的编号）"},
+        reserved={**B, "description": "只有用户本人能决定（凭据、验收等）：转交后主会话也不能代答"},
+    ),
+    "user_answer": schema(
+        ["task_id", "request_id", "message_id", "answer"],
+        task_id=S,
+        request_id=S,
+        message_id={**S, "description": "hook 记录的用户消息编号（M-…），提示里会给出"},
+        answer={**S, "description": "按用户原话整理的决定"},
+        extend_rounds={**INT, "description": "用户批准追加的评审轮次"},
+        defer_findings=FINDINGS,
+        overrule_findings=FINDINGS,
+    ),
+    "input_handoff": schema(["task_id", "request_id"], task_id=S, request_id=S),
+    "requirement_change": schema(
+        ["task_id", "message_ids", "goal", "acceptance"],
+        task_id=S,
+        message_ids={
+            **STRS,
+            "description": "hook 记录的、用户在本会话中输入的消息编号（M-…），至少一个",
+        },
+        goal={**S, "description": "新的完整目标"},
+        acceptance={**STRS, "description": "新的完整验收条目"},
+        summary={**S, "description": "worker 对变更的概括（不作为用户来源）"},
+    ),
+    "follow_up_record": schema(
+        ["task_id", "items"],
+        task_id=S,
+        items={
+            "type": "array",
+            "description": "一条或多条 follow-up：本任务不做、之后可能要做的事",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {**S, "description": "一行标题"},
+                    "detail": {
+                        **S,
+                        "description": "说明：背景、已知信息、建议做法、外部反馈的位置；"
+                        "写到不读原报告也能接手",
+                    },
+                    "kind": {**FOLLOW_UP_KIND},
+                    "severity": {**SEVERITY, "description": "范围外发现（尤其安全问题）必须给出"},
+                },
+                "required": ["title", "detail"],
+            },
+        },
+        message_ids={
+            **STRS,
+            "description": "出于用户原话时：hook 为该任务记录的用户消息编号（M-…）",
+        },
+        user_source=FOLLOW_UP_SOURCE,
+    ),
+    "follow_up_update": schema(
+        ["follow_up_id", "reason"],
+        task_id=S,
+        follow_up_id={**S, "description": "F-<任务>-<n>，只能改 open 的"},
+        title=S,
+        detail=S,
+        kind=FOLLOW_UP_KIND,
+        severity=SEVERITY,
+        recheck_after={
+            **S,
+            "description": "（主会话）用户决定暂不处理时的复查日期 YYYY-MM-DD；须附用户来源",
+        },
+        reason={**S, "description": "修改理由"},
+        message_ids={**STRS, "description": "hook 为该任务记录的用户消息编号（M-…）"},
+        user_source=FOLLOW_UP_SOURCE,
+    ),
+    "follow_up_convert": schema(
+        ["follow_up_ids"],
+        follow_up_ids={**STRS, "description": "要转为任务的 open follow-up（可以来自不同任务）"},
+        task={
+            "type": "object",
+            "description": "登记新任务（与 into_task 二选一）；"
+            "省略的字段由 follow-up 与来源任务生成",
+            "properties": {
+                "task_id": S,
+                "title": {**S, "description": "多条 follow-up 时必填；一条时默认取它的标题"},
+                "repo": {**S, "description": "默认取来源任务的仓库"},
+                "kind": {"enum": ["research", "design", "code"]},
+                "goal": {**S, "description": "默认列出每条 follow-up 的编号、标题与说明"},
+                "acceptance": {**STRS, "description": "默认每条 follow-up 一项"},
+            },
+        },
+        into_task={**S, "description": "并入已登记、尚未完成的任务（与 task 二选一）"},
+        message_ids={**STRS, "description": "hook 为来源任务记录的用户消息编号（M-…）"},
+        user_source=FOLLOW_UP_SOURCE,
+    ),
+    "follow_up_dismiss": schema(
+        ["follow_up_ids", "reason"],
+        follow_up_ids=STRS,
+        reason={**S, "description": "理由，写明去向（例如“已并入 T270 revision 2”）"},
+        message_ids={**STRS, "description": "hook 为来源任务记录的用户消息编号（M-…）"},
+        user_source=FOLLOW_UP_SOURCE,
+    ),
+    "handoff_resolve": schema(
+        ["task_id", "request_id", "decision", "answer", "rationale", "basis", "confidence"],
+        task_id=S,
+        request_id=S,
+        decision={"enum": ["answer", "extend", "overrule", "defer"]},
+        answer=S,
+        rationale=S,
+        basis=STRS,
+        confidence={"enum": ["high", "medium", "low"]},
+        extend_rounds=INT,
+        defer_findings=FINDINGS,
+        overrule_findings=FINDINGS,
+    ),
+    "input_relay": schema(
+        ["task_id", "request_id", "channel"],
+        task_id=S,
+        request_id=S,
+        channel={
+            **S,
+            "description": "plugins.human_channels 加载的人类渠道：in-session（在主会话中直接问；"
+            "旧名 main-session）或 teams-chat 等",
+        },
+        note=S,
+    ),
+    "routine_start": schema(
+        ["user_turn"],
+        user_turn={**B, "description": "这一轮是不是用户本人的 turn（只有它能创建会话）"},
+    ),
+    "routine_bind": schema(
+        ["generation", "session_id"],
+        generation={**INT, "description": "routine_start 返回的代次"},
+        session_id={**S, "description": "start_session 返回的会话 ID"},
+    ),
+    "routine_detached": schema(
+        ["generation"],
+        generation={**INT, "description": "已从主会话名下分离的例行会话代次"},
+        note={
+            **S,
+            "description": "可选：分离未由本会话完成时的原因（例如它不是本会话启动的）",
+        },
+    ),
+    "routine_armed": schema(
+        ["job_ref", "cron", "interval_minutes"],
+        job_ref={**S, "description": "宿主定时工具返回的任务引用（如 CronCreate 的 job ID）"},
+        cron=S,
+        interval_minutes=INT,
+    ),
+    "routine_run": schema(
+        ["job_id"],
+        job_id={**S, "description": "routine_board 列出的例行项"},
+        chat_id={**S, "description": "Teams 例行项：取自该行 run 中的 chat_id"},
+        fetched={
+            "description": "这一行 fetch 或上次 routine_run 的 next 取到的一页原始数据"
+            "（宿主工具的返回值，原样）；宿主集成已用 hook 记下取数结果时不用传（T286）"
+        },
+    ),
+    "channel_sent": schema(
+        ["task_id", "request_id", "chat_id", "message_id"],
+        task_id=S,
+        request_id=S,
+        chat_id={**S, "description": "卡片所在的 Teams chat ID（发送结果中的 chatId）"},
+        message_id={**S, "description": "卡片的 Teams 消息 ID"},
+        sender_id={**S, "description": "发送者（用户本人）在 Teams 中的 ID，发送结果中有时给出"},
+    ),
+    "config_change": schema(
+        ["ops", "reason"],
+        ops={
+            "type": "array",
+            "description": "按顺序应用：set（空路径表示替换整个文件）/ unset；路径用点号，"
+            "键名含点号时用字符串数组",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "op": {"enum": ["set", "unset"]},
+                    "path": {"description": "如 repositories.app.delivery.push"},
+                    "value": {"description": "set 的新值（任意 JSON）"},
+                },
+                "required": ["op", "path"],
+            },
+        },
+        reason=S,
+        user_source={
+            **SOURCE,
+            "description": "改动权限类键时必填：用户原话；target 为 "
+            '["config", 修改前文件的 sha256（config_show 的 file_sha256）, "authorize"]',
+        },
+        expected_sha256={**S, "description": "修改前文件的摘要；不一致时拒绝"},
+    ),
+    "config_revert": schema(
+        ["to_change", "reason"],
+        to_change={**S, "description": "恢复到这次修改（如 C003）之前的内容"},
+        reason=S,
+        user_source={**SOURCE, "description": "恢复涉及权限类键时必填，target 同 config_change"},
+        expected_sha256=S,
+    ),
+    "task_summary": schema(
+        ["task_id", "keywords", "stage"],
+        task_id=S,
+        keywords={
+            **STRS,
+            "description": "4–8 个具体短语（模块、接口、现象、方案名），用于以后检索相关任务",
+        },
+        summary={**S, "description": "一两句话的实际成果；acceptance 时必填"},
+        stage={
+            "enum": ["intake", "acceptance", "update"],
+            "description": "intake 受理时按任务书写初版；acceptance 技术验收时补全成果；"
+            "update 其他时候修正或回填",
+        },
+    ),
+    "preference_record": schema(
+        ["scope", "user_source"],
+        topic={
+            **S,
+            "description": "主题词，如“邮件发送”“画图”；带 candidate 时可省（用候选的主题）",
+        },
+        text={
+            **S,
+            "description": "偏好原文，用户的原话；带 candidate 时可省（用候选原话），"
+            "用户确认时改了说法的写新说法（须原样出现在 user_source.text 中）",
+        },
+        scope={
+            **S,
+            "description": "global（默认）；只有用户的习惯本身只限于某个仓库或项目时才用 "
+            "repo:<仓库> 或 project:<项目>（DN007 §6）",
+        },
+        supersedes={**STRS, "description": "被替代的偏好编号（P-…），须同范围或更宽"},
+        candidate={**S, "description": "用户确认的偏好候选编号（PC-…，须未决，DN007 §6.3）"},
+        user_source={
+            **SOURCE,
+            "description": "用户明确表示长期适用（或确认候选）的原话；target 为 "
+            '["preference", <scope>, "standing"]',
+        },
+    ),
+    "preference_candidates_record": schema(
+        ["task_id", "scanned_through", "candidates"],
+        task_id=S,
+        scanned_through={**INT, "description": "preference_sources 返回的 scanned_through"},
+        candidates={
+            "type": "array",
+            "description": "子代理找出的候选，至多 5 条；没有时为空数组",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "quote": {**S, "description": "从一条材料中原样摘取的连续原话"},
+                    "source_ref": {**S, "description": "材料编号：M-…、E<序号> 或 goal@r<n>"},
+                    "scope": {**S, "description": "建议的范围，默认 global"},
+                    "topic": {**S, "description": "几个字的主题"},
+                    "reason": {**S, "description": "为什么是用户以后都适用的做事方式"},
+                    "supersedes": {**STRS, "description": "建议替代的现行偏好编号"},
+                },
+                "required": ["quote", "source_ref", "topic", "reason"],
+            },
+        },
+        skipped={
+            "type": "array",
+            "description": "看过但不提的：来源编号、类别与理由",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source_ref": S,
+                    "category": {
+                        "enum": [
+                            "same_as",
+                            "project_decision",
+                            "product_behavior",
+                            "task_requirement",
+                            "not_standing",
+                        ]
+                    },
+                    "same_as": {**S, "description": "category 为 same_as 时的偏好编号"},
+                    "reason": S,
+                },
+                "required": ["source_ref", "category"],
+            },
+        },
+    ),
+    "preference_candidate_dismiss": schema(
+        ["candidate", "reason", "user_source"],
+        candidate={**S, "description": "偏好候选编号（PC-…），须未决"},
+        reason={**S, "description": "用户不记的理由"},
+        user_source={
+            **SOURCE,
+            "description": '用户不记的原话；target 为 ["preference", <候选编号>, "dismiss"]',
+        },
+    ),
+    "preference_revoke": schema(
+        ["ref", "reason", "user_source"],
+        ref={**S, "description": "要撤销的偏好编号（P-…），须为现行的"},
+        reason={**S, "description": "撤销的理由，按用户原意写"},
+        user_source={
+            **SOURCE,
+            "description": '用户要求撤销的原话；target 为 ["preference", <编号>, "revoke"]',
+        },
+    ),
+}

@@ -1,0 +1,902 @@
+"""The live harness without the live parts: the GitHub stand-in and the host-e2e checks.
+
+The live scenarios themselves call the real app and reviewers and never run here
+(docs/development/testing-layers.md); these tests cover the pieces a live run relies on.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
+
+import pytest
+
+from tests.machine_harness import MACHINE, Harness
+from tools import live
+from tsw import lease
+from tsw.home import Home
+from tsw.machine.base import Caller
+
+STUB = Path(live.LIVE / "gh_stub.py")
+
+
+def git(cwd: Path, *args: str) -> str:
+    proc = subprocess.run(
+        ["git", *live.GIT_ID, *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    return proc.stdout.strip()
+
+
+def make_run(tmp_path: Path) -> Path:
+    run = tmp_path / "run"
+    run.mkdir()
+    git(run, "init", "-q", "--bare", "--initial-branch=main", "origin.git")
+    git(run, "init", "-q", "--initial-branch=main", "w")
+    work = run / "w"
+    (work / "a.txt").write_text("a\n", encoding="utf-8")
+    git(work, "add", "-A")
+    git(work, "commit", "-q", "-m", "initial")
+    git(work, "remote", "add", "origin", str(run / "origin.git"))
+    git(work, "push", "-q", "origin", "main")
+    git(work, "checkout", "-q", "-b", "feature")
+    (work / "b.txt").write_text("b\n", encoding="utf-8")
+    git(work, "add", "-A")
+    git(work, "commit", "-q", "-m", "feature")
+    git(work, "push", "-q", "origin", "feature")
+    (run / "gh-state.json").write_text(
+        json.dumps({"repository": "live/live-repo", "pulls": []}), encoding="utf-8"
+    )
+    return run
+
+
+def gh(run: Path, *args: str, encoding: str | None = None) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "TSW_LIVE_RUN": str(run)}
+    utf8 = ["-X", "utf8"] if encoding is None else []
+    if encoding is not None:
+        env["PYTHONIOENCODING"] = encoding
+        env.pop("PYTHONUTF8", None)
+    return subprocess.run(
+        [sys.executable, *utf8, str(STUB), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding=encoding or "utf-8",
+        check=False,
+    )
+
+
+def test_gh_stub_squash_merges_into_the_bare_origin(tmp_path: Path) -> None:
+    run = make_run(tmp_path)
+    head = git(run / "w", "rev-parse", "HEAD")
+    created = gh(run, "pr", "create", "-R", "live/live-repo", "--head", "feature", "-t", "Feature")
+    assert created.returncode == 0, created.stderr
+    assert created.stdout.strip() == "https://github.com/live/live-repo/pull/1"
+    unnamed = gh(run, "pr", "merge", "1", "--squash")
+    assert unnamed.returncode != 0
+    assert "-R" in unnamed.stderr
+    other = gh(run, "pr", "merge", "1", "-R", "someone/else", "--squash")
+    assert other.returncode != 0
+    # A worker's shell may write with a legacy code page (cp1252 in the live run): the stand-in
+    # prints only ASCII, so a merge that happened is never reported as a failure.
+    merged = gh(
+        run, "pr", "merge", "1", "-R", "github.com/live/live-repo", "--squash", encoding="cp1252"
+    )
+    assert merged.returncode == 0, merged.stderr
+    state: dict[str, Any] = json.loads((run / "gh-state.json").read_text(encoding="utf-8"))
+    pr = state["pulls"][0]
+    assert pr["state"] == "MERGED"
+    assert pr["merged_head"] == head
+    main = git(run / "origin.git", "log", "--format=%H", "main").split()
+    assert pr["merge_commit"] == main[0]
+    assert git(run / "origin.git", "show", "main:b.txt") == "b"
+    view = gh(run, "pr", "view", "https://github.com/live/live-repo/pull/1", "--json", "state")
+    assert json.loads(view.stdout)["mergeCommit"]["oid"] == pr["merge_commit"]
+    again = gh(run, "pr", "merge", "1", "-R", "live/live-repo", "--squash")
+    assert again.returncode != 0
+    # The merge commit's CI on main, simulated as one passed run (decision 0003).
+    listed = gh(run, "run", "list", "--commit", pr["merge_commit"][:10], "-R", "live/live-repo")
+    assert listed.returncode == 0, listed.stderr
+    (ci,) = json.loads(listed.stdout)
+    assert (ci["headSha"], ci["conclusion"]) == (pr["merge_commit"], "success")
+    assert ci["url"].endswith("/actions/runs/1")
+    viewed = gh(run, "run", "view", "1", "-R", "github.com/live/live-repo")
+    assert json.loads(viewed.stdout)["headSha"] == pr["merge_commit"]
+    assert json.loads(gh(run, "run", "list", "-c", "0" * 40, "-R", "live/live-repo").stdout) == []
+    log = (run / "gh-log.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(log) == 9
+
+
+def runtime(root: Path, *, claims: bool) -> Path:
+    (root / "tsw").mkdir(parents=True)
+    (root / "tsw" / "__init__.py").write_text("", encoding="utf-8")
+    text = "def claim_sessions(): ...\n" if claims else "def resolve_home(): ...\n"
+    (root / "tsw" / "home.py").write_text(text, encoding="utf-8")
+    return root
+
+
+def test_prepare_checks_the_runtime_the_installed_plugin_will_use(tmp_path: Path) -> None:
+    """The launcher's order: TSW_REPO first, then the recorded product_repo (a cached plugin is
+    in no checkout). The run is refused when that runtime does not know claim_sessions, or
+    when no runtime can be determined, so workers never fall back to the real data directory."""
+    new, old = runtime(tmp_path / "new", claims=True), runtime(tmp_path / "old", claims=False)
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "tsw-home.json").write_text(json.dumps({"product_repo": str(new)}), encoding="utf-8")
+    assert live.installed_runtime_claims({"TSW_HOME": str(real)}) == new
+    # The recorded runtime is up to date, but TSW_REPO wins and is not.
+    with pytest.raises(SystemExit, match="TSW_REPO"):
+        live.installed_runtime_claims({"TSW_HOME": str(real), "TSW_REPO": str(old)})
+    assert live.installed_runtime_claims({"TSW_HOME": str(real), "TSW_REPO": str(new)}) == new
+    # A TSW_REPO without the package is skipped by the launcher, which takes the recorded one.
+    broken = tmp_path / "broken"
+    (broken / "tsw").mkdir(parents=True)
+    (broken / "tsw" / "home.py").write_text("def claim_sessions(): ...\n", encoding="utf-8")
+    env = {"TSW_HOME": str(real), "TSW_REPO": str(broken)}
+    assert live.installed_runtime_claims(env) == new
+    (real / "tsw-home.json").write_text(json.dumps({"product_repo": str(old)}), encoding="utf-8")
+    with pytest.raises(SystemExit, match="product_repo"):
+        live.installed_runtime_claims({"TSW_HOME": str(real)})
+    with pytest.raises(SystemExit, match="product_repo"):
+        live.installed_runtime_claims({"TSW_HOME": str(real), "TSW_REPO": str(broken)})
+    with pytest.raises(SystemExit, match="无法确定"):
+        live.installed_runtime_claims({})
+
+
+def ev(seq: int, type_: str, task: str, actor: str | None = None, **data: Any) -> dict[str, Any]:
+    return {
+        "sequence": seq,
+        "type": type_,
+        "task_id": task,
+        "attempt": "a1",
+        "actor": {"role": "worker", "session_id": actor} if actor else {"role": "orchestrator"},
+        "data": data,
+        "time": "2026-11-07T00:00:00Z",
+    }
+
+
+def test_b1_requires_the_hook_message_from_the_asking_session() -> None:
+    asked = ev(
+        1, "input.escalated", "T001", "w1", kind="in_session", request_id="Q1", session_ref="w1"
+    )
+    message = ev(
+        2, "input.session_message", "T001", request_id="Q1", session_ref="w1", message_id="M-1"
+    )
+    source = {"channel": "in-session", "message_ref": "M-1"}
+    answer = ev(
+        3, "input.resolved", "T001", "w1", request_id="Q1", source_kind="user", source=source
+    )
+    assert live.b1([asked, message, answer])["status"] == "passed"
+    forged = ev(
+        3,
+        "input.resolved",
+        "T001",
+        "w1",
+        request_id="Q1",
+        source_kind="user",
+        source={"channel": "in-session", "message_ref": "M-9"},
+    )
+    assert live.b1([asked, message, forged])["status"] == "failed"
+    assert live.b1([asked, answer])["status"] == "failed"
+
+
+@pytest.mark.use_case("UC-FOLLOWUP-001")
+def test_f_requires_the_workers_follow_up_before_submitting_and_its_conversion() -> None:
+    items = [{"follow_up_id": "F-T002-1", "title": "README 补充用法示例"}]
+    recorded = ev(1, "follow_up.recorded", "T002", "w2", items=items)
+    submitted = ev(2, "worker.submitted", "T002", "w2")
+    made = ev(
+        3,
+        "task.registered",
+        "T004",
+        follow_up_of=[{"task_id": "T002", "follow_up_id": "F-T002-1"}],
+    )
+    converted = ev(
+        4, "follow_up.converted", "T002", follow_up_ids=["F-T002-1"], to_task="T004", mode="new"
+    )
+    assert live.follow_ups([recorded, submitted, made, converted])["status"] == "passed"
+    # Recorded after the submission, by another session, or never turned into a task: failed.
+    late = ev(5, "follow_up.recorded", "T002", "w2", items=items)
+    assert live.follow_ups([submitted, late, made, converted])["status"] == "failed"
+    other = ev(1, "follow_up.recorded", "T002", "w9", items=items)
+    assert live.follow_ups([other, submitted, made, converted])["status"] == "failed"
+    assert live.follow_ups([recorded, submitted])["status"] == "failed"
+    unlinked = ev(3, "task.registered", "T004")
+    assert live.follow_ups([recorded, submitted, unlinked, converted])["status"] == "failed"
+    # An earlier attempt's record does not count, nor does it fail the session that took over.
+    old = ev(1, "follow_up.recorded", "T002", "w-old", items=[{"follow_up_id": "F-T002-1"}])
+    items2 = [{"follow_up_id": "F-T002-2", "title": "README 补充用法示例"}]
+    new = ev(2, "follow_up.recorded", "T002", "w2", items=items2)
+    final = ev(3, "worker.submitted", "T002", "w2")
+    made2 = ev(
+        4,
+        "task.registered",
+        "T005",
+        follow_up_of=[{"task_id": "T002", "follow_up_id": "F-T002-2"}],
+    )
+    conv2 = ev(
+        5, "follow_up.converted", "T002", follow_up_ids=["F-T002-2"], to_task="T005", mode="new"
+    )
+    assert live.follow_ups([old, new, final, made2, conv2])["status"] == "passed"
+    conv_old = ev(
+        5, "follow_up.converted", "T002", follow_up_ids=["F-T002-1"], to_task="T005", mode="new"
+    )
+    assert live.follow_ups([old, new, final, made2, conv_old])["status"] == "failed"
+
+
+def test_b2_requires_a_handoff_and_the_orchestrator_handling_it() -> None:
+    asked = ev(
+        1, "input.escalated", "T002", "w2", kind="in_session", request_id="Q2", session_ref="w2"
+    )
+    handed = ev(2, "input.handed_off", "T002", request_id="Q2", by="worker")
+    decision = ev(3, "orchestrator.decision", "T002")
+    resolved = ev(4, "input.resolved", "T002", request_id="Q2", source_kind="orchestrator")
+    assert live.b2([asked, handed, decision, resolved])["status"] == "passed"
+    assert live.b2([asked, decision, resolved])["status"] == "failed"
+    assert live.b2([asked, handed])["status"] == "failed"
+
+
+def test_scrub_removes_machine_paths(tmp_path: Path) -> None:
+    run = live.Run("live-x")
+    text = f"{run.dir}\\home and {live.ROOT} and {Path.home()}"
+    out = live.scrub(text, run)
+    assert str(run.dir) not in out and str(live.ROOT) not in out and str(Path.home()) not in out
+
+
+def test_scenario_definitions_are_complete() -> None:
+    for name in ("host-e2e", "reviewer", "routine-e2e", "handoff-e2e", "change-e2e"):
+        spec = live.scenario(name)
+        assert spec["id"] == name
+        assert spec["useCases"] and spec["checks"]
+    host = live.scenario("host-e2e")
+    assert {t["task_id"] for t in host["tasks"]} == {"T001", "T002", "T003"}
+
+
+def test_a_reviewer_that_cannot_run_is_reported_not_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    run = live.Run.create("reviewer")
+    checks = [
+        live.check("X1", "全量评审", True, "ok"),
+        {
+            **live.check("C0", "claude-headless 可运行", False, "未实现"),
+            "status": live.NOT_VERIFIED,
+        },
+    ]
+    assert live.write_results(run, "reviewer", checks, [])
+    evidence = (run.dir / "evidence.md").read_text(encoding="utf-8")
+    assert "未验证（NOT VERIFIED）" in evidence and "另有未验证项" in evidence
+    checks.append(live.check("X2", "增量评审", False, "失败"))
+    assert not live.write_results(run, "reviewer", checks, [])
+
+
+def test_without_a_subset_every_scenario_task_is_used() -> None:
+    spec = live.scenario("host-e2e")
+    every = [t["task_id"] for t in spec["tasks"]]
+    assert [t["task_id"] for t in live.selected(spec, None)] == every
+    assert [t["task_id"] for t in live.selected(spec, [""])] == every
+    assert [t["task_id"] for t in live.selected(spec, ["T001", " T002"])] == ["T001", "T002"]
+    with pytest.raises(SystemExit):
+        live.selected(spec, ["T999"])
+
+
+def test_concurrent_pull_requests_keep_every_record(tmp_path: Path) -> None:
+    run = make_run(tmp_path)
+    work = run / "w"
+    for branch in ("b1", "b2", "b3", "b4"):
+        git(work, "checkout", "-q", "-b", branch, "main")
+        (work / f"{branch}.txt").write_text(branch, encoding="utf-8")
+        git(work, "add", "-A")
+        git(work, "commit", "-q", "-m", branch)
+        git(work, "push", "-q", "origin", branch)
+    env = {**os.environ, "TSW_LIVE_RUN": str(run)}
+    procs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-X",
+                "utf8",
+                str(STUB),
+                "pr",
+                "create",
+                "-R",
+                "live/live-repo",
+                "--head",
+                branch,
+                "-t",
+                branch,
+            ],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
+        for branch in ("b1", "b2", "b3", "b4")
+    ]
+    urls = sorted(p.communicate(timeout=120)[0].strip() for p in procs)
+    assert len(set(urls)) == 4
+    state = json.loads((run / "gh-state.json").read_text(encoding="utf-8"))
+    assert sorted(p["head"] for p in state["pulls"]) == ["b1", "b2", "b3", "b4"]
+    assert not (run / "gh-state.lock").exists()
+
+
+def test_unknown_sessions_block_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    run = live.Run.create("host-e2e")
+    run.record("claude-session", "main")
+    events = [
+        ev(
+            1,
+            "attempt.start_requested",
+            "T001",
+            attempt="a1",
+            generation=1,
+            session_name="t001-a1-g1",
+        ),
+        ev(
+            2,
+            "attempt.start_requested",
+            "T002",
+            attempt="a1",
+            generation=1,
+            session_name="t002-a1-g1",
+        ),
+        ev(3, "attempt.not_created", "T002", attempt="a1", generation=1),
+    ]
+    live.reconcile_sessions(run, events)
+    names = {e["name"]: e["state"] for e in live.unresolved(run)}
+    # The orchestrator's session and T001's are unknown; T002's was never created.
+    assert names == {"main": "maybe_created", "t001-a1-g1": "maybe_created"}
+    bound = ev(4, "attempt.bound", "T001", attempt="a1", generation=1, session_ref="local_1")
+    live.reconcile_sessions(run, [*events, bound])
+    entry = next(e for e in run.manifest()["entries"] if e["name"] == "t001-a1-g1")
+    assert (entry["state"], entry["ref"]) == ("created", "local_1")
+    with pytest.raises(SystemExit):
+        live.discard(argparse.Namespace(run_id=run.id))
+
+
+def test_a_new_main_session_never_inherits_an_archived_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    run = live.Run.create("host-e2e")
+    run.record("claude-session", "main")
+    run.bind_main("local_z")
+    run.record("claude-session", "main", state="archived")
+    # A later verify finds another main session that sorts first.
+    for sid in ("local_a", "local_z"):
+        run.bind_main(sid)
+    states = {e["ref"]: e["state"] for e in run.manifest()["entries"]}
+    assert states == {"local_z": "archived", "local_a": "created"}
+    assert [e["ref"] for e in live.unresolved(run)] == ["local_a"]
+    # Recording a different session under an archived name does not keep the archive mark.
+    run.record("claude-session", "main", state="created", ref="local_b")
+    assert next(e for e in run.manifest()["entries"] if e["name"] == "main")["state"] == "created"
+
+
+@pytest.mark.use_case("UC-CHANNEL-001")
+def test_routine_e2e_teams_check_accepts_a_real_round_trip(
+    home: Home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The routine-e2e Teams check reads the events the real tools write (review r2 F1)."""
+    monkeypatch.setattr(lease, "this_machine", lambda: MACHINE)
+    h = Harness(home, {"plugins": {"human_channels": ["teams-chat"]}})
+    out = h.run("routine_start", user_turn=True)
+    h.run("routine_bind", generation=out["events"][0]["data"]["generation"], session_id="r")
+    routine = Caller(role="routine", session_id="r", machine=MACHINE)
+    h.register("T002")
+    h.plan("T002")
+    worker = h.dispatch("T002")
+    asked = h.run("ask_user", worker, task_id="T002", question="红色还是蓝色？", reserved=True)
+    request = asked["events"][0]["data"]["request_id"]
+    h.clock.now = "2026-11-05T00:10:00Z"
+    h.run("routine_run", routine, job_id="handoff-scan")
+    relayed = h.run("input_relay", task_id="T002", request_id=request, channel="teams-chat")
+    card_html = relayed["events"][0]["data"]["card_html"]
+    h.run("channel_sent", task_id="T002", request_id=request, chat_id="c", message_id="card-1")
+    reply = {
+        "id": "m1",
+        "createdDateTime": "2026-11-05T00:12:00Z",
+        "body": {"content": "T002 蓝色"},
+    }
+    h.run("routine_run", routine, job_id="teams-replies", chat_id="c", fetched=[reply])
+    h.run(
+        "input_resolve",
+        task_id="T002",
+        request_id=request,
+        answer="蓝色",
+        user_source={
+            "channel": "teams-chat",
+            "principal": "teams",
+            "message_ref": "m1",
+            "text": "T002 蓝色",
+            "request_id": request,
+            "target": ["T002", 1, "answer"],
+        },
+    )
+    h.run("progress_note", worker, task_id="T002", text="收到答复：蓝色")
+    evs = [
+        {
+            "sequence": e.sequence,
+            "type": e.type,
+            "task_id": e.task_id,
+            "attempt": e.attempt,
+            "actor": e.actor,
+            "data": e.data,
+            "time": e.time,
+        }
+        for e in h.ledger.storage.read(since=0)
+    ]
+    result = live.teams_round_trip(evs)
+    assert result["status"] == "passed", result
+    # Check C (T256): the card went out as rich text, read from the main session's own call.
+    run_dir = home.root.parent / "live-run"
+    run_dir.mkdir()
+    run = cast(live.Run, SimpleNamespace(dir=run_dir, home=home.root))
+
+    def sent(content_type: str, content: str, cwd: Path = home.root) -> dict[str, Any]:
+        body = {"body": {"contentType": content_type, "content": content}}
+        return {
+            "time": "2026-11-05T00:11:00Z",
+            "event": "PostToolUse",
+            "payload": {
+                "cwd": str(cwd),
+                "tool_name": live.CARD_TOOL,
+                "tool_input": {"parentUrl": "/me/chats/48:notes/messages", "jsonBody": body},
+                "tool_response": [{"type": "text", "text": '{"id": "card-1"}'}],
+            },
+        }
+
+    def card_check(*records: dict[str, Any], seen: str | None = "yes") -> dict[str, Any]:
+        lines = [json.dumps(r, ensure_ascii=False) for r in records]
+        text = "".join(f"{line}\n" for line in lines)
+        (run_dir / "hook-payloads.jsonl").write_text(text, encoding="utf-8")
+        return live.teams_card(run, evs, seen)
+
+    filled = card_html.replace("{worker_link}", "https://example.invalid/s?a=1&amp;b=2")
+    assert card_check(sent("html", filled))["status"] == "passed"
+    # The operator did not see it on several lines; or it went out as text, or unfilled; or
+    # another session (a worker) sent it.
+    assert card_check(sent("html", filled), seen="no")["status"] == "failed"
+    assert card_check(sent("html", filled), seen=None)["status"] == "failed"
+    assert card_check(sent("text", filled))["status"] == "failed"
+    assert card_check(sent("html", card_html))["evidence"]["link_filled"] is False
+    other = card_check(sent("html", filled, cwd=run_dir))
+    assert other["status"] == "failed" and other["evidence"]["call_found"] is False
+
+
+@pytest.mark.use_case("UC-ROUTINE-001")
+def test_routine_e2e_reads_the_orchestrator_wakes_from_the_hooks(tmp_path: Path) -> None:
+    """Check W (T250): after the detach, a routine run's end no longer wakes the orchestrator;
+    its forwards still do. Read from the main session's hook payloads, not the operator."""
+    run_dir = tmp_path / "run"
+    home = run_dir / "home"
+    (home / "config").mkdir(parents=True)
+    (home / "cache").mkdir()
+    rid = "local_r"
+    linked = f"(Linked sessions now: worker = local_w (idle); routine-g1 = {rid} (idle).)"
+
+    def note(session: str) -> str:
+        return (
+            f'<system-reminder>\nThe session "x" you started ({session}) finished a turn. {linked}'
+        )
+
+    def forward(session: str) -> str:
+        return f'<cross-session-message from="{session}" from-name="r">x</cross-session-message>'
+
+    def write(*prompts: tuple[str, str, Path]) -> None:
+        lines = [
+            json.dumps(
+                {"event": "UserPromptSubmit", "time": t, "payload": {"cwd": str(cwd), "prompt": p}}
+            )
+            for t, p, cwd in prompts
+        ]
+        (run_dir / "hook-payloads.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def cache(generation: int, runs: list[str], ends: list[str]) -> None:
+        (home / "cache" / "routine.json").write_text(
+            json.dumps({"generation": generation, "runs": runs, "ends": ends}), encoding="utf-8"
+        )
+
+    def bound(seq: int, generation: int, session: str) -> dict[str, Any]:
+        data = {"generation": generation, "session_ref": session}
+        return {"sequence": seq, "type": "routine.bound", "data": data, "time": "t"}
+
+    def detached(seq: int, generation: int, time: str) -> dict[str, Any]:
+        data = {"generation": generation}
+        return {"sequence": seq, "type": "routine.detached", "data": data, "time": time}
+
+    def handed_off(seq: int, time: str) -> dict[str, Any]:
+        actor = {"role": "routine", "session_id": rid}
+        return {
+            "sequence": seq,
+            "type": "input.handed_off",
+            "actor": actor,
+            "data": {},
+            "time": time,
+        }
+
+    def at(minute: int, second: int = 0) -> str:
+        return f"2026-11-09T10:{minute:02d}:{second:02d}Z"
+
+    evs = [bound(1, 1, rid), detached(2, 1, at(0))]
+    run = cast(live.Run, SimpleNamespace(dir=run_dir, home=home))
+    # Turns 10:02–10:02:40 (hands off and forwards) and 10:04–10:04:20 (idle).
+    cache(1, ["2026-11-09T09:58:00Z", at(2), at(4)], ["2026-11-09T09:58:30Z", at(2, 40), at(4, 20)])
+    forwarding = [*evs, handed_off(3, at(2, 10))]
+    write(
+        ("2026-11-09T09:58:30Z", note(rid), home),  # before the detach: counted apart
+        (at(2, 30), forward(rid), home),
+        (at(3), note("local_w"), home),  # a worker; lists the routine's ID
+        (at(5), note(rid), tmp_path),  # another session's prompt
+    )
+    passed = live.routine_wakes(run, forwarding)
+    assert passed["status"] == "passed", passed
+    assert passed["evidence"]["notices_before_detach"] == 1
+    assert passed["evidence"]["turns_after_detach"] == 2
+    assert passed["evidence"]["idle_turns_ended"] == [at(4, 20)]
+    # A turn that still wakes the orchestrator after the detach fails the check.
+    write((at(2, 30), forward(rid), home), (at(4, 30), note(rid), home))
+    woken = live.routine_wakes(run, forwarding)
+    assert woken["status"] == "failed" and woken["evidence"]["notices_after_detach"] == [at(4, 30)]
+    # No idle turn known to have ended: the idle one has no recorded end yet, every turn
+    # forwarded, or several board reads within one turn (one end) are not several turns.
+    write((at(2, 30), forward(rid), home))
+    cache(1, [at(2), at(4)], [at(2, 40)])
+    assert live.routine_wakes(run, forwarding)["status"] == "failed"
+    cache(1, [at(2), at(4)], [at(2, 40), at(4, 20)])
+    assert live.routine_wakes(run, [*forwarding, handed_off(4, at(4, 5))])["status"] == "failed"
+    cache(1, [at(2), at(2, 5)], [at(2, 40)])
+    assert live.routine_wakes(run, forwarding)["status"] == "failed"
+    cache(1, [at(2), at(2, 5), at(4)], [at(2, 40), at(4, 20)])
+    assert live.routine_wakes(run, forwarding)["evidence"]["turns_after_detach"] == 2
+    assert live.routine_wakes(run, forwarding)["status"] == "passed"
+    # The app may put its own reminders in front of a forward (Copilot review): still a forward.
+    reminded = f"<system-reminder>\n{linked}\n</system-reminder>\n{forward(rid)}"
+    write((at(2, 30), reminded, home))
+    assert live.routine_wakes(run, forwarding)["evidence"]["forwards_after_detach"] == [at(2, 30)]
+    assert live.routine_wakes(run, forwarding)["status"] == "passed"
+    # No detach at all (the T243 run), or nothing forwarded after it.
+    assert live.routine_wakes(run, evs[:1])["status"] == "failed"
+    write(("2026-11-09T09:59:00Z", forward(rid), home))
+    assert live.routine_wakes(run, forwarding)["status"] == "failed"
+    # A newer generation needs its own detach and evidence; the old one's do not count.
+    write(
+        ("2026-11-09T10:02:30Z", forward(rid), home),
+        ("2026-11-09T10:20:00Z", note("local_r2"), home),
+    )
+    newer = [*evs, bound(3, 2, "local_r2")]
+    cache(2, [at(12), at(14)], [at(12, 30), at(14, 30)])
+    assert live.routine_wakes(run, newer)["status"] == "failed"
+    write(
+        ("2026-11-09T10:12:30Z", forward("local_r2"), home),
+        ("2026-11-09T10:20:00Z", note("local_r2"), home),
+    )
+    woken = live.routine_wakes(run, [*newer, detached(4, 2, "2026-11-09T10:10:00Z")])
+    assert woken["status"] == "failed" and woken["evidence"]["generation"] == 2
+    assert woken["evidence"]["notices_after_detach"] == ["2026-11-09T10:20:00Z"]
+
+
+@pytest.mark.use_case("UC-DISPATCH-002")
+def test_w_reads_the_submission_and_needs_every_mark(tmp_path: Path) -> None:
+    run = SimpleNamespace(id="live-20261110T000000Z-abc123", home=tmp_path / "home")
+    origin = tmp_path / "repo"
+    origin.mkdir()
+    git(origin, "init", "-q", "-b", "main")
+    git(origin, "commit", "-q", "--allow-empty", "-m", "base")
+    worktree = run.home / "work" / "T001" / "a1" / "live-repo"
+    git(origin, "worktree", "add", "-q", "-b", "tsw/t001-a1", str(worktree))
+    head = git(worktree, "rev-parse", "HEAD")
+    marks = live.probe_marks(cast(Any, run))
+    report = run.home / "runs" / "T001" / "a1" / "result.md"
+    report.parent.mkdir(parents=True)
+    started = ev(
+        1, "attempt.start_requested", "T001", attempt="a1", worktree={"path": str(worktree)}
+    )
+    # As the ledger records it: the submission is nested, the head may be abbreviated.
+    submitted = ev(
+        2,
+        "worker.submitted",
+        "T001",
+        "w1",
+        submission={"head": head[:7], "report": {"md_path": "runs/T001/a1/result.md"}},
+    )
+    report.write_text("\n".join(marks.values()) + "\n", encoding="utf-8")
+    passed = live.worktrees(cast(Any, run), [started, submitted], {"T001": submitted})
+    assert passed["status"] == "passed", passed
+    report.write_text(f"{marks['agents']}\n{marks['repo_skill']}\n", encoding="utf-8")
+    missing = live.worktrees(cast(Any, run), [started, submitted], {"T001": submitted})
+    assert missing["status"] == "failed"
+
+
+@pytest.mark.use_case("UC-HOST-001")
+def test_handoff_e2e_checks_the_handover_and_where_the_wake_went(tmp_path: Path) -> None:
+    """Checks L and K (T254): A releases, B takes the lease, the worker's message reaches B."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    run = cast(live.Run, SimpleNamespace(dir=run_dir, home=run_dir / "home"))
+
+    def at(minute: int) -> str:
+        return f"2026-11-10T10:{minute:02d}:00Z"
+
+    def orch(seq: int, type_: str, session: str, minute: int, **data: Any) -> dict[str, Any]:
+        e = ev(seq, type_, "", **data)
+        return {**e, "actor": {"role": "orchestrator", "session_id": session}, "time": at(minute)}
+
+    def worker(seq: int, type_: str, minute: int) -> dict[str, Any]:
+        return {**ev(seq, type_, "T001", "w1"), "time": at(minute)}
+
+    def message(session: str, sender: str, minute: int) -> str:
+        prompt = (
+            f'<cross-session-message from="{sender}" from-name="t001">x</cross-session-message>'
+        )
+        payload = {"cwd": str(run.home), "prompt": prompt}
+        record = {"event": "UserPromptSubmit", "time": at(minute), "session": session}
+        return json.dumps({**record, "payload": payload})
+
+    evs = [
+        orch(1, "controller.lease_acquired", "A", 0, session_id="A", renewed=False),
+        orch(2, "controller.lease_stood_down", "A", 1, session_id="A", via="release"),
+        orch(3, "controller.lease_released", "A", 1, session_id="A"),
+        orch(4, "controller.lease_acquired", "B", 2, session_id="B", renewed=False),
+        worker(5, "worker.question", 3),
+        {**orch(6, "orchestrator.decision", "B", 4), "task_id": "T001"},
+        worker(7, "worker.progress", 5),
+    ]
+    payloads = run_dir / "hook-payloads.jsonl"
+    payloads.write_text(
+        "\n".join([message("A", "w1", 0), message("B", "w1", 3)]) + "\n", encoding="utf-8"
+    )
+    handed, old, new = live.lease_handoff(evs)
+    assert handed["status"] == "passed", handed
+    assert (old, new) == ("A", "B")
+    woken = live.handoff_wake(run, evs, old, new)
+    assert woken["status"] == "passed", woken
+    assert woken["evidence"]["messages_to_new"] == [at(3)]
+    # The worker's message reaching the session that gave the lease up fails K.
+    payloads.write_text(
+        "\n".join([message("A", "w1", 3), message("B", "w1", 3)]) + "\n", encoding="utf-8"
+    )
+    assert live.handoff_wake(run, evs, old, new)["status"] == "failed"
+    # So does a question asked before B held the lease, or no answer from B.
+    early = [*evs[:4], {**evs[4], "sequence": 0}, *evs[5:]]
+    assert (
+        live.handoff_wake(run, sorted(early, key=lambda e: e["sequence"]), old, new)["status"]
+        == "failed"
+    )
+    assert live.handoff_wake(run, [*evs[:5], evs[6]], old, new)["status"] == "failed"
+    # A taking the lease back, a takeover instead of a release, or no stand-down fail L.
+    back = orch(8, "controller.lease_acquired", "A", 6, session_id="A", renewed=False)
+    assert live.lease_handoff([*evs, back])[0]["status"] == "failed"
+    taken = orch(8, "controller.lease_taken_over", "B", 6, session_id="B", from_session="A")
+    assert live.lease_handoff([*evs, taken])[0]["status"] == "failed"
+    assert live.lease_handoff([evs[0], *evs[2:]])[0]["status"] == "failed"
+    assert live.lease_handoff(evs[:1])[0]["status"] == "failed"
+
+
+@pytest.mark.use_case("UC-CHANGE-001")
+def test_change_e2e_checks_pass_on_a_real_change_and_fail_without_it(
+    home: Home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Checks A, M, X, R and I of change-e2e against the ledger the real tools and hook write."""
+    from tsw.host import inbox as inbox_mod  # noqa: PLC0415
+    from tsw.host.guard import Guard  # noqa: PLC0415
+
+    monkeypatch.setattr(lease, "this_machine", lambda: MACHINE)
+    h = Harness(home)
+    worker = h.complete("T001")
+
+    def ledger_events() -> list[dict[str, Any]]:
+        # The shape live.events reads from a run's ledger.
+        return [
+            {
+                "sequence": e.sequence,
+                "type": e.type,
+                "task_id": e.task_id,
+                "revision": e.revision,
+                "attempt": e.attempt,
+                "actor": e.actor,
+                "data": e.data,
+                "time": e.time,
+            }
+            for e in h.ledger.storage.read(since=0)
+        ]
+
+    def ids(evs: list[dict[str, Any]]) -> dict[str, str]:
+        return {c["id"]: c["status"] for c in live.requirement_change_checks(evs)}
+
+    assert ids(ledger_events())["X"] == "failed"
+    env = {"CLAUDE_CODE_HOST_SESSION_ID": str(worker.session_id)}
+    payload = {"cwd": str(home.root), "prompt": "README 再加一行", "hook_event_name": "x"}
+    Guard(h.home, env, payload).run("UserPromptSubmit")
+    changed = h.run(
+        "requirement_change",
+        worker,
+        task_id="T001",
+        message_ids=["M-T001-1"],
+        goal="g2",
+        acceptance=["a2"],
+    )
+    h.finalize(worker, "T001", head="h2")
+    h.submit(worker, "T001", head="h2")
+    h.ledger.commit(
+        inbox_mod.ack(
+            [changed["events"][0]["sequence"]],
+            actor={"role": "orchestrator", "session_id": "orch-1"},
+            config=h.config,
+            session_id="orch-1",
+            machine=MACHINE,
+        )
+    )
+    h.accept("T001", head="h2")
+    assert ids(ledger_events()) == {
+        "A": "passed",
+        "M": "passed",
+        "X": "passed",
+        "R": "passed",
+        "I": "passed",
+    }
+    # The orchestrator relaying the words itself (task_update) is not what the scenario checks.
+    relayed = [
+        {**e, "actor": {"role": "orchestrator"}} if e["type"] == "task.requirement_changed" else e
+        for e in ledger_events()
+    ]
+    assert ids(relayed)["X"] == "failed"
+    # Revision 2 delivered by another attempt (a2) is not the same attempt continuing.
+    elsewhere = [
+        {**e, "attempt": "a2"}
+        if e["type"] in ("worker.submitted", "review.started", "review.decision")
+        and e["sequence"] > changed["events"][0]["sequence"]
+        else e
+        for e in ledger_events()
+    ]
+    assert ids(elsewhere)["R"] == "failed"
+
+
+@pytest.mark.use_case("UC-SESSION-001")
+def test_title_e2e_checks_read_the_receipts_not_the_requests(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Checks T, D, U, F, A, X and R of title-e2e against the ledger the real tools write; a
+    rename or archive asked for but never recorded is not done (PR #43 review)."""
+    from tsw import direct  # noqa: PLC0415
+
+    monkeypatch.setattr(lease, "this_machine", lambda: MACHINE)
+    h = Harness(home)
+
+    def seen(session: str, title: str) -> dict[str, Any]:
+        return {"sessionId": session, "title": title, "isArchived": False}
+
+    def renamed(task: str, session: str, current: str) -> None:
+        out = h.run("session_check", task_id=task, attempt="a1", observed=seen(session, current))
+        h.run(
+            "session_record",
+            task_id=task,
+            attempt="a1",
+            action="title",
+            title=out["title"],
+            ok=True,
+            result=f'Renamed session {session} to "{out["title"]}" (was "{current}").',
+        )
+
+    workers: dict[str, Caller] = {}
+    for task in ("T001", "T002"):
+        h.register(task)
+        h.plan(task)
+        data = h.run(
+            "attempt_start",
+            task_id=task,
+            purpose="prestart",
+            user_turn=True,
+            session_title=f"{task} 短标题",
+        )["events"][0]["data"]
+        h.run(
+            "attempt_reconcile",
+            task_id=task,
+            attempt="a1",
+            generation=data["generation"],
+            outcome="created",
+            session_ref=f"w-{task}",
+        )
+        h.run("task_dispatch", task_id=task, workdir=f"work/{task}/a1")
+        h.run("attempt_deliver", task_id=task)
+        workers[task] = Caller(role="worker", session_id=f"w-{task}", machine=MACHINE)
+        renamed(task, f"w-{task}", f"[待命] {task} 短标题")
+    h.finalize(workers["T001"], "T001")
+    h.submit(workers["T001"], "T001")
+    h.accept("T001")
+    direct.perform(
+        h.ledger,
+        h.config,
+        "accept",
+        "T001",
+        channel="user-cli",
+        message_ref="cli:2026-11-12T00:00:00Z:1",
+        text="tsw task accept T001",
+    )
+    h.run("session_check", task_id="T001", attempt="a1", observed=seen("w-T001", "T001 短标题"))
+    h.run(
+        "task_cancel",
+        task_id="T002",
+        user_source=h.source("T002", 1, "cancel"),
+        worker_stopped=True,
+    )
+    h.run("session_check", task_id="T002", attempt="a1", observed=seen("w-T002", "我的 T002"))
+    h.run("task_archive", task_id="T002", user_source=h.source("T002", 1, "archive"))
+    out = h.run("session_check", task_id="T002", attempt="a1", observed=seen("w-T002", "我的 T002"))
+    assert out["action"] == "archive"
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    forward = {
+        "event": "UserPromptSubmit",
+        "session": "orch-1",
+        "time": h.clock.now,
+        "payload": {
+            "cwd": str(home.root),
+            "prompt": '<cross-session-message from="routine-1">TaskSteward 例行项 session-scan：…',
+        },
+    }
+    (run_dir / "hook-payloads.jsonl").write_text(
+        json.dumps(forward, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    run = cast(Any, SimpleNamespace(dir=run_dir, home=home.root))
+
+    def ids() -> dict[str, str]:
+        evs = [
+            {
+                "sequence": e.sequence,
+                "type": e.type,
+                "task_id": e.task_id,
+                "revision": e.revision,
+                "attempt": e.attempt,
+                "actor": e.actor,
+                "data": e.data,
+                "time": e.time,
+            }
+            for e in h.ledger.storage.read(since=0)
+        ]
+        return {c["id"]: c["status"] for c in live.title_checks(run, evs)}
+
+    # Asked for, not yet done: A and R wait for the receipts.
+    assert ids() == {
+        "T": "passed",
+        "D": "passed",
+        "U": "passed",
+        "F": "passed",
+        "A": "failed",
+        "X": "passed",
+        "R": "failed",
+    }
+    h.run(
+        "session_record",
+        task_id="T001",
+        attempt="a1",
+        action="title",
+        title="[已验收] T001 短标题",
+        ok=True,
+        result='Renamed session w-T001 to "[已验收] T001 短标题" (was "T001 短标题").',
+    )
+    h.run(
+        "session_record",
+        task_id="T002",
+        attempt="a1",
+        action="archive",
+        ok=True,
+        result="Archived session w-T002.",
+    )
+    assert set(ids().values()) == {"passed"}

@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from tsw.errors import rejected
 
@@ -174,3 +174,21 @@ def seal(
         data=dict(draft.data),
     )
     return replace(unsealed, checksum=unsealed.computed_checksum())
+
+
+def sources_in(value: Any) -> Generator[Mapping[str, Any], None, None]:
+    """Every ``VerifiedSource`` in an event's data (DN006 §8.5)."""
+    if isinstance(value, Mapping):
+        found = cast("Mapping[str, Any]", value)
+        if (
+            isinstance(found.get("channel"), str)
+            and isinstance(found.get("text"), str)
+            and isinstance(found.get("target"), list)
+        ):
+            yield found
+            return
+        for item in found.values():
+            yield from sources_in(item)
+    elif isinstance(value, list):
+        for item in cast("list[Any]", value):
+            yield from sources_in(item)

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="tsw-source-sha256" content="023069e0c4d0d5af14e4fb650f973c2c7a1c7b7365d1018b6f82fee1164f0427">
+<title>CX004 Codex 评审器</title>
+<style>
+:root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.7 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--fg);background:#fff}
+.layout{display:grid;grid-template-columns:260px minmax(0,1fr);max-width:1400px;margin:0 auto}
+nav.toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:28px 18px;border-right:1px solid var(--line);font-size:13px}
+nav.toc h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
+nav.toc a{display:block;color:var(--fg);text-decoration:none;padding:2px 0}
+nav.toc a.l3{padding-left:14px;color:var(--muted)}
+nav.toc a:hover{color:var(--accent)}
+main{padding:32px 48px 64px;min-width:0}
+h1{font-size:28px;margin:0 0 16px;border-bottom:3px solid var(--accent);padding-bottom:10px}
+h2{font-size:21px;margin:36px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:17px;margin:26px 0 10px}
+h4{font-size:15px;margin:20px 0 8px}
+a{color:var(--accent)}
+code{font-family:Consolas,"Cascadia Mono",monospace;font-size:13px;background:var(--code);padding:1px 5px;border-radius:4px}
+pre{background:#1e2230;color:#e8eaf2;padding:14px 16px;border-radius:8px;overflow:auto;line-height:1.5}
+pre code{background:none;padding:0;color:inherit}
+table{border-collapse:collapse;width:100%;margin:12px 0 18px;font-size:13.5px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:var(--bg-soft);white-space:nowrap}
+tr:nth-child(even) td{background:#fbfcfe}
+blockquote{margin:12px 0;padding:8px 16px;border-left:4px solid var(--accent);background:var(--bg-soft)}
+figure{margin:18px 0 8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff}
+figure svg{display:block;width:100%;height:auto;max-height:none}
+figcaption{font-size:13px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between;gap:12px}
+.meta{color:var(--muted);font-size:13px}
+footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:10px}
+@media (max-width:900px){.layout{grid-template-columns:1fr}nav.toc{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line)}main{padding:20px}}
+@media print{nav.toc{display:none}.layout{display:block}main{padding:0}a{color:inherit;text-decoration:none}
+ pre{white-space:pre-wrap;background:#f3f4f8;color:#111}figure,table,pre{break-inside:avoid}h2,h3{break-after:avoid}
+ body{font-size:11pt}@page{margin:16mm 14mm}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc"><h2>目录</h2><a class="l2" href="#1-范围">1. 范围</a><a class="l2" href="#2-主路径app-server-一次性线程">2. 主路径：App Server 一次性线程</a><a class="l2" href="#3-回退codex-exec">3. 回退：codex exec</a><a class="l2" href="#4-v1-实现细节">4. v1 实现细节</a></nav>
+<main>
+<h1>CX004 Codex 评审器</h1>
+<ul><li>状态：设计草案（T242 r2 自 DN004 拆出，待用户确认）</li><li>日期：2026-11-08</li><li>实现：<a href="../DN004-worker-self-review.html">DN004 worker 自评审</a></li></ul>
+<h2 id="1-范围">1. 范围</h2>
+<p>本文是 DN004 评审器在 Codex 上的实现：默认会话适配器 <code>codex-app-server</code> 与回退 <code>codex-exec</code>。评审包、输出契约、处置规则与轮次计数见 DN004。</p>
+<h2 id="2-主路径app-server-一次性线程">2. 主路径：App Server 一次性线程</h2>
+<p>沿用 orchestrator-agent <code>agent oneshot</code> 已验证的方式，移植为 tsw 的 reviewer 适配器：</p>
+<ol><li>在本机临时启动私有 <code>codex app-server --listen ws://127.0.0.1:&lt;随机端口&gt;</code>，结束后结束整个进程树。</li><li><code>thread/start</code>：<code>model = roles.reviewer.model</code>（<code>gpt-6-astra</code>），<code>model_reasoning_effort = roles.reviewer.effort</code>（<code>medium</code>），<code>sandbox = read-only</code>，<code>cwd</code> = 执行目录，<code>model_context_window = roles.reviewer.context_window</code>，<code>allowProviderModelFallback = false</code>。</li><li><code>turn/start</code> 发送评审包；等待 <code>turn/completed</code>，超时（<code>timeout_seconds</code>）则中断并记为失败。</li><li>读回 finalMessage，解析 JSON。</li><li>首轮保留线程（keep thread），线程 ID 记入 <code>review.started</code>。后续轮次用 <code>resume_thread</code> 续用同一线程做增量评审；最后一轮结束后归档线程。</li></ol>
+<p>模型不可用、effort 不支持或返回的模型与请求不一致时，直接判为本轮失败，<strong>不回退到其他模型</strong>。</p>
+<h2 id="3-回退codex-exec">3. 回退：<code>codex exec</code></h2>
+<p>App Server 无法启动时，用 <code>codex exec</code> 非交互执行同一评审包（指定模型、effort、<code>--sandbox read-only</code>），输出同样按 schema 解析。回退本身记录在 <code>review.completed.data.transport</code> 中。回退也失败时记录 <code>review.unavailable</code> 交主会话判断（可稍后重试或交给人类）：<strong>不能跳过评审，也不能改用 Claude 子代理冒充 Codex 评审</strong>。</p>
+<h2 id="4-v1-实现细节">4. v1 实现细节</h2>
+<ul><li><code>codex-app-server</code> 通过 stdio 与 <code>codex app-server</code> 通信（不另开端口）。线程在同一周期的各轮之间保留，下一轮按 <code>review.incremental = resume_thread</code> 续用上一轮的线程；归档留给 attempt 结束后的清理。评审器进程在 Windows 上挂起启动、放入关闭即终止成员的 Job Object 后再恢复（其他平台为独立进程组），无法放入 Job Object 时在它运行之前结束并报告评审器不可用；结束时关闭输入、等待片刻，然后无论直接子进程是否已退出都结束整个进程树，输出管道只由读取线程关闭。</li></ul>
+<footer>本页由同目录的 <a href="CX004-reviewer.md">CX004-reviewer.md</a> 生成，内容与 Markdown 版本一致。</footer>
+</main>
+</div>
+</body>
+</html>

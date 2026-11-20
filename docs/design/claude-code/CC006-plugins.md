@@ -1,0 +1,417 @@
+# CC006 Claude Code 插件
+
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T302 §9.2 待命前缀、任务归档后归档会话；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`；T283 §11 自我更新的载入时机与生效方式，§12 Dashboard 常驻服务；T287 §10.2 受理与派发时检查长期偏好；T293 §6.2 teams-replies 列出最后修改时间、已判定消息记在 `teams_checked`；T305 §2 安装与改指插件来源见 CC009；T309 §13 workdeck 插件 manifest）
+- 日期：2026-11-08
+- 实现：[DN006 插件层](../DN006-plugin-layer.md)
+- 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md) · [CC009 Claude Code 上的安装](CC009-install.md)
+
+## 1. 范围
+
+本文是 DN006 插件层在 Claude Code 上的实现：宿主集成 `claude-code`、会话适配器 `claude-app` 与 `claude-headless`、`in-session` 渠道的记录方式、例行会话（DN006 §8.9）与 `teams-chat` 渠道。插件接口与能力声明见 DN006。
+
+
+与 Claude Code 耦合的设计元素及其归属的插件类型：
+
+| 设计元素 | Claude 实现 | 归属 |
+| --- | --- | --- |
+| 主会话与 worker 的指令、skill、工具注册 | `CLAUDE.md`、`.claude-plugin`、skills、`.mcp.json` | P1 |
+| 写入范围、危险命令拦截、结束前检查 | Claude Code hooks | P1 |
+| 创建、续用、停止、观察 worker 会话 | `start_session`、`SendMessage`、`list_sessions`、`get_session`、`stop_session` | P2 |
+| 唤醒主会话 | worker→当前持租主会话 `send_message(session_id=<wake.session_id>)`、side-sessions-event | P2（唤醒能力） |
+| 派发窗口与预启动（G-WINDOW、attempt `standby`） | 只有用户本人的 turn 能在任务目录创建会话；任何 turn 都能给已有会话发消息 | P2（能力声明） |
+| 权限模式名称 | `default` / `acceptEdits` / `auto` / `bypassPermissions` | P2（映射表） |
+| 评审器 | Codex App Server 一次性线程 | P2 的 oneshot 能力 + `roles.reviewer.session` |
+| 待答问题的投递与回收 | 用户在子会话直接答复；转交后按配置的人类渠道通知（如 Teams 自聊 `teams-chat`，§7） | P3 |
+| 例行会话的定时运行 | 会话内定时任务 `CronCreate` / `CronDelete`，`clear_session` 清空上下文（§6） | P2（`timer` 能力） |
+| 例行会话空跑不唤醒主会话 | 主会话启动后 `detach_session`（§6.1） | P2（`detach` 能力） |
+| 控制根 = 私有 Git 仓库 | ledger、runs 随仓库提交 | P4 + 数据目录 |
+
+## 2. 宿主集成 `claude-code`
+
+`claude-code` 的插件按用户级启用，任何目录的会话（主会话、`work/<任务>/<attempt>` 或其中仓库 worktree 中的 worker、无关会话）都会加载它，所以插件只携带每个会话都需要的 MCP 注册与 hooks。主会话的流程说明不放进插件：`render_instructions` 把 `CLAUDE.md` 和 `orchestrate` skill 写进数据目录，后者是 Claude Code 的项目 skill（`<cwd>/.claude/skills/`）。Claude Code 也从上级目录加载 `CLAUDE.md` 与项目 skill（skill 的查找在 git 仓库根停下，§8），执行目录在数据目录之下的例行会话与 worker 同样会看到二者（仓库 worktree 中的 worker 只看到 `CLAUDE.md`），所以二者都写明：`whoami` 的角色不是 orchestrator 时忽略。skill 的来源在产品代码中（`tsw/host/orchestrate_skill.md`），产品更新后重新运行 `tsw host render`。同样生成的还有主会话的 `handle-input`（§6.4）、`task-intake`（受理与写任务书，§10.2）、渠道 skill（§7），以及主会话与 worker 都用的 `gh-account`（§10.1）。
+
+worker 的说明不是 skill，也不在插件里加载（Claude Code 不加载插件的 `roles/` 目录）：`render_instructions` 把 `plugin/roles/worker.md` 复制到数据目录的 `roles/worker.md`，`attempt_start` 生成的 worker 会话 prompt 以它的全文开头（DN006 §6.2，CC001 §3）。这样仓库 worktree 中看不到数据目录 skill 的 worker 也能拿到同一份说明；SessionStart hook 只指向提示语开头的说明与副本路径（CC001 §6）。`host render` 的输出 `written` 列出这份文件；产品更新后没有重新 render 时，副本与 `plugin/roles/worker.md` 不一致，`attempt_start` 被拒绝并提示运行 `tsw host render`；render 改变了说明时，已有 worker 会话由 hook 在下一轮提示重读副本。
+
+插件由 Claude Code 复制到插件缓存运行，缓存里没有 `tsw` 运行时。启动器按顺序查找：`TSW_REPO` 环境变量、插件所在的产品仓库（源码树或原地使用的本地市场）、`tsw init` 写入数据目录标记文件的 `product_repo`；都找不到时 MCP server 报错退出，hooks 静默放行。
+
+缓存副本只在插件的版本变化时才被替换（Claude Code 按 `plugin.json` 的 `version`、市场条目的 `version`、来源的提交 SHA 的顺序计算版本）。开发期 `plugin.json` 不写版本，版本取提交，产品仓库更新后 `claude plugin update task-steward@task-steward` 就会换上新副本；固定的版本字符串会让副本一直停在第一次安装时（T247 实测：app 运行的副本停在 2026-11-06 的 hooks 与启动器）。
+
+- `tsw host render`（DN006 §6.2 的 `update_plugin`）在写完数据目录的文件后运行 `claude plugin update task-steward@task-steward`，幂等：副本已是最新时不变。它按 Claude Code 的安装记录（`installed_plugins.json`）比较更新前后每个 task-steward 安装与 `plugin/` 的文件，输出带 `plugin`：更新前（`before`）与更新后（`installed`）每个安装是否一致、不一致的文件、更新命令的输出，以及之后要做的事（重启会话；更新后仍不一致时先卸载再安装）。没有安装记录时不运行（安装由用户按 install-hint 做），找不到 `claude` 命令时只报告。
+- 主会话的 SessionStart 比较 Claude Code 给 hooks 的 `CLAUDE_PLUGIN_ROOT` 与产品仓库的 `plugin/`，内容不一致时在注入的上下文中写明不一致的文件，并让主会话向用户说明、请用户确认运行 `tsw host render`：用户确认后由主会话运行（CC008 §5.7，T282；此前让用户在终端运行），之后请用户重启 Claude 会话（会话不能重启自己）；原地加载（二者是同一目录）或一致时不提示。只读。
+
+已在运行的会话重启后才用上新副本与新的 tsw 运行时（MCP server 在会话开始时载入）。
+
+用户的安装（终端或会话中的 `/task-steward:setup`）、把插件市场改指本机检出、写用户设置与 auto 模式规则见 [CC009](CC009-install.md)（DN009）。
+
+规则执行：hooks 调用 `tsw guard`，按 [CC008](CC008-guardrails.md) 的 block list 拦截已知的错误动作；tsw 已把关的动作在主会话由数据目录中生成的允许规则放行，在 worker 由用户设置中的 auto 模式规则放行（执行目录不带权限规则，CC008 §6）。
+
+## 3. 会话适配器
+
+| 适配器 | 用途 | 做法 |
+| --- | --- | --- |
+| `claude-app` | 主会话与 worker（interactive、delegated） | 创建、投递、停止、观察、对账分别用 app 的 `start_session`、`SendMessage`、`stop_session`、`get_session`、`list_sessions {linked:true}`；创建参数与平台约束见 [CC001 §3–§4](CC001-sessions-and-hooks.md)；中性权限映射 ask→default、edits→acceptEdits、auto→auto、full→bypassPermissions |
+| `claude-headless` | 无 Codex 时的评审器（oneshot、direct） | `claude -p` 严格只读，调用约定见 [CC004](CC004-reviewer.md) |
+
+`claude-app` 的 interactive 动作：
+
+| 动作 | `claude-app` |
+| --- | --- |
+| create | `start_session`（fresh、cwd 为 `attempt_start` 返回的执行目录或其中的仓库 worktree（§8）、use_worktree=false；prompt 为 `attempt_start` 返回的 `prompt`：worker 说明加待命说明（预启动）或启动指令（派发）） |
+| deliver_brief | `SendMessage`（任何 turn 都可以；直接启动时由 `start_session` 的短指令 prompt 指向任务书路径，两阶段合一；正文不放进 prompt，见 [CC008 §6](CC008-guardrails.md)） |
+| send | `SendMessage` |
+| stop | `stop_session` |
+| observe | `get_session` |
+| find | `list_sessions {linked:true}` 按名称 |
+| 会话地址（Dashboard 页面的会话链接，DN006 §8.10） | `claude://claude.ai/epitaxy/<session_ref>`：`session_ref` 是 app 的会话 ID（`local_…`），按 URL 路径段编码；点击由桌面 app 打开该会话 |
+| 唤醒主会话 | push：worker `mcp__ccd_session_mgmt__send_message`，`session_id` 为 tsw 给出的当前持租主会话（DN001 §6.3）；兜底 side-sessions-event（只到原主会话） |
+
+## 4. `in-session` 渠道
+
+`UserPromptSubmit` hook 把用户在 worker 会话中输入的消息记为 `input.session_message`（DN006 §8.1a；T262 前只在 worker 有待答问题时记录），worker 引用它登记答复或需求变更（DN002 §5.1a）。这是 worker 层的会话内提问，账本中记为渠道 `in-session`；它不受 `plugins.human_channels` 控制。配置中的 `in-session` 人类渠道是另一回事：主会话在自己的会话中直接问用户（DN006 §8.6 的层次与命名）。哪些消息记录、哪些作为注入消息跳过，见 [CC008 §4](CC008-guardrails.md) 的 CC-S2。
+
+## 5. 委托操作示例
+
+派发 T241 的 worker（Claude app 宿主），DN006 §4 的委托操作：
+
+```json
+{
+  "operation_id": "op-T241-a1-g1-start",
+  "kind": "session.start",
+  "task_id": "T241",
+  "attempt": "a1",
+  "generation": 1,
+  "action": {
+    "neutral": "start_worker_session",
+    "tool": "mcp__ccd_session__start_session",
+    "params": {
+      "initiation": "user_asked",
+      "context": "fresh",
+      "cwd": "<数据目录>/work/T241/a1/example-app",
+      "use_worktree": false,
+      "name": "t241-a1-g1",
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "permission_mode": "auto",
+      "prompt": "按 runs/T241/a1/brief.md 执行。工具、评审与回传协议见 brief 第 1 节。",
+      "background": "为 example-app 的报表页增加 CSV 导出：在任务 worktree 中实现服务端流式导出接口与界面上的导出按钮，支持十万行分页与导出链接过期，补齐单元测试与端到端测试，完成后用配置的评审器自评审，再按 brief 提交报告。"
+    }
+  },
+  "expects_receipt": {"fields": ["session_id"], "on_unknown": "reconcile_by_name"},
+  "expires_at": "2026-11-05T12:00:00Z"
+}
+```
+
+回执：
+
+```json
+{"operation_id": "op-T241-a1-g1-start", "outcome": "ok", "result": {"session_id": "local_6c1f…"}, "evidence": "tool result"}
+```
+
+## 6. 例行会话
+
+DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 tsw 进程唤醒，所以例行表的执行者是一个子会话：`claude-app` 声明 `timer`，会话内定时任务（`CronCreate`）由 app 在会话进程中执行，只在 app 打开时运行。
+
+### 6.1 启动
+
+主会话在用户第一次要求执行待办的那一轮（用户本人的 turn，CC001 §4）启动：
+
+1. `routine_start` 返回会话名 `routine-g<K>`、执行目录（数据目录下的 `routine/`，磁盘上的实际写法）与 `start_session` 参数：`initiation: user_asked`、`context: fresh`、`use_worktree: false`、`roles.routine` 的 `model` / `effort`，以及按 §3 映射为宿主名称的权限模式（事件中的 `host_permission_mode`）；`prompt` 只写短指令（“你是 TaskSteward 的例行会话。调用 `whoami`，再调用 `routine_board`，逐行执行。”），`background` 写明例行会话的职责（≥80 字）。
+2. 主会话调用 `start_session`，再用返回的会话 ID 调用 `routine_bind`。结果未知时按会话名用 `list_sessions {linked:true}` 对账。
+3. `claude-app` 声明 `detach`，`routine_start` 返回 `detach: true`：主会话随即调用 `mcp__ccd_session_mgmt__detach_session(session_id)`，成功后 `routine_detached`（`generation`），再用 `SendMessage` 告诉例行会话“已绑定，调用 routine_board 开始”。原因：app 在主会话启动的会话（linked side session）每结束一轮、主会话空闲时，都用 side-sessions-event 继续主会话一轮（`start_session` 的 `wake_when_done` 说明：“whether or not this is set”），不区分这一轮是不是定时任务触发、有没有转发内容；`detach_session` 的说明：“it stops nesting under the session that started it, is no longer archived with it, and that session is no longer told when its turns end”。分离后：
+   - 例行会话转发用的 `send_message` 按会话 ID 发给主会话，与是否 linked 无关；主会话也按会话 ID 给它发消息（`stale` 时）。
+   - 它不再出现在主会话的 `list_sessions {linked:true}` 与 linked 列表中，按会话名对账只在分离之前进行。
+   - 主会话被归档时不再连带归档它；它继续把结果转给下一个持有调度租约的主会话。关闭例行会话（`routine.enabled=false`）时主会话停止、归档它，`stop_session` 与 `archive_session` 对非本会话启动的会话可能要用户确认（auto 模式由分类器判断）。
+   - `detach_session` 不能撤销，没有确认卡片，不受派发窗口限制（不创建会话）。分离失败或没有记录时 `attention` 的 `routine` 为 `attached`，主会话的 Stop hook 在任何一轮提醒补做；本版本之前启动的例行会话也这样迁移。
+4. 新目录第一次使用时 app 要求用户确认信任，确认只能在用户看着主会话时弹出（CC001 §3），所以启动只在用户 turn 中进行。
+
+数据目录的 `CLAUDE.md` 与 `orchestrate` skill 也会被 `routine/` 中的会话读到；二者已写明角色不是 orchestrator 时忽略（§2）。例行会话的指令由 SessionStart hook 注入（CC001 §6）。
+
+### 6.2 每次运行
+
+定时提示（由 `routine_board` 的 `arm` 动作给出）：`<scheduled-task>调用 routine_board，逐行执行例行项，原样转发结果；没有例行项就结束这一轮。</scheduled-task>`。提示自身就足够完成一次运行，所以清空上下文后定时任务继续有效时，下一次运行不需要任何记忆。
+
+| 例行表给出的内容 | 例行会话调用的工具 |
+| --- | --- |
+| 例行项没有 `fetch` | `routine_run`，参数为该行的 `run`（没有时为 `job_id`） |
+| 例行项的 `fetch` 为 `teams.read_chat`（列出） | `mcp__workiq__fetch`，`entityUrls` 为 `fetch.arguments` 给出的一个路径（`/me/chats/<chat>/messages?$top=10&$orderby=createdDateTime+desc&$select=id,createdDateTime,lastModifiedDateTime`：只取消息 ID、创建时间与最后修改时间，按创建时间从新到旧；Graph 默认按最后修改时间排序，后来编辑过的旧消息会排在前面、让读取提前结束），然后用该行的 `run`（`job_id` 与 `chat_id`）调用 `routine_run`，不传 `fetched`：取到的结果由 tsw 的 PostToolUse hook 记下（见下）。返回值形如 `{"results": [{"data": <这一页>, "statusCode": …}]}`，这一页的 `value` 是消息（新的在前），`@odata.count` 是条数；脚本也仍接受带正文的整页与 `mcp__teams__ListChatMessages` 的返回（JSON 后接一行 `CorrelationId: …`） |
+| `routine_run` 返回 `next` | 按 `next.tool` 与 `next.arguments` 取数，再用 `next.run` 调用 `routine_run`；直到不再返回 `next`。`next` 有两种，执行者不需要区分：**正文**的 `entityUrls` 是这一页每条候选消息一个路径 `/me/chats/<chat>/messages/<id>?$select=id,from,body`，一次取完；**下一页的列出**在第一页的路径上加 `&$filter=createdDateTime+lt+<上一页最早消息的创建时间>`，不用 Graph 的 `@odata.nextLink`。读到哪一页、哪一步由 tsw 记在 `cache/routine.json`（`teams_steps`），`routine_board` 每次运行从第一页重新开始；读过正文、没有转出的消息记在同一文件的 `teams_checked`（按 chat：判定依据 `basis` 与每条消息的创建时间、最后修改时间），之后列出时不再是候选（DN006 §8.9.5，T293）。`fetch.pages` 已弃用，只给 T243 a2 之前启动的例行会话用 |
+| `fetch` 的工具报错或返回错误 | 照样调用 `routine_run`，`fetched` 为工具返回的原文（行中的 `fetch.on_error` 也这样写）；连续失败的计数与通知由 tsw 完成（DN006 §8.9.5） |
+| `routine_run` 返回非空的 `forward` | `mcp__ccd_session_mgmt__send_message`，`session_id` 为 `forward` 中的主会话 ID，正文原样 |
+| 维护动作 `arm` | 有旧任务引用时先 `CronDelete`；再 `CronCreate`（`recurring: true`，`durable: false`，`cron` 与 `prompt` 原样）；然后 `routine_armed` 登记返回的任务引用 |
+| 维护动作 `clear_context` | 本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`：app 在这一轮结束、会话空闲后清空 |
+
+WorkIQ 的读取方式（T286 在用户的自聊上实测）：列出与单条读取都遵守 `$select`，只返回选定的字段；列出支持 `$filter=createdDateTime lt <时间>`（与 `$orderby=createdDateTime desc` 同用），`gt` 与 `lt` 用 `and` 组合时报错，所以读取窗口的起点仍由 tsw 按每页最早的消息判断；`entityUrls` 中的多个路径一次取完，结果按路径的顺序放在 `results` 中，各带自己的 `statusCode`。
+
+取数结果的交接（T286）：插件的 PostToolUse hook（matcher `mcp__workiq__fetch`）在例行会话中把工具结果（`tool_response` 中的文字）按 `entityUrls` 记进 `cache/routine-fetch.json`（只保留最近几次），并提示“直接用 run 调用 routine_run，不用传 fetched”；`routine_run` 按这一步的取数参数取出记下的结果，用过即删；`routine_board` 开始新一次运行时清空这个文件，中断的运行留下的结果不会顶替之后同一路径的取数。其他会话（主会话自己读全文时）不记。live 中已用同样的 hook 读到 `mcp__workiq__create_entity` 的 `tool_response`（T256 的 routine-e2e 检查 C）。没有记下的结果时（插件还没更新），`routine_run` 用执行者给的 `fetched`；两者都没有时这一步按读取失败计。
+
+tsw 核对取到的内容（DN006 §8.9.5 的“核对”）：列出的每条消息的 ID 必须等于创建时间的毫秒数、条数等于 `@odata.count`；取回正文的 `id` 必须恰好是请求的候选（HTTP 404 的不再是候选）。核对失败时 `routine_run` 不返回 `next`，计入连续读取失败。例行会话的 SessionStart 说明写明取数后用 `run` 调用 `routine_run`、不转抄；本版本之前启动的例行会话仍按旧说明传 `fetched`，hook 已记下时 tsw 不用它。
+
+间隔 N 分钟的 cron 表达式：N 整除 60 时为 `*/N * * * *`，N 为 60 的倍数时为 `0 */(N/60) * * *`（DN003 §3.1b）。`CronCreate` 的循环任务 7 天后到期，所以 `routine.renew_after_days` 默认 6。
+
+转发的消息以 `<cross-session-message` 到达主会话，不是用户本人的 turn（CC008 的 CC-S6）；到达 worker 时也不会被记成用户答复（CC-S2）。
+
+### 6.3 宿主侧护栏与允许规则
+
+例行会话角色见 CC001 §5；hooks 对它执行 CC008 的 CC-B8、CC-B10（已撤销、待绑定）与 CC-B11（不编辑、不运行命令、不建会话）。与 worker 的执行目录一样，`routine/` 不带权限规则（带规则的目录会再次要求信任，决定 0003）：例行会话的定时任务、取数、转发与清空上下文由用户设置中的 auto 模式规则“TaskSteward Routine”放行（`tsw host install-hint` 给出，CC008 §6），创建它的 `start_session` 与随后的 `detach_session` 由“TaskSteward Worker Dispatch”覆盖。
+
+### 6.4 主会话的问题流程 skill
+
+`render_instructions` 在数据目录生成项目 skill `.claude/skills/handle-input/SKILL.md`（来源 `tsw/host/handle_input_skill.md`），写明 DN006 §8.1b 的三步（T256）：
+
+1. **超时转交并通知主会话**：例行会话的 `handoff-scan` 转交到期的问题，转来的消息列出问题、是否 `reserved`、worker 会话，以及配置的人类渠道与各自的做法（`plugins.human_channels` 加载、`input.channels` 选中的渠道；一个也没有时写明问题留在 worker 会话）。
+2. **主会话判断**：读问题与任务书，按 DN006 §8.2 的授权边界与因素判断。能代答时 `handoff_resolve`，再用 `send_message` 把决定告诉 worker，让它继续；`reserved` 或超出授权的交给用户。
+3. **按 `plugins.human_channels` 交给用户**：配置的是什么就用什么，没有配置的方式不用。`in-session`：`input_relay`（`channel: in-session`）后在主会话中直接问，用户的答复用 `input_resolve` 登记（来源渠道 `main-session`）；`teams-chat`：`input_relay` 后按与渠道同名的 skill 发出（§7）。没有配置 `in-session` 时不在主会话里问用户（`input_relay` 也会拒绝），也不用“去 worker 会话回答”代替渠道。发送失败时问题保持待答，向用户说明，问题仍可在 worker 会话里回答。
+
+4. **用户在主会话里的话回答了待答的问题**（T292，DN002 §5.1）：不论问题是否已转交，主会话用 `context_task` 读出问题正文对照用户的话；是回答就 `input_resolve`（来源渠道 `main-session`），有需求变更时再 `task_update`，把答复与新任务书一起告诉 worker；与问题无关的需求变更只 `task_update`，问题继续等待；拿不准时问用户。
+
+渠道转回的答复与渠道的故障（Teams 的回复登记与读取失败）按渠道的 skill 处理。通用的 skill 不写渠道的工具、路径、格式与 `channel_sent` 字段：新增渠道时只加它自己的 skill，问题流程不变。
+
+改动原因：Q-T255-1 超时转交后，主会话只在主会话里提示“去 worker 会话回答”，没有经 Teams 转达。原 skill 把“用户正在本会话对话时转达到 `main-session`”与“否则转 Teams”并列，主会话据此判断出了偏差；`input_relay` 也总是允许 `main-session`，与配置无关（用户 2026-11-10）。现在只有配置的渠道可用，本机配置为只有 `teams-chat`。
+
+### 6.5 待验证（T243、T250 live）
+
+| 编号 | 假设 | 不成立时 |
+| --- | --- | --- |
+| R1 | 由定时任务触发的一轮结束时，app 不用 `side-sessions-event` 唤醒主会话（只在子会话的第一轮或主会话发起的一轮结束时唤醒） | **不成立**（T250）：T243 live 自己的 hook 记录显示例行会话每轮结束（包括空跑）都唤醒主会话，当时的检查 O 只取操作者观察而漏判。已改为启动后 `detach_session`（§6.1），live 检查改为从 hook 记录判定（R5） |
+| R2 | `clear_session("self")` 之后，会话内的定时任务仍然有效 | 清空后定时任务失效，按恢复规则（DN006 §8.9.6）由主会话发消息让例行会话重新设定；或把 `context_reset_hours` 设得很大，只依赖宿主的自动压缩 |
+| R3 | 例行会话能按会话 ID 给主会话发消息 | 改用 `SendMessage`（`to` 为 `local_…` 会话 ID） |
+| R4 | `SendMessageToSelf` 返回消息 ID、chat ID 与发送者 ID；`ListChatMessages` 能读回用户在自聊中的消息与发送者 | 发送者取自读回的卡片消息。T253 起改用 WorkIQ（§7）：`create_entity` 返回创建的消息（`id`、`chatId`、`from.user.id`），`fetch` 读回自聊中的消息与发送者（T253 主会话实测） |
+| R5 | 分离后例行会话空跑结束时主会话不再收到 side-sessions-event；例行会话的转发仍以 `<cross-session-message` 送达主会话，没有确认卡片（T250 live routine-e2e 的检查 W，从主会话的 hook 记录判定） | 转发改用 `SendMessage`（`to` 为主会话 ID）；仍需确认时把放行写进 auto 规则 |
+
+## 7. `teams-chat` 渠道
+
+DN006 §8.6–§8.7 在 Claude Code 上的做法。发送与读取都用 WorkIQ MCP（`mcp__workiq__*`，由用户连接，主会话与例行会话都能调用）；tsw 进程不能调用，所以发送与取数都由会话执行。不用 Teams MCP（`mcp__teams__*`）：T253 时它在主会话中一律返回“Session not found”，同一会话里 WorkIQ 正常；发送与读取用同一套工具，例行会话的 auto 模式规则也只需放行一个读取工具。
+
+| 步骤 | 谁 | 工具 |
+| --- | --- | --- |
+| 发送问题卡片 | 主会话 | `input_relay`（`channel: teams-chat`）返回富文本卡片 `card_html`、同一内容的纯文本 `card`（不发送）与目标 chat；主会话用 `get_session` 取 worker 会话的 `link`，替换卡片中所有 `{worker_link}`；调用 `mcp__workiq__create_entity`，`parentUrl` 在目标为 `self` 时为 `/me/chats/48:notes/messages`（用户本人的自聊），否则为 `/me/chats/<chat>/messages`，`jsonBody` 为 `{"body": {"contentType": "html", "content": <card_html>}}`；再用 `channel_sent` 登记返回的消息：`chat_id` 取 `chatId`（没有时取路径中的 chat），`message_id` 取 `id`，`sender_id` 取 `from.user.id` |
+| 取出答复 | 例行会话 | Teams 例行项：`mcp__workiq__fetch` 逐页先列出、再取候选消息的正文（§6.2），`routine_run` 运行脚本，结果转给主会话 |
+| 读取全文 | 主会话 | 转来的回复标明“正文已截断”时，`mcp__workiq__fetch` 读这一条：`/me/chats/<chat>/messages/<消息 ID>?$select=id,from,body`，按全文判断，登记的原文用全文（T286） |
+| 登记答复、告诉 worker | 主会话 | `input_resolve`、`send_message` |
+
+这些做法写在渠道自己的 skill 中：`render_instructions` 生成 `.claude/skills/teams-chat/SKILL.md`（来源 `tsw/host/teams_chat_skill.md`），包括发送、回复登记（`user_source` 的字段）与读取失败的处理（主会话自己用 WorkIQ 读一次同一个 chat，区分是 chat 读不到还是例行会话的工具或权限有问题；后者让例行会话重试并告诉用户要做的事，前者告诉用户回复暂时收不回来，可以在 worker 会话里直接回答）。问题流程 skill（§6.4）只指向它；例行会话转来的 Teams 回复与读取失败通知也指向它。
+
+卡片按问题内容排版（T256）：纯文本消息（`contentType: text`）在 Teams 中不显示换行，Q-T253-1、Q-T255-1 的卡片都挤成一行。`card_html` 只用 Teams 支持的标签（`<p>`、`<br>`、`<b>`、`<ul>`/`<li>`、`<a>`、`<codeblock><code>`）：
+
+| 部分 | 排版 |
+| --- | --- |
+| 标题 | `[TaskSteward] <任务 ID> <问题编号>`，加粗，单独一段；卡片的文字仍以 `[TaskSteward]` 开头 |
+| 任务、问题、回复方式、worker 会话 | 各自一段，字段名加粗；worker 会话为链接 |
+| 问题正文 | 空行分段，段内换行保留为 `<br>`；`-` / `*` 开头的行为列表；`1.`、`A.`、`1、` 等开头的行（选项）每行一行、保留自己的编号（回复时会说“选 A”，有序列表会重新编号）；` ``` ` 围起的代码为代码块；其余文字转义，不解释 Markdown |
+
+消息正文是 HTML，脚本去掉标签与首尾空白后再看是否以任务 ID 开头；富文本卡片去掉标签后以 `[TaskSteward]` 开头，用户的回复照旧，读取与判断都不变。
+
+## 8. 会话能用到的 skill、MCP 与插件；仓库任务的 worktree
+
+T251 依据实测与官方文档（[skills](https://code.claude.com/docs/en/skills)、[memory](https://code.claude.com/docs/en/memory)、[permissions](https://code.claude.com/docs/en/permissions)、[plugins/loading](https://code.claude.com/docs/en/plugins/loading)）确定，用户 2026-11-09 确认。分发（把 skill、MCP、插件放到哪里）由各仓库的 owner 与用户（对数据目录）自己维护，tsw 不做。
+
+### 8.1 宿主的发现规则
+
+| 来源 | 规则 |
+| --- | --- |
+| 项目 skill（`.claude/skills/`） | 从会话目录逐级向上查找，到 git 仓库根（链接 worktree 为 worktree 根）为止；不在 git 仓库中时一直向上。会话目录之下的子目录中的 skill 在第一次读写其中文件时加载 |
+| `CLAUDE.md`、`.claude/rules/` | 从会话目录逐级向上加载，不受 git 仓库根限制；子目录中的在读写其中文件时加载 |
+| `AGENTS.md` | 由内置插件 `cc-plugin-agents-md` 读取；默认只在会话目录及上级都没有 `CLAUDE.md` 时读。数据目录有 `CLAUDE.md`，所以它之下的会话都不会自动读仓库的 `AGENTS.md`（仓库 `CLAUDE.md` 用 `@AGENTS.md` 引用时除外） |
+| `.mcp.json` | 从会话目录与上级目录发现（实测，不受 git 仓库根限制）；使用前按路径记录批准 |
+| 项目设置（`.claude/settings.json`：`enabledPlugins`、hooks、权限规则等） | 只读会话目录本身，没有上级回退 |
+| 用户范围的 skill、MCP、插件 | 所有会话 |
+
+信任：不在 git 仓库中的目录，信任覆盖其子目录，但不覆盖嵌在其中的 git 仓库；worktree 的信任按其主检出计算。用户实测：在数据目录下 task-steward 的 worktree 中新开会话，没有弹出信任确认（主检出已信任）。主检出从未信任过的仓库，第一次可能弹出，由用户确认一次（或先在 app 中打开该仓库）。
+
+### 8.2 各会话能用到什么
+
+| 来源 | 主会话（数据目录） | 例行会话、没有 worktree 的 worker（执行目录） | 仓库任务的 worker（会话目录 = worktree） |
+| --- | --- | --- | --- |
+| 用户范围的 skill、MCP、插件（含 task-steward） | 可用 | 可用 | 可用 |
+| 数据目录的 skill | 可用 | 可用 | 宿主不加载；任务书列出名称、说明与路径，worker 直接读 SKILL.md |
+| 数据目录的 `CLAUDE.md`、`.mcp.json` | 可用 | 可用 | 可用 |
+| 数据目录的项目插件 | 可用 | 不可用 | 不可用 |
+| 仓库的 skill、`.mcp.json`、项目插件、hooks 与设置、`CLAUDE.md` | — | — | 可用（按仓库自己的配置） |
+| 仓库的 `AGENTS.md` 等指令文件 | — | — | 宿主不自动读；任务书要求读并遵守（§8.3） |
+
+要给所有会话用的插件装在用户范围；数据目录的项目插件只对主会话生效。
+
+### 8.3 tsw 的做法
+
+- **worktree**：任务的仓库在配置中有本机 git 检出（`repositories.<id>.path`）时，`attempt_start`（预启动或派发）在执行目录下创建 `<执行目录>/<仓库 id>` 的 git worktree：分支按 `worktrees.branch_pattern`，基线为 `base_ref`，未配置时取远端默认分支（`<remote>/HEAD`、`<remote>/main` 等第一个存在的）。创建前 `git fetch` 一次（失败不阻止创建，事件记录 `fetched`）。
+  - worktree 在记录事件之前创建：路径上已有别的内容（`worktree_conflict`）或 git 失败（`worktree_unavailable`）时拒绝，不记录事件。同一 attempt 的后续代次沿用已有的 worktree；已有同名分支时用它。
+  - `attempt.start_requested` 的 `worktree` 字段记录路径、分支、基线、是否新建与是否 fetch 成功。执行目录（`workdir`）仍是 `<执行目录>`，报告草稿与可写范围不变。
+  - MCP 返回的 `cwd` 是 worktree，主会话用它创建 worker 会话。
+  - 没有可用检出（未配置 `path`、目录不存在、不是 git 仓库）时不建 worktree，会话在执行目录中启动，任务书写明原因。
+- **任务书的“仓库与 worktree”一节**（仓库已配置时生成）：
+  - 会话目录与分支（或没有 worktree 的原因），不要另建 worktree 或 clone；报告写在执行目录。
+  - 仓库指令文件：`repositories.<id>.instructions`（相对仓库根的路径列表），未配置时默认 `AGENTS.md`、`CLAUDE.md`、`.github/copilot-instructions.md`；worker 开始前完整阅读并遵守，改动子目录前也读该子目录中的同名文件，报告写明读了哪些。各仓库的列表由主会话经 `config_change` 维护。
+  - gh 账号（T279，F-T279-1）：仓库在 GitHub 上（`provider: github`，或没有 `provider` 但写了 `repository`，且 `auth_profile` 指向的账号没有写明别的提供方）时写一行。配置了 `auth_profile`、指向 `provider: github` 的 `accounts` 条目时，写出账号、主机与配置项，要求用 gh 建 PR、合并、查看 CI 或推送之前核对 gh 当前账号，不一致时按 `gh-account` skill 只对一条命令选择账号（skill 已渲染到数据目录时附它的绝对路径）；没有配置时写明按该 skill 第 1 节确定账号。都写“不用 `gh auth switch`”。其他提供方（如 Azure DevOps）不写。
+  - 有 worktree 时列出数据目录的 skill（`orchestrate`、`handle-input`、`task-intake`、`teams-chat` 只用于主会话，不列；`gh-account` 列出，§10.1）。
+- **评审**：`review_run` 在 worktree 中评审，按其中的提交确定范围。
+- 数据目录的 `CLAUDE.md` 不变，不为 `AGENTS.md` 原生加载改写它（用户决定）。
+- `worktrees.root` 在 `claude-code` 宿主中不使用（字段保留）；`worktrees.work_dir` 仍是执行目录的默认位置。
+
+### 8.4 Codex（记录，未实现）
+
+TaskSteward 目前只把 Codex 用作评审器。Codex 从项目根（默认以 `.git` 为标记）到会话目录读取 `AGENTS.md`，`.agents/skills` 的查找也在这个范围内；MCP 只来自 `config.toml`（用户级或受信任项目的 `.codex/config.toml`），不读 `.mcp.json`。以后实现 Codex worker 时，会话目录同样应是仓库 worktree；数据目录的 skill 与 `AGENTS.md` 在 worktree 中同样读不到，需要由任务书列出。
+
+## 9. worker 会话的标题与归档
+
+DN002 §5.8 在 Claude app 上的做法（T272）。
+
+### 9.1 实测（T272，2026-11-11，auto 模式）
+
+在 worker 自建的两个临时会话上测 `mcp__ccd_session_mgmt__set_session_title`（记录在 T272 报告）：
+
+| 情形 | 结果 |
+| --- | --- |
+| 标题由 Claude 设定（`start_session` 的 `title`，或之后 Claude 改过），启动者在用户 turn 中改 | 直接改名，没有确认，auto 分类器没有拦 |
+| 同上，非启动者的会话在由其他会话的消息触发的一轮中改 | 同上 |
+| 同上，定时提示（`<scheduled-task>`）触发的一轮中改 | 同上 |
+| 标题由用户在侧栏手动设定，用户 turn 中改 | 弹出确认卡片：“This replaces the name you gave it yourself.”，用户拒绝后工具返回 “The user doesn't want to proceed with this tool use” |
+| 同上，定时提示触发的一轮中改（会话在 app 中打开着） | 同样弹出确认，这一轮被中断，没有改名；不是工具说明所说的“无人值守时直接拒绝” |
+
+`get_session` / `list_sessions` 只返回标题文字，不返回标题是不是用户设定的。所以 tsw 记下自己让会话使用的标题，改名前比较（DN002 §5.8）。
+
+### 9.2 主会话的做法
+
+- 创建会话：`start_session` 的 `title` 用 `attempt_start` 返回的 `session_title`（预启动带“[待命]”前缀）。
+- 逐项处理 `attention` 的 `sessions`：
+  1. `mcp__ccd_session_mgmt__get_session(session_id)`，原样交给 `session_check`（任务、attempt、`observed`）。不存在或已归档时 tsw 记 `missing`；当前标题已是应有标题时记 `already`；与 tsw 记下的标题不同时记 `user_title`。这三种都不再调用改名工具。
+  2. `session_check` 返回 `rename` 时，`mcp__ccd_session_mgmt__set_session_title(session_id, title)`，再 `session_record`（`action: title`，`ok` 与工具结果原文）。
+  3. 返回 `archive` 时（任务已验收且 `sessions.archive_on_accept`，或任务已归档且 `sessions.archive_on_archive`），`mcp__ccd_session_mgmt__archive_session(session_id, reason)`，`reason` 按清单项的原因写“任务已验收（sessions.archive_on_accept）”或“任务已归档（sessions.archive_on_archive）”，再 `session_record`（`action: archive`）；成功记 `attempt.closed`。
+- 数据目录的允许规则（CC008 §6）加入 `set_session_title`。会话工具由 app 的分类器把关，实测中改 Claude 设定的标题没有被拦，所以不新增 auto 模式规则。
+
+### 9.3 待验证
+
+| 编号 | 假设 | 不成立时 |
+| --- | --- | --- |
+| R6 | auto 模式下主会话按 `sessions.archive_on_accept` / `archive_on_archive` 归档它启动的、已验收或已归档任务的会话不被分类器拦下（工具说明：auto 模式“may approve without asking”；会话正在工作或显示在屏幕上时 app 拒绝） | 拒绝记为 `failed`，`attention` 中标明，由用户决定；必要时在 install hint 的 “TaskSteward Worker Dispatch” 规则中加入按配置归档已验收任务的会话 |
+
+## 10. gh 账号 skill 与受理与写任务书 skill（T279）
+
+用户 2026-11-14 的要求：不包装成 tsw 命令，把“用哪个 gh 账号、怎样只对一条命令生效”直接写进一个只用于 Claude Code、由 `tsw host render` 安装到数据目录的 skill；同时把主会话写任务书的规则从 `orchestrate` 拆成单独的 skill，并在其中要求 code 任务的任务书写明 gh 账号的注意事项。
+
+### 10.1 `gh-account`
+
+**问题**：本机 gh 在同一主机上登录了多个账号（例如 github.com 上的企业托管账号与个人账号），活动账号只有一个，而且是全局的。gh 没有按单条命令指定账号的参数（2.104.0 核实）。T275、T276、T278 的 worker 在个人仓库上建 PR、合并时被企业托管账号拒绝；`gh auth switch` 能绕过，但它改的是全局活动账号，并行的其他会话会在不知情时换了账号（F-T278-1）。
+
+**来源与安装**：来源 `tsw/host/gh_account_skill.md`，`render_instructions` 写到数据目录 `.claude/skills/gh-account/SKILL.md`。主会话、例行会话与不在 git 仓库中的 worker 由宿主加载；仓库 worktree 中的 worker 看不到数据目录 skill（§8.1），由任务书“仓库与 worktree”一节按路径列出（它不在只给主会话的名单中），worker 直接读取。只有 Claude Code 宿主生成它。
+
+**内容**：
+
+1. **确定仓库的账号**，按顺序取第一个有的：任务书写明的账号；配置 `repositories.<仓库>.auth_profile` 指向的 `accounts.<名>`（`host`、`account`，DN003 §3.4；主会话用 `config_show` 查看）；仓库 `owner` 与某个已登录账号同名时取该账号。都没有时问用户，不猜。
+2. **核对当前账号**：`gh auth status --hostname <host>`（只看 `Active account`，不加 `--show-token`）；必要时 `gh api --hostname <host> user --jq .login` 看某条命令实际用的账号（`gh api` 不带 `--hostname` 时总是问 github.com）。当前活动账号就是仓库账号时，直接运行，不加前缀。
+3. **只对一条命令生效的两种做法**：
+
+   | 做法 | 写法 | 优点 | 缺点 |
+   | --- | --- | --- | --- |
+   | A（推荐）`GH_TOKEN` | `GH_TOKEN="$(…)" gh <命令> …`（完整写法见表下） | 不需要准备，任何会话、任何目录都能用；令牌只在这一条命令的子进程环境中，不进入命令行参数与输出；账号未登录时以 401 失败 | 命令里有一次取令牌的命令替换；`gh auth status` 看到的是环境令牌而不是账号；GitHub Enterprise Server 主机要用 `GH_ENTERPRISE_TOKEN` |
+   | B `GH_CONFIG_DIR` | `GH_CONFIG_DIR="<目录>" gh <命令> …` | 命令里不取令牌；对应 DN003 已有的 `accounts.<名>.auth.config_dir` | 需要用户事先准备每个账号的 gh 配置目录（复制 `config.yml` 与 `hosts.yml`，把该主机的 `user` 改为该账号；令牌仍在系统钥匙串中），目录在数据目录之外、worker 的可写范围之外；令牌以明文存放在 `hosts.yml` 的机器上复制会多一份凭据；登录状态变化后副本可能过时 |
+
+   A 的完整写法：`GH_TOKEN="$(gh auth token --hostname <host> --user <账号> || echo none)" gh <命令> …`。选定 A 为推荐做法：它不要求任何准备，也不在执行目录或数据目录写入任何文件（用户 2026-11-14：“用 gh token 然后配 env 然后执行”）；账号配置中写了 `auth.config_dir` 时可以用 B。命令替换必须放在双引号里。`|| echo none` 不能省（T279 评审 F1，实测）：账号没有登录时 `gh auth token` 失败、替换为空，gh 把空的 `GH_TOKEN` 当作没有设置，回退到活动账号执行；有了它，gh 以无效令牌请求，401 失败。每条需要该账号的 gh 命令各自带前缀，不 `export`。写操作之前先核对一次：带同样前缀的 `gh api --hostname <host> user --jq .login` 必须恰好是该账号，否则停下、请用户自己登录该账号。
+4. **git push 用哪个账号**：git 不经 gh 认证，而是用自己的凭据助手（本机为 Git Credential Manager，github.com 上存有多个账号时按用户名选择）。推送时用 `git -c credential.username=<账号> push …` 只对这一条命令指定账号；远端 URL 已带用户名时以它为准。凭据助手是 `gh auth git-credential` 时，同样用做法 A 的前缀。推送被拒并显示别的账号名时，就是账号不对。T279 实测：同一条 `git push --dry-run`，`credential.username=flyrobin620` 时通过，`credential.username` 为企业托管账号时被拒（“Permission … denied to <企业账号>”，403）；`GH_TOKEN` 前缀下 `gh api user` 返回 flyrobin620，不加前缀时返回活动账号。
+5. **禁止**：
+   - `gh auth switch`、`gh auth login` / `logout`、`gh config set`（全局，影响并行会话）；`git config --global` 改凭据设置，或把用户名、令牌写进远端 URL；
+   - 输出、记录或保存令牌：`gh auth token` 单独运行、`--show-token`、`echo $GH_TOKEN`、`export GH_TOKEN`、把令牌写进文件、命令行参数（如 `-H "Authorization: …"`）、URL、报告或提交；
+   - 在执行目录或 worktree 写 `.claude/settings*.json`、`.env` 一类设置或环境文件来固定账号（app 会对每个新任务再要求信任，CC001 §3、CC008 §6）。
+6. **合并**：`GH_TOKEN="$(gh auth token --hostname github.com --user <账号> || echo none)" gh pr merge <编号> -R github.com/<owner>/<name> --squash` 单独运行，不与其他命令用 `;`、`&&`、`|` 连接，不加 `cd` 前缀；这是 worker 说明与 auto 模式规则“TaskSteward Worker Merge”认可的唯一前缀（CC008 §6）。
+
+**账号配置**：给仓库写 `auth_profile` 是权限类配置（DN003 §7.2），由主会话按用户原话 `config_change`；skill 只读取，不修改配置。
+
+### 10.2 `task-intake`（受理与写任务书）
+
+**来源与安装**：来源 `tsw/host/task_intake_skill.md`，`render_instructions` 写到数据目录 `.claude/skills/task-intake/SKILL.md`；只用于主会话，任务书不列出它（§8.3）。
+
+**为什么单独成 skill**：任务书由两部分组成：tsw 生成的标题、仓库、交付、live、“仓库与 worktree”与 resume 资料，以及主会话写的目标与验收。后者是任务唯一可靠的记录，原来散在 `orchestrate` 的“检索历史”“受理与规划”里，主会话实际遵循的约定（目标以用户原话开头等）没有写下来。拆出后 `orchestrate` 只保留调度流程，在受理、写目标与验收、写回需求变更时引用它，不重复内容。
+
+**为什么仍放在 Claude Code 宿主中渲染**：规则本身只涉及 tsw 工具，与宿主无关；但主会话的说明是按宿主分发的（Claude Code 读项目 skill），与 `orchestrate` 一样由宿主集成生成。其中引用 `gh-account` 的一条只在 Claude Code 上成立。以后增加别的宿主时，由该宿主的集成以自己的方式分发同一份来源，并换掉宿主专有的引用。
+
+**内容**：
+
+1. 检索历史（原 `orchestrate`“检索历史”全文）与受理前的查重、依赖、既有决定。
+   长期偏好不靠主题词搜索（DN007 §6.1）：受理时 `context_decisions` 以 `kind: standing`、`scope: repo`（项目任务加 `project`）、不写 `query` 列全能到达本任务的偏好并翻完分页，逐条判断；派发与续用前再列一次，目标中没写的适用偏好把编号放进 `read_set`，由 tsw 校验后写进任务书开头的“派发时补充的适用偏好”（不用 `task_update` 改目标）。skill 只写这些步骤，不写任何具体的偏好；偏好从账本读取，记录后下一次受理即可用，不需要重新 render。偏好的管理（记录、替代、撤销与 `tsw preference` 命令，DN007 §6.2）写在 `orchestrate` 的“配置与维护”，task-intake 只引用。
+2. 登记：`task_register` 的标题（`[仓库或项目简称] 摘要`）、类型、目标与验收；随后 `task_summary`（`stage: intake`）写 4–8 个具体关键词（模块、接口、现象、方案名，不写泛词）；有疑问时 `intake_question`。
+3. 目标的写法：
+   - 以用户原话开头：日期、在哪个会话，按顺序逐条引用；主会话的答复与用户对它的回应也按顺序写入。
+   - “背景（主会话核实）”：主会话核实过的事实、相关任务与出处、既有决定、约束；其中“适用的用户偏好”逐条写编号、范围与原文，没有时写“无”（tsw 生成任务书时核对这些编号，DN007 §6.1）。
+   - “要做的”：编号的工作项。
+   - “并行”：同时执行、可能改到相同文件或资源的任务，没有时写“无”。
+   - 设计确认：会改变已定义行为、需要先改设计的，写明“设计按仓库规则需用户确认后再实现与合并”。
+   - 用户授权：只写用户说过的授权，附原话与范围（例如“用户授权过夜进行，期间设计与合并无需再确认”）；不代为授权。
+4. 验收：每条可以逐项核对（有对象、有证据），不写“质量好”一类无法核对的话；交付方式与 live 规则由 tsw 写在任务书开头，不重复。
+5. 交流语言：用户偏好的语言在配置 `control.language`，由 tsw 写进任务书（DN003 §3.5a），主会话不在目标中重复；用户说以后都用别的语言时按原话 `config_change`，只是某个任务要用别的语言时写进该任务的目标。
+6. 推荐读取集合：检索中入围、worker 需要参考的任务，在 `task_dispatch` / `attempt_continue` 的 `read_set` 中给出，并在背景中写明理由（DN007 §7.2）。
+7. 写回：之后的决定影响已登记、尚未完成的任务时，立即 `task_update`（附用户来源），已有会话时告诉它重读任务书（原 `orchestrate` 的两条）。任务在等用户回答 worker 的问题时，先判断用户的话是否回答了问题：是回答就先 `input_resolve` 再 `task_update`，与问题无关时只 `task_update`、问题继续等待，拿不准时问用户（T292，DN002 §5.1）。
+8. 按任务类型的附加说明：
+   - code：写明涉及的仓库规则（需要用户确认的改动、live 场景）。gh 账号的注意事项由 tsw 写在任务书的“仓库与 worktree”一节（§8.3，按 `auth_profile`），主会话不再手写；仓库没有配置 `auth_profile` 时，把建议的账号配置告诉用户，按用户原话 `config_change`。
+   - design：产出的设计文档位置、需要用户确认的范围。
+   - research：结论的形式、来源要求，不改代码。
+
+## 11. 自我更新：载入时机与生效方式（T283）
+
+DN006 §9.8 的原则在 Claude Code（Windows 上的 Claude app）中的做法。依据是用户与主会话 2026-11-15 的实测（T282 合并后的那次更新）与官方文档（[mcp](https://code.claude.com/docs/en/mcp)、[plugins/loading](https://code.claude.com/docs/en/plugins/loading)、[plugins/cli-reference](https://code.claude.com/docs/en/plugins/cli-reference)、[skills](https://code.claude.com/docs/en/skills)、[hooks](https://code.claude.com/docs/en/hooks)、[settings](https://code.claude.com/docs/en/settings)）。
+
+### 11.1 各类内容何时载入
+
+| 内容 | 何时载入 | 拉取 / render 后怎样生效 | 依据 |
+| --- | --- | --- | --- |
+| `tsw` 命令行 | 每次新起进程，从产品仓库导入（可编辑安装，DN006 §9.1） | 拉取后立即生效 | 设计 |
+| hooks 的逻辑（`tsw guard`） | 每次 hook 新起进程，经插件副本中的启动器从产品仓库导入 | 拉取后立即生效 | 设计；实测 |
+| hooks 的事件与匹配（插件 `hooks/hooks.json`）、启动器 `bin/tsw_launch.py`、MCP 注册（`.mcp.json`） | 属于插件副本；会话启动时从它的 `CLAUDE_PLUGIN_ROOT` 读取 | render 更新副本（`claude plugin update`）后：新会话、重启 app；hooks 也可由用户输入 `/reload-plugins` | 官方 plugins/loading；实测 `/reload-plugins` 输出 “Reloaded: 2 plugins · 10 skills · 6 agents · 4 hooks · 0 plugin LSP servers” |
+| tsw MCP server | 会话启动时启动的常驻进程（`tsw_launch.py mcp`），从插件副本启动、从产品仓库导入；之后的 `git pull` 改不到它 | 只有新会话或重启 app。`/reload-plugins` 不换 MCP（输出中没有 MCP 一项，进程仍是旧版本，新工具不出现）；`/mcp` 的 Reconnect 只能由用户在交互界面操作，app 中未验证 | 实测：主会话的 MCP 曾停在 11-12 的提交而仓库已更新；重启 app 后只剩一个用新提交的 tsw MCP 进程，T272 的 `session_check` 等工具出现；不重启 app 新建的会话直接用最新安装的插件（T282 worker 的 MCP 在 render 4 分钟后启动，用的是新副本） |
+| 数据目录的 skill（`.claude/skills/*`） | 宿主监视 skill 目录，改动在会话内生效；已调用的 skill 正文留在对话中，不会重读 | render 后由主会话用 Read 重读已调用过的 SKILL.md（无影响） | 官方 skills；实测 `/reload-skills` 没有增减 |
+| 数据目录的 `CLAUDE.md` | 会话开始、`/clear`、`/compact` 时读取 | 按 `update.instructions`：`compact` / `clear`，或随重新加载 | 官方 memory、hooks（`/clear` 以 `source: clear` 触发 SessionStart） |
+| 数据目录的 `.claude/settings.json`（允许规则） | 宿主自动重新载入设置文件 | render 后即生效 | 官方 settings |
+| 用户设置中的 auto 模式规则 | 用户编辑用户设置；宿主自动重新载入（官方未单独说明 `autoMode`） | 用户按 `tsw host install-hint` 更新 | 官方 settings |
+| worker 说明 `roles/worker.md` | 新 worker 会话的 prompt 开头 | render 后新 worker 直接用；已有 worker 由 hook 在下一轮提示重读（§2） | 设计 |
+| Dashboard 常驻服务 | 服务进程启动时导入 | `tsw dashboard restart`（§12） | 设计 |
+
+### 11.2 生效方式与谁来做
+
+主会话不能输入斜杠命令（`/reload-plugins`、`/compact`、`/clear`、`/mcp` 都只能由用户在输入框中输入），也不能重启 app 或自己。
+
+| 方式（DN003 §3.6） | 主会话能做吗 | 做法 | 注意 |
+| --- | --- | --- | --- |
+| `restart_host`（重启 app） | 不能，请用户做 | 主会话先报告执行中的会话，再在 `wrap_up` 中请用户重启 app；重启后用户在主会话中发一句话，主会话继续验证 | 重启 app 结束所有会话的 MCP 进程，打断各会话正在进行的一轮（实测）；重启后会话照常存在，下一轮用新的 MCP。例行会话的定时任务可能失效，按 `stale` 恢复（DN006 §8.9.6） |
+| `new_session`（接班主会话） | 能 | §11.4 | 已有 worker 保持旧 MCP 直到结束；旧主会话只读 |
+| `compact` | 不能，请用户做 | 更新的最后一步，主会话在 `wrap_up` 中请用户在本会话输入 `/compact` | 只重新读 `CLAUDE.md`，MCP 不变 |
+| `clear` | 能 | 记账（`update_record`）之后，本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`，app 在这一轮结束后清空 | app 中会话 ID 不变（例行会话的上下文清空已依赖这一点），租约仍归本会话；清空后的第一轮主会话按 SessionStart 的摘要继续 |
+| `/reload-plugins` | 不能 | 不作为生效方式：它只换 hooks 不换 MCP，`update-plan` 又以 MCP 启动时的提交核对是否已重新加载，用它之后验证无法通过（PR 评审意见）。只有用户自己想先让 hooks 生效时可以输入，之后仍按 `update.reload` 处理 | 不换 MCP |
+
+### 11.3 更新 skill 与 `update-plan`
+
+- **更新 skill**：来源 `tsw/host/update_skill.md`，`tsw host render` 安装为数据目录的 `.claude/skills/tsw-update/SKILL.md`（只用于主会话，任务书不列出）。orchestrate skill 的“自我更新”一节只写触发条件并指向它，不重复步骤。步骤：确认产品仓库干净且在主分支 → `git fetch` → 用 `gh run list --commit <目标提交>` 确认主分支 CI 成功（gh 账号按 `gh-account` skill）→ `git merge --ff-only` → **读产品仓库中新版本的 `tsw/host/update_skill.md`，按它继续** → `whoami` 取 `runtime.commit` → `tsw host update-plan --running <它>` → 先做无影响的动作 → 报告执行中的会话，按配置做有影响的动作 → 生效后再运行 `update-plan` 验证 → `update_record` 记账 → 告诉用户结果与需要用户做的事。
+- **`tsw host update-plan`**（只读，任何会话都可运行）：`--to`（默认产品仓库的 `HEAD`）、`--from`（明确的起点），或 `--running <提交>`（可重复，主会话运行时的提交）；没有 `--from` 时起点取 `--running` 与 `tsw-home.json` 的 `rendered.commit` 中最旧的一个（`git merge-base`），都没有时用插件副本的版本（Claude Code 以来源的提交作版本）。`--running` 传 `whoami` 的 `runtime.commit` 与 `runtime.plugin_version`（会话实际加载的插件副本版本；先拉取、再用旧副本启动会话、最后 render 时，只有它还是旧的，评审 T283 r1 F4），不是提交的写在 `unresolved` 中。输出：起点与终点、起点的来源、改动的文件及其类别、按顺序排列的动作（每项写明影响、谁来做、宿主中的做法）、包含的任务及其报告、当前状态（render 记录、插件副本是否与 `plugin/` 一致、Dashboard 服务、用户设置中缺少或过期的 auto 模式规则、投影是否可读）、执行中的会话（活动的 worker attempt、例行会话），以及 `pending`：状态可核对、还没有做完的动作；`manual`：没有状态可核对、由主会话确认的动作（重读 skill、`compact`、`clear`）。验证时再运行一次，`pending` 应为空。投影版本不匹配、账本暂不可读时仍输出计划，`ledger_rebuild` 排在最前，会话列表标为不可用。
+- 类别规则（`tsw/host/update_plan.py`，有单元测试）：`docs/**`、`tests/**`、`tools/**`、`.github/**`、根目录的 Markdown 与 HTML → `docs`；`tsw/**`（不含 `*_skill.md`）→ `runtime` 与 `dashboard`（`runtime` 中只有 MCP server 载入的文件需要 `reload`：命令行专用的 `tsw/cli.py`、`tsw/__main__.py`、`tsw/host/guard.py`、`tsw/host/status_app.py`、`tsw/host/update_plan.py`、`tsw/host/dashboard_service.py` 拉取后即生效，这份清单由测试核对 MCP server 确实不导入它们）；`tsw/host/*_skill.md`、`plugin/roles/**`、`tsw/host/claude_code.py`、`tsw/roles.py` → `rendered`；起点与终点生成的 `CLAUDE.md` 模板不同 → `instructions`（`tsw/host/claude_code.py` 除模板外没有变化时只算 `rendered` 与 `instructions`，不算 `runtime`，于是按 `update.instructions` 处理）；`plugin/**`（不含 `plugin/roles/**`）→ `plugin`；`pyproject.toml` → `install`；`tsw/projection.py` 中 `REDUCER_VERSION` 改变 → `projection`；`tsw/context/index.py` 中 `SCHEMA_VERSION` 改变 → `index`。`host_rules` 不看改动，直接比较用户设置（`~/.claude/settings.json`，`CLAUDE_CONFIG_DIR` 优先）中的 `autoMode.allow` 与当前 install hint 的规则文本。
+- **主会话运行时的版本**：MCP server 启动时记下产品仓库的 `HEAD` 与 `CLAUDE_PLUGIN_ROOT` 的目录名（插件副本版本），`whoami` 返回 `runtime`（DN006 §9.9）。本版本之前启动的 MCP 没有这个字段，第一次更新时起点取 render 记录或插件副本版本。
+
+### 11.4 接班主会话（`update.reload: new_session`）
+
+此前主会话为自己建接班会话（`start_session`，`cwd` 为数据目录）被 CC-B9 拒绝（实测）：会话名不是已落账的 attempt。T283 起 CC-B9 对 `cwd` 就是数据目录本身（不是其下的执行目录）的 `start_session` 例外放行（CC008 §3）：在数据目录中打开、没有绑定的会话按角色解析就是主会话，调度租约保证同一时间只有一个主会话写入（DN001 §6.4），不需要 attempt。步骤（更新 skill 中）：
+
+1. `start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为数据目录（`whoami` 的 `cwd`，磁盘上的写法）、`use_worktree: false`、`name` 为 `tsw-main-<日期时间>`、`title` 为“TaskSteward 主会话”、`model` / `effort` / `permission_mode` 取 `roles.orchestrator`，`prompt` 写明“你是接班的 TaskSteward 主会话（自我更新，前任 <会话 ID>）。先 whoami 与 lease_status；前任让出租约后会发消息给你，届时 lease_acquire，再按 tsw-update skill 的验证与记录继续”。
+2. `mcp__ccd_session_mgmt__detach_session` 把它从本会话名下分离：否则归档旧主会话会连带归档它（§6 例行会话同理）。
+3. `lease_release` 让出租约，再用 `send_message` 告诉新会话“租约已让出”。新会话的 SessionStart 发生在让出之前，只读运行；收到消息后 `lease_acquire`。
+4. 告诉用户之后在新会话中继续（附会话链接），旧会话只读、可以归档；旧主会话启动的 worker 照常把唤醒消息发给持租的新会话（DN001 §6.4）。
+
+待 live 验证：auto 模式分类器是否放行这次 `start_session`（用户在这一轮要求了更新；被拦时由用户重试，或按 CC008 §6 在 install hint 中加一条规则）。
+
+## 12. Dashboard 常驻服务（Windows，T283）
+
+DN006 §8.10“常驻服务”在 Windows 上的做法。其他操作系统暂不支持安装（`install` 报告不支持，用户照旧在终端运行 `tsw dashboard`）。
+
+- **登记**：`tsw dashboard install`（终端；会话中拒绝）用 `schtasks /Create /XML` 登记任务 `TaskSteward Dashboard (<键>)`，键为数据目录规范路径的 SHA-256 前 8 位（一台机器多个数据目录互不冲突）。任务 XML：登录触发器限当前用户（`<USERDOMAIN>\<USERNAME>`），主体 `InteractiveToken`、`LeastPrivilege`；不限运行时长（`PT0S`）、`IgnoreNew`（不重复启动）、使用电池时也运行、失败后每分钟重试最多 3 次；动作为 `pythonw.exe -m tsw --home <数据目录> dashboard service`，工作目录为产品仓库（`pythonw.exe` 取当前 Python 同目录的，没有窗口）。实测（T283，2026-11-15）：非提升权限的用户可以用这样的 XML 登记本人的登录触发任务（登记后立即删除）。登记后立即 `schtasks /Run`，等 `/healthz` 应答后输出地址，并提示运行 `tsw dashboard open`。
+- **服务**：`tsw dashboard service` 只供计划任务调用（会话中拒绝）：读令牌文件（不存在时退出并写日志），监听 `127.0.0.1:<dashboard.port>`，cookie 加 `Max-Age`（400 天），其余与终端运行的 Dashboard 相同；输出写日志 `%LOCALAPPDATA%\TaskSteward\dashboard\<键>.log`（每次启动覆盖，只记启动、端口与错误）。
+- **令牌**：只存摘要。`install` 在 `%LOCALAPPDATA%\TaskSteward\tsw-dashboard-secret\<键>.json`（数据目录之外；用户配置目录的默认权限只允许用户本人与系统）建立登录记录（重装时沿用，已登录的浏览器不失效）；每次 `tsw dashboard open`（终端；会话中拒绝）生成一个新令牌，只把它的 SHA-256 加进记录（保留最近 8 个），用浏览器打开 `http://127.0.0.1:<端口>/?token=…`，令牌不写进任何文件或输出。服务每次核对时读记录，摘要在其中即可登录；cookie 保存的就是这个浏览器自己的令牌，页面按钮用它。之后地址去掉令牌，PWA 从 `http://127.0.0.1:<端口>/` 安装。会话读不到能登录的东西：命令行在会话中拒绝 `install` / `open` / `uninstall` / `service`；记录中只有摘要（Claude Code 的 PreToolUse hook 只挂在编辑类工具与 Bash 等上，Read、Grep、Glob 不经过 hook，所以不能只靠 hook 挡住读取，评审 T283 r1 F1）；CC008 CC-B12 另外拒绝会话的编辑类工具与命令触及这个目录，防止会话改写记录。
+- **重启**：`tsw dashboard restart`：`schtasks /End` 后 `/Run`，等 `/healthz` 报告的提交等于产品仓库 `HEAD`（最多 30 秒）。主会话与终端可以运行（与 `host render` 相同的判断，CC008 §5.7），其他会话拒绝。没有安装时报告“未安装”，不报错。
+- **状态**：`tsw dashboard status`（只读，任何会话）：是否登记（`schtasks /Query`）、`/healthz` 是否应答、端口、服务载入的提交是否等于 `HEAD`、日志路径。`install`、`status`、`restart` 都核对应答中的 `home_key`：端口上是另一个数据目录的服务时报告冲突（`conflict`），不算在运行。`/healthz` 不需要令牌，照常核对 `Host`，只返回 `{"service": "tsw-dashboard", "commit", "home_key", "started_at"}`。
+- **卸载**：`tsw dashboard uninstall`（终端）：`/End`、`/Delete /F`，删除令牌文件。
+- **测试**：任务 XML、命令行参数与令牌文件的读写有 unit / component 测试；`schtasks` 是本仓库之外的平台，测试中替换为记录参数的替身（模拟证据）；真实登记由用户在终端运行 `install` 验证（live，见报告）。
+
+## 13. workdeck 插件 manifest（T309）
+
+DN006 §8.10“workdeck 插件 manifest”在本宿主与 Windows 上的做法。
+
+- **解释器**：`spawn.command` 是生成 manifest 的进程所用解释器的完整路径；它是 `pythonw.exe`（常驻服务）时换成同目录的 `python.exe`：workdeck 要读启动输出中的地址，`pythonw.exe` 没有控制台输出。workdeck daemon 运行在无窗口的控制台下（workdeck DN011 §1），它启动的 `python.exe` 不弹窗口。`tsw setup` 的步骤用安装记录中的解释器（与垫片相同）。
+- **命令形式**：`<python.exe> -X utf8 -m tsw status serve --no-open --home <数据目录>`，工作目录为产品检出（与常驻服务的计划任务相同，CC006 §12）；不用 PATH 中的 `tsw` 垫片，因为 `tsw.cmd` 只能经 `cmd.exe` 运行，而 workdeck 不经 shell 启动 `spawn.command`。
+- **编码与环境**：输出经管道时 Python 默认按系统代码页编码，中文提示会出错，所以带 `-X utf8`（与垫片相同，CC009 §8）；不加环境变量，数据目录由 `--home` 给出。
+- **宿主会话之外**：`tsw status serve` 在宿主会话的环境中拒绝运行（DN006 §8.10 第 2 条）。workdeck daemon 由它自己的登录计划任务启动，不在 Claude Code 会话的环境中；用户若在会话中前台启动 daemon，插件启动会被拒绝，门户显示插件的错误。
+- **`/.well-known/workdeck-plugin.json`**：生成时用 Dashboard 进程自己的解释器、产品检出与数据目录，所以常驻服务（`pythonw.exe`）给出的与终端运行的 Dashboard 给出的相同。
+- **`tsw setup` 的步骤**：`workdeck` 命令按 PATH 查找（npm 全局安装的是 `workdeck.cmd`）；manifest 写到临时文件后运行 `workdeck plugin add <文件> --replace`，结束后删除临时文件。workdeck 先备份它的配置再写入，并重启它的 daemon。

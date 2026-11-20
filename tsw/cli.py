@@ -9,15 +9,58 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import webbrowser
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from tsw import __version__
+from tsw import __version__, direct, lease, preferences
+from tsw.config import DEFAULTS, EffectiveConfig, lease_minutes, load_config
+from tsw.context import ContextService
 from tsw.errors import EXIT_CODES, ErrorCode, TswError
-from tsw.home import Home, init_home, open_home, resolve_home
+from tsw.events import utc_now
+from tsw.home import (
+    Home,
+    claim_sessions,
+    init_home,
+    locate_home,
+    open_home,
+    record_product_repo,
+    record_render,
+    remember_home,
+    resolve_home,
+)
+from tsw.host import dashboard_service, workdeck
+from tsw.host.claude_code import install_hint, render_instructions
+from tsw.host.guard import run as run_guard
+from tsw.host.identity import (
+    HOST_CLI_COMMANDS,
+    MAIN_SESSION_CLI_COMMANDS,
+    SESSION_ENV,
+    SETUP_CLI_COMMANDS,
+    Identity,
+)
+from tsw.host.identity import resolve as resolve_identity
+from tsw.host.mcp import serve
+from tsw.host.plugin_copy import RENDER_RESTART
+from tsw.host.plugin_copy import update as update_plugin
+from tsw.host.status_app import serve_hosted, serve_status
+from tsw.host.update_plan import build as build_update_plan
+from tsw.host.version import head as product_head
+from tsw.host.version import render_record
+from tsw.importer import renumber
+from tsw.importer.orchestrator_agent import run_import as run_import_orchestrator_agent
 from tsw.ledger import Ledger
+from tsw.machine import candidates as candidates_mod
+from tsw.machine.base import REGISTRY, Caller
+from tsw.machine.config_tools import CONFIG_TOOLS
+from tsw.machine.runner import run_tool
+from tsw.review.run import run_round
+from tsw.setup import questions as setup_questions
+from tsw.setup import steps as setup_steps
+from tsw.setup.record import answers_path, save_answers
 from tsw.storage.fs import FsStorage, restore
 from tsw.tasks import KINDS, TaskSpec, list_tasks, note, register, task_row
 
@@ -32,19 +75,55 @@ def _home(args: argparse.Namespace) -> Home:
     return open_home(root)
 
 
+def _ledger_for(home: Home, config: EffectiveConfig, machine: str | None = None) -> Ledger:
+    storage = FsStorage(home, segment_max_bytes=int(config.get("ledger.segment_max_mb")) << 20)
+    return Ledger(
+        home,
+        storage,
+        checkpoint_every=int(config.get("ledger.checkpoint_every")),
+        machine=machine,
+    )
+
+
 def _ledger(args: argparse.Namespace) -> Ledger:
-    return Ledger(_home(args))
+    """A ledger for read commands; an invalid configuration falls back to defaults for reads."""
+    home = _home(args)
+    config = load_config(home)
+    return _ledger_for(home, config) if config.valid else Ledger(home)
+
+
+def _writer(args: argparse.Namespace) -> tuple[Ledger, EffectiveConfig]:
+    """A ledger for write commands: refused while the configuration is invalid (DN003 §4)."""
+    home = _home(args)
+    config = load_config(home).require_valid()
+    return _ledger_for(home, config, getattr(args, "machine", None)), config
 
 
 def _cmd_init(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)
     home, created = init_home(root)
-    return {"home": str(home.root), "created": created}
+    record_product_repo(home, REPO_ROOT)
+    claimed = bool(getattr(args, "claim_sessions", False))
+    if claimed:
+        claim_sessions(home)
+    remembered = remember_home(REPO_ROOT, home.root) if args.remember else None
+    return {
+        "home": str(home.root),
+        "created": created,
+        "product_repo": str(REPO_ROOT),
+        **({"claim_sessions": True} if claimed else {}),
+        **({"remembered": str(remembered)} if remembered else {}),
+    }
 
 
 def _cmd_home(args: argparse.Namespace) -> dict[str, Any]:
-    root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)
-    return {"home": str(root), "initialized": (root / "tsw-home.json").is_file()}
+    root, found_by = (Path(args.home), "--home") if args.home else locate_home(repo_root=REPO_ROOT)
+    return {
+        "home": str(root),
+        "initialized": (root / "tsw-home.json").is_file(),
+        "source": found_by,
+        "product_repo": str(REPO_ROOT),
+    }
 
 
 def _cmd_task_register(args: argparse.Namespace) -> dict[str, Any]:
@@ -56,7 +135,7 @@ def _cmd_task_register(args: argparse.Namespace) -> dict[str, Any]:
         goal=args.goal,
         acceptance=args.acceptance or [],
     )
-    result = _ledger(args).commit(register(spec, actor=CLI_ACTOR, command_id=args.command_id))
+    result = _writer(args)[0].commit(register(spec, actor=CLI_ACTOR, command_id=args.command_id))
     event = result.events[0]
     return {"task_id": event.task_id, "sequence": event.sequence, "duplicate": result.duplicate}
 
@@ -69,12 +148,275 @@ def _cmd_task_note(args: argparse.Namespace) -> dict[str, Any]:
         expected_version=args.expected_version,
         command_id=args.command_id,
     )
-    result = _ledger(args).commit(command)
+    result = _writer(args)[0].commit(command)
     return {
         "task_id": args.task_id,
         "sequence": result.last_sequence,
         "duplicate": result.duplicate,
     }
+
+
+def _confirm(args: argparse.Namespace, prompt: str) -> None:
+    """The user confirms a direct action: interactively, or with ``--yes``."""
+    if args.yes:
+        return
+    if not sys.stdin.isatty():
+        raise TswError(ErrorCode.REJECTED, "非交互运行时须加 --yes 确认", reason="not_confirmed")
+    try:
+        answer = input(f"{prompt} [y/N] ").strip().lower()
+    except EOFError:  # stdin closed: nobody can confirm
+        answer = ""
+    if answer not in ("y", "yes"):
+        raise TswError(ErrorCode.REJECTED, "已取消，没有写入", reason="not_confirmed")
+
+
+def _cli_ref() -> str:
+    return f"cli:{utc_now()}:{os.getpid()}"
+
+
+def _cmd_task_direct(args: argparse.Namespace) -> dict[str, Any]:
+    action = str(args.task_command)
+    label = direct.ACTIONS[action][2]
+    direct.require_outside_session(os.environ, f"tsw task {action} ")
+    ledger, config = _writer(args)
+    with ledger.view() as conn:
+        row = task_row(conn, args.task_id)
+    revision = args.revision if args.revision is not None else int(row["revision"])
+    _confirm(
+        args,
+        f"{label} {args.task_id}「{row['title']}」（状态 {row['status']}，revision {revision}）？",
+    )
+    words = getattr(args, "note", None) or getattr(args, "reason", None)
+    text = f"tsw task {action} {args.task_id}" + (f"：{words}" if words else "")
+    return direct.perform(
+        ledger,
+        config,
+        action,
+        args.task_id,
+        channel="user-cli",
+        message_ref=_cli_ref(),
+        text=text,
+        revision=revision,
+        reason=getattr(args, "reason", None),
+    )
+
+
+def _cmd_preference_list(args: argparse.Namespace) -> dict[str, Any]:
+    """The standing preferences (DN007 §6.2): those in force, or with ``--all`` every one; with
+    ``--repo`` / ``--project`` only those reaching that scope."""
+    where = (
+        (str(args.repo or ""), {p for p in (args.repo, args.project) if p})
+        if args.repo or args.project
+        else None
+    )
+    if args.candidates:
+        # Preference candidates collected when tasks ended (DN007 §6.3): those waiting for the
+        # user, or with --all every one.
+        with _ledger(args).view() as conn:
+            pending = candidates_mod.every(conn)
+        if where is not None:
+            pending = [c for c in pending if preferences.applies(str(c["scope"]), where)]
+        listed = pending if args.all else [c for c in pending if c["status"] == "open"]
+        return {"candidates": listed, "total": len(listed), "all": bool(args.all)}
+    with _ledger(args).view() as conn:
+        found = preferences.load(conn, where)
+    shown = found if args.all else [p for p in found if preferences.in_force(p)]
+    return {"preferences": shown, "total": len(shown), "all": bool(args.all)}
+
+
+def _cmd_preference_record(args: argparse.Namespace) -> dict[str, Any]:
+    direct.require_outside_session(os.environ, "tsw preference record ")
+    ledger, config = _writer(args)
+    supersedes = list(args.supersedes or [])
+    scope, topic, words = args.scope, args.topic, args.text
+    payload: dict[str, Any] = {"supersedes": supersedes}
+    if args.candidate:
+        # Confirming a candidate (DN007 §6.3): its words, suggested scope and topic by default.
+        with ledger.view() as conn:
+            found = candidates_mod.open_candidate(conn, args.candidate)
+        scope = scope or str(found["scope"])
+        topic = topic or str(found["topic"])
+        words = words or str(found["quote"])
+        payload["candidate"] = args.candidate
+    missing = [f"--{k}" for k, v in (("scope", scope), ("topic", topic), ("text", words)) if not v]
+    if missing:
+        raise TswError(
+            ErrorCode.REJECTED,
+            "缺少 " + "、".join(missing) + "（或用 --candidate 确认一条偏好候选）",
+            reason="invalid_input",
+        )
+    replaces = f"，替代 {'、'.join(supersedes)}" if supersedes else ""
+    of = f"（确认候选 {args.candidate}）" if args.candidate else ""
+    _confirm(args, f"记录长期偏好{of}（{scope}{replaces}）「{topic}」：{words}？")
+    return direct.preference(
+        ledger,
+        config,
+        "record",
+        {**payload, "topic": topic, "text": words, "scope": scope},
+        target=["preference", scope, "standing"],
+        channel="user-cli",
+        message_ref=_cli_ref(),
+        text=words,
+    )
+
+
+def _cmd_preference_dismiss(args: argparse.Namespace) -> dict[str, Any]:
+    direct.require_outside_session(os.environ, "tsw preference dismiss ")
+    ledger, config = _writer(args)
+    with ledger.view() as conn:
+        found = candidates_mod.open_candidate(conn, args.ref)
+    _confirm(
+        args,
+        f"不记偏好候选 {args.ref}（{found['task_id']}，{found['scope']}）「{found['topic']}」："
+        f"{found['quote']}，理由：{args.reason}？",
+    )
+    return direct.preference(
+        ledger,
+        config,
+        "dismiss",
+        {"candidate": args.ref, "reason": args.reason},
+        target=["preference", args.ref, "dismiss"],
+        channel="user-cli",
+        message_ref=_cli_ref(),
+        text=args.reason,
+    )
+
+
+def _cmd_preference_revoke(args: argparse.Namespace) -> dict[str, Any]:
+    direct.require_outside_session(os.environ, "tsw preference revoke ")
+    ledger, config = _writer(args)
+    with ledger.view() as conn:
+        row = conn.execute(
+            "SELECT scope, topic, text FROM user_decisions WHERE ref = ?", (args.ref,)
+        ).fetchone()
+    if row is None:
+        raise TswError(ErrorCode.REJECTED, "偏好不存在", reason="invalid_input", ref=args.ref)
+    _confirm(
+        args,
+        f"撤销长期偏好 {args.ref}（{row['scope']}）「{row['topic']}」：{row['text']}"
+        f"，理由：{args.reason}？",
+    )
+    return direct.preference(
+        ledger,
+        config,
+        "revoke",
+        {"ref": args.ref, "reason": args.reason},
+        target=["preference", args.ref, "revoke"],
+        channel="user-cli",
+        message_ref=_cli_ref(),
+        text=args.reason,
+    )
+
+
+def _cmd_status_serve(args: argparse.Namespace) -> dict[str, Any]:
+    direct.require_outside_session(os.environ, "tsw status serve ")
+    serve_status(_home(args), port=args.port, open_browser=not args.no_open)
+    return {"_silent": True}
+
+
+def _dashboard_port(home: Home, *, strict: bool = True) -> int:
+    """The hosted Dashboard's port: commands that act require a valid configuration; read-only
+    ones fall back to the default (and report the problems elsewhere)."""
+    config = load_config(home)
+    if strict:
+        config.require_valid()
+    elif not config.valid:
+        return int(DEFAULTS["dashboard"]["port"])
+    return int(config.get("dashboard.port"))
+
+
+def _cmd_dashboard_install(args: argparse.Namespace) -> dict[str, Any]:
+    direct.require_outside_session(os.environ, "tsw dashboard install ")
+    home = _home(args)
+    return dashboard_service.install(home, os.environ, _dashboard_port(home))
+
+
+def _cmd_dashboard_uninstall(args: argparse.Namespace) -> dict[str, Any]:
+    direct.require_outside_session(os.environ, "tsw dashboard uninstall ")
+    return dashboard_service.uninstall(_home(args), os.environ)
+
+
+def _cmd_dashboard_open(args: argparse.Namespace) -> dict[str, Any]:
+    direct.require_outside_session(os.environ, "tsw dashboard open ")
+    home = _home(args)
+    port = _dashboard_port(home)
+    url = dashboard_service.open_url(home, os.environ, port)
+    if not args.no_browser:
+        webbrowser.open(url)
+    return {
+        "opened": not args.no_browser,
+        "url": f"http://127.0.0.1:{port}/",
+        "note": "浏览器打开的地址带新令牌（只保存它的摘要），第一次访问后换成 cookie；之后可从上面"
+        "的地址安装为 PWA",
+    }
+
+
+def _cmd_dashboard_restart(args: argparse.Namespace) -> dict[str, Any]:
+    home = _home(args)
+    return dashboard_service.restart(home, os.environ, _dashboard_port(home))
+
+
+def _cmd_dashboard_status(args: argparse.Namespace) -> dict[str, Any]:
+    home = _home(args)
+    config = load_config(home)
+    state = dashboard_service.status(home, os.environ, _dashboard_port(home, strict=False))
+    return state if config.valid else {**state, "config_problems": config.problems}
+
+
+def _cmd_dashboard_workdeck_manifest(args: argparse.Namespace) -> dict[str, Any]:
+    """The Dashboard's workdeck plugin manifest (DN006 §8.10, CC006 §13; T309): printed, or with
+    ``--out`` written as UTF-8 without a BOM for ``workdeck plugin add <file>``. A session may
+    print it but not write it: ``--out`` is a write the host guard does not see."""
+    if args.out:
+        direct.require_outside_session(os.environ, "tsw dashboard workdeck-manifest --out ")
+    home = _home(args)
+    value = workdeck.manifest(
+        home.root, python=sys.executable, checkout=REPO_ROOT, plugin_id=args.id
+    )
+    text = workdeck.to_json(value)
+    if args.out:
+        out = Path(args.out)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        return {
+            "written": str(out.resolve()),
+            "id": value["id"],
+            "next": f"workdeck plugin add {out}",
+        }
+    sys.stdout.write(text)
+    sys.stdout.flush()
+    return {"_silent": True}
+
+
+def _cmd_dashboard_service(args: argparse.Namespace) -> dict[str, Any]:
+    """The hosted service the logon task starts: no window, so output goes to a log file."""
+    direct.require_outside_session(os.environ, "tsw dashboard service ")
+    home = _home(args)
+    key = dashboard_service.home_key(home)
+    log = dashboard_service.log_path(os.environ, key)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    store = dashboard_service.read_store(os.environ, key)
+    saved = sys.stdout, sys.stderr
+    with log.open("w", encoding="utf-8") as stream:
+        sys.stdout = sys.stderr = stream
+        try:
+            if store is None:
+                print("Dashboard 常驻服务没有安装：先运行 tsw dashboard install", flush=True)
+                return {"ok": False, "reason": "not_installed"}
+            found = product_head()
+            serve_hosted(
+                home,
+                verify=dashboard_service.verifier(os.environ, key),
+                port=_dashboard_port(home),
+                commit=found.get("commit") if found else None,
+                key=key,
+                cookie_max_age=dashboard_service.COOKIE_MAX_AGE,
+            )
+        except OSError as exc:  # the port is taken, for one
+            print(f"Dashboard 服务启动失败：{exc}", flush=True)
+            return {"ok": False, "reason": "unavailable", "error": str(exc)}
+        finally:
+            sys.stdout, sys.stderr = saved
+    return {"_silent": True}
 
 
 def _cmd_task_list(args: argparse.Namespace) -> dict[str, Any]:
@@ -97,8 +439,13 @@ def _cmd_ledger_audit(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _cmd_ledger_rebuild(args: argparse.Namespace) -> dict[str, Any]:
-    tail = _ledger(args).rebuild()
+    tail = _writer(args)[0].rebuild()
     return {"projected_seq": tail.sequence}
+
+
+def _cmd_context_rebuild(args: argparse.Namespace) -> dict[str, Any]:
+    ledger, config = _writer(args)
+    return ContextService(ledger.home, ledger, config).rebuild()
 
 
 def _cmd_backup(args: argparse.Namespace) -> dict[str, Any]:
@@ -119,6 +466,359 @@ def _cmd_restore(args: argparse.Namespace) -> dict[str, Any]:
         return {"restored": str(dest), "audit": report, "ok": False}
     tail = ledger.rebuild()
     return {"restored": str(dest), "accepted_problems": problems, "projected_seq": tail.sequence}
+
+
+def _cmd_config_show(args: argparse.Namespace) -> dict[str, Any]:
+    config = load_config(_home(args))
+    return {
+        "valid": config.valid,
+        "values": config.values,
+        "sources": config.sources,
+        "problems": config.problems,
+        "warnings": config.warnings,
+    }
+
+
+def _cmd_config_validate(args: argparse.Namespace) -> dict[str, Any]:
+    config = load_config(_home(args))
+    return {"ok": config.valid, "problems": config.problems, "warnings": config.warnings}
+
+
+def _cmd_lease_show(args: argparse.Namespace) -> dict[str, Any]:
+    with _ledger(args).view() as conn:
+        row = lease.lease_row(conn)
+    if row is None:
+        return {"lease": None}
+    return {"lease": {**row, "expired": lease.is_expired(row, utc_now())}}
+
+
+def _lease_ledger(args: argparse.Namespace) -> tuple[Ledger, EffectiveConfig]:
+    """Lease commands work while the configuration is invalid: repairing it with
+    ``config_change`` needs the lease (DN003 §7.1)."""
+    home = _home(args)
+    config = load_config(home)
+    machine = getattr(args, "machine", None)
+    return (
+        _ledger_for(home, config, machine) if config.valid else Ledger(home, machine=machine)
+    ), config
+
+
+def _cmd_lease_acquire(args: argparse.Namespace) -> dict[str, Any]:
+    ledger, config = _lease_ledger(args)
+    command = lease.acquire(
+        args.session,
+        machine=args.machine,
+        lease_minutes=lease_minutes(config),
+        actor={"role": "orchestrator", "session_id": args.session},
+        command_id=args.command_id,
+    )
+    event = ledger.commit(command).events[-1]
+    return {"session_id": args.session, "expires_at": event.data["expires_at"]}
+
+
+def _cmd_lease_release(args: argparse.Namespace) -> dict[str, Any]:
+    ledger, _ = _lease_ledger(args)
+    ledger.commit(
+        lease.release(
+            args.session,
+            machine=args.machine,
+            actor={"role": "orchestrator", "session_id": args.session},
+        )
+    )
+    return {"released": True}
+
+
+def _cmd_lease_takeover(args: argparse.Namespace) -> dict[str, Any]:
+    ledger, config = _lease_ledger(args)
+    if args.user_source is None:
+        # The user running the command is the confirmation that the old session has stopped.
+        direct.require_outside_session(os.environ, "不带 --user-source 的 tsw lease takeover ")
+        source: Any = {
+            "channel": "user-cli",
+            "principal": direct.principal(),
+            "message_ref": _cli_ref(),
+            "text": f"tsw lease takeover --session {args.session} --from-session "
+            f"{args.from_session}" + (" --from-machine" if args.from_machine else ""),
+        }
+    else:
+        try:
+            source = json.loads(args.user_source)
+        except json.JSONDecodeError as exc:
+            raise TswError(ErrorCode.REJECTED, "--user-source 必须是 JSON 对象") from exc
+        if not isinstance(source, dict):
+            raise TswError(ErrorCode.REJECTED, "--user-source 必须是 JSON 对象")
+    command = lease.takeover(
+        args.session,
+        machine=args.machine,
+        from_session=args.from_session,
+        user_source=source,  # pyright: ignore[reportUnknownArgumentType]
+        lease_minutes=lease_minutes(config),
+        from_machine=args.from_machine,
+        actor={"role": "orchestrator", "session_id": args.session},
+        command_id=args.command_id,
+    )
+    event = ledger.commit(command).events[-1]
+    return {"session_id": args.session, "expires_at": event.data["expires_at"]}
+
+
+def _cmd_tool_list(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "tools": [
+            {"name": name, "roles": list(spec.roles), "description": spec.description}
+            for name, spec in sorted(REGISTRY.tools.items())
+        ]
+        + [{"name": "sync", "roles": ["orchestrator", "system"], "description": "系统规则"}]
+    }
+
+
+def _cmd_tool_run(args: argparse.Namespace) -> dict[str, Any]:
+    raw = args.input
+    if raw.startswith("@"):
+        raw = Path(raw[1:]).read_text(encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise TswError(ErrorCode.REJECTED, "--input 必须是 JSON 对象") from exc
+    if not isinstance(payload, dict):
+        raise TswError(ErrorCode.REJECTED, "--input 必须是 JSON 对象")
+    if args.name in CONFIG_TOOLS:
+        # Configuration tools repair an invalid configuration; they validate their own result.
+        ledger, config = _lease_ledger(args)
+    else:
+        ledger, config = _writer(args)
+    caller = Caller(role=args.role, session_id=args.session, machine=args.machine)
+    return run_tool(ledger, config, caller, args.name, payload)  # pyright: ignore[reportUnknownArgumentType]
+
+
+def _cmd_mcp(args: argparse.Namespace) -> dict[str, Any]:
+    serve(_home(args).root)
+    return {"_silent": True}
+
+
+def _cmd_guard(args: argparse.Namespace) -> dict[str, Any]:
+    root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)
+    if not (root / "tsw-home.json").is_file():
+        return {"_silent": True}  # the plugin is installed but this machine has no data directory
+    output = run_guard(args.event, open_home(root), dict(os.environ), sys.stdin.read())
+    if output:
+        print(output)
+    return {"_silent": True}
+
+
+def _cmd_host_render(args: argparse.Namespace) -> dict[str, Any]:
+    home = _home(args)
+    with FsStorage(home).writer():
+        written = render_instructions(home)
+        # The commit now rendered: where the next self-update starts (DN006 §9.9).
+        record_render(home, render_record())
+    # Keeping the host current is part of rendering for it: the plugin is Claude Code's cached
+    # copy, which only Claude Code's own update replaces (T247; idempotent).
+    return {
+        "written": [str(p) for p in written],
+        "plugin": update_plugin(os.environ),
+        "restart": RENDER_RESTART,
+    }
+
+
+def _cmd_host_update_plan(args: argparse.Namespace) -> dict[str, Any]:
+    """Read-only: the self-update's categories and actions (DN006 §9.8, CC006 §11.3)."""
+    home = _home(args)
+    config = load_config(home)
+    port = _dashboard_port(home, strict=False)
+    dashboard = dashboard_service.status(home, os.environ, port)
+    plan: dict[str, Any] = {
+        "env": os.environ,
+        # An invalid configuration plans with the defaults; its problems are reported.
+        "config": config.values if config.valid else DEFAULTS,
+        "to": args.to,
+        "start": getattr(args, "from"),
+        "running": args.running or [],
+        "dashboard": dashboard,
+    }
+    problems = {} if config.valid else {"config_problems": config.problems}
+    try:
+        with _ledger(args).view() as conn:
+            return {**build_update_plan(home, conn=conn, **plan), **problems}
+    except TswError as exc:
+        # After pulling a new projection version the ledger cannot be read until it is rebuilt;
+        # the plan says so first (DN006 §9.8, ``projection``).
+        if exc.details.get("reason") != "rebuild_required":
+            raise
+    return {**build_update_plan(home, conn=None, **plan), **problems}
+
+
+def _cmd_host_install_hint(args: argparse.Namespace) -> dict[str, Any]:
+    return {"hint": install_hint(_home(args))}
+
+
+def _setup_context(args: argparse.Namespace, *, require: bool) -> setup_steps.Context:
+    git = getattr(args, "git", None)
+    if git:
+        # The probe found git outside PATH (newly installed): tsw and its children run it by
+        # name (T308 review r1 F5).
+        folder = str(Path(git).parent)
+        os.environ["PATH"] = os.pathsep.join([folder, os.environ.get("PATH", "")])
+    return setup_steps.context(
+        os.environ,
+        answers_file=getattr(args, "answers", None),
+        python=getattr(args, "python", None),
+        claude=getattr(args, "claude", None),
+        require_answers=require,
+    )
+
+
+def _cmd_setup_check(args: argparse.Namespace) -> dict[str, Any]:
+    """Read-only (DN009 §3): prerequisites, the install and data directory, the host's state."""
+    return setup_steps.check(_setup_context(args, require=False), with_questions=args.questions)
+
+
+def _cmd_setup_plan(args: argparse.Namespace) -> dict[str, Any]:
+    return setup_steps.plan(_setup_context(args, require=True))
+
+
+def _cmd_setup_install(args: argparse.Namespace) -> dict[str, Any]:
+    if args.interactive:
+        return _setup_interactive(args)
+    if not args.answers and not answers_path(os.environ).is_file():
+        # A rerun (repair, update-plan's reinstall) uses the saved answers (DN009 §3).
+        raise TswError(
+            ErrorCode.REJECTED,
+            "没有保存的答案：须给出 --answers <答案文件>，或在终端用 --interactive 逐项回答",
+            reason="invalid_input",
+        )
+    ctx = _setup_context(args, require=True)
+    if not ctx.problems:
+        save_answers(ctx.env, ctx.answers)  # a rerun need not ask again (DN009 §3)
+    return setup_steps.install(ctx, open_browser=not args.no_browser)
+
+
+def _say_plan(planned: dict[str, Any]) -> None:
+    print("\n将要执行的步骤：")
+    for step in planned["steps"]:
+        state = {"ok": "已满足，跳过", "todo": "要做", "skipped": "不做", "manual": "手工"}.get(
+            step.get("state", ""), step.get("state", "")
+        )
+        print(f"  - {step['step']}：{state}")
+        actions: list[str] = step.get("actions") or []
+        for action in actions:
+            print(f"      {action}")
+        changes: list[dict[str, Any]] = step.get("diff") or []
+        for change in changes:
+            print(f"      {change['key']}：{change['before']} → {change['after']}")
+        if step.get("manual"):
+            print(f"      {step.get('note', '')}")
+            print(f"      文件：{step.get('file')}")
+            print("\n".join(f"      {line}" for line in str(step["manual"]).splitlines()))
+        if step.get("problem"):
+            print(f"      {step['problem']}")
+    for problem in planned["problems"]:
+        print(f"  问题：{problem}")
+
+
+def _setup_interactive(args: argparse.Namespace) -> dict[str, Any]:
+    """The terminal entry's flow (DN009 §4.1): check, ask, show the plan, confirm, install."""
+    first = _setup_context(args, require=False)
+    checked = setup_steps.check(first)
+    blocking = [p for p in checked["problems"] if not p.startswith("home：")]
+    print(f"产品检出：{checked['checkout']['path']}（{checked['checkout']['head']}）")
+    print(f"Python：{checked['python']['path']}（{checked['python']['version']}）")
+    print(f"Claude Code 命令行：{checked['claude']}")
+    if blocking:
+        raise TswError(
+            ErrorCode.REJECTED, "安装的前提不满足", reason="setup_preconditions", problems=blocking
+        )
+    print("\n请回答下面的问题（直接回车采用默认值）：")
+    answers = setup_questions.ask(first.questions, first.answers, input, print)
+    path = save_answers(first.env, answers)
+    ctx = setup_steps.context(
+        os.environ,
+        answers=answers,
+        python=args.python,
+        claude=args.claude,
+        require_answers=True,
+    )
+    planned = setup_steps.plan(ctx)
+    _say_plan(planned)
+    if not planned["ok"]:
+        raise TswError(
+            ErrorCode.REJECTED,
+            "安装的前提不满足",
+            reason="setup_preconditions",
+            problems=planned["problems"],
+        )
+    reply = input("\n按上面的计划安装？[是 / 否]：").strip().lower()
+    if reply not in ("y", "yes", "是", "好"):
+        return {"installed": False, "answers_file": str(path), "note": "没有安装；答案已保存"}
+    result = setup_steps.install(ctx, open_browser=not args.no_browser)
+    if args.json:
+        return result
+    return _say_installed(result)
+
+
+def _say_installed(result: dict[str, Any]) -> dict[str, Any]:
+    """The terminal's summary of an install: each step, the checks, what to do next."""
+    print("\n安装结果：")
+    for step in result["steps"]:
+        print(f"  - {step['step']}：{step.get('state')}")
+        if step.get("manual"):
+            print(f"    {step.get('note', '')}")
+            print(f"    文件：{step.get('file')}")
+            print("\n".join(f"    {line}" for line in str(step["manual"]).splitlines()))
+    verify = result["verify"]
+    for check in verify["checks"]:
+        mark = {True: "通过", False: "失败", None: "未核对"}[check["ok"]]
+        extra = "（重启后生效）" if check.get("pending_reload") else ""
+        print(f"  核对 {check['check']}：{mark}{extra}")
+    out: dict[str, Any] = {
+        "installed": True,
+        "record": result["record"],
+        "next": result["next"],
+        "repositories": result["repositories"],
+    }
+    if not verify["ok"]:
+        out["ok"] = False
+        out["failed"] = verify["failed"]
+    return out
+
+
+def _cmd_setup_verify(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _setup_context(args, require=False)
+    return setup_steps.verify(ctx, after_reload=args.after_reload, running=args.running or [])
+
+
+def _cmd_setup_uninstall(args: argparse.Namespace) -> dict[str, Any]:
+    ctx = _setup_context(args, require=False)
+    _confirm(
+        args,
+        "卸载 TaskSteward：删除 Dashboard 常驻服务、插件与市场、安装脚本加入的用户设置、tsw 垫片"
+        "与 PATH 项（数据目录与产品检出保留）？",
+    )
+    return setup_steps.uninstall(ctx)
+
+
+def _cmd_review_run(args: argparse.Namespace) -> dict[str, Any]:
+    notes = args.notes
+    if args.notes_file:
+        notes = Path(args.notes_file).read_text(encoding="utf-8")
+    if not os.environ.get(SESSION_ENV):
+        raise TswError(
+            ErrorCode.REJECTED, "需要在绑定任务的 worker 会话中运行", reason="role_denied"
+        )
+    return run_round(
+        _home(args), os.environ, Path.cwd(), head=args.head, base=args.base, notes=notes
+    )
+
+
+def _cmd_import_orchestrator_agent(args: argparse.Namespace) -> dict[str, Any]:
+    ledger, _ = _writer(args)
+    return run_import_orchestrator_agent(
+        ledger.home,
+        ledger,
+        Path(args.snapshot),
+        dry_run=args.dry_run,
+        renumber_local=renumber.parse(args.renumber_local),
+        exclude=args.exclude,
+    )
 
 
 def _cmd_quiesce(args: argparse.Namespace) -> dict[str, Any]:
@@ -147,8 +847,18 @@ def build_parser() -> argparse.ArgumentParser:
         command.set_defaults(handler=handler)
         return command
 
-    add(sub, "init", _cmd_init, "初始化数据目录")
-    add(sub, "home", _cmd_home, "显示数据目录位置")
+    init = add(sub, "init", _cmd_init, "初始化数据目录")
+    init.add_argument(
+        "--claim-sessions",
+        action="store_true",
+        help="在其中工作的会话一律使用本数据目录，不看 TSW_HOME（live 运行等隔离场景）",
+    )
+    init.add_argument(
+        "--remember",
+        action="store_true",
+        help="把它记为本产品仓库的数据目录（写入 .local/tsw-home），终端不必再设 TSW_HOME",
+    )
+    add(sub, "home", _cmd_home, "显示数据目录位置与定位依据")
 
     task = sub.add_parser("task", help="任务").add_subparsers(
         dest="task_command", required=True, metavar="<task command>"
@@ -169,6 +879,53 @@ def build_parser() -> argparse.ArgumentParser:
     add(task, "list", _cmd_task_list, "列出任务")
     show = add(task, "show", _cmd_task_show, "显示任务")
     show.add_argument("task_id")
+    for name, text in (
+        ("accept", "用户验收待验收的任务（T22，用户本人在终端运行）"),
+        ("reject", "用户退回待验收的任务（T23，用户本人在终端运行）"),
+        ("cancel", "用户取消任务（T25，用户本人在终端运行；活动 worker 须先由主会话停止）"),
+    ):
+        direct_cmd = add(task, name, _cmd_task_direct, text)
+        direct_cmd.add_argument("task_id")
+        direct_cmd.add_argument("--revision", type=int, help="确认的 revision（默认当前）")
+        direct_cmd.add_argument("--yes", action="store_true", help="不再询问，直接执行")
+        if name == "reject":
+            direct_cmd.add_argument("--reason", required=True, help="退回理由")
+        else:
+            direct_cmd.add_argument("--note", help="记录的用户原话（可选）")
+
+    pref = sub.add_parser("preference", help="用户的长期偏好（DN007 §6.2）").add_subparsers(
+        dest="preference_command", required=True, metavar="<preference command>"
+    )
+    plist = add(pref, "list", _cmd_preference_list, "列出长期偏好（默认只列现行的）")
+    plist.add_argument("--repo", help="只列能到达该仓库的（全局与该仓库）")
+    plist.add_argument("--project", help="只列能到达该项目的（全局与该项目）")
+    plist.add_argument(
+        "--all", action="store_true", help="包括已被替代、覆盖或撤销的（候选：已记录与已拒绝的）"
+    )
+    plist.add_argument(
+        "--candidates", action="store_true", help="列出偏好候选（DN007 §6.3），默认只列未决的"
+    )
+    prec = add(
+        pref, "record", _cmd_preference_record, "记录或替代一条长期偏好（用户本人在终端运行）"
+    )
+    prec.add_argument(
+        "--scope", help="global、repo:<仓库> 或 project:<项目>（--candidate 时缺省为建议的范围）"
+    )
+    prec.add_argument("--topic", help="主题词（--candidate 时缺省为候选的主题）")
+    prec.add_argument("--text", help="偏好原文（--candidate 时缺省为候选原话）")
+    prec.add_argument("--candidate", help="确认一条偏好候选（PC-…，DN007 §6.3）")
+    prec.add_argument(
+        "--supersedes", action="append", help="被替代的偏好编号（同范围或更宽），可重复"
+    )
+    prec.add_argument("--yes", action="store_true", help="不再询问，直接执行")
+    prev = add(pref, "revoke", _cmd_preference_revoke, "撤销一条长期偏好（用户本人在终端运行）")
+    prev.add_argument("ref", help="偏好编号（P-…）")
+    prev.add_argument("--reason", required=True, help="撤销理由")
+    prev.add_argument("--yes", action="store_true", help="不再询问，直接执行")
+    pdis = add(pref, "dismiss", _cmd_preference_dismiss, "不记一条偏好候选（用户本人在终端运行）")
+    pdis.add_argument("ref", help="偏好候选编号（PC-…）")
+    pdis.add_argument("--reason", required=True, help="不记的理由")
+    pdis.add_argument("--yes", action="store_true", help="不再询问，直接执行")
 
     ledger = sub.add_parser("ledger", help="账本").add_subparsers(
         dest="ledger_command", required=True, metavar="<ledger command>"
@@ -176,15 +933,197 @@ def build_parser() -> argparse.ArgumentParser:
     add(ledger, "tail", _cmd_ledger_tail, "账本末端序号与摘要")
     add(ledger, "audit", _cmd_ledger_audit, "全量审计摘要链与投影")
     add(ledger, "rebuild", _cmd_ledger_rebuild, "丢弃投影并从账本重建")
+    context = sub.add_parser("context", help="任务上下文检索索引（DN007）").add_subparsers(
+        dest="context_command", required=True, metavar="<context command>"
+    )
+    add(context, "rebuild", _cmd_context_rebuild, "丢弃并从账本与原始材料重建检索索引")
 
     backup = add(sub, "backup", _cmd_backup, "在线备份到空目录")
     backup.add_argument("dest")
     rest = add(sub, "restore", _cmd_restore, "从备份恢复到空的数据目录")
     rest.add_argument("src")
     rest.add_argument("--allow-unverified", action="store_true")
+    config = sub.add_parser("config", help="统一配置").add_subparsers(
+        dest="config_command", required=True, metavar="<config command>"
+    )
+    show_config = add(config, "show", _cmd_config_show, "显示有效配置及每个值的来源")
+    show_config.add_argument("--effective", action="store_true", help="（默认即为有效配置）")
+    add(config, "validate", _cmd_config_validate, "校验配置")
+
+    lease_cmd = sub.add_parser("lease", help="调度租约").add_subparsers(
+        dest="lease_command", required=True, metavar="<lease command>"
+    )
+    add(lease_cmd, "show", _cmd_lease_show, "显示调度租约")
+    for name, handler, text in (
+        ("acquire", _cmd_lease_acquire, "领取或续期调度租约"),
+        ("release", _cmd_lease_release, "释放调度租约"),
+        ("takeover", _cmd_lease_takeover, "在用户确认后接管调度租约"),
+    ):
+        command = add(lease_cmd, name, handler, text)
+        command.add_argument("--session", required=True, help="主会话 ID")
+        command.add_argument("--machine", default=lease.this_machine())
+        if name != "release":
+            command.add_argument("--command-id")
+        if name == "takeover":
+            command.add_argument("--from-session", required=True)
+            command.add_argument("--from-machine", action="store_true")
+            command.add_argument(
+                "--user-source",
+                help='用户确认来源（JSON：{"channel","principal","message_ref","text"}）；'
+                "用户本人在终端运行时可省略",
+            )
+
+    tool_cmd = sub.add_parser("tool", help="状态机工具（与 MCP 共用实现）").add_subparsers(
+        dest="tool_command", required=True, metavar="<tool command>"
+    )
+    add(tool_cmd, "list", _cmd_tool_list, "列出工具")
+    run = add(tool_cmd, "run", _cmd_tool_run, "运行工具")
+    run.add_argument("name")
+    run.add_argument("--input", required=True, help="JSON 对象，或 @文件路径")
+    run.add_argument("--role", required=True, choices=["orchestrator", "worker", "system"])
+    run.add_argument("--session", help="调用者的会话 ID")
+    run.add_argument("--machine", default=lease.this_machine())
+
+    add(sub, "mcp", _cmd_mcp, "以 stdio 运行 tsw MCP server（由插件启动）")
+    guard = add(
+        sub, "guard", _cmd_guard, "Claude Code hooks 入口（由插件调用，从 stdin 读取 payload）"
+    )
+    guard.add_argument(
+        "event", choices=["SessionStart", "PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop"]
+    )
+    host = sub.add_parser("host", help="宿主集成").add_subparsers(
+        dest="host_command", required=True, metavar="<host command>"
+    )
+    add(
+        host,
+        "render",
+        _cmd_host_render,
+        "在数据目录生成主会话的 CLAUDE.md、skill 与 worker 说明 roles/worker.md",
+    )
+    add(host, "install-hint", _cmd_host_install_hint, "显示插件安装步骤")
+    plan = add(
+        host,
+        "update-plan",
+        _cmd_host_update_plan,
+        "自我更新：按运行中的版本到目标提交的改动列出类别与动作（只读，DN006 §9.8）",
+    )
+    plan.add_argument("--to", help="目标提交（默认产品仓库的 HEAD）")
+    plan.add_argument("--from", help="明确的起点提交（默认取运行中的最旧版本）")
+    plan.add_argument(
+        "--running",
+        action="append",
+        metavar="COMMIT",
+        help="主会话运行时（whoami 的 runtime.commit）的提交，可重复",
+    )
+
+    setup = sub.add_parser("setup", help="安装脚本（DN009）").add_subparsers(
+        dest="setup_command", required=True, metavar="<setup command>"
+    )
+    check = add(setup, "check", _cmd_setup_check, "只读：前提、已有安装与数据目录、宿主侧状态")
+    check.add_argument("--questions", action="store_true", help="同时输出问题清单（会话入口用）")
+    setup_plan = add(setup, "plan", _cmd_setup_plan, "只读：将要执行的步骤与用户设置的差异")
+    setup_install = add(setup, "install", _cmd_setup_install, "安装或修复（幂等，逐步记录）")
+    setup_install.add_argument(
+        "--interactive", action="store_true", help="在终端逐项提问、显示计划并请你确认"
+    )
+    setup_install.add_argument(
+        "--no-browser", action="store_true", help="装好 Dashboard 后不打开浏览器"
+    )
+    setup_verify = add(setup, "verify", _cmd_setup_verify, "只读：核对安装结果")
+    setup_verify.add_argument(
+        "--after-reload", action="store_true", help="重新加载宿主之后的核对（PATH、运行时版本）"
+    )
+    setup_verify.add_argument(
+        "--running",
+        action="append",
+        metavar="COMMIT",
+        help="主会话运行时（whoami 的 runtime.commit）的提交，可重复",
+    )
+    setup_uninstall = add(
+        setup, "uninstall", _cmd_setup_uninstall, "卸载安装脚本加入的内容（数据目录保留）"
+    )
+    setup_uninstall.add_argument("--yes", action="store_true", help="不再询问，直接执行")
+    for command in (check, setup_plan, setup_install, setup_verify, setup_uninstall):
+        command.add_argument("--answers", help="答案文件（默认用保存的 setup-answers.json）")
+        command.add_argument("--python", help="解释器的完整路径（默认为运行本命令的解释器）")
+        command.add_argument(
+            "--claude", help="claude 命令行的完整路径（默认先查 PATH 再查桌面 app）"
+        )
+        command.add_argument("--git", help="git 的完整路径（不在 PATH 中时）")
+
+    review = sub.add_parser("review", help="worker 自评审").add_subparsers(
+        dest="review_command", required=True, metavar="<review command>"
+    )
+    review_run = add(review, "run", _cmd_review_run, "运行一轮自评审（与 MCP 的 review_run 相同）")
+    review_run.add_argument("--head", help="评审的 HEAD；git 执行目录默认取 HEAD")
+    review_run.add_argument("--base", help="评审范围的起点（base..HEAD）")
+    review_run.add_argument("--notes", help="已执行的验证与结果摘要")
+    review_run.add_argument("--notes-file", help="从文件读取说明")
+
+    importing = sub.add_parser("import", help="导入其他任务系统的历史（DN005）").add_subparsers(
+        dest="import_command", required=True, metavar="<import source>"
+    )
+    oa = add(
+        importing,
+        "orchestrator-agent",
+        _cmd_import_orchestrator_agent,
+        "导入 orchestrator-agent 的历史（先在来源运行 python -m orchestrator export-snapshot）",
+    )
+    oa.add_argument("--snapshot", required=True, help="export-snapshot 写出的快照目录")
+    oa.add_argument("--dry-run", action="store_true", help="只核对与分类，不写入")
+    oa.add_argument(
+        "--renumber-local",
+        action="append",
+        metavar="OLD=NEW",
+        help="先把与导入编号冲突的已结束本地任务改到新编号（可重复），例如 T001=T238",
+    )
+    oa.add_argument(
+        "--exclude",
+        action="append",
+        metavar="ID",
+        help="按用户决定排除只有任务书、旧账本未登记的任务（可重复）：不导入，也不列为待决定",
+    )
+
+    status = sub.add_parser("status", help="TaskSteward Dashboard").add_subparsers(
+        dest="status_command", required=True, metavar="<status command>"
+    )
+    serve_help = (
+        "在本机启动 TaskSteward Dashboard 应用：直接读账本，提供验收、退回、取消按钮（Ctrl+C 停止）"
+    )
+    # `tsw dashboard` is the same command under the page's name (DN006 §8.10, T273).
+    for target, name in ((status, "serve"), (sub, "dashboard")):
+        serve_cmd = add(target, name, _cmd_status_serve, serve_help)
+        serve_cmd.add_argument("--port", type=int, default=0, help="端口（默认任选空闲端口）")
+        serve_cmd.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
+        if name == "dashboard":
+            _add_dashboard_service(serve_cmd, add)
+
     add(sub, "quiesce", _cmd_quiesce, "静止数据目录（之后可直接复制）")
     add(sub, "resume-writes", _cmd_resume_writes, "解除静止")
     return parser
+
+
+def _add_dashboard_service(dashboard: argparse.ArgumentParser, add: Any) -> None:
+    """``tsw dashboard <command>``: the hosted service (DN006 §8.10, CC006 §12; T283). Plain
+    ``tsw dashboard`` still runs the Dashboard in this terminal."""
+    service = dashboard.add_subparsers(
+        dest="dashboard_command", required=False, metavar="<dashboard command>"
+    )
+    add(service, "install", _cmd_dashboard_install, "安装为登录时启动的常驻服务（固定端口）")
+    add(service, "uninstall", _cmd_dashboard_uninstall, "删除常驻服务与令牌")
+    opened = add(service, "open", _cmd_dashboard_open, "用浏览器打开常驻服务（带令牌）")
+    opened.add_argument("--no-browser", action="store_true", help="不打开浏览器，只核对令牌")
+    add(service, "restart", _cmd_dashboard_restart, "重启常驻服务（主会话或终端）")
+    add(service, "status", _cmd_dashboard_status, "常驻服务的状态（只读）")
+    add(service, "service", _cmd_dashboard_service, "运行常驻服务（由计划任务调用）")
+    manifest = add(
+        service,
+        "workdeck-manifest",
+        _cmd_dashboard_workdeck_manifest,
+        "输出 Dashboard 的 workdeck 插件 manifest（JSON；供 workdeck plugin add 使用）",
+    )
+    manifest.add_argument("--id", default=workdeck.DEFAULT_ID, help="门户中的插件 id（默认 tsw）")
+    manifest.add_argument("--out", help="写成文件（UTF-8，不带 BOM；会话中不可用）")
 
 
 def iter_commands(parser: argparse.ArgumentParser | None = None) -> list[str]:
@@ -198,6 +1137,8 @@ def iter_commands(parser: argparse.ArgumentParser | None = None) -> list[str]:
                 choices: dict[str, argparse.ArgumentParser] = action.choices  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
                 for name, child in choices.items():
                     walk(child, [*prefix, name])
+                if not action.required and prefix:  # the command also runs on its own
+                    found.append(" ".join(prefix))
                 return
         found.append(" ".join(prefix))
 
@@ -213,6 +1154,103 @@ def _print_human(result: dict[str, Any]) -> None:
             print(f"{key}: {value}")
 
 
+def command_path(args: argparse.Namespace) -> str:
+    sub = getattr(args, f"{args.command}_command", None)
+    return f"{args.command} {sub}" if sub else str(args.command)
+
+
+def _session_identity(args: argparse.Namespace) -> Identity | None:
+    """The calling session's TaskSteward identity, or None without a data directory to resolve it
+    against."""
+    try:
+        root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)
+    except TswError:
+        return None
+    if not (root / "tsw-home.json").is_file():
+        return None
+    home = open_home(root)
+    with Ledger(home).view() as conn:
+        return resolve_identity(conn, home, os.environ, Path.cwd())
+
+
+def _check_main_session_command(args: argparse.Namespace) -> None:
+    """``host render`` inside a session: the main session only (T282, CC008 §5.7).
+
+    The role comes from the session ID the host sets, never from the command line. Any other
+    session (a worker, the routine session, one opened outside the data directory) is refused, and
+    so is a process that is in a session without saying which one.
+    """
+    if not direct.in_host_session(os.environ):
+        return
+    who = _session_identity(args) if os.environ.get(SESSION_ENV) else None
+    if who is not None and who.role == "orchestrator":
+        return
+    command = command_path(args)
+    raise TswError(
+        ErrorCode.REJECTED,
+        f"只有主会话（在数据目录打开的 TaskSteward 会话）可以在会话中运行 tsw {command}："
+        "请交给主会话（它会先请用户确认），或请用户在会话外的终端运行",
+        reason="host_session_cli",
+        command=command,
+        role=who.role if who is not None else "unknown",
+    )
+
+
+def _check_setup_command(args: argparse.Namespace) -> None:
+    """``setup install`` / ``uninstall`` inside a session (DN009 §8, CC008 §5.8).
+
+    A session bound to no data directory (role none: the first install has no data directory
+    yet) and the main session may run them; a worker, the routine session, a revoked or a pending
+    session may not: they must not install or update the host. A process that is in a session
+    without saying which one cannot be resolved to any of those and counts as unrelated.
+    """
+    if not os.environ.get(SESSION_ENV):
+        return
+    who = _session_identity(args)
+    if who is None or (who.role in ("none", "orchestrator") and not who.pending):
+        return
+    command = command_path(args)
+    raise TswError(
+        ErrorCode.REJECTED,
+        f"worker、例行会话、已撤销与待绑定的会话不能运行 tsw {command}（安装与更新宿主）："
+        "请交给主会话，或请用户在会话外的终端运行",
+        reason="host_session_cli",
+        command=command,
+        role=who.role,
+    )
+
+
+def _check_host_session(args: argparse.Namespace) -> None:
+    """Inside a TaskSteward session the caller is the session: no ``--role`` on the command line.
+
+    A session bound to the data directory (orchestrator, worker, or a revoked worker) is
+    identified by the MCP server and the hooks; a command line that names its own role could
+    claim any of them, so such sessions only get the commands that resolve the caller
+    themselves or only read (DN001 §7.1). Unrelated Claude sessions are not affected.
+    """
+    if command_path(args) in MAIN_SESSION_CLI_COMMANDS:
+        _check_main_session_command(args)
+        return
+    if command_path(args) in SETUP_CLI_COMMANDS:
+        _check_setup_command(args)
+        return
+    if not os.environ.get(SESSION_ENV) or command_path(args) in HOST_CLI_COMMANDS:
+        return
+    root = Path(args.home) if args.home else resolve_home(repo_root=REPO_ROOT)
+    if not (root / "tsw-home.json").is_file():
+        return
+    home = open_home(root)
+    with Ledger(home).view() as conn:
+        who = resolve_identity(conn, home, os.environ, Path.cwd())
+    if who.role != "none" or who.pending:
+        raise TswError(
+            ErrorCode.REJECTED,
+            "Claude Code 会话中不能用命令行执行该操作，请使用 tsw MCP 工具",
+            reason="host_session_cli",
+            command=command_path(args),
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
@@ -222,6 +1260,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     handler: Handler = args.handler
     try:
+        _check_host_session(args)
         result = handler(args)
     except TswError as exc:
         if args.json:
@@ -230,6 +1269,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             detail = f" {json.dumps(exc.details, ensure_ascii=False)}" if exc.details else ""
             print(f"错误 [{exc.code.value}] {exc.message}{detail}", file=sys.stderr)
         return EXIT_CODES[exc.code]
+    if result.pop("_silent", False):
+        return 0
     ok = bool(result.pop("ok", True))
     if args.json:
         print(json.dumps({"ok": ok, **result}, ensure_ascii=False))

@@ -21,7 +21,13 @@ from tsw.storage.fs import atomic_write
 
 # Bump when tables or reduction rules change; older projections and checkpoints then need a
 # rebuild (DN007 §3.4).
-REDUCER_VERSION = 1
+REDUCER_VERSION = 6
+# Events that keep the task's business time: an import carries the source's own times, and a
+# renumbering only moves the task to a new id.
+IMPORTS = frozenset({"import.task_imported", "task.renumbered"})
+# Events that describe a task without anything happening in it: the card's keywords and
+# summary (DN007 §5.1) do not count as activity.
+QUIET = frozenset({"task.summary_recorded"})
 KEEP_CHECKPOINTS = 3
 
 SCHEMA_SQL = """
@@ -44,13 +50,352 @@ CREATE TABLE IF NOT EXISTS tasks(
     spec_sha256 TEXT NOT NULL,
     registered_seq INTEGER NOT NULL,
     last_activity TEXT NOT NULL,
-    source_seq INTEGER NOT NULL
+    source_seq INTEGER NOT NULL,
+    last_record TEXT NOT NULL DEFAULT '',
+    goal TEXT NOT NULL DEFAULT '',
+    acceptance TEXT NOT NULL DEFAULT '[]',
+    resources TEXT NOT NULL DEFAULT '[]',
+    substate TEXT,
+    cycle INTEGER NOT NULL DEFAULT 0,
+    stale INTEGER NOT NULL DEFAULT 0,
+    stale_ack TEXT,
+    waiting_revision INTEGER,
+    pause TEXT,
+    submission TEXT,
+    current_attempt TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    previous_status TEXT,
+    done_at TEXT,
+    accepted_at TEXT,
+    business_changed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS dependencies(
+    task_id TEXT NOT NULL,
+    dep_id TEXT NOT NULL,
+    bound_revision INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    PRIMARY KEY(task_id, dep_id)
+);
+CREATE TABLE IF NOT EXISTS attempts(
+    task_id TEXT NOT NULL,
+    attempt TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    session_ref TEXT,
+    session_name TEXT,
+    adapter TEXT,
+    generation INTEGER NOT NULL DEFAULT 0,
+    generation_valid INTEGER NOT NULL DEFAULT 0,
+    invalid_generations TEXT NOT NULL DEFAULT '[]',
+    purpose TEXT,
+    controller TEXT,
+    workdir TEXT,
+    branch TEXT,
+    brief_path TEXT,
+    brief_revision INTEGER,
+    read_set TEXT NOT NULL DEFAULT '[]',
+    receipt TEXT,
+    late_sessions TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY(task_id, attempt)
+);
+CREATE TABLE IF NOT EXISTS review_cycles(
+    task_id TEXT NOT NULL,
+    attempt TEXT NOT NULL,
+    cycle INTEGER NOT NULL,
+    rounds INTEGER NOT NULL DEFAULT 0,
+    orchestrator_extension INTEGER NOT NULL DEFAULT 0,
+    user_extension INTEGER NOT NULL DEFAULT 0,
+    last_round INTEGER,
+    last_reviewed_head TEXT,
+    last_decision TEXT,
+    retries INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(task_id, attempt, cycle)
+);
+CREATE TABLE IF NOT EXISTS review_rounds(
+    task_id TEXT NOT NULL,
+    attempt TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    cycle INTEGER NOT NULL,
+    head TEXT NOT NULL,
+    reviewer TEXT NOT NULL,
+    verdict TEXT,
+    reviewed_head TEXT,
+    decision TEXT,
+    PRIMARY KEY(task_id, attempt, round)
+);
+CREATE TABLE IF NOT EXISTS findings(
+    task_id TEXT NOT NULL,
+    attempt TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    finding_id TEXT NOT NULL,
+    cycle INTEGER NOT NULL,
+    severity TEXT NOT NULL,
+    blocking INTEGER NOT NULL,
+    action TEXT,
+    reason TEXT,
+    verification TEXT,
+    disposition TEXT,
+    decision_ref TEXT,
+    PRIMARY KEY(task_id, attempt, round, finding_id)
+);
+CREATE TABLE IF NOT EXISTS judgments(
+    item_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    status TEXT NOT NULL,
+    data TEXT NOT NULL,
+    decision_ref TEXT
+);
+CREATE TABLE IF NOT EXISTS decisions(
+    decision_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    basis TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    sequence INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS input_requests(
+    request_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    question TEXT NOT NULL,
+    binding TEXT NOT NULL,
+    resolution TEXT
+);
+-- Questions a worker asks the user in its own session (DN006 §8.2). Only the in-session events
+-- of DN006 §8.2–§8.3 write these two tables, so a projection made before them stays valid.
+CREATE TABLE IF NOT EXISTS in_session_requests(
+    request_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    session_ref TEXT NOT NULL,
+    asked_at TEXT NOT NULL,
+    handoff_after TEXT NOT NULL,
+    reserved INTEGER NOT NULL,
+    answered_in_session INTEGER NOT NULL DEFAULT 0,
+    responded_at TEXT,
+    handed_off_at TEXT,
+    relayed_to TEXT
+);
+CREATE TABLE IF NOT EXISTS session_messages(
+    message_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    session_ref TEXT NOT NULL,
+    text TEXT NOT NULL,
+    sequence INTEGER NOT NULL
+);
+-- The routine session and its routine board (DN006 §8.9). Only routine.* and channel.* events
+-- write these tables, so a projection made before them stays valid.
+CREATE TABLE IF NOT EXISTS routine_sessions(
+    generation INTEGER PRIMARY KEY,
+    session_name TEXT NOT NULL,
+    workdir TEXT NOT NULL,
+    status TEXT NOT NULL,
+    session_ref TEXT,
+    requested_at TEXT NOT NULL,
+    bound_at TEXT,
+    armed_ref TEXT,
+    armed_cron TEXT,
+    armed_at TEXT
+);
+-- Generations detached from the orchestrator that started them (DN006 §8.9.7, T250). Only
+-- routine.detached writes it, so a projection made before it stays valid.
+CREATE TABLE IF NOT EXISTS routine_detached(
+    generation INTEGER PRIMARY KEY,
+    detached_at TEXT NOT NULL,
+    note TEXT
+);
+CREATE TABLE IF NOT EXISTS routine_jobs(
+    job_id TEXT PRIMARY KEY,
+    script TEXT NOT NULL,
+    input TEXT NOT NULL,
+    added_seq INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS channel_messages(
+    message_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    sender_id TEXT,
+    sent_at TEXT NOT NULL,
+    PRIMARY KEY(channel, chat_id, message_id)
+);
+CREATE TABLE IF NOT EXISTS channel_replies(
+    chat_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    job_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    sent_at TEXT,
+    sequence INTEGER NOT NULL,
+    PRIMARY KEY(chat_id, message_id)
+);
+CREATE TABLE IF NOT EXISTS outputs(
+    task_id TEXT NOT NULL,
+    output_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    role TEXT,
+    delivery TEXT,
+    verified_at TEXT,
+    evidence TEXT NOT NULL,
+    PRIMARY KEY(task_id, output_id)
+);
+CREATE TABLE IF NOT EXISTS resource_claims(
+    resource TEXT NOT NULL,
+    owner_task TEXT NOT NULL,
+    status TEXT NOT NULL,
+    PRIMARY KEY(resource, owner_task)
+);
+CREATE TABLE IF NOT EXISTS integrations(
+    task_id TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    status TEXT NOT NULL,
+    PRIMARY KEY(task_id, repo)
 );
 CREATE TABLE IF NOT EXISTS task_notes(
     task_id TEXT NOT NULL,
     sequence INTEGER NOT NULL,
     text TEXT NOT NULL,
     PRIMARY KEY(task_id, sequence)
+);
+-- Follow-ups of a task (DN002 §5.7). Only follow_up.* events write this table, so a projection
+-- made before it stays valid.
+CREATE TABLE IF NOT EXISTS follow_ups(
+    follow_up_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    severity TEXT,
+    title TEXT NOT NULL,
+    detail TEXT NOT NULL,
+    status TEXT NOT NULL,
+    recorded_seq INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL,
+    recorded_by TEXT NOT NULL,
+    source TEXT,
+    recheck_after TEXT,
+    converted_to TEXT,
+    resolution TEXT,
+    updated_at TEXT
+);
+-- The titles tsw gave worker sessions and what became of them (DN002 §5.8). Only events that
+-- carry a title (attempt.start_requested since T272) and attempt.session_updated write this
+-- table, so a projection made before it stays valid: older attempts have no row.
+CREATE TABLE IF NOT EXISTS session_titles(
+    task_id TEXT NOT NULL,
+    attempt TEXT NOT NULL,
+    base TEXT NOT NULL,
+    known TEXT NOT NULL,
+    asked TEXT,
+    user_title TEXT,
+    missing INTEGER NOT NULL DEFAULT 0,
+    failed_title TEXT,
+    archive_failed INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(task_id, attempt)
+);
+CREATE TABLE IF NOT EXISTS leases(
+    name TEXT PRIMARY KEY,
+    holder_session TEXT,
+    machine TEXT,
+    acquired_at TEXT,
+    expires_at TEXT,
+    source_seq INTEGER NOT NULL
+);
+-- Sessions that gave the scheduling lease up and do not take it back at session start
+-- (DN001 §6.4, T254). Only controller.lease_stood_down adds rows, so a projection made before it
+-- stays valid.
+CREATE TABLE IF NOT EXISTS lease_stood_down(
+    session_id TEXT PRIMARY KEY,
+    machine TEXT,
+    via TEXT NOT NULL,
+    stood_down_at TEXT NOT NULL,
+    source_seq INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS inbox_acks(
+    sequence INTEGER PRIMARY KEY
+);
+CREATE TABLE IF NOT EXISTS imported_tasks(
+    task_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    event_seq INTEGER NOT NULL,
+    source_sequence INTEGER NOT NULL,
+    old_status TEXT,
+    resumable INTEGER NOT NULL,
+    runs TEXT,
+    legacy TEXT NOT NULL
+);
+-- Task cards' keywords and summaries and the user's standing preferences (DN007 §5.1, §6,
+-- §12). Only task.summary_recorded and user.preference_recorded write these tables, so a
+-- projection made before them stays valid.
+CREATE TABLE IF NOT EXISTS task_summaries(
+    task_id TEXT PRIMARY KEY,
+    keywords TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    bound_revision INTEGER NOT NULL,
+    bound_outputs TEXT NOT NULL,
+    source_seq INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_decisions(
+    ref TEXT PRIMARY KEY,
+    task_id TEXT,
+    kind TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    text TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    verified_source TEXT NOT NULL,
+    supersedes TEXT NOT NULL DEFAULT '[]',
+    superseded_by TEXT,
+    recorded_at TEXT NOT NULL,
+    source_seq INTEGER NOT NULL
+);
+-- Revoked standing preferences (DN007 §6.2): only user.preference_revoked writes it.
+CREATE TABLE IF NOT EXISTS preference_revocations(
+    ref TEXT PRIMARY KEY,
+    reason TEXT NOT NULL,
+    verified_source TEXT NOT NULL,
+    revoked_at TEXT NOT NULL,
+    source_seq INTEGER NOT NULL
+);
+-- Preference candidates collected when a task ends, and the scans that found them (DN007 §6.3):
+-- only user.preference_candidate(_dismissed), task.preference_scanned and the candidate field of
+-- user.preference_recorded write them, so a projection made before them stays valid.
+CREATE TABLE IF NOT EXISTS preference_candidates(
+    ref TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    attempt TEXT,
+    quote TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    verified INTEGER NOT NULL,
+    scope TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    supersedes TEXT NOT NULL,
+    status TEXT NOT NULL,
+    preference TEXT,
+    resolution TEXT,
+    recorded_by TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    source_seq INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS preference_scans(
+    sequence INTEGER PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    attempt TEXT,
+    scanned_through INTEGER NOT NULL,
+    candidates TEXT NOT NULL,
+    skipped TEXT NOT NULL,
+    by TEXT NOT NULL,
+    scanned_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS index_queue(
     task_id TEXT NOT NULL,
@@ -173,6 +518,29 @@ class Projection:
             raise
         return current
 
+    def trial(self, conn: sqlite3.Connection, events: list[Event]) -> None:
+        """Apply ``events`` in a transaction that is always rolled back.
+
+        The ledger runs this before appending, so an event its reducer would refuse is never
+        written: a stuck ledger (every later read failing on one event) cannot be produced.
+        """
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for event in events:
+                try:
+                    self._apply(conn, event)
+                except TswError:
+                    raise
+                except Exception as exc:  # e.g. a constraint violation in a reducer
+                    raise rejected(
+                        "命令产生的事件无法归约，已拒绝",
+                        reason="reducer_rejected",
+                        type=event.type,
+                        error=str(exc),
+                    ) from exc
+        finally:
+            conn.execute("ROLLBACK")
+
     def _apply(self, conn: sqlite3.Connection, event: Event) -> None:
         reducer = self.reducers.get(event.type)
         if reducer is None:
@@ -192,9 +560,20 @@ class Projection:
             )
         reducer(conn, event)
         if event.task_id is not None:
+            # An imported task keeps the business time it had in its source system (DN005 §4.3);
+            # a renumbered task keeps its own.
+            # ``last_record`` is the time of the task's latest ledger record of any kind: the
+            # task flow orders by it (DN006 §8.10, T304).
             conn.execute(
-                "UPDATE tasks SET last_activity = ?, source_seq = ? WHERE task_id = ?",
-                (event.time, event.sequence, event.task_id),
+                "UPDATE tasks SET last_activity = CASE WHEN ? THEN last_activity ELSE ? END, "
+                "source_seq = ?, last_record = ? WHERE task_id = ?",
+                (
+                    event.type in IMPORTS | QUIET,
+                    event.time,
+                    event.sequence,
+                    event.time,
+                    event.task_id,
+                ),
             )
             conn.execute(
                 "INSERT OR IGNORE INTO index_queue(task_id, sequence) VALUES(?, ?)",

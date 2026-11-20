@@ -14,20 +14,51 @@
 - 不联网，不调用模型，不访问 GitHub。临时 git 仓库没有远端，测试中不执行 push。
 - MCP server 与 hooks 走 stdio，不占用端口；需要端口时动态分配，不用固定端口。
 - 并发运行的测试不共享进程级环境变量、锁文件或数据目录。
+- 测试进程不刷盘：`tests/conftest.py` 把 `os.fsync` 换成空操作，并给每个 SQLite 连接设
+  `synchronous = OFF`。刷盘只在机器断电时才有区别，测试不模拟断电；而几个并行的测试进程同时刷盘时，
+  CI runner 上每次刷盘要排队等磁盘（T317 实测慢约 30 倍）。这替换的是平台的落盘保证，tsw 的代码路径
+  照常运行；测试启动的子进程（`tsw`、MCP server、hooks）照常刷盘。
 - 录制的平台样本（hooks payload、`codex app-server` JSON-RPC 记录、`get_session` 回执）放在
   `tests/fixtures/`，提交前去除会话 ID 以外的个人信息（用户名、本机路径、主机名）。
 
 ## live 层级
 
-- 每次运行有一个运行 ID：`live-<时间戳>-<随机后缀>`。运行目录 `.local/live/<runId>/`（不提交）中放：
+入口是 `python tools/live.py`，场景定义在 `tools/live/scenarios/*.json`（`useCases`、检查项、模型调用上限、
+操作步骤）。
+
+- 每次运行有一个运行 ID：`live-<时间戳>-<随机后缀>`。运行目录默认在 `.local/live/<runId>/`（不提交），
+  可以用 `--runs-dir` 或 `TSW_LIVE_RUNS` 放到别处，但不能放在启动它的会话的数据目录（`TSW_HOME`）之中：
+  在那里打开的会话会读到该数据目录的 `CLAUDE.md`，就不再隔离（`live.py` 拒绝这样的位置）。运行目录中放：
   - `home/`：本次运行专用的数据目录；
-  - `repo/`：本次运行专用的临时目标仓库，没有远端；
-  - `manifest.json`：本次运行创建的每个会话、线程、worktree。
+  - `repo/` 与 `origin.git/`：本次运行专用的临时目标仓库，唯一的远端是同一运行目录中的裸仓库；
+  - `bin/gh`：GitHub CLI 的替身（`tools/live/gh_stub.py`），在 `origin.git` 上模拟 PR 与 squash 合并，
+    状态在 `gh-state.json`，调用记录在 `gh-log.jsonl`。经替身得到的 PR 与合并是模拟证据；
+  - `manifest.json`：本次运行创建的每个会话、线程、目录；`result.json` 与 `evidence.md`：检查结果
+    （`evidence.md` 已去除本机路径与用户名，可附在 PR 中）；`hook-payloads.jsonl`：真实 app 发出的 hook
+    payload（可去除个人信息后作为 surface 测试的录制样本）。
+- 宿主会话的隔离：用户设置给每个 Claude Code 会话 `TSW_HOME`。`host-e2e` 用
+  `tsw init --claim-sessions` 建运行的数据目录：在其中工作的会话（主会话与 `work/` 下的 worker）一律使用
+  它，不看 `TSW_HOME`，执行目录里因此不需要任何设置文件。只有运行的数据目录本身（主会话所在、操作者打开
+  时就要信任的文件夹）写 `.claude/settings.local.json`：挂上记录 hook payload 的钩子，并让本检出的 hooks
+  守卫宿主插件缓存副本还看不到的工具（例如定时工具）。worker 会话找到运行时靠真实数据目录记录的
+  `product_repo`，所以 `prepare` 先检查那个检出已认识 `claim_sessions`，否则拒绝（worker 会落到真实数据
+  目录）。tsw 不在执行目录中写
+  任何设置，worker 的放行来自用户设置中的 auto 模式规则（与真实数据目录相同）。Claude 桌面 app 对带
+  `.claude/settings.local.json` 的文件夹（即使只有 `env` 与 `hooks`）会再次要求信任（2026-11-09 live 实测，
+  确认框写明 “Execution allowed by: .claude/settings.local.json”），所以执行目录必须没有这个文件；运行中
+  worker 会话创建时是否弹出信任确认，就是“新任务不弹信任确认”的检验。操作者把观察到的信任确认与权限
+  拦截在 `verify` 时用 `--trust-prompted` / `--blocked` 记下（操作者观察，不是自动检查）。项目
+  设置里的 `env.PATH` 到不了会话的 shell，所以任务书用完整路径调用 `bin/gh`（hooks 仍按程序名 `gh`
+  检查合并授权与目标仓库）；替身还模拟主分支上合并提交的 CI（`gh run list --commit`，结论为
+  `success`，模拟证据）。
 - 先写清单再创建：每个会话或线程在请求创建前以“可能已提交”状态写入清单，拿到回执后更新。结果未知时
   按清单中的会话名或线程名对账，不重复创建。
 - 运行结束时（包括失败）清理清单中的条目：归档本次创建的 Claude 会话与 Codex 线程，并用
-  `get_session` / `thread/read` 读回确认。进程退出、`finally` 执行或一次空列表都不等于清理完成；
-  无法确认的条目报告为清理失败，并给出剩余对象。
+  `get_session` / `thread/list`（已归档）读回确认。Claude 会话只能在 app 中归档：操作者归档并读回后用
+  `live.py cleanup <runId> --archived <会话 ID>` 记入清单；Codex 线程由 `cleanup` 归档并读回。进程退出、
+  `finally` 执行或一次空列表都不等于清理完成；无法确认的条目报告为清理失败，并给出剩余对象。清理完成
+  后才能用 `live.py discard <runId>` 删除运行目录。
 - 只处理清单中的对象，绝不归档、停止或修改清单之外的会话、线程和目录。
-- live 运行不使用用户真实的数据目录，不连接真实业务仓库，不推送任何内容。
+- live 运行不使用用户真实的数据目录，不连接真实业务仓库，不向任何网络远端推送。
 - 费用：`reviewer` 场景每次运行的模型调用次数写在场景定义中；超出时停止并报告，不自动重试。
+  `host-e2e` 的会话与评审轮次上限也写在场景定义中，报告附费用估算。

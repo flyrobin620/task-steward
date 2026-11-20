@@ -1,0 +1,582 @@
+"""The user's terminal commands and the Dashboard app as separate processes (DN006 §8.10, §9.1)."""
+
+from __future__ import annotations
+
+import http.client
+import json
+import re
+import shutil
+import subprocess
+import sys
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+import pytest
+
+from tests.machine_harness import MACHINE, ORCH, Harness
+from tests.support import REPO_ROOT, child_env, flow_layouts, run_json, run_tsw
+from tsw import lease
+from tsw.home import Home
+from tsw.host.status_assets import APP_SCRIPT
+
+mark = pytest.mark
+
+
+@pytest.fixture
+def h(home: Home) -> Harness:
+    return Harness(home)
+
+
+def handed_back(h: Harness) -> None:
+    """The harness's orchestrator, on another machine, hands the lease back: this one may write."""
+    h.ledger.commit(lease.release("orch-1", machine=MACHINE, actor=ORCH.actor()))
+
+
+def json_of(proc: Any) -> dict[str, Any]:
+    stream = proc.stdout if proc.returncode == 0 else proc.stderr
+    return json.loads(stream.strip().splitlines()[-1])
+
+
+def events(h: Harness, kind: str) -> list[Any]:
+    return [e for e in h.ledger.storage.read(since=0) if e.type == kind]
+
+
+# ---------------------------------------------------------------------- terminal commands
+
+
+@mark.use_case("UC-DIRECT-001")
+@mark.transition("T22")
+def test_tsw_task_accept_records_the_users_terminal_decision(h: Harness) -> None:
+    h.complete("T001")
+    handed_back(h)
+    code, out = run_json("task", "accept", "T001", "--yes", "--note", "看过报告，可以")
+    assert code == 0, out
+    assert (out["event"], out["revision"], out["channel"]) == ("task.user_accepted", 1, "user-cli")
+    assert h.status("T001") == "accepted"
+    source = events(h, "task.user_accepted")[-1].data["user_source"]
+    assert source["channel"] == "user-cli"
+    assert source["message_ref"].startswith("cli:")
+    assert source["text"] == "tsw task accept T001：看过报告，可以"
+    assert source["target"] == ["T001", 1, "accept"]
+
+
+@mark.use_case("UC-DIRECT-001")
+@mark.transition("T23")
+@mark.transition("T25")
+def test_tsw_task_reject_and_cancel(h: Harness) -> None:
+    h.complete("T001")
+    h.register("T002")
+    handed_back(h)
+    assert run_tsw("task", "reject", "T001", "--yes").returncode == 2  # --reason is required
+    code, out = run_json("task", "reject", "T001", "--yes", "--reason", "缺少导出")
+    assert (code, out["event"]) == (0, "task.user_rejected")
+    assert (h.task("T001")["status"], h.task("T001")["revision"]) == ("intake", 2)
+    code, out = run_json("task", "cancel", "T002", "--yes")
+    assert (code, out["event"]) == (0, "task.cancelled")
+    code, err = run_json("task", "accept", "T002", "--yes")
+    assert (code, err["details"]["reason"]) == (3, "invalid_state")
+
+
+@mark.use_case("UC-DIRECT-001")
+@pytest.mark.parametrize("marker", ["CLAUDE_CODE_HOST_SESSION_ID", "CLAUDECODE"])
+def test_the_users_commands_refuse_inside_any_host_session(h: Harness, marker: str) -> None:
+    h.complete("T001")
+    env = child_env(**{marker: "1"})
+    for args in (
+        ("task", "accept", "T001", "--yes"),
+        ("task", "reject", "T001", "--yes", "--reason", "x"),
+        ("task", "cancel", "T001", "--yes"),
+        ("status", "serve", "--no-open"),
+        ("dashboard", "--no-open"),
+        ("lease", "takeover", "--session", "s2", "--from-session", "orch-1"),
+    ):
+        code, err = run_json(*args, env=env)
+        assert (code, err["details"]["reason"]) == (3, "host_session_cli"), args
+    assert h.status("T001") == "done"
+
+
+@mark.use_case("UC-DIRECT-001")
+def test_without_a_terminal_the_user_must_confirm_with_yes(h: Harness) -> None:
+    h.complete("T001")
+    handed_back(h)
+    code, err = run_json("task", "accept", "T001")
+    assert (code, err["details"]["reason"]) == (3, "not_confirmed")
+    assert h.status("T001") == "done"
+
+
+@mark.use_case("UC-LEASE-001")
+def test_the_user_takes_over_the_lease_without_writing_a_source(h: Harness) -> None:
+    code, out = run_json(
+        "lease", "takeover", "--session", "orch-2", "--from-session", "orch-1", "--machine", "m1"
+    )
+    assert (code, out["session_id"]) == (0, "orch-2")
+    source = events(h, "controller.lease_taken_over")[-1].data["user_source"]
+    assert source["channel"] == "user-cli"
+    assert "--from-session orch-1" in source["text"]
+
+
+# ---------------------------------------------------------------------- locating the data directory
+
+
+def _repo_copy(tmp_path: Path) -> Path:
+    """A product repository of this checkout's runtime, so its ``.local`` stays the test's."""
+    repo = tmp_path / "product"
+    shutil.copytree(REPO_ROOT / "tsw", repo / "tsw", ignore=shutil.ignore_patterns("__pycache__"))
+    return repo
+
+
+@mark.use_case("UC-HOME-001")
+def test_init_remember_lets_a_terminal_without_tsw_home_find_the_data_directory(
+    tmp_path: Path,
+) -> None:
+    repo = _repo_copy(tmp_path)
+    data = tmp_path / "data-home"
+    env = child_env(PYTHONPATH=str(repo))
+    env.pop("TSW_HOME", None)
+
+    def tsw(*args: str, extra: dict[str, str] | None = None) -> dict[str, Any]:
+        proc = run_tsw(*args, "--json", env={**env, **(extra or {})}, cwd=tmp_path)
+        assert proc.returncode == 0, proc.stderr
+        return json_of(proc)
+
+    out = tsw("init", "--home", str(data), "--remember")
+    assert Path(out["remembered"]) == repo / ".local" / "tsw-home"
+    out = tsw("home")
+    assert (Path(out["home"]), out["source"], out["initialized"]) == (data, ".local/tsw-home", True)
+    assert Path(out["product_repo"]) == repo
+    # TSW_HOME still comes first, and the default is reported as such.
+    assert tsw("home", extra={"TSW_HOME": str(tmp_path / "other")})["source"] == "TSW_HOME"
+    (repo / ".local" / "tsw-home").unlink()
+    assert tsw("home")["source"] == "default"
+
+
+@mark.use_case("UC-HOME-001")
+def test_init_without_remember_leaves_the_repository_alone(tmp_path: Path) -> None:
+    repo = _repo_copy(tmp_path)
+    env = child_env(PYTHONPATH=str(repo))
+    proc = run_tsw("init", "--home", str(tmp_path / "d"), "--json", env=env, cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert Path(json_of(proc)["product_repo"]) == repo
+    assert not (repo / ".local").exists()
+
+
+# ---------------------------------------------------------------------- the STATUS app
+
+
+class App:
+    def __init__(self, proc: subprocess.Popen[str], url: str) -> None:
+        self.proc = proc
+        parts = urlsplit(url)
+        self.port = int(parts.port or 0)
+        self.token = parts.query.removeprefix("token=")
+        self.cookie = ""
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, str], bytes]:
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+        sent = {"Host": f"127.0.0.1:{self.port}"}
+        if self.cookie:
+            sent["Cookie"] = self.cookie
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            sent["Content-Type"] = "application/json"
+        sent.update(headers or {})
+        conn.request(method, path, body=data, headers=sent)
+        response = conn.getresponse()
+        out = (response.status, dict(response.getheaders()), response.read())
+        conn.close()
+        return out
+
+    def act(self, task_id: str, action: str, **body: Any) -> tuple[int, dict[str, Any]]:
+        status, _, raw = self.request(
+            "POST",
+            f"/api/tasks/{task_id}/{action}",
+            body,
+            {"X-TSW-Token": self.token, "Origin": f"http://127.0.0.1:{self.port}"},
+        )
+        return status, json.loads(raw)
+
+
+@pytest.fixture
+def app(h: Harness) -> Iterator[App]:
+    yield from _serve("status", "serve")
+
+
+@pytest.fixture
+def dashboard(h: Harness) -> Iterator[App]:
+    yield from _serve("dashboard")
+
+
+def _serve(*command: str) -> Iterator[App]:
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "tsw", *command, "--no-open"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        env={**child_env(), "PYTHONUNBUFFERED": "1"},
+    )
+    try:
+        assert proc.stdout is not None
+        line = proc.stdout.readline()
+        assert line.startswith("TaskSteward Dashboard："), line
+        found = re.search(r"http://127\.0\.0\.1:\d+/\?token=[\w-]+", line)
+        assert found, (line, proc.stderr.read() if proc.poll() is not None and proc.stderr else "")
+        yield App(proc, found.group(0))
+    finally:
+        proc.terminate()
+        proc.wait(timeout=30)
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                stream.close()
+
+
+@mark.use_case("UC-DIRECT-002")
+@mark.transition("T22")
+def test_the_status_app_admits_only_its_token_and_accepts_with_one_click(
+    h: Harness, app: App
+) -> None:
+    h.complete("T001")
+    h.register("T002")
+    handed_back(h)
+    # No token, a wrong token, or a foreign host name: nothing is shown.
+    assert app.request("GET", "/")[0] == 403
+    assert app.request("GET", "/?token=wrong")[0] == 403
+    status, headers, _ = app.request("GET", f"/?token={app.token}")
+    assert (status, headers["Location"]) == (303, "/")
+    cookie = headers["Set-Cookie"]
+    assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
+    assert cookie.startswith(f"tsw_status_{app.port}=")  # per port: another serve keeps its own
+    app.cookie = f"tsw_status_{app.port + 1}={app.token}"
+    assert app.request("GET", "/")[0] == 403
+    app.cookie = cookie.split(";")[0]
+    assert app.request("GET", "/", headers={"Host": f"evil.example:{app.port}"})[0] == 403
+    status, _, page = app.request("GET", "/")
+    text = page.decode("utf-8")
+    assert status == 200
+    assert f'<meta name="tsw-token" content="{app.token}">' in text
+    assert "connect-src 'self'" in text.replace("&#x27;", "'")
+    t1 = re.search(r'<div class="acts" data-task="T001" data-revision="1">.*?</div>', text)
+    assert t1 and 'data-act="accept"' in t1.group(0) and 'data-act="reject"' in t1.group(0)
+    t2 = re.search(r'<div class="acts" data-task="T002".*?</div>', text)
+    assert t2 and 'data-act="cancel"' in t2.group(0) and 'data-act="accept"' not in t2.group(0)
+    # A button request needs the header token and this page's origin.
+    status, _, _ = app.request(
+        "POST",
+        "/api/tasks/T001/accept",
+        {"revision": 1},
+        {"Origin": f"http://127.0.0.1:{app.port}"},
+    )
+    assert status == 403
+    status, _, _ = app.request(
+        "POST",
+        "/api/tasks/T001/accept",
+        {"revision": 1},
+        {"X-TSW-Token": app.token, "Origin": "http://evil.example"},
+    )
+    assert status == 403
+    assert h.status("T001") == "done"
+    # A page showing an older revision is refused; the current one is accepted.
+    status, out = app.act("T001", "accept", revision=7)
+    assert (status, out["ok"], out["reason"]) == (409, False, "g_user")
+    status, out = app.act("T001", "accept", revision=1)
+    assert (status, out["ok"], out["event"]) == (200, True, "task.user_accepted")
+    assert h.status("T001") == "accepted"
+    source = events(h, "task.user_accepted")[-1].data["user_source"]
+    assert source["channel"] == "status-app"
+    assert source["message_ref"].startswith("status-app:")
+    assert "T001 revision 1" in source["text"]
+
+
+@mark.use_case("UC-DIRECT-002")
+@mark.transition("T23")
+@mark.transition("T25")
+def test_the_status_app_rejects_and_cancels(h: Harness, app: App) -> None:
+    h.complete("T001")
+    h.register("T002")
+    handed_back(h)
+    app.cookie = f"tsw_status_{app.port}={app.token}"
+    status, out = app.act("T001", "reject", revision=1)
+    assert (status, out["reason"]) == (409, "invalid_input")
+    status, out = app.act("T001", "reject", revision=1, reason="缺少导出")
+    assert (status, out["event"]) == (200, "task.user_rejected")
+    status, out = app.act("T002", "cancel", revision=1)
+    assert (status, out["event"]) == (200, "task.cancelled")
+    assert (h.status("T001"), h.status("T002")) == ("intake", "cancelled")
+    # The rejected revision is now history on the card; the brief shows the current one.
+    page = app.request("GET", "/")[2].decode("utf-8")
+    card = re.search(r'<article [^>]*id="task-T001".*?</article>', page, re.S)
+    assert card and "任务书 · revision 2" in card.group(0)
+    assert "历史任务书（1）" in card.group(0) and "revision 1 · 登记" in card.group(0)
+
+
+@mark.use_case("UC-DIRECT-002")
+def test_the_status_app_serves_linked_reports_and_nothing_else(h: Harness, app: App) -> None:
+    app.cookie = f"tsw_status_{app.port}={app.token}"
+    report = h.home.path("runs", "T009", "a1", "report.html")
+    report.parent.mkdir(parents=True)
+    report.write_text("<p>报告</p>", encoding="utf-8")
+    status, headers, body = app.request("GET", "/runs/T009/a1/report.html")
+    assert (status, body.decode("utf-8")) == (200, "<p>报告</p>")
+    assert headers["Content-Type"].startswith("text/html")
+    assert "script-src 'none'" in headers["Content-Security-Policy"]
+    brief = h.home.path("runs", "T009", "a1", "brief.md")
+    brief.write_text("# 任务书", encoding="utf-8")
+    status, headers, body = app.request("GET", "/runs/T009/a1/brief.md")
+    assert (status, headers["Content-Type"]) == (200, "text/plain; charset=utf-8")
+    assert body.decode("utf-8") == "# 任务书"
+    for path in ("/tsw-home.json", "/config/task-steward.json", "/runs/../tsw-home.json"):
+        assert app.request("GET", path)[0] == 404, path
+    assert app.request("GET", "/runs/T009/a1/report.html", headers={"Cookie": ""})[0] == 403
+
+
+@mark.use_case("UC-DIRECT-003")
+@mark.transition("T22")
+def test_the_status_app_serves_a_task_view_behind_the_same_admission(h: Harness, app: App) -> None:
+    h.complete("T001")
+    handed_back(h)
+    # The view needs the cookie and this server's host name, like the board.
+    assert app.request("GET", "/tasks/T001")[0] == 403
+    app.cookie = f"tsw_status_{app.port}={app.token}"
+    assert app.request("GET", "/tasks/T001", headers={"Host": f"evil.example:{app.port}"})[0] == 403
+    status, headers, body = app.request("GET", "/tasks/T001")
+    page = body.decode("utf-8")
+    assert status == 200 and headers["Content-Type"] == "text/html; charset=utf-8"
+    assert headers["X-Frame-Options"] == "DENY" and headers["Cache-Control"] == "no-store"
+    assert '<main class="task-view" data-tsw-task="T001">' in page
+    assert f'<meta name="tsw-token" content="{app.token}">' in page
+    assert "connect-src 'self'" in page.replace("&#x27;", "'")
+    assert re.search(r'<a class="session" data-tsw-session="[^"]+" data-tsw-task="T001"', page)
+    assert '<a class="back" href="../#task-T001">' in page
+    assert f"127.0.0.1:{app.port}" not in page
+    # The board links the view relatively; the view's report link resolves under /runs/.
+    board = app.request("GET", "/")[2].decode("utf-8")
+    assert '<a class="detail" href="tasks/T001">详情</a>' in board
+    assert '<a href="../runs/T001/a1/result.html">报告</a>' in page
+    assert app.request("GET", "/runs/T001/a1/result.html")[0] == 200
+    # The view's accept button posts to the same endpoint as the card's.
+    acts = re.search(r'<div class="acts" data-task="T001" data-revision="1">.*?</div>', page)
+    assert acts and 'data-act="accept"' in acts.group(0)
+    status, out = app.act("T001", "accept", revision=1)
+    assert (status, out["event"]) == (200, "task.user_accepted")
+    assert 'data-act="accept"' not in app.request("GET", "/tasks/T001")[2].decode("utf-8")
+    # An unknown task is a 404 page with the way back; other paths under /tasks are not views.
+    status, _, body = app.request("GET", "/tasks/T404")
+    assert status == 404 and '<a class="back" href="../">' in body.decode("utf-8")
+    for path in ("/tasks/", "/tasks", "/tasks/T001/x"):
+        assert app.request("GET", path)[0] == 404, path
+
+
+@mark.use_case("UC-DIRECT-004")
+def test_tsw_dashboard_serves_the_dashboard_with_its_task_flow(h: Harness, dashboard: App) -> None:
+    h.complete("T001")
+    h.register("T002")
+    h.plan("T002", ["T001"])
+    handed_back(h)
+    dashboard.cookie = f"tsw_status_{dashboard.port}={dashboard.token}"
+    status, _, body = dashboard.request("GET", "/")
+    page = body.decode("utf-8")
+    assert status == 200 and "<title>TaskSteward Dashboard</title>" in page
+    assert f'<meta name="tsw-token" content="{dashboard.token}">' in page
+    # Every node opens its task view, relative to the board; the dependency is drawn.
+    node = re.search(r'<a class="fnode[^"]*" data-id="T002"[^>]*>', page)
+    assert node and 'href="tasks/T002"' in node.group(0) and 'data-deps="T001"' in node.group(0)
+    assert re.search(r'data-tile-st="done"[^>]*><b>1</b>', page)
+    assert dashboard.request("GET", "/tasks/T002")[0] == 200
+    # The same command: the same buttons, recorded on the same channel.
+    status, out = dashboard.act("T001", "accept", revision=1)
+    assert (status, out["event"]) == (200, "task.user_accepted")
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_the_dashboard_renders_markdown_shows_references_and_the_index_card(
+    h: Harness, dashboard: App
+) -> None:
+    for task_id in ("T001", "T002"):
+        h.register(task_id)
+        h.run("task_cancel", task_id=task_id, user_source=h.source(task_id, 1, "cancel"))
+        h.run("task_archive", task_id=task_id, user_source=h.source(task_id, 1, "archive"))
+    h.register("T003", goal="参考 T002 的结论")
+    h.plan("T003")
+    h.run("task_dispatch", task_id="T003", workdir="~/wt/T003", user_turn=True, read_set=["T001"])
+    handed_back(h)
+    dashboard.cookie = f"tsw_status_{dashboard.port}={dashboard.token}"
+    # The flow draws the references; the archived tasks referenced are not context (T304),
+    # only in the layout with every task.
+    page = dashboard.request("GET", "/")[2].decode("utf-8")
+    node = re.search(r'<a class="fnode[^"]*" data-id="T003"[^>]*>', page)
+    assert node and 'data-refs="T001 T002"' in node.group(0)
+    layouts = flow_layouts(page)
+    for tid in ("T001", "T002"):
+        assert re.search(rf'<a class="fnode[^"]*" data-id="{tid}"', page), tid
+        assert tid in layouts["all:dep,fu,ref"]["cells"], tid
+        assert tid not in layouts["live:dep,fu,ref"]["cells"], tid
+    # The task view lists them, and its index card says the index is not built, without
+    # building it.
+    view = dashboard.request("GET", "/tasks/T003")[2].decode("utf-8")
+    cited = view.split("<h3>本任务引用的任务</h3>")[1].split("<h3>")[0]
+    assert '<a href="T001">T001</a>' in cited and "推荐读取集合（a1）" in cited
+    assert '<a href="T002">T002</a>' in cited and "<td>目标</td>" in cited
+    card = re.search(r'<section class="panel" id="card">.*?</section>', view, re.S)
+    assert card and "检索索引尚未建立" in card.group(0)
+    assert not (h.home.cache_dir / "context.sqlite").exists()
+    # The brief: rendered and escaped with ?view=html, still plain text without it.
+    brief = h.home.path("runs", "T003", "a1", "brief.md")
+    assert brief.is_file()
+    brief.write_text(
+        "# 任务书\n\n- [链接](javascript:alert(1))\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n"
+        "<script>alert(1)</script>\n",
+        encoding="utf-8",
+    )
+    status, headers, body = dashboard.request("GET", "/runs/T003/a1/brief.md?view=html")
+    html = body.decode("utf-8")
+    assert (status, headers["Content-Type"]) == (200, "text/html; charset=utf-8")
+    assert "script-src 'none'" in headers["Content-Security-Policy"]
+    assert html.startswith('<article class="md"><h1 id="md-任务书">任务书</h1>')
+    assert "<table>" in html and "<li>链接</li>" in html
+    assert "<script>" not in html and "&lt;script&gt;" in html and "javascript:" not in html
+    status, headers, body = dashboard.request("GET", "/runs/T003/a1/brief.md")
+    assert headers["Content-Type"] == "text/plain; charset=utf-8"
+    assert body.decode("utf-8").startswith("# 任务书")
+    # Rendering asks the same admission as the file.
+    assert (
+        dashboard.request("GET", "/runs/T003/a1/brief.md?view=html", headers={"Cookie": ""})[0]
+        == 403
+    )
+    assert dashboard.request("GET", "/runs/../tsw-home.json?view=html")[0] == 404
+    # The page's own script opens these links in a dialog; the policy is unchanged.
+    assert "connect-src 'self'" in view.replace("&#x27;", "'")
+    assert 'searchParams.set("view", "html")' in APP_SCRIPT and "showModal()" in APP_SCRIPT
+
+
+@mark.use_case("UC-DIRECT-007")
+def test_the_dashboard_manages_standing_preferences_as_the_user(h: Harness, dashboard: App) -> None:
+    h.register("T001", repo="demo")
+    handed_back(h)
+    headers = {"X-TSW-Token": dashboard.token, "Origin": f"http://127.0.0.1:{dashboard.port}"}
+
+    def post(path: str, body: dict[str, Any], sent: dict[str, str] | None = None) -> Any:
+        status, _, raw = dashboard.request("POST", path, body, headers if sent is None else sent)
+        return status, json.loads(raw)
+
+    # The page needs the cookie and this server's host name, like the board.
+    assert dashboard.request("GET", "/preferences")[0] == 403
+    dashboard.cookie = f"tsw_status_{dashboard.port}={dashboard.token}"
+    evil = {"Host": f"evil.example:{dashboard.port}"}
+    assert dashboard.request("GET", "/preferences", headers=evil)[0] == 403
+    status, sent, body = dashboard.request("GET", "/preferences")
+    page = body.decode("utf-8")
+    assert status == 200 and sent["Content-Type"] == "text/html; charset=utf-8"
+    assert sent["X-Frame-Options"] == "DENY" and "还没有长期偏好。" in page
+    assert '<option value="repo:demo">' in page and 'data-pref-send="record"' in page
+    board = dashboard.request("GET", "/")[2].decode("utf-8")
+    assert '<a class="ghost" id="prefs" href="preferences"' in board and "长期偏好 0</a>" in board
+    # A request needs the header token and this page's origin.
+    record = {"scope": "repo:demo", "topic": "PR", "text": "先开 draft"}
+    assert post("/api/preferences/record", record, {"Origin": headers["Origin"]})[0] == 403
+    bad = {**headers, "Origin": "http://evil.example"}
+    assert post("/api/preferences/record", record, bad)[0] == 403
+    assert post("/api/preferences/P-1/remove", {"reason": "x"})[0] == 404
+    assert post("/api/preferences", record)[0] == 404
+    assert not events(h, "user.preference_recorded")
+    # Record, replace, revoke: one event each, the user's own on the status-app channel.
+    status, out = post("/api/preferences/record", {**record, "command_id": "dashboard-pref-a"})
+    assert (status, out["ok"], out["ref"]) == (200, True, "P-1")
+    # The page's retry of the same submission returns the first result (PR #53 review).
+    status, again = post("/api/preferences/record", {**record, "command_id": "dashboard-pref-a"})
+    assert (status, again["ref"], again["sequence"]) == (200, "P-1", out["sequence"])
+    assert "command_id" in APP_SCRIPT and "randomUUID" in APP_SCRIPT
+    status, out = post(
+        "/api/preferences/record", {**record, "text": "直接 ready", "supersedes": ["P-1"]}
+    )
+    assert (status, out["ref"], out["event"]) == (200, "P-2", "user.preference_recorded")
+    status, out = post("/api/preferences/P-1/revoke", {"reason": "已被替代"})
+    assert (status, out["ok"], out["reason"]) == (409, False, "invalid_input")
+    status, out = post("/api/preferences/P-2/revoke", {"reason": "不再需要"})
+    assert (status, out["event"]) == (200, "user.preference_revoked")
+    assert out["sequence"] == events(h, "user.preference_revoked")[-1].sequence
+    recorded = [e.data["source"] for e in events(h, "user.preference_recorded")]
+    revoked = [e.data["source"] for e in events(h, "user.preference_revoked")]
+    assert [s["channel"] for s in recorded + revoked] == ["status-app"] * 3
+    assert [s["text"] for s in recorded + revoked] == ["先开 draft", "直接 ready", "不再需要"]
+    assert revoked[0]["target"] == ["preference", "P-2", "revoke"]
+    # The page lists them by scope with their state; the filter is in the address.
+    page = dashboard.request("GET", "/preferences?all=1&scope=repo%3Ademo")[2].decode("utf-8")
+    assert re.findall(r'<article class="pref (\w+)" id="pref-(P-\d)"', page) == [
+        ("replaced", "P-1"),
+        ("revoked", "P-2"),
+    ]
+    listing = page.split("</header>", 1)[1]
+    assert 'data-pref-open="' not in listing and "撤销理由</b>：不再需要" in listing
+    assert "现行 0 条" in dashboard.request("GET", "/preferences")[2].decode("utf-8")
+    # The script that sends them is the app's, admitted by the page's policy.
+    assert "/api/preferences/record" in APP_SCRIPT and "connect-src 'self'" in page.replace(
+        "&#x27;", "'"
+    )
+
+
+@mark.use_case("UC-DIRECT-008")
+def test_the_dashboard_labels_an_embedding_portals_sessions(h: Harness, dashboard: App) -> None:
+    h.register("T001")
+    h.plan("T001")
+    h.dispatch("T001", session="local_w1")
+    ask = {"sessions": [{"id": "local_w1"}, {"id": "orch-1"}, {"id": "local_none"}]}
+    path = "/workdeck/labels"
+    # The page's admission: the cookie and this server's host name; a foreign origin is refused.
+    assert dashboard.request("POST", path, ask)[0] == 403
+    dashboard.cookie = f"tsw_status_{dashboard.port}={dashboard.token}"
+    assert (
+        dashboard.request("POST", path, ask, {"Host": f"evil.example:{dashboard.port}"})[0] == 403
+    )
+    assert dashboard.request("POST", path, ask, {"Origin": "http://evil.example"})[0] == 403
+    # JSON only, a session list, within the size limit.
+    status, _, raw = dashboard.request("POST", path, None, {"Content-Type": "text/plain"})
+    assert status == 415 and json.loads(raw)["ok"] is False
+    assert dashboard.request("POST", path, {"session": []})[0] == 400
+    too_long = {"Content-Length": str((1 << 20) + 1)}  # refused before the body is read
+    assert dashboard.request("POST", path, {}, too_long)[0] == 400
+    assert dashboard.request("GET", path)[0] == 404
+    # No header token needed (an embedding portal's proxy adds none); the proxy's origin is ours.
+    tail = h.ledger.storage.tail()
+    status, sent, raw = dashboard.request(
+        "POST", path, ask, {"Origin": f"http://127.0.0.1:{dashboard.port}"}
+    )
+    assert (status, sent["Content-Type"]) == (200, "application/json; charset=utf-8")
+    assert json.loads(raw) == {
+        "labels": {
+            "local_w1": [
+                {
+                    "text": "T001 · a1 · worker",
+                    "title": "task: T001\nattempt: a1\nphase: live\nrole: worker",
+                    "link": "/tasks/T001",
+                }
+            ],
+            "orch-1": [
+                {
+                    "text": "orchestrator",
+                    "title": "role: orchestrator\nlease: scheduler",
+                    "link": "/",
+                }
+            ],
+            "local_none": [],
+        }
+    }
+    assert h.ledger.storage.tail() == tail
+    # A full refresh of a long session list is not held to the buttons' body limit.
+    many = {"sessions": [{"id": f"local_{n:060}"} for n in range(2000)]}
+    status, _, raw = dashboard.request("POST", path, many)
+    assert status == 200 and len(json.loads(raw)["labels"]) == 2000
+    # An id JSON allows but UTF-8 cannot carry does not cost the batch its answer (PR #57 review).
+    odd = {"sessions": [{"id": "\ud800"}, {"id": "orch-1"}]}
+    status, _, raw = dashboard.request("POST", path, odd)
+    assert status == 200 and list(json.loads(raw)["labels"]) == ["orch-1"]
+    # The link is the task view's address in the app.
+    assert dashboard.request("GET", "/tasks/T001")[0] == 200

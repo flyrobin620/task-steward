@@ -1,0 +1,23 @@
+{
+  "id": "setup-e2e",
+  "title": "安装：终端与会话两条路径在干净的用户环境中从零走到主会话可用（DN009、CC009）",
+  "useCases": [
+    "UC-SETUP-001"
+  ],
+  "modelCalls": {
+    "max": 0
+  },
+  "operator": "无人值守：python tools/live.py setup-e2e run --path terminal（从本检出）；python tools/live.py setup-e2e run --path session（从 GitHub 的插件市场，合并后）",
+  "checks": [
+    "S0 取得检出与插件：终端路径克隆本检出；会话路径一步安装插件（--marketplace）、探测前提、取检出（插件安装的提交）、问题清单、计划",
+    "S1 安装完成，安装阶段 verify 通过（终端路径经 setup.ps1 交互；会话路径带会话标记、未绑定数据目录）",
+    "S2 用户级 PATH（HKCU）加入垫片目录，install.json 记下归属",
+    "S3 插件市场指向检出，插件副本为检出 HEAD",
+    "S4 用户设置写入 env.TSW_HOME、env.TSW_PYTHON 与三条 auto 模式规则",
+    "S5 claude mcp list 显示插件的 tsw MCP server 已连接",
+    "S6 插件副本的 SessionStart hook 命令在 Git Bash 中运行，主会话得到注入",
+    "S7 新进程的 PATH 中 tsw 解析到垫片（cmd 与 Git Bash），verify --after-reload 通过",
+    "S8 tsw setup uninstall：PATH 恢复原值，用户设置移除，插件回到安装前的状态（终端路径移除；会话路径保留并改回远端来源），数据目录保留",
+    "S9 清理：用户级 PATH 与运行前相同"
+  ]
+}

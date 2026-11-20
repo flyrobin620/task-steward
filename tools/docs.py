@@ -70,8 +70,11 @@ _LIST_START = re.compile(r"^(\s*)([-*]|\d+\.)\s")
 
 
 def html_sources(root: Path = ROOT) -> list[Path]:
-    """Markdown files that have an HTML view: the README and the design documents."""
-    return [root / "README.md", *sorted((root / "docs" / "design").glob("*.md"))]
+    """Markdown files that have an HTML view: the README, the design documents and their host
+    implementations (``docs/design/<host>/``)."""
+    design = root / "docs" / "design"
+    hosts = sorted(p for p in design.glob("*/*.md") if p.parent.name != "diagrams")
+    return [root / "README.md", *sorted(design.glob("*.md")), *hosts]
 
 
 def _slug(text: str, used: set[str]) -> str:

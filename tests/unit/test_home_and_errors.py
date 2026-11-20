@@ -7,12 +7,20 @@ import pytest
 
 from tsw.errors import EXIT_CODES, ErrorCode, TswError
 from tsw.faults import FaultInjected, fault
-from tsw.home import HOME_VERSION, MARKER, init_home, open_home, resolve_home
+from tsw.home import (
+    HOME_VERSION,
+    MARKER,
+    claim_sessions,
+    init_home,
+    open_home,
+    resolve_home,
+)
 
 
 @pytest.mark.use_case("UC-HOME-001")
 def test_resolve_prefers_environment(tmp_path: Path) -> None:
-    assert resolve_home({"TSW_HOME": str(tmp_path / "a")}, repo_root=tmp_path) == tmp_path / "a"
+    env = {"TSW_HOME": str(tmp_path / "a")}
+    assert resolve_home(env, repo_root=tmp_path, cwd=tmp_path) == tmp_path / "a"
 
 
 @pytest.mark.use_case("UC-HOME-001")
@@ -20,9 +28,36 @@ def test_resolve_uses_repo_pointer_then_default(tmp_path: Path) -> None:
     pointer = tmp_path / ".local" / "tsw-home"
     pointer.parent.mkdir()
     pointer.write_text(str(tmp_path / "b") + "\n", encoding="utf-8")
-    assert resolve_home({}, repo_root=tmp_path) == tmp_path / "b"
+    assert resolve_home({}, repo_root=tmp_path, cwd=tmp_path) == tmp_path / "b"
     pointer.write_text("", encoding="utf-8")
-    assert resolve_home({}, repo_root=tmp_path) == Path("~/.tsw").expanduser()
+    assert resolve_home({}, repo_root=tmp_path, cwd=tmp_path) == Path("~/.tsw").expanduser()
+
+
+@pytest.mark.use_case("UC-HOME-001")
+def test_a_data_directory_that_claims_sessions_wins_over_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session working inside a claiming data directory uses it whatever TSW_HOME says
+    (decision 0003: no settings file in the session's folder); the nearest data directory
+    decides, and one that does not claim leaves TSW_HOME in charge."""
+    real, _ = init_home(tmp_path / "real")
+    run, _ = init_home(tmp_path / "run")
+    workdir = run.root / "work" / "T001" / "a1"
+    workdir.mkdir(parents=True)
+    env = {"TSW_HOME": str(real.root)}
+    assert resolve_home(env, cwd=workdir) == real.root
+    claim_sessions(run)
+    claim_sessions(run)  # idempotent
+    assert json.loads((run.root / MARKER).read_text(encoding="utf-8"))["claim_sessions"] is True
+    assert resolve_home(env, cwd=workdir) == run.root
+    assert resolve_home(env, cwd=run.root) == run.root
+    assert resolve_home(env, cwd=tmp_path) == real.root
+    # Without an explicit directory, the current directory is the session's.
+    monkeypatch.chdir(workdir)
+    assert resolve_home(env) == run.root
+    # A data directory nested in the claiming one decides for its own sessions.
+    inner, _ = init_home(workdir / "inner")
+    assert resolve_home(env, cwd=inner.root) == real.root
 
 
 @pytest.mark.use_case("UC-HOME-001")

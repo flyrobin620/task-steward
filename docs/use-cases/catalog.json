@@ -1,16 +1,30 @@
 {
-  "tiers": ["unit", "component", "surface", "conformance", "live"],
+  "tiers": [
+    "unit",
+    "component",
+    "surface",
+    "conformance",
+    "live"
+  ],
   "useCases": [
     {
       "id": "UC-HOME-001",
       "title": "初始化与定位数据目录",
       "actor": "用户 / tsw CLI",
-      "acceptance": "数据目录按 DN001 §8.1 的布局创建，tsw-home.json 记录版本；重复初始化不改变内容；非空的其他目录被拒绝；版本不受支持时拒绝打开",
-      "surfaces": ["cli"],
-      "claims": ["cli:init", "cli:home"],
+      "acceptance": "数据目录按 DN001 §8.1 的布局创建，tsw-home.json 记录版本；重复初始化不改变内容；非空的其他目录被拒绝；版本不受支持时拒绝打开；声明 claim_sessions（tsw init --claim-sessions）的数据目录优先于 TSW_HOME，用于在其中工作的会话（最近的数据目录决定），插件启动器同样按它找到运行时；tsw init --home <目录> --remember 把数据目录写入产品仓库的 .local/tsw-home，没有 TSW_HOME 的终端据此找到它（不带 --remember 不写仓库）；tsw home 给出定位依据（claim_sessions、TSW_HOME、.local/tsw-home、default 或 --home）与产品仓库",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:init",
+        "cli:home"
+      ],
       "component": "home",
       "status": "active",
-      "requiredTiers": ["unit", "surface"],
+      "requiredTiers": [
+        "unit",
+        "surface"
+      ],
       "omittedTiers": {
         "component": "只创建目录与标记文件，unit 已在临时目录中覆盖",
         "conformance": "不经过插件接口",
@@ -22,11 +36,22 @@
       "title": "登记任务（T01）",
       "actor": "主会话 / tsw CLI",
       "acceptance": "task.registered 事件记录任务书路径与摘要；todo/Txxx.md 与 todo/TODO.md 生成；投影中任务为 intake、revision 1；缺项、非法类型、已用 ID 被拒绝",
-      "surfaces": ["cli"],
-      "claims": ["cli:task register", "cli:task list", "cli:task show"],
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:task register",
+        "cli:task list",
+        "cli:task show",
+        "tool:task_register"
+      ],
       "component": "tasks",
       "status": "active",
-      "requiredTiers": ["unit", "component", "surface"],
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
       "omittedTiers": {
         "conformance": "不经过插件接口",
         "live": "不依赖宿主与模型"
@@ -37,11 +62,18 @@
       "title": "记录任务备注",
       "actor": "主会话 / tsw CLI",
       "acceptance": "task.note 事件追加备注，任务版本加一；expected_version 不一致或任务不存在时拒绝且不写入",
-      "surfaces": ["cli"],
-      "claims": ["cli:task note"],
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:task note"
+      ],
       "component": "tasks",
       "status": "active",
-      "requiredTiers": ["component", "surface"],
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
       "omittedTiers": {
         "unit": "备注没有独立于账本的纯逻辑",
         "conformance": "不经过插件接口",
@@ -53,11 +85,16 @@
       "title": "写命令原子提交（幂等、乐观并发、并发写者、崩溃窗口）",
       "actor": "tsw 的所有写入口",
       "acceptance": "事件按序追加并形成摘要链；同一 command_id 重复提交返回原结果、内容不同则拒绝（投影重建后仍然成立）；守卫失败不写入；多进程并发写入得到连续的链；追加后中断由下一次读写补齐；进程崩溃不留下半条记录",
-      "surfaces": ["cli"],
+      "surfaces": [
+        "cli"
+      ],
       "claims": [],
       "component": "ledger",
       "status": "active",
-      "requiredTiers": ["unit", "component"],
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
       "omittedTiers": {
         "surface": "经 CLI 的写命令由 UC-TASK-001 与 UC-TASK-002 的 surface 测试覆盖",
         "conformance": "存储后端的约定由 UC-STORE-002 覆盖",
@@ -69,11 +106,19 @@
       "title": "账本分段与全量审计",
       "actor": "用户 / tsw CLI",
       "acceptance": "分段按月份或大小封存为 .jsonl.gz 且可跨段读取；封存中断可恢复；审计发现篡改、删除的事件与投影不一致并以非零退出码报告；断链时写命令拒绝",
-      "surfaces": ["cli"],
-      "claims": ["cli:ledger audit", "cli:ledger tail"],
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:ledger audit",
+        "cli:ledger tail"
+      ],
       "component": "ledger",
       "status": "active",
-      "requiredTiers": ["component", "surface"],
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
       "omittedTiers": {
         "unit": "审计依赖真实的分段文件",
         "conformance": "不经过插件接口",
@@ -85,11 +130,18 @@
       "title": "投影检查点与重建",
       "actor": "tsw / 用户",
       "acceptance": "按 checkpoint_every 写内容寻址的检查点；投影丢失时从最近有效的检查点恢复而不全量重放；检查点损坏时退回更早的检查点或全量重放；归约版本变化或出现未知事件类型时拒绝继续并要求升级或重建；rebuild 得到相同的投影",
-      "surfaces": ["cli"],
-      "claims": ["cli:ledger rebuild"],
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:ledger rebuild"
+      ],
       "component": "projection",
       "status": "active",
-      "requiredTiers": ["component", "surface"],
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
       "omittedTiers": {
         "unit": "检查点与重建依赖真实的 SQLite 文件",
         "conformance": "不经过插件接口",
@@ -100,12 +152,22 @@
       "id": "UC-STORE-001",
       "title": "静止、在线备份与恢复",
       "actor": "用户 / tsw CLI",
-      "acceptance": "静止后写入返回 QUIESCED，读取照常；静止等待已获准的写入完成；在线备份带 manifest（不含文件哈希），恢复后审计通过并重建投影；无 manifest 或 manifest 不一致的副本只有显式允许才能恢复",
-      "surfaces": ["cli"],
-      "claims": ["cli:backup", "cli:restore", "cli:quiesce", "cli:resume-writes"],
+      "acceptance": "静止后写入返回 QUIESCED，读取照常；静止等待已获准的写入完成；在线备份带 manifest（不含文件哈希），恢复后审计通过并重建投影；无 manifest 或 manifest 不一致的副本只有显式允许才能恢复；配置无效时 quiesce、resume-writes、backup、restore 仍可用（数据目录维护不依赖配置）",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:backup",
+        "cli:restore",
+        "cli:quiesce",
+        "cli:resume-writes"
+      ],
       "component": "storage",
       "status": "active",
-      "requiredTiers": ["component", "surface"],
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
       "omittedTiers": {
         "unit": "全部行为依赖真实文件与锁",
         "conformance": "存储后端的约定由 UC-STORE-002 覆盖",
@@ -113,20 +175,1259 @@
       }
     },
     {
+      "id": "UC-STORE-003",
+      "title": "主会话经 MCP 运行数据目录维护",
+      "actor": "主会话 / tsw",
+      "acceptance": "持有租约的主会话可以 home_backup（目标须在数据目录之外，记 maintenance.performed）、ledger_audit（只读）、ledger_rebuild（先审计，审计有问题时拒绝）与 import_orchestrator_agent 演练；正式导入须附用户原话并有同参数、在上次导入之后的演练；restore、quiesce / resume-writes、host render 不提供 MCP 入口",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "mcp:home_backup",
+        "mcp:ledger_audit",
+        "mcp:ledger_rebuild",
+        "mcp:import_orchestrator_agent"
+      ],
+      "component": "storage",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "unit": "规则都依赖数据目录与账本，在 component 层验证",
+        "conformance": "不经过插件接口",
+        "live": "不依赖宿主行为"
+      }
+    },
+    {
       "id": "UC-STORE-002",
       "title": "存储后端一致性（P4）",
       "actor": "插件实现者",
       "acceptance": "每个存储后端通过同一套一致性测试：能力声明、追加与读取、末端冲突与断链拒绝、产物目录限制、锁互斥、静止时返回 QUIESCED、快照记录账本末端",
-      "surfaces": ["plugin"],
+      "surfaces": [
+        "plugin"
+      ],
       "claims": [],
       "component": "storage",
       "status": "active",
-      "requiredTiers": ["conformance"],
+      "requiredTiers": [
+        "conformance"
+      ],
       "omittedTiers": {
         "unit": "一致性套件直接测试实现",
         "component": "fs 后端的组合行为由 UC-LEDGER 与 UC-STORE-001 覆盖",
         "surface": "插件接口没有进程外表面",
         "live": "不依赖宿主与模型"
+      }
+    },
+    {
+      "id": "UC-CONFIG-001",
+      "title": "加载、合并与校验统一配置",
+      "actor": "用户 / tsw",
+      "acceptance": "默认值、数据目录配置与本机覆盖按 DN003 §5a 合并并记录每个值的来源；DN003 §4 的规则逐条报告问题；本机覆盖只能改白名单字段；不能配置关闭评审；配置无效时写命令以 config_invalid 拒绝、读命令照常",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:config show",
+        "cli:config validate"
+      ],
+      "component": "config",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "surface"
+      ],
+      "omittedTiers": {
+        "component": "配置只读取文件，unit 已在临时数据目录中覆盖",
+        "conformance": "不经过插件接口",
+        "live": "不依赖宿主与模型"
+      }
+    },
+    {
+      "id": "UC-CONFIG-002",
+      "title": "主会话经 tsw 工具修改与回退统一配置",
+      "actor": "主会话 / tsw",
+      "acceptance": "config_change 应用 set / unset 后按 DN003 §4 校验整份有效配置，无效时以 config_invalid 拒绝且不写文件、不记账；改动权限类键（扩大或收窄）须附绑定到修改前文件摘要的用户原话，否则以 g_user 拒绝；通过时先记 config.changed（前后全文、改动的键、理由、用户来源）再写文件，写入中断由下一次提交补写且不覆盖手改；config_revert 恢复某次修改之前的内容并同样记账；worker 与其他会话不能调用；hooks 拒绝直接编辑 config/ 并指向 config_change；当前配置无效时仍可经工具修复",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "tool:config_change",
+        "tool:config_revert",
+        "mcp:config_show",
+        "mcp:config_history"
+      ],
+      "component": "config",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不依赖宿主行为：MCP 与 hooks 经 surface 层的独立进程验证"
+      }
+    },
+    {
+      "id": "UC-LEASE-001",
+      "title": "调度租约的领取、续期、释放与接管（G-LEASE）",
+      "actor": "主会话 / 用户",
+      "acceptance": "租约空闲或在本机过期时可领取，持有者可续期；其他会话在有效期内只读；另一台机器的租约即使过期也不能静默领取；持有者可主动释放（交接），释放或被接管的会话记为让出（controller.lease_stood_down），再次领取时清除；接管必须附用户确认来源并核对原持有者，跨机器还需 from_machine；G-LEASE 对非持有者、其他机器和过期租约拒绝；另一台机器持有未释放的租约时，除接管外的所有写命令与 rebuild 都以 lease_other_machine 拒绝，读命令照常；用户本人在终端运行 lease takeover 时可省略 --user-source，来源记为 user-cli，在宿主会话中省略则拒绝",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:lease show",
+        "cli:lease acquire",
+        "cli:lease release",
+        "cli:lease takeover"
+      ],
+      "component": "lease",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不依赖宿主与模型"
+      }
+    },
+    {
+      "id": "UC-PLAN-001",
+      "title": "受理与规划（T02–T05、需求变更、依赖重绑定）",
+      "actor": "主会话 / 用户",
+      "acceptance": "受理时提问阻止规划直到用户答复（G-USER）；G-PLAN 要求任务书完整且仓库已配置；依赖不能自依赖或成环；依赖未满足进入等待依赖，上游完成后经 sync 就绪；需求变更 revision+1 并按状态处理；依赖可重新绑定到上游新 revision",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "tool:intake_question",
+        "tool:input_resolve",
+        "tool:task_plan",
+        "tool:task_update",
+        "tool:dependency_rebind",
+        "tool:stale_keep",
+        "cli:tool list",
+        "cli:tool run"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
+      }
+    },
+    {
+      "id": "UC-DISPATCH-001",
+      "title": "派发与 attempt（T07–T10、T15、R-ATTEMPT、预启动）",
+      "actor": "主会话",
+      "acceptance": "派发须持有租约、有名额与资源、依赖满足，新建会话还须在用户 turn；按 R-ATTEMPT 选择新建、复用 planned、投递待命会话或续用；会话未创建经 T09 回到就绪且代次失效，迟到会话只记录；执行目录冲突暂停；会话丢失回到就绪并以新 attempt 接手；其他主会话启动的会话不能续用",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "tool:task_dispatch",
+        "tool:attempt_start",
+        "tool:attempt_reconcile",
+        "tool:attempt_deliver",
+        "tool:attempt_continue",
+        "tool:attempt_update"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
+      }
+    },
+    {
+      "id": "UC-DISPATCH-002",
+      "title": "仓库任务的 worktree 与任务书中的仓库说明（CC006 §8）",
+      "actor": "主会话 / worker",
+      "acceptance": "仓库配置了本机 git 检出（repositories.<id>.path）的任务，attempt_start 在记录事件之前于执行目录下创建 worktree <执行目录>/<仓库 id>（分支按 worktrees.branch_pattern，基线为 base_ref 或远端默认分支），事件记录 worktree，MCP 返回的 cwd 为该 worktree；同一 attempt 的后续代次沿用已有 worktree，已有同名分支时用它；路径上已有其他内容（worktree_conflict）或 git 失败（worktree_unavailable）时拒绝且不记录事件；没有可用检出时不建 worktree，会话在执行目录中启动；任务书含“仓库与 worktree”一节：会话目录与分支（或没有 worktree 的原因）、须完整阅读并遵守的仓库指令文件（repositories.<id>.instructions，默认 AGENTS.md、CLAUDE.md、.github/copilot-instructions.md）并在报告中写明读了哪些、有 worktree 时列出数据目录的 skill（不含主会话专用的）；未配置的仓库没有这一节",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "surface": "不新增对外表面；attempt_start 的 MCP 表面由 UC-DISPATCH-001 的 surface 测试覆盖，返回的 cwd 由 component 测试经 MCP server 断言"
+      }
+    },
+    {
+      "id": "UC-REVIEW-001",
+      "title": "worker 自评审循环（E01–E07、评审预算、R-ROUND）",
+      "actor": "worker",
+      "acceptance": "评审轮次在 attempt 内递增；本周期轮次受有效预算限制；评审结果须满足输出契约；阻断项只能修复或有据拒绝；修复由后续增量评审或验证说明确认；定稿后 HEAD 变化须再评审；需求变更开启新周期；评审失败重试超限后交主会话判断；评审器因缺材料返回 blocked 时不算有效评审，补齐后以新一轮重跑；自查后预算用完时可直接交主会话判断",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "tool:review_start",
+        "tool:review_fail",
+        "tool:review_complete",
+        "tool:review_triage",
+        "tool:review_decide",
+        "tool:self_check_failed",
+        "tool:question",
+        "tool:progress_note",
+        "tool:review_exhausted"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
+      }
+    },
+    {
+      "id": "UC-REVIEW-002",
+      "title": "运行配置的评审器（review_run / tsw review run）",
+      "actor": "worker",
+      "acceptance": "只有绑定任务、处于运行状态且在执行目录中的 worker 能运行，同一 attempt 同时只运行一轮；开轮前校验评审器命令与评审范围（Git 的 head/base 必须是真实提交，缺省 base 取分叉点，选项形式的输入被拒绝），校验失败不开新一轮；请求与结果由 tsw 写入 runs/ 下本 attempt 的 review/，每轮请求都带当前需求；评审器以只读线程、配置的模型与 effort 运行，同一需求周期内续用上一轮线程并附上 worker 的处置；输出满足契约且 reviewed_head 与本轮 HEAD 一致（Git 缩写解析为同一提交）时记录 review_complete，否则以及任何开轮后的异常都保存原始输出并记录 review_fail；再次调用按落账的范围在同一轮重试，超出重试次数时记录 review.unavailable；关闭评审器时结束整个进程树；未实现的评审会话返回 UNSUPPORTED",
+      "surfaces": [
+        "cli",
+        "mcp"
+      ],
+      "claims": [
+        "cli:review run",
+        "mcp:review_run"
+      ],
+      "component": "review",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "unit": "行为依赖账本、投影与评审器进程，由 component 与 surface 覆盖"
+      }
+    },
+    {
+      "id": "UC-JUDGE-001",
+      "title": "主会话判断与交给人类（T11、T12、DN006 §8.3）",
+      "actor": "主会话 / 用户",
+      "acceptance": "worker 提问、预算用完、延后请求、评审器不可用都成为待判断事项；主会话可回答、追加轮次（不超过上限）、认定不成立、批准延后、调整方向或交给人类；每个决定写入 DecisionRecord；交给人类后由用户答复恢复原子状态，迟到答复只记录",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "tool:judge"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "主会话对转交问题的判断与转达由 T243（例行会话与 teams-chat 渠道）的 live 验证覆盖",
+        "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
+      }
+    },
+    {
+      "id": "UC-ASK-001",
+      "title": "worker 在自己的会话里问用户，超时转交主会话（T11、T12、DN006 §8.2–§8.5）",
+      "actor": "worker / 用户 / 主会话",
+      "acceptance": "ask_user 经 T11 进入 waiting_user，问题不进入主会话 inbox，attention 只显示状态；用户在 worker 会话的消息由 UserPromptSubmit hook 记录（其他会话注入的消息不记），user_answer 必须引用本会话记录的消息，经 T12 回到离开时的子状态，可同时登记用户批准的追加轮次、延后或认定不成立；超时（input.in_session_timeout_minutes）且用户未回复时，例行表的 handoff-scan 或 sync 的系统规则记录 input.handed_off（可回传；worker 的 input_handoff 保留），主会话 Stop hook 提示转交；转交后主会话可 handoff_resolve 代答（标为 reserved 的不行）或 input_relay 转达并以 input_resolve 记录用户原话；worker 的会话内提问与回复不受 plugins.human_channels 控制（只配 teams-chat 时照常可用）；input_relay 只接受 plugins.human_channels 加载的人类渠道（in-session 为在主会话中直接问，记为 channel main-session、plugin in-session，旧名 main-session 同义且同样需要 in-session 已加载；只配 teams-chat 时拒绝主会话转达），同一问题可依任意顺序转达到多个渠道（channel_sent 按账本中是否有 teams-chat 的转达判断，投影的 relayed_to 仍只记最后一个）；转给主会话的 handoff-scan 消息写明配置的每个人类渠道的做法，一个也没有时写明问题留在 worker 会话；问题已由他人答复后用户在 worker 会话的回复记为 input.late_response 并标明被取代的答复；Dashboard 页面显示等待用户的问题与转交状态",
+      "surfaces": [
+        "mcp",
+        "hook",
+        "cli"
+      ],
+      "claims": [
+        "tool:ask_user",
+        "tool:user_answer",
+        "tool:input_handoff",
+        "tool:handoff_resolve",
+        "tool:input_relay"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "unit": "规则依赖账本与投影，在 component 层经真实工具与 hook 验证",
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-CHANGE-001",
+      "title": "worker 凭用户在本会话中的话登记需求变更并重新提交（DN002 §5.1a，T28）",
+      "actor": "用户 / worker / 主会话",
+      "acceptance": "UserPromptSubmit hook 记录用户在 live worker 会话中输入的每条消息（不限于有待答问题时；注入消息与已验收、取消、归档的任务不记），没有待答问题时消息不对应问题；requirement_change 只接受引用本任务、本会话、当前 revision 下记录的消息（G-CHANGE），来源取记录的原文；in_progress 经 E07、verifying 经 T17、done 经 T28 回到执行并开启新周期（旧技术验收失效、重新占用资源），T28 的 G-RES 或 G-DEP 不满足时改经 T23 回到 intake；waiting_user 要求先登记答复；accepted、cancelled、archived 拒绝；revision+1、任务书按新 revision 重写；登记后以系统身份运行 sync 传播依赖；worker 登记的 task.requirement_changed 进入主会话 inbox 并唤醒持租主会话，主会话自己的 task_update 不进入；之后 worker 在同一 attempt 内评审、提交，主会话按新 revision 验收；主会话在 waiting_user 时 task_update 不作废待答问题（事件的 superseded_requests 为空，T292 之前没有该字段的事件重放时仍作废全部待答请求），任务保持 waiting_user，hook 仍把用户回复关联到该问题，之后的答复经 T12 回到执行并因 revision 已变开启新周期，被代答后的迟到答复照常登记；用户的话就是回答时主会话先 input_resolve（T12）再 task_update（E07），worker 继续评审、提问与提交（DN002 §5.1）",
+      "surfaces": [
+        "mcp",
+        "hook"
+      ],
+      "claims": [
+        "tool:requirement_change"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-ROUTINE-001",
+      "title": "例行会话按例行表运行脚本，把超时的会话内问题转给主会话（DN006 §8.9）",
+      "actor": "主会话 / 例行会话 / tsw",
+      "acceptance": "主会话在用户 turn 中 routine_start（routine.start_requested，返回会话名、目录与创建参数）、start_session、routine_bind（routine.bound，旧代次撤销），宿主在被启动会话每轮结束时唤醒启动者时（routine_start 返回 detach: true）随即分离它并 routine_detached（routine.detached，只对当前代次、只一次）；例行会话的角色按会话 ID 解析，只列出例行工具，hooks 拦下它的编辑、命令行与建会话（CC-B11），定时提示须带 <scheduled-task>；routine_board 返回到期的例行项与维护动作（首次与续期时 arm、按间隔 clear_context、失效后重新 arm），并把运行时间记在 cache/routine.json；routine_armed 记录 routine.armed；routine_run 运行 handoff-scan，把超时且用户未回复的会话内问题记为 input.handed_off（by: system），返回发给主会话的原文；attention 的 routine 给出 missing / starting / attached / unarmed / stale，主会话 Stop hook 在用户 turn 提醒启动、在失效时提醒发消息、在任何一轮提醒分离仍挂在名下（attached）的例行会话",
+      "surfaces": [
+        "mcp",
+        "hook"
+      ],
+      "claims": [
+        "tool:routine_start",
+        "tool:routine_bind",
+        "tool:routine_detached",
+        "tool:routine_armed",
+        "tool:routine_run",
+        "mcp:routine_board"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-CHANNEL-001",
+      "title": "经 Teams 转达问题，例行表取出以任务 ID 开头的回复交主会话登记（DN006 §8.7）",
+      "actor": "主会话 / 例行会话 / 用户",
+      "acceptance": "input_relay（channel: teams-chat）记录 input.relayed 并给出以 [TaskSteward] 开头的卡片与目标 chat：card_html 是按问题内容排版的富文本（标题、任务、问题、回复方式与 worker 会话链接各自成段，问题的段落、列表、带编号的选项与代码块保留，文字转义），去掉标签后仍以 [TaskSteward] 开头，读取时不会当作答复，card 为同一内容的纯文本；主会话发送后 channel_sent 记录 channel.message_sent，例行表随之有 teams-replies（routine.job_added / job_updated）；routine_board 只在有经 Teams 转达、仍待答的问题时列出它，带取数参数；routine_run 每次处理一步（读取窗口从最早一个待答问题的卡片起到现在，不限条数）：先只列出一页消息的 ID、创建时间与最后修改时间，去掉 tsw 发出的卡片、已转过、窗口外的消息，以及读过正文、判定不转出且之后没有改动的消息，再由 next 取剩下消息的正文；判定不转出的消息记在例行缓存（teams_checked），这一行出现新的问题或用户的 Teams ID 变化时作废重读，窗口前移或 chat 不再有待答问题时清理，读取失败的一步不记，不影响分页与连续失败计数；这一页满页且还没读到窗口起点时 next 给出以本页最早时间为界的下一页；读到哪一步由 tsw 记在缓存中，例行会话的 PostToolUse hook 把 mcp__workiq__fetch 的结果交给 routine_run，例行会话不转抄（没有记下时才用它传的 fetched）；列出的 ID 与创建时间、条数，以及取回正文的消息 ID 不一致时按读取失败计；从中选出用户发送、在读取窗口内、不是 tsw 发出（按出站消息 ID）、未转过、以问题编号或等待中任务 ID 开头的消息，对应到它回答的问题（以任务 ID 开头的不会算到之后才问的问题上），记为 channel.reply_seen（可回传）并返回发给主会话的原文，正文超过 routine.teams_message_chars 时截取并标明 truncated、原文长度与按消息 ID 读取全文的路径；主会话不在线、租约已过期时仍转给最后持有租约的主会话；主会话用 input_resolve 以 teams-chat 来源登记，经 T12 让 worker 继续；问题不再待答时自动移出列表；取数失败时例行会话照样调用 routine_run（fetched 为错误原文），同一 chat 连续 3 次读取失败时 forward 告诉主会话一次（有候选的列出不清零计数），attention 的 routine 列出 fetch_failing 直到读取恢复",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "tool:channel_sent"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-VERIFY-001",
+      "title": "提交、核验与技术验收（T13、T17、T18、G-SUBMIT、G-ACCEPT）",
+      "actor": "worker / 主会话",
+      "acceptance": "提交须满足 G-SUBMIT 并把草稿报告复制进 runs；主会话可给出剩余工作退回执行；技术验收须逐项覆盖验收要求、核对 HEAD、有已核验的产出、集成已完成、没有待答输入，并写出 review.md",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "tool:submit",
+        "tool:feedback",
+        "tool:integrate",
+        "tool:output_link",
+        "tool:task_accept"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
+      }
+    },
+    {
+      "id": "UC-MERGE-001",
+      "title": "worker 合并 PR 并等合并提交的 CI 通过后提交，主会话核对证据（DN002 §3.5、G-SUBMIT、G-ACCEPT）",
+      "actor": "worker / 主会话",
+      "acceptance": "仓库授权 delivery.merge 的任务（不看任务类型）：任务书写明合并方式、合并后等 CI 与 live 的要求；hooks 只对授权仓库的任务放行 worker 的 gh 合并命令，且目标必须是本任务的仓库（配置须写明 repository）；submit 须带合并记录（PR、合并提交、合并的 head 等于提交 HEAD、主分支上合并提交的 CI 结果：提交等于合并提交、结论 success、运行链接，以及 live 说明）或 merge_skipped 原因，CI 未完成或失败时拒绝并写明等待或修复 / revert，未授权时不能带合并记录；task_accept 要求该 PR 已由主会话核验登记并写明对证据的核对，review.md 含“合并后核对”与 CI 链接",
+      "surfaces": [
+        "mcp",
+        "hook"
+      ],
+      "claims": [],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "live"
+      ],
+      "omittedTiers": {
+        "surface": "没有新增工具或命令：submit 与 task_accept 的新字段经 MCP / CLI 共用实现，hooks 规则在 unit 层验证",
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-LIFE-001",
+      "title": "暂停恢复、用户验收退回、取消归档与依赖传播（T14、T16、T19–T27、sync）",
+      "actor": "主会话 / 用户 / 系统",
+      "acceptance": "暂停须写明负责人、下一步、恢复条件与类别；恢复按 §5.3 选择 T27 / T20 / T21；用户验收与退回须有 G-USER 来源；退回与取消使下游失效或标记 stale，用户可保留成果；运行中的下游须先停止 worker 再经 T16 离开；已验收 7 天无变化自动归档；已取消的任务可归档",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "tool:task_pause",
+        "tool:task_resume",
+        "tool:user_accept",
+        "tool:user_reject",
+        "tool:task_cancel",
+        "tool:task_archive",
+        "tool:dependency_invalidate",
+        "tool:resource_release",
+        "tool:sync"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "unit": "行为依赖账本与投影，由 component 覆盖；迁移表与守卫另有 unit 测试"
+      }
+    },
+    {
+      "id": "UC-DIRECT-001",
+      "title": "用户在终端直接验收、退回、取消任务（DN006 §8.10）",
+      "actor": "用户",
+      "acceptance": "tsw task accept / reject / cancel 以 user 调用者运行 user_accept / user_reject / task_cancel（T22、T23、T25），来源由 tsw 记录为渠道 user-cli（本机用户与机器、cli 消息引用、原话或命令行、任务 revision 与决定类别）；交互时先确认，非交互须 --yes；退回须有理由；revision 不一致时 G-USER 拒绝；在任何宿主会话中（Claude Code 的会话环境变量）拒绝；主会话不能以 user-cli / status-app 记录来源，user 调用者也不能用其他渠道或其他工具；有活动 worker 的任务不提供取消",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:task accept",
+        "cli:task reject",
+        "cli:task cancel"
+      ],
+      "component": "direct",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；会话中拒绝按环境变量判定，由 surface 以独立进程覆盖"
+      }
+    },
+    {
+      "id": "UC-DIRECT-002",
+      "title": "Dashboard 应用：本机托管、直接读账本，一键验收、退回、取消（DN006 §8.10）",
+      "actor": "用户",
+      "acceptance": "tsw status serve 只监听 127.0.0.1，每次启动生成令牌并输出带令牌的地址；带令牌的首次访问换成 HttpOnly、SameSite=Strict 的 cookie；没有 cookie、令牌错误或 Host 不是本机时拒绝；页面与 STATUS.html 相同并在卡片上加按钮（待验收：验收、退回；无活动 worker：取消；有活动 worker 时写明原因）；按钮请求须带请求头令牌与本页 Origin，按页面上的 revision 以渠道 status-app 记录并执行与 UC-DIRECT-001 相同的实现，结果以 JSON 返回并显示在卡片上；只读提供 runs/ 与 legacy/ 下的文件，其余路径 404；在宿主会话中拒绝启动；静态 STATUS.html 不含按钮与令牌；退回理由在卡片内的输入框填写并发送；卡片显示当前 revision 的任务书与 brief.md 链接，并从账本列出历史 revision（登记、需求变更附原话、退回附理由），.md 文件按纯文本提供",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:status serve"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "surface"
+      ],
+      "omittedTiers": {
+        "component": "写入走 UC-DIRECT-001 的同一实现（component 已覆盖）；HTTP 服务经独立进程在 surface 覆盖",
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；浏览器中的点击由本机手工验证记录在 PR 中"
+      }
+    },
+    {
+      "id": "UC-DIRECT-003",
+      "title": "Dashboard 应用的单任务视图与会话链接（DN006 §8.10）",
+      "actor": "用户 / 嵌入 Dashboard 应用的页面",
+      "acceptance": "GET /tasks/<任务> 与看板同一令牌 cookie 与 Host 核对，返回只读的单任务视图（已归档任务也可打开，不存在的任务 404 并给出返回看板的链接）；视图带与看板相同的 CSP、meta 令牌与脚本，按钮与卡片相同；依次列出概况、当前需求与 revision 历史、每个 attempt（阶段、会话链接、适配器、执行目录、分支、任务书）、当前提交与评审周期、轮次、产出、依赖与被依赖、资源与集成、全部提问与判断、决定、暂停、进展记录与本任务最近 200 条账本事件（改号后保留原号的事件），缺少的数据显示为空；应用内链接全为相对路径（看板 → tasks/<任务>，视图 → ../#task-<任务>、依赖 <任务>、报告 ../runs/...），不含主机与端口；看板卡片（当前 attempt，静态 STATUS.html 也有）与视图（每个 attempt）对有 session_ref 的 attempt 渲染会话链接 class=session，带 data-tsw-session、data-tsw-task、data-tsw-attempt、data-tsw-adapter 与 data-workdeck-session（T309，见 UC-DIRECT-009），claude-app（或没有适配器记录）的地址为 claude://claude.ai/epitaxy/<session_ref>，其他适配器无地址时渲染为不带 href 的 span；视图的 main 带 data-tsw-task；静态 STATUS.html 没有详情链接",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；真实浏览器打开看板与单任务视图由本机手工验证记录在 PR 与报告中"
+      }
+    },
+    {
+      "id": "UC-DIRECT-004",
+      "title": "TaskSteward Dashboard：名称、计数卡、任务流（依赖优先的布局、独立通道与端口、关系与线形选择）与刷新保留选择（DN006 §8.10，T273、T280、T304）",
+      "actor": "用户",
+      "acceptance": "静态页、Dashboard 应用与单任务视图的标题为 TaskSteward Dashboard；tsw dashboard 与 tsw status serve 是同一命令（选项相同，宿主会话中同样拒绝），views/STATUS.html、control.status_page 与渠道 status-app 不变；顶部计数卡不显示计数为 0 的卡片，关注卡（待启动、待判断、待用户答复）之后为看板上实际存在的每个状态一张，计数与分段条、状态筛选相同，最后为已归档（点击进入任务流并显示已归档）；「运行中」（占用名额的状态）与「follow-up」（有 open follow-up 的任务数）是筛选区类型之后的快捷项，计数为 0 时不显示；视图切换为按状态、按时间顺序、任务流；任务流每个任务一个卡片，显示编号、最近修改时间（任务最近一条账本记录的时间，投影的 last_record）、标题与状态；箭头按执行方向：依赖为从被依赖方指向依赖方的实线箭头，follow-up 为从来源指向转来任务的虚线箭头，引用为从被引用方指向引用方的点线箭头，跨仓库照画；横向依赖优先：依赖方总在被依赖方左边（含传递，也含经过不在布局中的任务的依赖），其余按最近修改时间越左越新（相邻两张卡片时间顺序反了时两者之间必有依赖路径），序列切成连续的列：依赖与勾选的 follow-up 的两端不同列、同仓库每列最多 6 个，跨越列数之和最小；纵向按仓库泳道（按最近活动排序）；每条线独立端口与通道：同一卡片的端口互不相同，同一间隙中纵向区间重叠的线通道互不相同，线不穿过卡片，用户截图样例（9 个任务、9 条依赖）0 交叉；布局由 tsw 生成并写入页面中不执行的 JSON 数据块（卡片的列与纵坐标、泳道上下边界、各列横坐标与间隙、每条线的路点；每套带不含引用、悬停用的含引用（原间隙）、勾选用的含引用（间隙加宽）三组路线；相同的只写一次，文本不能结束数据块），组合为 follow-up 勾选与否 × 显示引用与否 × 含与不含已归档共 8 种，全部任务全部组合 1 秒内；结果确定（同输入同输出）；图例中依赖没有勾选框（总显示、总参与排布），follow-up 勾选框默认勾选（取消时不画线、不约束分列、不参与上下文），「显示引用」默认不勾选：引用不参与排布，勾选时卡片的列与纵坐标不变、列只向右移（间隙按需加宽），不勾选时悬停或聚焦卡片临时显示它的引用、卡片不动；「折线」「曲线」选项默认折线，两者用同一组路点；筛选作用于卡片，直接相连的不符合者淡色显示，已归档任务默认只作上下文（只按依赖与勾选的 follow-up；引用不带出上下文，勾选前后卡片不动），没有显示卡片的列与泳道收拢；卡片在应用中链接 tasks/<任务>，静态页链接看板卡片；自动刷新与重新载入保留筛选、搜索、视图、分组排序、缩放与滚动、follow-up 与引用的选择（地址片段 hide=fu、refs=1）与线形（line=curve），不再按地址中的任务锚点重新定位，暂时没有任务的已选筛选保留；清除筛选与计数卡不改变这些选择",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:dashboard"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；真实浏览器中的三种视图、计数卡与刷新保留筛选由本机手工验证，截图附在 PR 与报告中"
+      }
+    },
+    {
+      "id": "UC-DIRECT-005",
+      "title": "Dashboard：任务流的引用关系、单任务视图的检索卡片与 Markdown 弹框（DN006 §8.10，T278）",
+      "actor": "用户",
+      "acceptance": "A 引用 B：B 在 A 任一 attempt 的推荐读取集合（read_set）中，或 A 当前的标题、目标、验收以任务编号（T 加 3–6 位数字，前后不接字母数字下划线，只认存在的任务）点名 B；A 自己、已有依赖或 follow-up 关系（任一方向）的一对不算；任务流节点带 data-refs，脚本画从被引用方指向引用方的点线箭头（与依赖、follow-up 不同的线型与颜色，图例「A 引用 B」）；引用不参与排布（T304，取代 T278 的引用决定左右、互相引用同列与错行干线）：有无引用卡片的列、顺序与纵坐标相同，引用线在卡片与其他线之间的空白中走（跨两列以上的在经过的各列中取没有卡片与其他线的高度，找不到时从泳道下方绕过），有自己的端口与通道，同列两端的在右侧间隙折返；引用不带出上下文（T304，用户选定）：只与看板任务有引用关系的已归档任务只在含已归档的布局中，勾选显示引用只画两端都已显示的引用线；单任务视图的「关系与资源」列出本任务引用的与引用本任务的任务（链接、标题、状态、来源）；单任务视图在概况之后显示检索卡片（关键词与来源、摘要与来源、标签、项目、stale 与原因、卡片绑定、依赖、产出），只读打开 cache/context.sqlite 不创建或更新索引，索引缺失、版本不同、无法读取或与账本历史不符时写明原因与 tsw context rebuild 并只显示投影的结构字段，本任务在索引之后有记录或没有卡片时标「索引落后」（索引序号与本任务最近记录序号）并取投影的结构字段、沿用索引的关键词与摘要；Dashboard 应用对 runs/、legacy/ 下的 .md 加 ?view=html 返回标准库渲染的 HTML 片段（标题、列表、任务列表、表格、代码块、引用、链接；原始 HTML 转义，只保留 http/https/mailto/相对链接，图片为链接；同样核对 cookie 与 Host，带 script-src 'none' 的 CSP），不加时仍为纯文本；应用页面的脚本把这些链接在原页面的对话框中打开（窄屏全屏、可滚动、Esc/关闭/点外部关闭，打开期间不自动刷新），页面 CSP 不变；静态 STATUS.html 不变",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；真实浏览器中的引用线、检索卡片与 Markdown 弹框（桌面与窄屏）由本机手工验证，截图附在 PR 与报告中"
+      }
+    },
+    {
+      "id": "UC-HOST-001",
+      "title": "按会话解析角色的 MCP server",
+      "actor": "主会话 / worker / 其他会话",
+      "acceptance": "stdio JSON-RPC：校验请求格式（-32600 / -32602），按支持的协议版本协商，声明 tools.listChanged 并在会话角色变化后通知；tools/list 只列出该角色可用的工具（未知会话与已撤销会话只有 whoami），tools/call 经同一注册表执行，错误以 isError 返回；worker 只能操作本任务与授权读取集合，会话目录与执行目录不一致时拒绝写工具；已绑定数据目录的会话不能用命令行声明角色；派发时执行目录在数据目录 work/ 下的（研究任务）由 MCP server 创建；在 starting 且未绑定会话的 attempt 执行目录中启动的会话，从第一次 tools/list 起就列出 worker 工具，绑定前除 whoami 外的调用以 not_bound 拒绝；主会话可用 lease_release 让出租约（之后 lease_status 的 stood_down 记录让出），另一个主会话随后 lease_acquire；whoami 给出当前持租主会话 orchestrator_session，worker 记录可回传事件的工具结果带 wake（发给持租主会话的消息，没有持租者时 send 为 false）",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "cli:mcp",
+        "mcp:whoami",
+        "mcp:task_read",
+        "mcp:task_list",
+        "mcp:lease_status",
+        "mcp:lease_acquire",
+        "mcp:lease_release"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "unit": "身份解析依赖投影，由 component 覆盖"
+      }
+    },
+    {
+      "id": "UC-HOST-002",
+      "title": "hooks 规则执行（SessionStart、PreToolUse、UserPromptSubmit、Stop）",
+      "actor": "Claude Code 宿主",
+      "acceptance": "SessionStart 为主会话领取租约并注入 attention 摘要（让出过租约的会话不领取、只注入只读说明）、为 worker 注入任务与可写路径（唤醒发给当前持租主会话）；PreToolUse 拒绝写出可写路径（编辑工具与可识别的 shell 写入）、写入 tsw 管理的目录、未授权推送与 PR（识别带路径与 .exe 的程序名）、对可执行文件求哈希、未落账的 start_session、在会话里调用 tsw 写命令；worker 离开执行目录时只允许 cd 回去；已撤销会话不能写入；[report] 注入回传提示；Stop 在有未处理回传或评审未收尾时拦截一次，并记录 worker.turn_ended；钩子内部错误不影响会话；待绑定的会话在绑定前只能读，编辑、命令行与建会话都被拒绝",
+      "surfaces": [
+        "mcp",
+        "cli"
+      ],
+      "claims": [
+        "cli:guard"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-HOST-003",
+      "title": "inbox、attention 与 Dashboard 页面",
+      "actor": "主会话",
+      "acceptance": "可回传事件进入 inbox，持有租约的主会话确认后以账本事件记录且重建后保持；attention 只读列出待判断、待答复、需对账、需停止、stale、待启动、待核验、暂停；Dashboard 页面随每次提交重新生成，显示记录时间而非渲染时间；卡片上过长的问题在卡片内滚动，当前 revision 的任务书可展开；「按时间顺序」一键切换为不分组、按最近记录时间倒序",
+      "surfaces": [
+        "mcp",
+        "cli"
+      ],
+      "claims": [
+        "mcp:inbox",
+        "mcp:inbox_ack",
+        "mcp:attention"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "unit": "依赖账本与投影"
+      }
+    },
+    {
+      "id": "UC-HOST-004",
+      "title": "Claude Code 插件包与生成文件",
+      "actor": "用户",
+      "acceptance": "插件清单、MCP 注册、hooks 配置都指向插件内的启动器；插件复制到产品仓库之外（插件缓存）时按 TSW_REPO、产品仓库、数据目录记录的 product_repo 找到运行时；插件不携带 skill，开发期插件清单与市场条目不写 version；tsw host render 幂等地运行 claude plugin update（有安装记录且找得到 claude 时），按 Claude Code 的安装记录报告更新前后每个安装与产品 plugin/ 是否一致；已安装的插件副本与 plugin/ 不一致时，主会话 SessionStart 注入不一致的文件并让用户运行 tsw host render；本仓库自带本地插件市场；tsw host render 生成数据目录的 CLAUDE.md 与项目 skill .claude/skills/orchestrate/SKILL.md、问题流程 handle-input（超时转交、判断、按配置的人类渠道通知用户，不含渠道细节）与渠道 skill teams-chat（富文本卡片的发送、回复登记、读取失败），install-hint 给出安装步骤与 auto 模式规则且不修改全局设置；worker 的执行目录不写权限规则，早先 tsw 写下、只含 tsw 规则的 settings.local.json 在 attempt_start 时删除，含其他内容的不动",
+      "surfaces": [
+        "mcp",
+        "cli"
+      ],
+      "claims": [
+        "cli:host render",
+        "cli:host install-hint"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "unit": "只有文件与命令行行为",
+        "component": "由 surface 直接覆盖"
+      }
+    },
+    {
+      "id": "UC-HOST-007",
+      "title": "worker 说明的单一来源：host render 放入数据目录，worker 会话的 prompt 以它开头（DN006 §6.2）",
+      "actor": "用户 / 主会话 / worker",
+      "acceptance": "产品仓库的 plugin/roles/worker.md 是 worker 通用说明的唯一来源；tsw host render 把它复制到数据目录的 roles/worker.md 并列在 written 中，tsw init 为没有它的数据目录写入一次、不覆盖已有的；roles/ 属于 tsw 管理的目录，会话的编辑与 shell 写入被 hooks 拒绝；attempt_start（派发与预启动）的结果带 prompt：这份副本的全文，后接“---”与本会话的一句指令（派发：先调用 whoami，再按任务书 runs/<任务>/<attempt>/brief.md 执行；预启动：可以先读任务书、不要开始工作、等派发消息），事件记录 worker_instructions_sha256；任务书只写任务本身，不附 worker 说明；副本缺失（worker_instructions_missing）或与运行中 tsw 旁边的来源字节不同（worker_instructions_stale）时 attempt_start 拒绝并提示运行 tsw host render，且在任何写入之前（不建执行目录与 worktree、不写任务书、不记事件）；worker 的 SessionStart 只注入任务、attempt、任务书路径、可写路径、待命状态与副本路径，不含任何工具规则；会话得到的说明版本与当前副本不同或没有记录时，SessionStart 或 UserPromptSubmit 提示完整重读副本，每个版本一次",
+      "surfaces": [
+        "cli",
+        "mcp",
+        "hook"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "生成与拼接不依赖宿主行为，surface 以独立进程覆盖；真实 app 中 host render 后新建 worker 会话的首个 prompt 由 T276 合并后核对，作为任务证据而不是可重复的 live 场景"
+      }
+    },
+    {
+      "id": "UC-HOST-008",
+      "title": "主会话自我更新：会话中只有主会话可以运行 tsw host render（T282，CC008 §5.7）",
+      "actor": "主会话 / worker / 例行会话 / 用户",
+      "acceptance": "在 Claude Code 会话中（CLAUDE_CODE_HOST_SESSION_ID 或 CLAUDECODE）运行 tsw host render：会话 ID 解析为主会话（数据目录中、角色 orchestrator）时照常运行，输出 written、plugin 与 restart（会话不能重启自己，请用户重启）；worker、例行会话、已撤销与待绑定会话、其他目录的会话（角色 none）以及只有 CLAUDECODE 没有会话 ID 的进程以 host_session_cli 拒绝（退出码 3，details 带 command 与 role，信息写明只有主会话可以运行、交给主会话或请用户在终端运行），拒绝发生在 render 写任何产出之前（不生成或改写 CLAUDE.md、skill、roles/、设置，不更新插件副本；解析身份时与其他读命令一样可能建立可重建的投影缓存与锁文件）；会话外的终端照旧运行；tsw task accept、tsw dashboard、tool run --role 等在主会话中仍被拒绝；PreToolUse 对主会话 Bash 中的 tsw host render（含 python -m tsw 写法）放行，对 worker、已撤销、待绑定会话拒绝；插件不一致的 SessionStart 提示与 orchestrate skill 让主会话先请用户确认，确认后自己运行并请用户重启会话",
+      "surfaces": [
+        "cli",
+        "hook"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "按会话角色放行由 CLI 与 hook 以独立进程覆盖；真实 app 中主会话在用户确认后运行 render 由 T282 合并后在用户的主会话中核对，作为任务证据而不是可重复的 live 场景"
+      }
+    },
+    {
+      "id": "UC-IMPORT-001",
+      "title": "导入 orchestrator-agent 历史（DN005）",
+      "actor": "用户 / 维护者",
+      "acceptance": "读取来源导出的快照，核对事件卷未变化（变化则拒绝），按 DN005 §3 分类全部任务：已归档、已取消、已验收只读导入，待用户验收、待规划、暂停（含原执行中改为 import_handover、失败改为 failure）可 resume；事件卷按原字节复制并写 manifest；任务书进 todo/，只读任务成果进 legacy/orchestrator-agent/runs/，可 resume 任务成果进 runs/；导入事件保留原业务时间（统一为 UTC），原 attempt 数延续 attempt 编号；PR 与产出进入产出表，依赖保留；与数据目录中非导入的同 ID 任务冲突时不覆盖并列出；重复导入不追加事件，较新的快照只更新导入后未被新系统改动的任务；只在任务书中存在的任务列入报告；导入报告 md 与 html 写入 legacy/orchestrator-agent/import/；导入后的任务能继续走状态机（用户验收、恢复、按新编号派发），只读任务拒绝派发",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:import orchestrator-agent"
+      ],
+      "component": "importer",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "unit": "分类与时间转换经 component 覆盖完整导入路径",
+        "conformance": "不经过插件接口",
+        "live": "真实 orchestrator-agent 数据的导入在 v2 切换时执行并核对导入报告"
+      }
+    },
+    {
+      "id": "UC-FOLLOWUP-001",
+      "title": "worker 与主会话记录、修改任务的 follow-up，主会话记下用户暂不处理的决定（DN002 §5.7）",
+      "actor": "worker / 主会话 / 用户",
+      "acceptance": "follow_up_record 在同一事件中分配 F-<任务>-<n> 编号，记录标题、说明、类别（缺省 remaining）、严重度、revision 与记录者；不改变任务状态、revision 与业务时间；worker 只能在自己持有任务、用户验收前（in_progress、waiting_user、verifying、done）记录，主会话除 archived 外都可以；出于用户原话时 worker 只能引用 hook 在本会话为该任务记录的消息，主会话可以引用该任务任何会话的消息或附 target 为 [任务, revision, follow_up] 的主会话原话，来源取记录的原文；follow_up_update 只改 open 的条目，worker 只改 worker 记录的、不能设复查日期，复查日期须附用户来源；attention 的 follow_ups 列出 open 且没有复查日期或已到期的条目；hook 提示 worker 用 follow_up_record 记录",
+      "surfaces": [
+        "mcp",
+        "hook"
+      ],
+      "claims": [
+        "tool:follow_up_record",
+        "tool:follow_up_update"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-FOLLOWUP-002",
+      "title": "主会话把一条或多条 follow-up 转为新任务或并入已登记的任务（DN002 §5.7）",
+      "actor": "主会话 / 用户",
+      "acceptance": "follow_up_convert 给 task 时在同一命令中登记新任务（T01，task.registered 记录 follow_up_of），标题、仓库、类型、目标与验收缺省时由 follow-up 与来源任务生成（多条时须给标题，来源跨仓库或类型时须给出），每个来源任务一条 follow_up.converted（mode new）；给 into_task 时只建立关联（mode existing），目标任务须已登记、不是 accepted / cancelled / archived，也不是来源任务本身；来源 follow-up 变为 converted 并指向新任务，已处理或不存在的条目被拒；task_read 与 tsw task show 返回 follow_ups 与 follow_up_of；改号时 converted_to 跟随新编号",
+      "surfaces": [
+        "mcp",
+        "cli"
+      ],
+      "claims": [
+        "tool:follow_up_convert"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-FOLLOWUP-003",
+      "title": "主会话驳回 follow-up；有 open follow-up 的任务不归档（DN002 §5.7、T24、T26）",
+      "actor": "主会话 / 用户 / 系统",
+      "acceptance": "follow_up_dismiss 须附理由，可附用户来源，条目变为 dismissed 并记录处理时间与理由，已处理的条目被拒；已验收任务的自动归档（T24）与已取消任务的归档（T26）在有 open follow-up 时不发生（task_archive 以 follow_ups_open 拒绝），条目处理完后照常归档；已归档的任务不再接受 follow-up",
+      "surfaces": [
+        "mcp",
+        "cli"
+      ],
+      "claims": [
+        "tool:follow_up_dismiss"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "只有主会话的账本操作，不依赖宿主行为"
+      }
+    },
+    {
+      "id": "UC-FOLLOWUP-004",
+      "title": "Dashboard 页面与单任务视图展示 follow-up（DN006 §8.10）",
+      "actor": "用户",
+      "acceptance": "卡片在有 open follow-up 时显示条数（Dashboard 应用中链接到详细页的 follow-up 一节），由 follow-up 转来的任务在卡片上列出来源；筛选区的「follow-up」快捷项（有 open follow-up 的任务数）按 followups 标记筛选；单任务视图列出全部条目（open 在前）：编号、类别与严重度、标题与说明（转义）、来源（revision、记录者、时间、用户原话）、状态与去向（转成的任务链接、驳回理由、复查日期），每条有 follow-up-<编号> 锚点，并列出本任务来自哪些 follow-up；投影从账本重建后条目不变",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "页面由账本生成，不依赖宿主行为"
+      }
+    },
+    {
+      "id": "UC-SESSION-001",
+      "title": "worker 会话的标题跟上任务状态（状态写在前面），用户改过的标题不动；验收后、任务归档后按配置归档（DN002 §5.8）",
+      "actor": "主会话 / 用户 / 例行会话",
+      "acceptance": "attempt_start 接受 session_title（基准标题，缺省为“<任务> <任务标题>”截到 50 字），返回创建会话用的 session_title（预启动带“[待命]”前缀，sessions.title_on_standby）并记在 attempt.start_requested（title_base、session_title）；attempt_reconcile 可带回实际用的标题；attention 的 sessions 按任务状态列出标题还没跟上的会话：投递给待命会话后为“<基准>”，用户验收（任何渠道，包括 user-cli 与 status-app）后为“[已验收] <基准>”，取消后为“[已取消] <基准>”（sessions.title_on_standby / title_on_accept / title_on_cancel，空字符串不加）；session_check 读 get_session 的返回：当前标题等于 tsw 记下的标题时返回 rename，已是应有标题记 already，其他记 user_title（此后不再列出、不再改），会话不存在或已归档记 missing；session_record 记 renamed 或 failed（failed 列为 state failed、不再提醒，可以重试）；sessions.archive_on_accept 为 true 时标题处理完（含 user_title）后列出 archive，成功记 attempt.closed（disposition archived），失败记 attempt.session_updated；任务归档（T24 自动归档、T26）后，sessions.archive_on_archive 为 true 时列出它仍保留的会话的 archive（原因 archived，不再改标题），成功记 attempt.closed（via sessions.archive_on_archive），验收后归档失败过的任务归档后仍为 failed（via 改为 archive_on_archive）；归档项带 via；这些都不改变任务状态（已归档的任务照样记回执）；T302 之前以“<基准>（待命）”创建、仍用着这个标题的待命会话列为改名为“[待命] <基准>”；T272 之前创建、没有记下标题的会话不列出；主会话 Stop hook 在任何一轮对 due 的项提醒一次；例行项 session-scan 把新出现的 due 项转给主会话（转发时间记在例行会话缓存；过了失效窗口仍未处理时再转一次，没有主会话可发时不记）；session_check 返回改名时记 asked，改名成功后任务状态变化时 asked 的回执仍被接受，只是看起来像 tsw 标题的用户标题仍算 user_title；已验收或已取消任务中 closed 的 attempt 仍处理",
+      "surfaces": [
+        "mcp",
+        "hook"
+      ],
+      "claims": [
+        "tool:session_check",
+        "tool:session_record"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-CONTEXT-001",
+      "title": "任务卡片：主会话写入关键词与摘要，导入任务取旧关键词记录，其余任务生成初版并标 stale（DN007 §5.1、§8、§12）",
+      "actor": "主会话 / tsw",
+      "acceptance": "task_summary（主会话、需要租约）记 task.summary_recorded（关键词 1–12 个、acceptance 阶段须有摘要），绑定当时的 revision 与产出摘要，不改变任务状态与最近活动；卡片的关键词按 主会话写入 > legacy/orchestrator-agent/metadata/task-keywords 的旧记录 > 由标题与任务书生成（stale）选取，keyword_source 标出来源；revision 或产出变化后卡片标为 stale；摘要缺失时取目标开头并标 summary_source=goal",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "tool:task_summary"
+      ],
+      "component": "context",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "只读本地账本、投影与数据目录文件，不依赖宿主与模型；真实数据目录上的检索在合并后由主会话验证（T275 报告）"
+      }
+    },
+    {
+      "id": "UC-CONTEXT-002",
+      "title": "context_catalog / context_search：按范围、关键词、别名与全文检索任务（DN007 §5.2–§5.3、§7）",
+      "actor": "主会话 / worker",
+      "acceptance": "范围为 repo / project / global（worker 缺省为本任务仓库）；查询词经别名（配置的仓库别名、标题标签）扩展；点名任务（task_ids 或查询中的任务 ID）与其硬依赖总在 pinned 中，不受范围与分页影响；其余按 主会话写入或旧记录的关键词命中 > 标题 > 摘要与生成的关键词 > 全文命中 > 最近活动排序，worker 的推荐读取集合在前，next_offset 分页；不少于 3 个字符的词查 FTS5 trigram 全文，更短的只在卡片上匹配；context_search 返回片段与出处；global 范围的 catalog 与每次 search 记 context.read",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "mcp:context_catalog",
+        "mcp:context_search"
+      ],
+      "component": "context",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "只读本地账本、投影与数据目录文件，不依赖宿主与模型；真实数据目录上的检索在合并后由主会话验证（T275 报告）"
+      }
+    },
+    {
+      "id": "UC-CONTEXT-003",
+      "title": "检索索引 cache/context.sqlite 增量跟随账本，落后时退回投影，可完整重建（DN007 §5.4、§12.2）",
+      "actor": "tsw / 主会话 / 用户",
+      "acceptance": "读取前处理 indexed_seq 之后的事件，只重建受影响任务的卡片与全文，推进 indexed_seq 并清理 L1 index_queue；更新失败时结果标 index_lag，落后任务按 L1 的标题、仓库与依赖参与结果，点名任务不会丢失；索引缺失、损坏、版本不符或与账本历史不符时自动全量重建；tsw context rebuild 与主会话的 context_rebuild（需要租约，记 maintenance.performed）丢弃并重建索引，不改变账本与投影；新表只由新事件写入，旧投影不需要 rebuild",
+      "surfaces": [
+        "cli",
+        "mcp"
+      ],
+      "claims": [
+        "cli:context rebuild",
+        "mcp:context_rebuild"
+      ],
+      "component": "context",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "unit": "索引的规则依赖数据目录、账本与 SQLite，在 component 层验证",
+        "conformance": "不经过插件接口",
+        "live": "只读本地账本、投影与数据目录文件，不依赖宿主与模型；真实数据目录上的检索在合并后由主会话验证（T275 报告）"
+      }
+    },
+    {
+      "id": "UC-CONTEXT-004",
+      "title": "context_read / context_task：按部分读取任务材料与本任务的完整过程（DN007 §5.3、§7.1）",
+      "actor": "主会话 / worker",
+      "acceptance": "context_read 读取 spec / brief / report / reviews / decisions / outputs / follow_ups / requests，必须写理由（context.require_read_reason），按 context.max_chars 分页（next_offset），返回出处，并记 context.read（读者、任务、部分、理由、字符数）；任务不存在时拒绝；worker 可读任何任务；context_task 返回 attempt、评审轮次与意见、决定、问答、follow-up、产出与事件时间线",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "mcp:context_read",
+        "mcp:context_task"
+      ],
+      "component": "context",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "只读本地账本、投影与数据目录文件，不依赖宿主与模型；真实数据目录上的检索在合并后由主会话验证（T275 报告）"
+      }
+    },
+    {
+      "id": "UC-CONTEXT-005",
+      "title": "用户决定与长期偏好：preference_record 记录、context_decisions 检索并标明能否作为依据（DN007 §6、§12.2）",
+      "actor": "主会话 / worker",
+      "acceptance": "preference_record（主会话、需要租约）须附 target 为 [preference, <scope>, standing] 的用户原话，scope 为 global / repo:<名> / project:<名>，替代旧偏好须同范围或更窄且旧偏好未被替代，更窄范围的偏好只在其范围内优先，项目偏好只适用于该项目的任务；context_decisions 返回长期偏好与从事件中抽取的历史用户决定（任务答复、验收、退回、需求变更、follow-up 处置、配置授权），按主题词（可不写，列出范围内全部）、类型（kind：standing / task / one_time）、范围（global / repo / task；repo 可加 project）过滤并分页，标出类型、范围、替代关系与 usable_as_basis（in_scope / this_task_only / this_object_only / false）",
+      "surfaces": [
+        "mcp"
+      ],
+      "claims": [
+        "tool:preference_record",
+        "mcp:context_decisions"
+      ],
+      "component": "context",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "只读本地账本、投影与数据目录文件，不依赖宿主与模型；真实数据目录上的检索在合并后由主会话验证（T275 报告）"
+      }
+    },
+    {
+      "id": "UC-CONTEXT-006",
+      "title": "长期偏好的管理与使用：撤销、终端命令与任务书的偏好核对（DN007 §6.1、§6.2）",
+      "actor": "主会话 / 用户",
+      "acceptance": "preference_revoke（主会话需要租约，或 user 调用者）须附 target 为 [preference, <编号>, revoke] 的用户原话，只能撤销现行的（未被同范围替代、未撤销），记 user.preference_revoked 并写入 preference_revocations；撤销后该偏好 usable_as_basis 为 false 并带 revoked，它对更宽范围偏好的覆盖解除，不能再被替代；主会话只能用会话渠道、user 调用者只能用 user-cli / status-app；tsw preference list（默认现行，--all 全部，--repo / --project 限定范围）、record（--supersedes 替代）、revoke 以 user 调用者运行，来源记为 user-cli，非交互须 --yes，在任何宿主会话中拒绝；tsw 每次生成任务书时核对目标中引用的 P-<n>：已被替代（写出现在有效的编号、范围与原文）、在任务仓库内被更窄范围覆盖、范围不包括该仓库、已撤销或不存在时在任务书开头加“偏好核对”一行，项目范围的引用视为适用；task_dispatch / attempt_continue 的 read_set 可补充偏好编号（须存在、现行并能到达任务仓库，否则拒绝），任务书开头写“派发时补充的适用偏好”（编号、范围、原文），授权读取集合只列任务，续用时补充偏好或已引用偏好的状态变化时立即重写任务书（只在偏好行变化时，attempt.continued 记 brief_rewritten；被拒绝的续用不改任务书），目标不改写；偏好记录后不更新产品即在下一次检索与任务书中生效",
+      "surfaces": [
+        "mcp",
+        "cli"
+      ],
+      "claims": [
+        "tool:preference_revoke",
+        "cli:preference list",
+        "cli:preference record",
+        "cli:preference revoke"
+      ],
+      "component": "context",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "只读写本地账本与投影、生成任务书文件，不依赖宿主与模型；主会话按 task-intake skill 使用偏好在合并后的真实受理中核对（T287 报告）"
+      }
+    },
+    {
+      "id": "UC-CONTEXT-007",
+      "title": "任务结束时搜集偏好候选：preference_sources 给出材料与子代理说明，preference_candidates_record 记录候选，用户确认后才记为偏好（DN007 §6.3，CC007）",
+      "actor": "worker / 主会话 / 用户",
+      "acceptance": "preference_sources（worker 与主会话，只读）按任务从账本给出材料：hook 记录的 worker 会话用户消息 M-…、任务事件中带 VerifiedSource 的用户原话 E<序号>（由 hook 消息组成的与偏好自身的事件除外）、当前目标 goal@r<n>（verified false）；宿主注入的消息（含早先误记的子代理交回结果）不是材料，任务改号前旧编号的事件归改号后的任务；worker 只能取本任务的材料（否则 read_scope）；附上能到达任务仓库与卡片项目的现行偏好、本任务的候选与其他任务未决的候选、scanned_through、搜集状态和以 tsw/host/preference_scan.md 开头的 prompt；材料超过上限时保留目标与最新的部分并标 materials_truncated；preference_candidates_record（worker 只对自己持有、用户验收前的任务，主会话除已归档外）一次记录一次搜集：candidates 至多 5 条且可以为空，每条的 source_ref 须为本任务在 scanned_through 之前的材料、quote 去除多余空白后须原样出现在该材料中（否则 quote_not_found），scope 缺省 global，supersedes 须存在、现行且范围相容，skipped 的类别为 same_as / project_decision / product_behavior / task_requirement / not_standing；与未决候选（建议的范围）或现行偏好（记录的原文与范围，已确认的候选以其偏好为准）原话相同（忽略空白）且范围相同或已有的是全局的跳过并列入 duplicates（另一仓库范围或扩大到全局的仍记录）；scanned_through 早于当前目标（读取材料后任务改了目标或 revision）以 stale_scan 拒绝；每条候选记 user.preference_candidate（编号 PC-<n>），再记 task.preference_scanned；候选不进入 user_decisions，context_decisions 以 kind candidate 列出且 usable_as_basis 为 false，kind standing 不含候选；task_read 给出 preference_candidates 与 preference_scan（missing：本 revision 未搜集；stale：之后 hook 又记录了用户消息或事件中有新的用户原话；done）；context_decisions 的 candidate 按仓库查询时按建议范围匹配、按任务查询时列出该任务提出的，attention 的 preference_candidates 列出未决候选；preference_record 带 candidate（须未决）时 topic 与 text 可省（用候选的主题与原话），改过的 text 须原样出现在 user_source.text 中，记 user.preference_recorded 带 candidate，候选标为已记录并指向新偏好；preference_candidate_dismiss（主会话或 user 调用者）附 target 为 [preference, <候选编号>, dismiss] 的用户原话，只能处理未决候选，记 user.preference_candidate_dismissed；已处理的候选再确认或拒绝以 candidate_closed 拒绝；tsw preference list --candidates（默认未决，--all 全部）、record --candidate、dismiss 以 user 调用者在会话外运行，来源渠道 user-cli",
+      "surfaces": [
+        "mcp",
+        "cli"
+      ],
+      "claims": [
+        "mcp:preference_sources",
+        "tool:preference_candidates_record",
+        "tool:preference_candidate_dismiss",
+        "cli:preference dismiss"
+      ],
+      "component": "context",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "材料、记录、核对与确认只读写本地账本与投影，不依赖宿主；子代理（宿主 Agent 工具与模型）判断候选的质量不在自动测试中，合并后在真实任务的提交与验收中观察（CC007 §6）"
+      }
+    },
+    {
+      "id": "UC-HOST-009",
+      "title": "自我更新按改动决定步骤：update-plan、render 记录、whoami runtime、update_record、接班主会话（T283，DN006 §9.8–§9.9，CC006 §11）",
+      "actor": "主会话 / 用户",
+      "acceptance": "tsw host render 把产品仓库当时的 HEAD 记入 tsw-home.json 的 rendered（commit、dirty、at）；MCP server 启动时记下产品仓库的 HEAD 与 CLAUDE_PLUGIN_ROOT 的目录名，whoami 在 runtime 中返回；tsw host update-plan（只读，任何会话都可运行）以 --from 或 --running 与 render 记录中最旧的提交为起点（--running 可同时给出 MCP 的提交与会话加载的插件副本版本，不是提交的列为 unresolved；都没有时用可识别的插件副本版本，仍没有时以 from_unknown 拒绝）、--to（默认 HEAD）为终点，按文件把改动分为 docs / install / rendered / plugin / runtime / dashboard，按内容判定 projection（REDUCER_VERSION）、index（SCHEMA_VERSION）与 instructions（CLAUDE_MD 模板；claude_code.py 只有模板变化时不算 runtime），按顺序给出动作（ledger_rebuild、reinstall、render、plugin_copy、reread_skills、dashboard_restart、host_rules、reload 或 instructions），每项带 impact、who、how 与 pending；只有 MCP server 载入的运行时代码与插件包需要 reload（命令行专用模块的清单由测试核对 MCP server 不导入它们），reload 按 update.reload（restart_host 由用户、new_session 由主会话），只有 instructions 时按 update.instructions；列出提交标题中的任务及其报告、执行中的 worker attempt 与例行会话、render 记录、插件副本、Dashboard 服务与用户设置中缺少或过期的 auto 模式规则；重读 skill 与 compact / clear 是 manual（不进 pending）；render、需要重新加载的运行时与服务都是终点时 pending 为空；投影需要重建时仍输出计划、ledger_rebuild 在最前、会话列表不可用；update_record（主会话、持有租约）记 maintenance.performed（kind host_update）；主会话 start_session 的 cwd 就是数据目录本身时 CC-B9 放行（接班主会话），其他目录仍要求先 attempt_start；render 安装 tsw-update skill，orchestrate skill 引用它；ledger_rebuild 的 pending 按当前投影是否可读判定（可读即已重建），reinstall 为 manual；配置无效时按默认值计划并报告 config_problems",
+      "surfaces": [
+        "cli",
+        "mcp",
+        "hook"
+      ],
+      "claims": [
+        "cli:host update-plan",
+        "mcp:update_record"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "按改动分类与动作由 unit / component / surface 覆盖；真实 app 中按新流程完成一次更新（重启 app 或接班主会话、auto 分类器是否放行接班会话）在合并后由主会话下一次更新时核对，作为任务证据"
+      }
+    },
+    {
+      "id": "UC-DIRECT-006",
+      "title": "Dashboard 常驻服务：登录时启动的计划任务、固定端口、持久令牌与会话读不到令牌（T283，DN006 §8.10，CC006 §12，CC-B12）",
+      "actor": "用户 / 主会话",
+      "acceptance": "tsw dashboard install（终端，会话中以 host_session_cli 拒绝）在数据目录之外的 tsw-dashboard-secret 目录建立只存令牌摘要的登录记录（已有则沿用），用 schtasks /Create /XML 登记登录触发、当前用户、InteractiveToken、LeastPrivilege、不限时、IgnoreNew 的任务，动作为 pythonw -m tsw dashboard service --home <数据目录>，再 /Run 并等 /healthz；输出不含令牌；非 Windows 且没有替身时以 unsupported_platform 拒绝且不写任何文件；tsw dashboard service 按记录中的摘要核对令牌（每个浏览器用自己的令牌，cookie 与按钮请求头都是它）、监听 dashboard.port，/healthz 不要令牌（照常核对 Host）只返回 service、commit、home_key、started_at，cookie 带 Max-Age；tsw dashboard open（终端）生成新令牌、只保存摘要（保留最近 8 个）并打开带令牌的地址，输出不含令牌，未安装时拒绝；tsw dashboard restart 由主会话或终端运行（worker 等以 host_session_cli 拒绝，PreToolUse 同样拦下 worker），/End 后 /Run 并等服务报告产品 HEAD，未安装时报告 installed false；install、status、restart 核对 /healthz 的 home_key，端口上是另一个数据目录的服务时报告 conflict 且不算在运行；tsw dashboard status 只读、任何会话可运行；tsw dashboard uninstall 删除任务与令牌；CC-B12：所有已登记会话的 Read / Edit / Write / Grep / Glob 等的路径落在令牌目录中，或 Bash / PowerShell 中有指向令牌目录的路径词时拒绝；update.reload、update.instructions 与 dashboard.port 的取值与默认值经配置校验；登录记录的读取、追加与替换在跨进程锁内进行，每次写入用独立的临时文件，同时运行的 open 都保留；任务参数中的数据目录是安装时解析出的绝对路径；配置无效时 install、restart、service 拒绝，status 用默认端口并报告 config_problems",
+      "surfaces": [
+        "cli",
+        "hook"
+      ],
+      "claims": [
+        "cli:dashboard install",
+        "cli:dashboard uninstall",
+        "cli:dashboard open",
+        "cli:dashboard restart",
+        "cli:dashboard status",
+        "cli:dashboard service"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "Task Scheduler 在测试中以记录参数的替身代替（模拟证据）；真实登记、登录启动与 PWA 由用户在终端运行 tsw dashboard install 验证，记在任务报告中"
+      }
+    },
+    {
+      "id": "UC-DIRECT-007",
+      "title": "Dashboard 的长期偏好页：按范围与主题列出，记录、替代、撤销记为用户本人的操作（T290，DN006 §8.10，DN007 §6.2）",
+      "actor": "用户",
+      "acceptance": "Dashboard 应用的 /preferences 与看板同样准入（令牌 cookie、本机 Host），使用相同的 CSP 与 meta 令牌，返回看板为 ./；看板页首（只在应用中）有「长期偏好 N」链接（N 为现行条数），静态 STATUS.html 没有该链接并提示 tsw preference list；页面从投影列出全部长期偏好，按范围分组（全局、仓库、项目），组内按主题再按编号，每条显示编号锚点、主题、照录并转义的原文、状态（现行、已被 P-n 替代、已撤销附时间与理由、在某范围被更窄范围的 P-n 覆盖）、替代关系（替代 / 在本范围内覆盖 / 被替代 / 被覆盖，页内链接）与来源（渠道、记录者、消息引用、时间、账本序号；原话与原文不同时可展开；已撤销的附撤销来源）；同范围同主题两条以上现行偏好时在该组标出；筛选为地址参数 scope 与 all=1，在服务端筛选，默认只列现行的；页首记录表单（范围下拉：全局、任务的各仓库、已有范围、其他手填）；现行条目（未被同范围替代、未撤销）有替代（预填范围、主题、原文；全局的可选更窄范围）与撤销（理由）表单，其他条目没有；POST /api/preferences/record（scope、topic、text、可选 supersedes）与 /api/preferences/<编号>/revoke（reason）须带请求头令牌与本页 Origin、JSON 请求体，以 user 调用者运行 preference_record / preference_revoke，来源渠道 status-app、message_ref 为 status-app:<实例>:<序号>、text 为页面上填写的原文或理由，target 为 [preference, <范围>, standing] 或 [preference, <编号>, revoke]；缺少字段、supersedes 不是编号数组、替代或撤销已被替代或已撤销的偏好、范围不合规时返回 409 与原因且不写账本；成功返回编号与账本序号，应用在终端输出一行；其他 /api/preferences 路径 404；请求可带 command_id（8–80 个字母、数字、-、_）：同一 command_id 的重试沿用同一 message_ref，返回第一次的结果且不重复记录，内容不同或应用重启后的重试以 command_conflict 拒绝",
+      "surfaces": [
+        "cli"
+      ],
+      "component": "host",
+      "status": "active",
+      "claims": [],
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "页面与接口在本机由 surface 层的独立进程覆盖，不依赖宿主会话；浏览器中的确认框与表单另以本机截图核对"
+      }
+    },
+    {
+      "id": "UC-DIRECT-008",
+      "title": "Dashboard 的会话标签端点：嵌入方门户查询会话属于哪个任务、attempt 与角色（T297，DN006 §8.10，workdeck DN005 §10）",
+      "actor": "嵌入 Dashboard 应用的门户（workdeck daemon 经插件代理）",
+      "acceptance": "Dashboard 应用（tsw status serve、tsw dashboard 与常驻服务）提供 POST /workdeck/labels：与页面同样核对令牌 cookie 与本机 Host，Origin 缺省或为本应用，不要求 X-TSW-Token；请求体须为 JSON（否则 415）、至多 1 MiB（否则 400）、为带 sessions 数组的对象（否则 400）；忽略不认识的字段，id 不是 1–512 个字符的字符串或含不成对代理字符的条目跳过，重复的只算一次；回答 {labels: {<会话 ID>: [...]}}，请求中的每个会话一项（按请求顺序，没有标签为空数组）：attempts.session_ref 为 <任务> · <attempt> · worker（title 为 task、attempt、phase、role 四行，link 为 /tasks/<任务>，任务 ID 按路径段编码），leases.holder_session 为 orchestrator（title 为 role、lease 两行，link 为 /），routine_sessions.session_ref 为 routine g<代>（title 为 role、generation、phase 三行，无 link）；一个会话的多个标签按 worker、orchestrator、routine 排列；text 与 title 至多 256 个字符，每个会话至多 64 个标签；每次请求从追上账本末尾的投影读取，账本变化后下一次查询即反映（例如让出租约后主会话不再有标签）；查询不写账本；投影无法读取（SQLite 或文件错误）时返回 503 JSON，不含本机路径；GET 该路径 404",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；与 workdeck annotator 的一致性由 unit / component 按 annotator 的规则断言，另在本机对同一投影运行 workdeck 的 readAnnotations 对照，记在任务报告中"
+      }
+    },
+    {
+      "id": "UC-DIRECT-009",
+      "title": "Dashboard 的 workdeck 插件 manifest 与会话链接的标准属性 data-workdeck-session（T309，DN006 §8.10，CC006 §13，workdeck DN005 §11）",
+      "actor": "用户 / workdeck plugin add / 嵌入 Dashboard 的 workdeck 门户",
+      "acceptance": "tsw 按当前安装生成 workdeck 插件协议第 1 版的 manifest：workdeckPlugin 1、id（默认 tsw，须符合 [a-z0-9][a-z0-9-]{0,31}，否则以 invalid_plugin_id 拒绝）、name、description、spawn（command 为生成它的解释器，pythonw.exe 换成同目录的 python.exe；args 为 -X utf8 -m tsw status serve --no-open --home <数据目录>；cwd 为产品检出；不加 env）、auth query-token、labels /workdeck/labels 每 10 秒；不含 sessionLinks、url 与任何令牌。Dashboard（tsw status serve、tsw dashboard 与常驻服务）在 GET /.well-known/workdeck-plugin.json 不经令牌返回它（JSON，照常核对 Host，不设 cookie、不带 CORS 头），内容用该进程自己的解释器、检出与数据目录；tsw dashboard workdeck-manifest [--id] 把同一份 manifest 输出到 stdout（任何会话可运行），--out <文件> 写成不带 BOM、LF 换行的 UTF-8 文件，在宿主会话中拒绝 --out（不写文件）；宿主护栏放行会话中的 tsw dashboard workdeck-manifest。看板卡片、单任务视图与静态 STATUS.html 的会话链接（a 或没有地址时的 span）在 data-tsw-* 之外带 data-workdeck-session=<session_ref>（所有适配器，按 HTML 转义）",
+      "surfaces": [
+        "cli",
+        "hook"
+      ],
+      "claims": [
+        "cli:dashboard workdeck-manifest"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；接入本机真实 workdeck（workdeck plugin add、标签与会话跳转）由任务报告中的本机运行记录（T309）"
+      }
+    },
+    {
+      "id": "UC-SETUP-001",
+      "title": "安装脚本 tsw setup 与两条安装路径的入口（T308，DN009，CC009）",
+      "actor": "用户 / 终端入口 setup.ps1 / 会话入口 setup skill",
+      "acceptance": "tsw setup check（只读，--questions 输出唯一的问题清单：数据目录必填、没有默认值，产品检出由入口决定，不问仓库与账号；结果带 ready 与 problems）、plan（只读：每一步的状态、要运行的 claude 命令与用户设置的差异，前提不满足时退出码 3）、install（--answers 文件或 --interactive 在终端逐项提问、显示计划并请用户确认；空的数据目录回答再问一次）按顺序执行 machine、shim、path、plugin、home、user_settings、render、dashboard，每一步已满足就跳过（重跑不运行 claude 命令、不改用户设置、不产生新备份）；改动用户环境的步骤在改动之前把归属写入 %LOCALAPPDATA%\\TaskSteward\\install.json，中途失败后重跑保留第一次记下的归属；垫片 tsw.cmd 与无扩展名的 sh 脚本运行检出中的 tsw_launch.py；用户级 Path 只追加垫片目录一项（保留原有项与类型）；插件来源经 claude plugin marketplace add <检出> 指向检出（已从别处安装时改指、不重装），没有安装时 claude plugin install；新数据目录写初始配置（语言、评审器、人类渠道、宿主、Dashboard 端口，不含仓库与账号）并记 product_repo 与 .local/tsw-home，已有数据目录不改配置、只报告差异，非空的其他目录被拒绝；用户同意时先备份再写 Claude Code 用户设置的 env.TSW_HOME、env.TSW_PYTHON 与三条 auto 模式规则（按规则名替换旧文本，其他内容不动），不同意时输出要手工合并的文本；host render；用户选择时登记 Dashboard 计划任务（--no-browser 时不打开浏览器）；安装阶段的 verify 核对垫片、PATH 持久值、插件来源与副本、数据目录定位、配置、用户设置、Dashboard 与不加载用户 site-packages 时 MCP 握手，PATH 生效列为 pending_reload；verify --after-reload 另核对 PATH 中的 tsw 是垫片、update-plan 的 pending 为空；uninstall 按记录删除 Dashboard 服务、插件与市场、自己加入的用户设置（仍等于写入值的 env 键恢复原值或删除，原有的规则保留）、垫片与自己加入的 PATH 项，数据目录永不删除，没有安装记录时拒绝；setup.ps1 用 plugin/setup/prereq.ps1 探测 Python 3.10+（跳过 WindowsApps 占位程序）、git 与 claude（PATH，再 %LOCALAPPDATA%\\Programs\\ClaudeCode\\claude.exe），缺少时经同意用 winget 安装，再以完整路径运行 tsw setup install --interactive；fetch_checkout.py 把产品仓库克隆到固定位置并检出已安装插件的 gitCommitSha，已有检出只校验同一仓库与工作区干净；插件的 setup skill 只在用户要求安装、修复、升级或卸载时使用；插件的 MCP 与 hooks 用 ${TSW_PYTHON:-python} 运行；update-plan 的 install 类别（pyproject.toml、setup.ps1、tsw/setup/）与 host_rules 在 tsw setup 安装的机器上由主会话重跑 tsw setup install；host install-hint 与 tsw setup 同源；host render 更新插件时优先用 install.json 记录的 claude；在还没有绑定数据目录的会话中运行的 install 结束时把该会话记为让出租约（controller.lease_stood_down，via setup），输出 install_session；主会话中重跑不记；install 的 next 说明重启 Claude app、在数据目录新建主会话并输入“开始示例任务”（demo_prompt）",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [
+        "cli:setup check",
+        "cli:setup plan",
+        "cli:setup install",
+        "cli:setup verify",
+        "cli:setup uninstall"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口的一致性套件；Claude Code、winget、注册表与计划任务由替身代替（模拟）"
+      }
+    },
+    {
+      "id": "UC-SETUP-002",
+      "title": "会话中运行 tsw setup：未绑定的会话与主会话可以安装，worker 与例行会话不可以（T308，DN009 §8，CC008 §5.8）",
+      "actor": "未绑定数据目录的会话 / 主会话 / worker / 例行会话",
+      "acceptance": "tsw setup install / uninstall 在会话外的终端、角色为 none 的会话（还没有数据目录，或会话不在任何数据目录中）与主会话中运行，其中的 Dashboard 登记与 host render 随之放行；worker、例行会话、已撤销与待绑定的会话以 host_session_cli 拒绝（退出码 3，details 带 command 与 role），拒绝发生在任何写入之前；PreToolUse 对已登记会话的 Bash 命令识别 tsw setup install / uninstall（含 python -m tsw 与启动器写法），worker 拒绝、主会话放行；只读的 setup check / plan / verify 任何会话都可以运行；直接运行 tsw dashboard install / open / uninstall 与 tsw host render 的规则不变",
+      "surfaces": [
+        "cli",
+        "hook"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "surface"
+      ],
+      "omittedTiers": {
+        "component": "按会话角色放行由 CLI 与 hook 以独立进程覆盖",
+        "conformance": "不经过插件接口",
+        "live": "本机 live 在会话外的终端与未绑定的会话环境中运行安装（UC-SETUP-001 的 live 场景）；worker 被拒绝由 surface 以独立进程覆盖"
+      }
+    },
+    {
+      "id": "UC-SETUP-003",
+      "title": "安装后的示例任务：tsw-demo skill（T308，DN009 §15.3）",
+      "actor": "用户 / 主会话",
+      "acceptance": "tsw host render 把产品的 tsw/host/demo_skill.md 原样生成为数据目录的 .claude/skills/tsw-demo/SKILL.md 并列在 written 中；skill 在用户说“开始示例任务”时使用，规定一个不关联仓库（repo tsw-demo）的研究类任务的标题、目标与验收原样登记：worker 用 ask_user 提一个问题、报告解释任务状态机并列出本任务经过的状态、按 input.in_session_timeout_minutes 说明超时转交、记录与评审器的互动（review_run）、用 follow_up_record 记一条 idea；开始前说明模型调用并请用户确认，提交后主会话技术验收、引导用户在 Dashboard 中查看并验收；update-plan 把 demo_skill.md 的改动归为 rendered（重读 tsw-demo）",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "surface"
+      ],
+      "omittedTiers": {
+        "component": "只生成文件，surface 以独立进程覆盖",
+        "conformance": "不经过插件接口",
+        "live": "示例任务需要真实主会话、worker 与评审器的模型调用，由用户在另一台机器上按试装说明执行并记录（T308 验收）"
+      }
+    },
+    {
+      "id": "UC-SETUP-004",
+      "title": "tsw setup 的可选步骤：把 Dashboard 接入本机的 workdeck 门户（T309，DN009 §5 第 7 步，CC006 §13）",
+      "actor": "用户 / tsw setup / workdeck 命令行",
+      "acceptance": "问题清单增加 workdeck（布尔）：PATH 中找到 workdeck 命令时默认是并在终端中询问，找不到时默认否且不询问；旧的答案文件（保存的或用 --answers 给出的）中没有这一项时按否处理（重跑不替用户接入）。install 的 workdeck 步骤在 dashboard 之后：答案为否或找不到命令时 skipped；还没有数据目录位置时 todo；按安装的解释器、检出与数据目录位置生成 manifest（UC-DIRECT-009，数据目录还没建好时 plan 也一样），install.json 中记下的摘要等于它时 ok 且不调用 workdeck；否则 plan 列出要启动的命令（starts）与 workdeck plugin list 中是否已有同 id 的插件（replaces），并写进终端在确认前显示的 actions，install 先在 install.json 记下 id 与 existed_before，把 manifest 写到临时文件运行 workdeck plugin add <文件> --replace（之后删除临时文件），成功时记下 added 与摘要；workdeck 失败时这一步为 failed，带输出末尾与手工命令，其他步骤照常完成，verify 的 workdeck 检查失败（退出码 3），修正后重跑即补上；失败前 workdeck 已写入配置（workdeck plugin list 中该 id 的启动描述等于这份 manifest）时记为已加入；此后重跑时 workdeck 回答 unchanged 而 workdeck plugin list 没有 running: <id> ready（daemon 仍没有运行它）时这一步仍为 failed。verify 在安装接入过（或失败过）时核对记下的摘要等于按当前目标重新生成的摘要。uninstall 对安装加入（或中断前已写入）的插件，在 workdeck plugin list 中该 id 仍是这份 manifest 时运行 workdeck plugin remove <id>，用户之后改过的保留，读不到列表时不移除、保留记录并报告手工命令（被替换的旧项不恢复），失败只报告；数据目录不删除",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "omittedTiers": {
+        "surface": "tsw setup 的命令行表面由 UC-SETUP-001 覆盖；这一步在 component 中经独立进程运行 tsw setup 与替身 workdeck",
+        "conformance": "不经过插件接口；workdeck 由替身代替（模拟）",
+        "live": "本机真实 workdeck 的 plugin add 记在任务报告（T309）；setup-e2e 的隔离运行不接入用户的 workdeck"
       }
     }
   ]

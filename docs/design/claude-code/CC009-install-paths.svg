@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2800" height="2800" viewBox="0 0 2800 2800">
+<title>在 Claude Code 上安装 TaskSteward：两条各自在一处完成的路径</title>
+<desc>终端与 Claude 会话两条安装路径汇入公共安装、验证与完成流程。</desc>
+<defs>
+<marker id="arrow-main" markerWidth="12" markerHeight="12" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#2867B3"/></marker>
+<marker id="arrow-loop" markerWidth="12" markerHeight="12" refX="10" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#7857A7"/></marker>
+</defs>
+<rect x="0" y="0" width="2800" height="2800" fill="#FFFFFF"/>
+<g font-family="Segoe UI, &quot;Microsoft YaHei&quot;, Arial, sans-serif">
+<rect x="100" y="69" width="8" height="52" rx="4" fill="#2867B3"/>
+<text x="132" y="108" font-size="44" font-weight="700" text-anchor="start" fill="#203448">在 Claude Code 上安装 TaskSteward：两条各自在一处完成的路径</text>
+<g data-boundary="Terminal path" data-box="180 200 1100 900">
+<rect x="180" y="200" width="1100" height="900" rx="20" fill="#EEF4FC" stroke="#B6C7D6" stroke-width="2" stroke-dasharray="9 8"/>
+<rect x="204" y="227" width="5" height="33" rx="2" fill="#2867B3"/>
+<text x="222" y="252" font-size="26" font-weight="700" text-anchor="start" fill="#203448">终端路径（全在终端）</text>
+<text x="222" y="286" font-size="26" font-weight="700" text-anchor="start" fill="#203448"></text>
+<rect x="1160" y="225" width="92" height="38" rx="19" fill="#FFFFFF" stroke="#B6C7D6" stroke-width="2" />
+<text x="1206" y="251" font-size="20" font-weight="600" text-anchor="middle" fill="#203448">泳道</text>
+</g>
+<g data-boundary="Session path" data-box="1520 200 1100 1100">
+<rect x="1520" y="200" width="1100" height="1100" rx="20" fill="#EEF8F1" stroke="#B6C7D6" stroke-width="2" stroke-dasharray="9 8"/>
+<rect x="1544" y="227" width="5" height="33" rx="2" fill="#2867B3"/>
+<text x="1562" y="252" font-size="26" font-weight="700" text-anchor="start" fill="#203448">会话路径（全在 Claude 会话）</text>
+<text x="1562" y="286" font-size="26" font-weight="700" text-anchor="start" fill="#203448"></text>
+<rect x="2500" y="225" width="92" height="38" rx="19" fill="#FFFFFF" stroke="#B6C7D6" stroke-width="2" />
+<text x="2546" y="251" font-size="20" font-weight="600" text-anchor="middle" fill="#203448">泳道</text>
+</g>
+<g data-boundary="Shared installer" data-box="180 1370 2440 1200">
+<rect x="180" y="1370" width="2440" height="1200" rx="20" fill="#FFF7E8" stroke="#B6C7D6" stroke-width="2" stroke-dasharray="9 8"/>
+<rect x="204" y="1397" width="5" height="33" rx="2" fill="#2867B3"/>
+<text x="222" y="1422" font-size="26" font-weight="700" text-anchor="start" fill="#203448">公共流程（同一个安装脚本，</text>
+<text x="222" y="1456" font-size="26" font-weight="700" text-anchor="start" fill="#203448">在发起的那一处运行）</text>
+<rect x="2500" y="1395" width="92" height="38" rx="19" fill="#FFFFFF" stroke="#B6C7D6" stroke-width="2" />
+<text x="2546" y="1421" font-size="20" font-weight="600" text-anchor="middle" fill="#203448">泳道</text>
+</g>
+<path d="M 730 390 V 465" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="1" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 730 390 V 465" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 730 595 V 675" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="2" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 730 595 V 675" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 730 795 V 885" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="3" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 730 795 V 885" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 730 1015 V 1510" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="4" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 730 1015 V 1510" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 2070 390 V 465" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="5" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 2070 390 V 465" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 2070 595 V 675" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="6" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 2070 595 V 675" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 2070 795 V 885" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="7" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 2070 795 V 885" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 2070 1015 V 1095" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="8" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 2070 1015 V 1095" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 2070 1225 V 1510" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="9" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 2070 1225 V 1510" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 1400 1660 V 1740" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="10" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 1400 1660 V 1740" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 1400 1830 V 1890" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="11" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 1400 1830 V 1890" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 1250 1970 H 430 V 1585 H 620" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="12" data-category="loop" stroke="#7857A7" marker-end="url(#arrow-loop)" d="M 1250 1970 H 430 V 1585 H 620" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 1400 2050 V 2140" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="13" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 1400 2050 V 2140" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 1400 2230 V 2310" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="14" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 1400 2230 V 2310" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<path d="M 1400 2410 V 2460" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linejoin="round"/>
+<path data-flow="15" data-category="main" stroke="#2867B3" marker-end="url(#arrow-main)" d="M 1400 2410 V 2460" fill="none" stroke-width="3" stroke-linejoin="round"/>
+<g data-node="Start in a terminal" data-kind="start" data-box="430 310 600 80">
+<rect x="430" y="310" width="600" height="80" rx="40.0" fill="#EAF6EE" stroke="#3C8D5A" stroke-width="2" />
+<text x="730.0" y="360.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">开始（终端）</text>
+</g>
+<g data-node="git clone the product repository" data-kind="step" data-box="320 465 820 130">
+<rect x="320" y="465" width="820" height="130" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" />
+<text x="730.0" y="522.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">git clone 产品仓库</text>
+<text x="730.0" y="564.0" font-size="21" font-weight="400" text-anchor="middle" fill="#52657A">用户自己运行</text>
+</g>
+<g data-node="Run setup.ps1" data-kind="subprocess" data-box="320 675 820 120">
+<rect x="320" y="675" width="820" height="120" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" /><line x1="332" y1="675" x2="332" y2="795" stroke="#2867B3" stroke-width="2"/><line x1="1128" y1="675" x2="1128" y2="795" stroke="#2867B3" stroke-width="2"/>
+<text x="730.0" y="727.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">运行 setup.ps1</text>
+<text x="730.0" y="769.0" font-size="21" font-weight="400" text-anchor="middle" fill="#52657A">探测 Python、git 与 claude</text>
+</g>
+<g data-node="Ask the questions in the terminal" data-kind="step" data-box="320 885 820 130">
+<rect x="320" y="885" width="820" height="130" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" />
+<text x="730.0" y="942.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">在终端中提问</text>
+<text x="730.0" y="984.0" font-size="21" font-weight="400" text-anchor="middle" fill="#52657A">由脚本提问</text>
+</g>
+<g data-node="Start in a session" data-kind="start" data-box="1770 310 600 80">
+<rect x="1770" y="310" width="600" height="80" rx="40.0" fill="#EAF6EE" stroke="#3C8D5A" stroke-width="2" />
+<text x="2070.0" y="360.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">开始（Claude 会话）</text>
+</g>
+<g data-node="/plugin install task-steward" data-kind="step" data-box="1660 465 820 130">
+<rect x="1660" y="465" width="820" height="130" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" />
+<text x="2070.0" y="522.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">/plugin install task-steward</text>
+<text x="2070.0" y="564.0" font-size="21" font-weight="400" text-anchor="middle" fill="#52657A">--marketplace &lt;GitHub 地址&gt;，再 /reload-plugins</text>
+</g>
+<g data-node="/task-steward:setup" data-kind="subprocess" data-box="1660 675 820 120">
+<rect x="1660" y="675" width="820" height="120" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" /><line x1="1672" y1="675" x2="1672" y2="795" stroke="#2867B3" stroke-width="2"/><line x1="2468" y1="675" x2="2468" y2="795" stroke="#2867B3" stroke-width="2"/>
+<text x="2070.0" y="727.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">/task-steward:setup</text>
+<text x="2070.0" y="769.0" font-size="21" font-weight="400" text-anchor="middle" fill="#52657A">探测前提</text>
+</g>
+<g data-node="setup clones the product repository" data-kind="step" data-box="1660 885 820 130">
+<rect x="1660" y="885" width="820" height="130" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" />
+<text x="2070.0" y="942.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">setup 自动 git clone 产品仓库</text>
+<text x="2070.0" y="984.0" font-size="21" font-weight="400" text-anchor="middle" fill="#52657A">检出插件安装时的提交</text>
+</g>
+<g data-node="Ask the questions in the session" data-kind="step" data-box="1660 1095 820 130">
+<rect x="1660" y="1095" width="820" height="130" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" />
+<text x="2070.0" y="1152.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">在会话中提问</text>
+<text x="2070.0" y="1194.0" font-size="21" font-weight="400" text-anchor="middle" fill="#52657A">由 setup 提问</text>
+</g>
+<g data-node="tsw setup install" data-kind="subprocess" data-box="620 1510 1560 150">
+<rect x="620" y="1510" width="1560" height="150" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" /><line x1="632" y1="1510" x2="632" y2="1660" stroke="#2867B3" stroke-width="2"/><line x1="2168" y1="1510" x2="2168" y2="1660" stroke="#2867B3" stroke-width="2"/>
+<text x="1400.0" y="1563.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">tsw setup install</text>
+<text x="1400.0" y="1605.0" font-size="21" font-weight="400" text-anchor="middle" fill="#52657A">PATH 垫片、市场改指克隆、数据目录与配置、</text>
+<text x="1400.0" y="1633.0" font-size="21" font-weight="400" text-anchor="middle" fill="#52657A">用户设置（先备份）、host render、Dashboard</text>
+</g>
+<g data-node="Install-time verify" data-kind="subprocess" data-box="950 1740 900 90">
+<rect x="950" y="1740" width="900" height="90" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" /><line x1="962" y1="1740" x2="962" y2="1830" stroke="#2867B3" stroke-width="2"/><line x1="1838" y1="1740" x2="1838" y2="1830" stroke="#2867B3" stroke-width="2"/>
+<text x="1400.0" y="1795.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">安装阶段的 verify</text>
+</g>
+<g data-node="Verified?" data-kind="decision" data-box="1250 1890 300 160">
+<polygon points="1400.0,1890 1550,1970.0 1400.0,2050 1250,1970.0" fill="#FFF7E8" stroke="#B5873A" stroke-width="2"/>
+<text x="1400.0" y="1980.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">验证通过？</text>
+</g>
+<g data-node="Restart Claude app, open the main session" data-kind="step" data-box="950 2140 900 90">
+<rect x="950" y="2140" width="900" height="90" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" />
+<text x="1400.0" y="2195.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">重启 Claude app，在数据目录打开主会话</text>
+</g>
+<g data-node="verify --after-reload" data-kind="subprocess" data-box="950 2310 900 100">
+<rect x="950" y="2310" width="900" height="100" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" /><line x1="962" y1="2310" x2="962" y2="2410" stroke="#2867B3" stroke-width="2"/><line x1="1838" y1="2310" x2="1838" y2="2410" stroke="#2867B3" stroke-width="2"/>
+<text x="1400.0" y="2352.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">verify --after-reload</text>
+<text x="1400.0" y="2394.0" font-size="21" font-weight="400" text-anchor="middle" fill="#52657A">在主会话或新终端中</text>
+</g>
+<g data-node="Done" data-kind="end" data-box="1150 2460 500 70">
+<rect x="1150" y="2460" width="500" height="70" rx="35.0" fill="#F0F3F6" stroke="#708294" stroke-width="2" />
+<text x="1400.0" y="2505.0" font-size="28" font-weight="600" text-anchor="middle" fill="#203448">完成</text>
+</g>
+<g data-badge="12" data-box="730 1953 230 34">
+<rect x="730" y="1953" width="230" height="34" rx="17" fill="#FFFFFF" stroke="#7857A7" stroke-width="2" />
+<text x="845.0" y="1977" font-size="20" font-weight="600" text-anchor="middle" fill="#7857A7">否：修正后重跑</text>
+</g>
+<g data-badge="13" data-box="1360 2078 80 34">
+<rect x="1360" y="2078" width="80" height="34" rx="17" fill="#FFFFFF" stroke="#2867B3" stroke-width="2" />
+<text x="1400.0" y="2102" font-size="20" font-weight="600" text-anchor="middle" fill="#2867B3">是</text>
+</g>
+<text x="180" y="2640" font-size="32" font-weight="700" text-anchor="start" fill="#203448">图例</text>
+<rect x="180" y="2680" width="70" height="42" rx="21.0" fill="#EAF6EE" stroke="#3C8D5A" stroke-width="2" />
+<text x="268" y="2709" font-size="20" font-weight="400" text-anchor="start" fill="#203448">开始</text>
+<rect x="470" y="2680" width="70" height="42" rx="12" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" />
+<text x="558" y="2709" font-size="20" font-weight="400" text-anchor="start" fill="#203448">步骤</text>
+<rect x="750" y="2680" width="70" height="42" rx="2" fill="#EAF3FF" stroke="#2867B3" stroke-width="2" /><line x1="762" y1="2680" x2="762" y2="2722" stroke="#2867B3" stroke-width="2"/><line x1="808" y1="2680" x2="808" y2="2722" stroke="#2867B3" stroke-width="2"/>
+<text x="838" y="2709" font-size="20" font-weight="400" text-anchor="start" fill="#203448">子流程</text>
+<polygon points="1155.0,2680 1190,2701.0 1155.0,2722 1120,2701.0" fill="#FFF7E8" stroke="#B5873A" stroke-width="2"/>
+<text x="1208" y="2709" font-size="20" font-weight="400" text-anchor="start" fill="#203448">判断</text>
+<rect x="1450" y="2680" width="70" height="42" rx="21.0" fill="#F0F3F6" stroke="#708294" stroke-width="2" />
+<text x="1538" y="2709" font-size="20" font-weight="400" text-anchor="start" fill="#203448">结束</text>
+<path d="M 1750 2701 H 1824" fill="none" stroke="#2867B3" stroke-width="3" marker-end="url(#arrow-main)"/>
+<text x="1842" y="2709" font-size="20" font-weight="400" text-anchor="start" fill="#203448">主路径</text>
+<path d="M 2180 2701 H 2254" fill="none" stroke="#7857A7" stroke-width="3" marker-end="url(#arrow-loop)"/>
+<text x="2272" y="2709" font-size="20" font-weight="400" text-anchor="start" fill="#203448">重试与循环</text>
+</g>
+</svg>

@@ -64,6 +64,7 @@ stateDiagram-v2
 
     done --> accepted: T22 用户验收
     done --> intake: T23 用户退回或需求变更·revision+1
+    done --> in_progress: T28 worker 登记会话中的需求变更·revision+1
     accepted --> archived: T24 满7天无变化
 
     intake --> cancelled: T25 用户删除或关闭

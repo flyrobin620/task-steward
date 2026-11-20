@@ -1,0 +1,383 @@
+"""References in the task flow and the task view, and the index card (UC-DIRECT-005, T278)."""
+
+from __future__ import annotations
+
+import json
+import re
+import sqlite3
+from collections.abc import Iterator
+from typing import Any
+
+import pytest
+
+from tests.support import flow_layouts
+from tsw.context.index import IndexedCard, outputs_digest
+from tsw.host.flow import CARD_W, FlowTask, lay_out
+from tsw.host.relations import find_references, label, mentions, references
+from tsw.host.status import AppView, render
+from tsw.host.status_assets import CSS, SCRIPT
+from tsw.host.task_view import card_state, render_task
+from tsw.projection import SCHEMA_SQL
+from tsw.storage.base import LedgerTail
+
+mark = pytest.mark
+APP = AppView(token="tok-1", actions={})
+
+
+@pytest.fixture
+def conn() -> Iterator[sqlite3.Connection]:
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.executescript(SCHEMA_SQL)
+    yield db
+    db.close()
+
+
+def _task(db: sqlite3.Connection, task_id: str, status: str, seq: int, **fields: Any) -> None:
+    row: dict[str, Any] = {
+        "task_id": task_id,
+        "title": f"title {task_id}",
+        "repo": "demo",
+        "kind": "code",
+        "status": status,
+        "revision": 1,
+        "version": 1,
+        "spec_path": "todo/x.md",
+        "spec_sha256": "x",
+        "registered_seq": seq,
+        "last_activity": "2026-11-01T08:00:00Z",
+        "source_seq": 1,
+        **fields,
+    }
+    names = ", ".join(row)
+    marks = ", ".join("?" for _ in row)
+    db.execute(f"INSERT INTO tasks({names}) VALUES({marks})", tuple(row.values()))
+
+
+def _attempt(db: sqlite3.Connection, task_id: str, attempt: str, read_set: list[str]) -> None:
+    db.execute(
+        "INSERT INTO attempts(task_id, attempt, phase, read_set) VALUES(?, ?, 'live', ?)",
+        (task_id, attempt, json.dumps(read_set)),
+    )
+
+
+def _dep(db: sqlite3.Connection, task_id: str, dep_id: str) -> None:
+    db.execute(
+        "INSERT INTO dependencies(task_id, dep_id, bound_revision, kind, reason) "
+        "VALUES(?, ?, 1, 'explicit', 'x')",
+        (task_id, dep_id),
+    )
+
+
+def _node(page: str, task_id: str) -> str:
+    found = re.search(rf'<(a|span) class="fnode[^"]*" data-id="{task_id}"[^>]*>', page)
+    assert found, task_id
+    return found.group(0)
+
+
+def _section(page: str, key: str) -> str:
+    match = re.search(rf'<section class="panel" id="{key}">.*?</section>', page, re.S)
+    assert match, key
+    return match.group(0)
+
+
+# ---------------------------------------------------------------------- the rules
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_task_ids_are_named_with_three_to_six_digits() -> None:
+    text = (
+        "参考 T162、T170 / T226（T229）与`T247`；T251,T276 再提一次 T162。"
+        "迁移 T23 与 T07 不是任务；xT300、T301a、T1234567、T_302 也不是。"
+    )
+    assert mentions(text) == ["T162", "T170", "T226", "T229", "T247", "T251", "T276"]
+    assert label("read_set:a1") == "推荐读取集合（a1）" and label("goal") == "目标"
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_references_come_from_read_sets_and_named_ids_but_not_other_relations() -> None:
+    tasks = [
+        {"task_id": "T001", "title": "t", "goal": "", "acceptance": "[]"},
+        {"task_id": "T002", "title": "t", "goal": "", "acceptance": "[]"},
+        {"task_id": "T003", "title": "t", "goal": "", "acceptance": "[]"},
+        {"task_id": "T004", "title": "t", "goal": "", "acceptance": "[]"},
+        {
+            "task_id": "T005",
+            "title": "接着 T001 做",
+            "goal": "参考 T002 与 T005 自己、T999（不存在）、T003（依赖）、T004（follow-up）",
+            "acceptance": json.dumps(["与 T002 一致", "T23 迁移"]),
+        },
+    ]
+    read_sets = {"T005": {"a1": ["T005", "T003", "T002"], "a2": ["T001"]}}
+    joined = [("T005", "T003"), ("T004", "T005")]
+    found = find_references(tasks, read_sets, joined)
+    assert found == {
+        "T005": {
+            "T002": ["read_set:a1", "goal", "acceptance"],
+            "T001": ["read_set:a2", "title"],
+        }
+    }
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_the_projection_gives_the_references(conn: sqlite3.Connection) -> None:
+    _task(conn, "T001", "archived", 1)
+    _task(conn, "T002", "accepted", 2)
+    _task(conn, "T003", "in_progress", 3, goal="见 T001")
+    _attempt(conn, "T003", "a1", ["T003", "T002"])
+    _dep(conn, "T003", "T002")  # the dependency says more than the read set
+    assert references(conn) == {"T003": {"T001": ["goal"]}}
+
+
+# ---------------------------------------------------------------------- the task flow
+
+
+def _referring_board(db: sqlite3.Connection) -> None:
+    _task(db, "T001", "archived", 1, repo="hub")  # referenced by a board task: context
+    # T002 references a board task: context too.
+    _task(db, "T002", "archived", 2, repo="hub", goal="沿用 T004 的做法")
+    _task(db, "T003", "archived", 3, repo="hub")  # unrelated: only with the archived ones
+    _task(db, "T004", "accepted", 4)
+    _task(db, "T005", "in_progress", 5, goal="参考 T001 与 T004")
+    _attempt(db, "T005", "a1", ["T005", "T001"])
+    _task(db, "T006", "archived", 6, goal="后续见 T005")  # references a board task, newer
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_the_flow_draws_references_but_they_make_no_context(
+    conn: sqlite3.Connection,
+) -> None:
+    _referring_board(conn)
+    page = render(conn)
+    flow = page.split('id="flow"')[1]
+    t5 = _node(flow, "T005")
+    assert 'data-refs="T001 T004"' in t5 and 'data-deps=""' in t5
+    assert 'data-refs="T004"' in _node(flow, "T002")
+    assert 'data-refs="T005"' in _node(flow, "T006")
+    # References never make an archived task context, shown or not (the user's choice, T304):
+    # the archived tasks referenced are only in the layout with every task.
+    layouts = flow_layouts(page)
+    live = layouts["live:dep,fu,ref"]["cells"]
+    assert not {"T001", "T002", "T003", "T006"} & set(live)
+    assert {"T001", "T002", "T003", "T006"} <= set(layouts["all:dep,fu,ref"]["cells"])
+    # References never move a card: one layout whether shown or not.
+    assert layouts["live:dep,fu,ref"]["set"] == layouts["live:dep,fu"]["set"]
+    assert layouts["all:dep,fu,ref"]["set"] == layouts["all:dep,fu"]["set"]
+    assert 'const kinds = showing().filter(r => r !== "ref");' in SCRIPT
+    # Their routes run from the referenced task to the one referencing it, in the hover routes
+    # (the gaps as they are) and in the shown ones (the gaps widened).
+    for group in ("peek", "wide"):
+        refs = {(src, dst) for kind, src, dst, _ in layouts["all:dep,fu"][group] if kind == "ref"}
+        assert refs == {("T001", "T005"), ("T004", "T005"), ("T004", "T002"), ("T005", "T006")}
+    assert not [ln for ln in layouts["all:dep,fu"]["lines"] if ln[0] == "ref"]
+    # The legend tells the three lines apart; the script draws and highlights references.
+    assert "A 依赖 B" in flow and "follow-up 转来" in flow and "A 引用 B" in flow
+    assert 'class="lg ref"' in flow
+    assert 'const ATTR = {dep: "deps", fu: "from", ref: "refs"};' in SCRIPT
+    assert (
+        'if (drawn && kind === "ref" && !wide && peek !== a.dataset.id && peek !== b.dataset.id)'
+        in SCRIPT
+    )
+    assert ".edge.ref .line{stroke-dasharray" in CSS and ".lg.ref{" in CSS
+
+
+# ---------------------------------------------------------------------- the task view
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_the_task_view_lists_references_both_ways(conn: sqlite3.Connection) -> None:
+    _referring_board(conn)
+    page = render_task(conn, "T005", APP, [])
+    assert page is not None
+    relations = _section(page, "relations")
+    assert "<h2>关系与资源</h2>" in relations
+    cited = relations.split("<h3>本任务引用的任务</h3>")[1].split("<h3>")[0]
+    assert '<a href="T001">T001</a>' in cited and "推荐读取集合（a1）、目标" in cited
+    assert '<a href="T004">T004</a>' in cited and "已归档" in cited
+    citing = relations.split("<h3>引用本任务的任务</h3>")[1].split("<h3>")[0]
+    assert '<a href="T006">T006</a>' in citing and "<td>目标</td>" in citing
+    assert "T002" not in citing
+    page = render_task(conn, "T003", APP, [])
+    assert page is not None
+    assert _section(page, "relations").count('<p class="none">无</p>') >= 4
+
+
+def _card(**over: Any) -> dict[str, Any]:
+    card: dict[str, Any] = {
+        "task_id": "T005",
+        "title": "old title",
+        "repo": "demo",
+        "project_ids": ["demo"],
+        "kind": "code",
+        "status": "in_progress",
+        "revision": 1,
+        "keywords": ["任务流", "引用关系"],
+        "keyword_source": "recorded",
+        "summary": "画出引用 <b>线</b>",
+        "summary_source": "recorded",
+        "tags": ["tsw dashboard"],
+        "outcomes": [
+            {"type": "pr", "ref": "https://example.test/pull/41", "label": "PR41 · merged"}
+        ],
+        "dependencies": ["T004"],
+        "hard_dependencies": [],
+        "card_revision": {"task_revision": 1, "outputs": "abc123", "stale": False},
+    }
+    card.update(over)
+    return card
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_the_task_view_shows_the_index_card_when_it_is_current(conn: sqlite3.Connection) -> None:
+    _referring_board(conn)
+    found = IndexedCard(LedgerTail(40, "c40"), _card())
+    state = card_state(conn, "T005", found, {40: "c40"}, task_seq=38)
+    assert state is not None and state.problem is None and not state.lagging
+    section = _section(render_task(conn, "T005", APP, [], state) or "", "card")
+    assert "<h2>检索卡片</h2>" in section and "索引到账本序号 40" in section
+    assert '<span class="chip kw">任务流</span><span class="chip kw">引用关系</span>' in section
+    assert "<dd>主会话记录</dd>" in section and "画出引用 &lt;b&gt;线&lt;/b&gt;" in section
+    assert "<dt>stale</dt><dd>否</dd>" in section
+    assert "revision 1 · 产出摘要 abc123" in section
+    assert '<a href="https://example.test/pull/41">PR41 · merged</a>' in section
+    assert '<a href="T004">T004</a> <small>（推断）</small>' in section
+    # The overview comes first, then the card.
+    page = render_task(conn, "T005", APP, [], state) or ""
+    assert page.index('id="overview"') < page.index('id="card"') < page.index('id="requirement"')
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_a_stale_card_says_why(conn: sqlite3.Connection) -> None:
+    _referring_board(conn)
+    conn.execute("UPDATE tasks SET revision = 2 WHERE task_id = 'T005'")
+    bound = {"task_revision": 1, "outputs": "abc", "stale": True}
+    found = IndexedCard(LedgerTail(40, "c40"), _card(card_revision=bound))
+    state = card_state(conn, "T005", found, {40: "c40"}, task_seq=40)
+    section = _section(render_task(conn, "T005", APP, [], state) or "", "card")
+    assert "是：卡片记录于 revision 1，任务现在是 revision 2" in section
+    generated = _card(keyword_source="generated", card_revision=bound)
+    state = card_state(conn, "T005", IndexedCard(LedgerTail(40, "c40"), generated), {40: "c40"}, 40)
+    section = _section(render_task(conn, "T005", APP, [], state) or "", "card")
+    assert "由标题与任务书生成的初版" in section and "等主会话记录" in section
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_a_lagging_index_keeps_its_words_and_takes_the_projections_fields(
+    conn: sqlite3.Connection,
+) -> None:
+    _referring_board(conn)
+    bound = {"task_revision": 1, "outputs": outputs_digest([])[:12], "stale": False}
+    found = IndexedCard(LedgerTail(40, "c40"), _card(card_revision=bound))
+    state = card_state(conn, "T005", found, {40: "c40"}, task_seq=45)
+    assert state is not None and state.lagging and state.problem is None
+    assert state.card["card_revision"]["stale"] is False  # nothing it was bound to changed
+    assert state.card["title"] == "title T005" and state.card["keywords"] == ["任务流", "引用关系"]
+    section = _section(render_task(conn, "T005", APP, [], state) or "", "card")
+    assert "索引落后" in section and "索引到账本序号 40，本任务最近记录序号 45" in section
+    assert "tsw context rebuild" in section
+    # The revision changed after the card was indexed: stale, even though the index said not.
+    conn.execute("UPDATE tasks SET revision = 2 WHERE task_id = 'T005'")
+    state = card_state(conn, "T005", found, {40: "c40"}, task_seq=45)
+    assert state is not None and state.card["card_revision"]["stale"] is True
+    section = _section(render_task(conn, "T005", APP, [], state) or "", "card")
+    assert "是：卡片记录于 revision 1，任务现在是 revision 2" in section
+    conn.execute("UPDATE tasks SET revision = 1 WHERE task_id = 'T005'")
+    # So do outputs registered since.
+    conn.execute(
+        "INSERT INTO outputs(task_id, output_id, type, ref, delivery, evidence) "
+        "VALUES('T005', 'O-1', 'pr', 'https://example.test/pull/42', 'merged', '{}')"
+    )
+    state = card_state(conn, "T005", found, {40: "c40"}, task_seq=45)
+    assert state is not None and state.card["card_revision"]["stale"] is True
+    conn.execute("DELETE FROM outputs")
+    # A task the index has no card for yet is behind as well; its words are missing and
+    # whether it is stale is not known.
+    state = card_state(conn, "T005", IndexedCard(LedgerTail(40, "c40"), None), {40: "c40"}, 10)
+    assert state is not None and state.lagging
+    section = _section(render_task(conn, "T005", APP, [], state) or "", "card")
+    assert "<dt>关键词来源</dt><dd>缺失</dd>" in section
+    assert "<dt>stale</dt><dd>未知（索引中还没有这张卡片）</dd>" in section
+
+
+@mark.use_case("UC-DIRECT-005")
+@pytest.mark.parametrize(
+    ("found", "checksums", "problem", "words"),
+    [
+        (IndexedCard(LedgerTail.empty(), None, "missing"), {}, "missing", "检索索引尚未建立"),
+        (IndexedCard(LedgerTail.empty(), None, "version"), {}, "version", "其他版本"),
+        (IndexedCard(LedgerTail.empty(), None, "unreadable"), {}, "unreadable", "暂时无法读取"),
+        # Another history: the index is past the ledger, or the event there differs.
+        (IndexedCard(LedgerTail(90, "c90"), _card()), {40: "c40"}, "foreign", "历史不符"),
+        (IndexedCard(LedgerTail(40, "old"), _card()), {40: "c40"}, "foreign", "历史不符"),
+    ],
+)
+def test_an_index_that_cannot_be_used_is_said_so_with_the_way_out(
+    conn: sqlite3.Connection,
+    found: IndexedCard,
+    checksums: dict[int, str],
+    problem: str,
+    words: str,
+) -> None:
+    _referring_board(conn)
+    state = card_state(conn, "T005", found, checksums, task_seq=40)
+    assert state is not None and state.problem == problem
+    # Only what the projection knows; nothing of a card from another history.
+    assert state.card["keywords"] == [] and state.card["keyword_source"] == "missing"
+    section = _section(render_task(conn, "T005", APP, [], state) or "", "card")
+    assert words in section and "tsw context rebuild" in section
+    assert "任务流" not in section
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_no_card_for_an_unknown_task_and_none_read(conn: sqlite3.Connection) -> None:
+    found = IndexedCard(LedgerTail(1, "c1"), None)
+    assert card_state(conn, "T404", found, {1: "c1"}, 0) is None
+    _task(conn, "T001", "intake", 1)
+    assert "没有读取检索索引" in _section(render_task(conn, "T001", APP, []) or "", "card")
+
+
+# ---------------------------------------------------------------------- the layout (T304)
+
+
+def _t(n: int, repo: str = "a") -> FlowTask:
+    return FlowTask(f"T{n:03d}", f"t{n}", repo, "code", "in_progress", n, f"2026-11-{n:02d}")
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_references_do_not_take_part_in_the_layout() -> None:
+    # Before T304 a reference put the referencing task left and tasks referencing each other
+    # shared a column; now the cards stay where the dependencies and the time put them.
+    tasks = [_t(1), _t(2), _t(3)]
+    bare = lay_out(tasks, {})
+    for refs in (
+        {"T003": ["T001"]},
+        {"T001": ["T003"], "T003": ["T001"]},
+        {"T001": ["T002"], "T002": ["T003"], "T003": ["T001"]},
+    ):
+        layout = lay_out(tasks, {}, references=refs)
+        assert layout.cards == bare.cards and layout.columns == bare.columns, refs
+        assert {(ln.source, ln.target) for ln in layout.wide} == {
+            (b, a) for a, bs in refs.items() for b in bs
+        }
+
+
+@mark.use_case("UC-DIRECT-005")
+def test_a_reference_across_columns_runs_clear_of_cards_and_lines() -> None:
+    # T004 depends on T001 two columns away and references T002 past the middle column.
+    tasks = [_t(1), _t(2, "b"), _t(3), _t(4)]
+    deps = {"T004": ["T003"], "T003": ["T002"], "T002": ["T001"]}
+    layout = lay_out(tasks, deps, references={"T004": ["T001"]})
+    col = {t: c for t, (c, _) in layout.cards.items()}
+    assert col["T004"] < col["T003"] < col["T002"] < col["T001"]
+    (ref,) = [ln for ln in layout.wide if ln.kind == "ref"]
+    assert (ref.source, ref.target) == ("T001", "T004")
+    # It leaves T001's left side and enters T004's right side, the head pointing left.
+    assert ref.points[0][0] == layout.xs_wide[col["T001"]]
+    assert ref.points[-1][0] == layout.xs_wide[col["T004"]] + CARD_W
+    # Across the columns between, its run is off every card there.
+    for (x0, y0), (x1, y1) in zip(ref.points, ref.points[1:], strict=False):
+        for t in ("T002", "T003"):
+            left = layout.xs_wide[col[t]]
+            top = layout.cards[t][1]
+            if y0 == y1 and min(x0, x1) < left + CARD_W and max(x0, x1) > left:
+                assert not top <= y0 <= top + 62, (t, y0)

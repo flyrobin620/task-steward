@@ -1,0 +1,64 @@
+{
+  "id": "change-e2e",
+  "title": "Claude 桌面 app 中，用户在已完成任务的 worker 会话里追加要求：worker 登记需求变更、重新评审合并并提交，主会话再次验收",
+  "useCases": [
+    "UC-CHANGE-001",
+    "UC-HOST-001",
+    "UC-MERGE-001"
+  ],
+  "modelCalls": {
+    "sessions": "主会话 1 个、worker 1 个",
+    "reviewer": "codex-app-server，每个提交周期至少 1 轮，上限各 3 轮（review.max_rounds）"
+  },
+  "repository": "live/live-repo",
+  "config": {
+    "input": {
+      "in_session_timeout_minutes": 10
+    },
+    "roles": {
+      "reviewer": {
+        "effort": "low"
+      }
+    },
+    "review": {
+      "max_rounds": 3
+    },
+    "routine": {
+      "enabled": false
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "T001",
+      "title": "live：README 加说明（之后用户追加要求）",
+      "kind": "design",
+      "goal": "在 live-repo 的 README.md 加一行项目说明“四则运算示例”。做法：会话目录就是 tsw 为本任务创建的 live-repo worktree（任务书“仓库与 worktree”一节，分支已建好），在其中提交、自评审（review_run）直到 finalize、git push origin <分支>；本次运行的 GitHub 由替身代替，命令就是 {gh}（用这个完整路径，不要加 PATH 前缀或其他前置命令）：{gh} pr create -R github.com/{repository} --head <分支> --title <标题>，再按任务书的交付授权 {gh} pr merge <编号> -R github.com/{repository} --squash；合并后查看主分支上合并提交的 CI：{gh} run list --commit <合并提交> -R github.com/{repository}（替身模拟一次已通过的运行）。提交时 merge 带 PR 链接、合并提交、合并的 head、ci 与 live（写明“不需要：live-repo 没有 live 场景”）。再次修改时同样在本 worktree 中提交，与主分支同步后开新的 PR（每次合并后先 git fetch origin 并把分支更新到 origin/main）。开始前按任务书读仓库指令文件并照做；报告写明读了哪些仓库指令文件。",
+      "acceptance": [
+        "README.md 加了说明",
+        "PR 由 worker 自行合并，合并的 head 等于最后一轮评审的 HEAD，提交附合并提交的 CI（通过）"
+      ]
+    }
+  ],
+  "operator": [
+    "开始前，在 Claude 桌面 app 以本运行的仓库检出 {repo} 为文件夹新建一个会话并信任该文件夹，然后归档这个会话：真实使用中仓库的主检出已经信任过，worker 的 worktree 沿用主检出的信任。",
+    "在 Claude 桌面 app 新建会话，文件夹选择本运行的数据目录 {home}（首次打开需要信任该文件夹），权限模式用 auto。",
+    "在该主会话中说：“执行 T001”。等 worker 提交、主会话核验并技术验收（主会话告诉你 T001 完成、等待人工验收）。不要验收。",
+    "到 T001 的 worker 会话中说：“追加要求：README 再加一行‘支持加、减、乘、除’，然后重新提交”。worker 应引用 hook 给出的消息编号调用 requirement_change（任务从 done 回到执行中，revision 2），再评审、开新的 PR、合并、提交，并唤醒主会话。",
+    "主会话应被唤醒，从 inbox 看到 worker 登记的需求变更与新的提交，确认后按 revision 2 核验并再次技术验收（不需要退回或重新派发）。留意 worker 与主会话发消息、worker 合并时是否出现权限确认或分类器拒绝，记下来。",
+    "回到运行 live.py 的会话，运行 python tools/live.py change-e2e verify {run_id} --blocked <yes|no>（按你在 app 中看到的填写），然后在主会话中验收或取消 T001，归档本次运行的会话并运行 cleanup。"
+  ],
+  "prerequisites": [
+    "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则“TaskSteward Worker Merge”与“TaskSteward Worker Dispatch”。",
+    "已安装插件所用的运行时（真实数据目录 tsw-home.json 的 product_repo 指向的检出）已更新到含 requirement_change 的 main；prepare 会检查 claim_sessions。"
+  ],
+  "checks": [
+    "H1 隔离：数据目录与产品仓库指向本运行，主会话在其中操作",
+    "A 第一次交付：T001 revision 1 的 worker.submitted 与主会话的 task.accepted",
+    "M 记录：主会话验收之后，hook 在 worker 会话中把用户追加的要求记为 input.session_message（不对应问题，来自该 worker 会话）",
+    "X 登记：worker（actor 为 worker）记录 task.requirement_changed，迁移 T28，revision 2，user_source 引用 M 记录的消息编号、原文与之相同；主会话没有调用 task_update",
+    "R 重新交付：同一 attempt 中 revision 2 的评审以 finalize 定稿，worker.submitted 的 revision 为 2，主会话之后记录 revision 2 的 task.accepted",
+    "C 自行合并：最后一次提交带 merge，merged_head 等于提交 HEAD，替身记录的 PR 已合并且合并提交在 origin 的 main 上",
+    "I 通知：主会话确认（orchestrator.inbox_acked）了 worker 登记的需求变更事件",
+    "O 操作者观察：worker 与主会话发消息、worker 合并时没有被拦（verify 的 --blocked no）"
+  ]
+}

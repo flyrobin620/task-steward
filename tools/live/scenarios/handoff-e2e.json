@@ -1,0 +1,51 @@
+{
+  "id": "handoff-e2e",
+  "title": "Claude 桌面 app 中的主会话交接：让出租约、另一个主会话领取、worker 唤醒新主会话",
+  "useCases": [
+    "UC-HOST-001",
+    "UC-HOST-002",
+    "UC-LEASE-001"
+  ],
+  "modelCalls": {
+    "sessions": "主会话 2 个（A、B）、worker 1 个",
+    "reviewer": "不调用评审器：任务只走到跨任务提问与主会话的答复"
+  },
+  "repository": "live/live-repo",
+  "config": {
+    "input": {
+      "in_session_timeout_minutes": 10
+    },
+    "routine": {
+      "enabled": false
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "T001",
+      "title": "live：交接后 worker 唤醒新主会话",
+      "kind": "research",
+      "goal": "本任务用于验证主会话交接后的唤醒。收到任务书后，调用 progress_note 记录“就绪”，然后结束这一轮，等待，不做其他工作。之后用户在本会话中说“现在提问”时：调用 question 提一个跨任务问题“live：交接后的唤醒，请主会话回复‘收到’”，按 worker 指令用 question 结果中的 wake 唤醒主会话，然后结束这一轮。收到主会话的消息后，调用 progress_note 记录“收到主会话回复：<内容>”，然后结束这一轮，不做其他工作。",
+      "acceptance": [
+        "交接后 worker 的问题唤醒的是新主会话 B（不是启动它的 A），B 按会话 ID 回复，worker 记录收到"
+      ]
+    }
+  ],
+  "operator": [
+    "在 Claude 桌面 app 新建会话 A，文件夹选择本运行的数据目录 {home}（首次打开需要信任该文件夹），权限模式用 auto。",
+    "在 A 中说：“执行 T001”。A 派发 T001 的 worker（本场景关闭了例行会话）。等 worker 记录“就绪”并结束这一轮。",
+    "在 A 中说：“我要换一个主会话：让出调度租约”。A 应调用 lease_release，并说明之后只读运行。",
+    "再新建会话 B，文件夹同样选择 {home}，权限模式用 auto。在 B 中说：“你接手主会话：确认持有调度租约，然后处理 inbox 与 attention”。B 应在会话开始时已经领取租约。",
+    "到 T001 的 worker 会话（侧栏中在 A 名下）中说：“现在提问”。worker 调用 question，再把 wake.message 发给 wake.session_id（应为 B）。",
+    "B 应被 worker 的消息唤醒，用 judge 回答这个问题，并按会话 ID 给 worker 发消息转达“收到”。确认 worker 记录了“收到主会话回复”。留意 A 是否收到 worker 的消息、是否试图领取租约或处理回传，以及 worker 与 B 发消息时是否出现权限确认或分类器拒绝，记下来。",
+    "回到运行 live.py 的会话，运行 python tools/live.py handoff-e2e verify {run_id} --blocked <yes|no>（按你在 app 中看到的填写），然后在 B 中取消 T001，归档本次运行的会话（A、B 与 worker）并运行 cleanup。"
+  ],
+  "prerequisites": [
+    "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则。"
+  ],
+  "checks": [
+    "H1 隔离：数据目录与产品仓库指向本运行，两个主会话都在其中操作",
+    "L 交接：A 记录 controller.lease_stood_down（via: release）与 controller.lease_released，之后 B 以 controller.lease_acquired 领取（不是续期、没有接管），A 之后没有再领取",
+    "K 唤醒：B 领取之后 worker 记录 worker.question；B 的 hook 记录在提问之后收到来自 worker 会话的 <cross-session-message>，A 在让出之后没有收到；B 以 orchestrator.decision 回答，worker 之后记录 progress_note",
+    "O 操作者观察：worker 与 B 发消息时没有被拦（verify 的 --blocked no）"
+  ]
+}
