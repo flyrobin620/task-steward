@@ -14,7 +14,7 @@ description: "TaskSteward 新手导览与示例任务：主会话发现账本中
 1. **你在哪里**：这个会话在数据目录中打开，是 TaskSteward 的主会话：它受理、规划任务，把任务派发给 worker 会话（侧栏中可见），处理它们的回传，核验后交给你验收。以后开主会话也是这样：在数据目录新建会话，输入 `/orchestrate`；旧的主会话还持有调度租约时新会话只读，先在旧主会话中让它交接（`orchestrate` skill 的“交接主会话”），旧会话已不在时按同一节接管。
 2. **状态都在账本中**：任务、问题、评审、验收都记在数据目录的账本里，会话结束或重启都不会丢；Dashboard 是账本的视图。
 3. **当前配置**（`config_show` 读出后列出）：交流语言 `control.language`、评审器 `roles.reviewer`、需要你决定的事怎样找到你 `plugins.human_channels` 与超时 `input.in_session_timeout_minutes`、Dashboard 端口 `dashboard.port`。说明以后可以让主会话改（`config_change`，权限类的要你的原话）。
-4. **Dashboard**：在 Bash 中运行只读的 `tsw dashboard status --json`。`installed` 为 true 时，直接给出可点击的链接（结果中的 `url`，例如 `http://127.0.0.1:47800/`），请用户点开，说明之后任务的进展都在那里看；页面要求登录时（第一次在这个浏览器打开、或令牌已失效），请用户在会话外的终端运行一次 `tsw dashboard open`。`running` 为 false 时告诉用户服务没在运行，可以在终端运行 `tsw dashboard open` 或重新登录系统。没有安装常驻服务时，请用户在会话外的终端运行 `tsw dashboard`（它打开浏览器）。
+4. **Dashboard**：在 Bash 中运行只读的 `tsw dashboard status --json`。`installed` 为 true 时，直接给出可点击的链接（结果中的 `url`，例如 `http://127.0.0.1:47800/`），请用户点开，说明之后任务的进展都在那里看；页面要求登录时（第一次在这个浏览器打开、或令牌已失效），请用户在会话外的终端运行一次 `tsw dashboard open`。`installed` 为 true 而 `running` 为 false 时，先运行 `tsw dashboard restart`（主会话可以运行；它启动计划任务并等服务应答），确认 `running` 为 true 后再给链接；结果中有 `conflict`（端口上是另一个数据目录的服务）时告诉用户端口冲突，请用户改 `dashboard.port` 或停掉另一个服务，不给链接。没有安装常驻服务时，请用户在会话外的终端运行 `tsw dashboard`（它打开浏览器）。
 5. **怎样开始真实工作**：告诉主会话要管理哪些仓库（本机路径、是否允许推送、开 PR、合并），它逐个加入配置；然后用一句话描述要做的事，它会登记任务、写任务书并派发。
 6. **提议示例任务**：问用户要不要先跑一个示例任务（下一节），看一遍一个任务从登记到验收的全过程。用户不要时结束导览，之后随时说“开始示例任务”。
 
