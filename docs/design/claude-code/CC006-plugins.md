@@ -1,6 +1,6 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T302 §9.2 待命前缀、任务归档后归档会话；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`；T283 §11 自我更新的载入时机与生效方式，§12 Dashboard 常驻服务；T287 §10.2 受理与派发时检查长期偏好；T293 §6.2 teams-replies 列出最后修改时间、已判定消息记在 `teams_checked`；T305 §2 安装与改指插件来源见 CC009）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T302 §9.2 待命前缀、任务归档后归档会话；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`；T283 §11 自我更新的载入时机与生效方式，§12 Dashboard 常驻服务；T287 §10.2 受理与派发时检查长期偏好；T293 §6.2 teams-replies 列出最后修改时间、已判定消息记在 `teams_checked`；T305 §2 安装与改指插件来源见 CC009；T309 §13 workdeck 插件 manifest）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md) · [CC009 Claude Code 上的安装](CC009-install.md)
@@ -404,3 +404,14 @@ DN006 §8.10“常驻服务”在 Windows 上的做法。其他操作系统暂�
 - **状态**：`tsw dashboard status`（只读，任何会话）：是否登记（`schtasks /Query`）、`/healthz` 是否应答、端口、服务载入的提交是否等于 `HEAD`、日志路径。`install`、`status`、`restart` 都核对应答中的 `home_key`：端口上是另一个数据目录的服务时报告冲突（`conflict`），不算在运行。`/healthz` 不需要令牌，照常核对 `Host`，只返回 `{"service": "tsw-dashboard", "commit", "home_key", "started_at"}`。
 - **卸载**：`tsw dashboard uninstall`（终端）：`/End`、`/Delete /F`，删除令牌文件。
 - **测试**：任务 XML、命令行参数与令牌文件的读写有 unit / component 测试；`schtasks` 是本仓库之外的平台，测试中替换为记录参数的替身（模拟证据）；真实登记由用户在终端运行 `install` 验证（live，见报告）。
+
+## 13. workdeck 插件 manifest（T309）
+
+DN006 §8.10“workdeck 插件 manifest”在本宿主与 Windows 上的做法。
+
+- **解释器**：`spawn.command` 是生成 manifest 的进程所用解释器的完整路径；它是 `pythonw.exe`（常驻服务）时换成同目录的 `python.exe`：workdeck 要读启动输出中的地址，`pythonw.exe` 没有控制台输出。workdeck daemon 运行在无窗口的控制台下（workdeck DN011 §1），它启动的 `python.exe` 不弹窗口。`tsw setup` 的步骤用安装记录中的解释器（与垫片相同）。
+- **命令形式**：`<python.exe> -X utf8 -m tsw status serve --no-open --home <数据目录>`，工作目录为产品检出（与常驻服务的计划任务相同，CC006 §12）；不用 PATH 中的 `tsw` 垫片，因为 `tsw.cmd` 只能经 `cmd.exe` 运行，而 workdeck 不经 shell 启动 `spawn.command`。
+- **编码与环境**：输出经管道时 Python 默认按系统代码页编码，中文提示会出错，所以带 `-X utf8`（与垫片相同，CC009 §8）；不加环境变量，数据目录由 `--home` 给出。
+- **宿主会话之外**：`tsw status serve` 在宿主会话的环境中拒绝运行（DN006 §8.10 第 2 条）。workdeck daemon 由它自己的登录计划任务启动，不在 Claude Code 会话的环境中；用户若在会话中前台启动 daemon，插件启动会被拒绝，门户显示插件的错误。
+- **`/.well-known/workdeck-plugin.json`**：生成时用 Dashboard 进程自己的解释器、产品检出与数据目录，所以常驻服务（`pythonw.exe`）给出的与终端运行的 Dashboard 给出的相同。
+- **`tsw setup` 的步骤**：`workdeck` 命令按 PATH 查找（npm 全局安装的是 `workdeck.cmd`）；manifest 写到临时文件后运行 `workdeck plugin add <文件> --replace`，结束后删除临时文件。workdeck 先备份它的配置再写入，并重启它的 daemon。

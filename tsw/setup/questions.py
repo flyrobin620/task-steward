@@ -66,6 +66,11 @@ def detected_reviewer(env: Mapping[str, str]) -> str:
     return "codex-app-server" if shutil.which("codex", path=env.get("PATH")) else "claude-headless"
 
 
+def workdeck_found(env: Mapping[str, str]) -> bool:
+    """Whether this machine has the workdeck command line (DN009 §5 step 7, T309)."""
+    return shutil.which("workdeck", path=env.get("PATH")) is not None
+
+
 def questions(env: Mapping[str, str], checkout: Path) -> list[Question]:
     windows = sys.platform == "win32"
     return [
@@ -138,6 +143,17 @@ def questions(env: Mapping[str, str], checkout: Path) -> list[Question]:
             "int",
             "dashboard.port",
             default=int(DEFAULTS["dashboard"]["port"]),
+        ),
+        Question(
+            "workdeck",
+            "是否把 Dashboard 接入本机的 workdeck 门户（workdeck plugin add）",
+            "bool",
+            "workdeck plugin add、install.json",
+            default=workdeck_found(env),
+            note="接入后门户为 TaskSteward 的会话显示任务标签，Dashboard 中的会话链接在门户中打开；"
+            "workdeck 中已有 id 为 tsw 的插件时替换它（workdeck 先备份配置）"
+            if workdeck_found(env)
+            else "找不到 workdeck 命令，不接入",
         ),
         Question(
             "user_settings",
@@ -270,6 +286,9 @@ def ask(
             continue
         if q.id == "host" and len(q.choices) == 1:
             answers[q.id] = q.choices[0]
+            continue
+        if q.id == "workdeck" and q.default is False:
+            answers[q.id] = False  # no workdeck command here: nothing to ask (T309)
             continue
         default = previous.get(q.id, q.default)
         while True:

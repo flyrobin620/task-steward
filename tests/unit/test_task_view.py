@@ -90,6 +90,7 @@ def test_a_claude_app_session_links_to_the_desktop_app_with_its_attributes() -> 
     assert link == (
         '<a class="session" data-tsw-session="local_ab-1" data-tsw-task="T9" '
         'data-tsw-attempt="a2" data-tsw-adapter="claude-app" '
+        'data-workdeck-session="local_ab-1" '
         'href="claude://claude.ai/epitaxy/local_ab-1" '
         'title="在宿主中打开会话 local_ab-1">t9-a2-g1</a>'
     )

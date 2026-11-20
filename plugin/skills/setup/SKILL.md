@@ -43,6 +43,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/setup
 - `questions` 是唯一的问题清单。`asked_by` 为 `entry` 的（产品检出）已在第 2 步问过，不再问。按顺序在对话中一项一项问，每项说明 `note` 与默认值：
   - `home`（数据目录位置）**必填，没有默认值**：用户没有给出时再问，不要替用户选一个路径。用户给出已有的数据目录时复用它。
   - `host` 只有一个选项时直接选定，不必问。
+  - `workdeck` 的默认值为 false（本机找不到 workdeck 命令）时直接取 false，不必问。
   - 其他项用户说“默认”时取 `default`。
 - 不问、也不记录任何令牌或密码；要管理的仓库不在这里问（安装后在主会话中逐个加入）。
 

@@ -69,6 +69,7 @@ def test_repositories_and_accounts_are_never_asked() -> None:
         "host",
         "dashboard",
         "dashboard_port",
+        "workdeck",
         "user_settings",
     }
     checkout = next(x for x in qs() if x.id == "checkout")
@@ -260,3 +261,38 @@ def test_the_hook_keeps_workers_from_installing_the_host(
     assert (problem is not None) is refused
     if refused:
         assert problem is not None and "不能运行 tsw setup" in problem
+
+
+WORKDECK = "UC-SETUP-003"
+
+
+@pytest.mark.use_case(WORKDECK)
+def test_the_workdeck_question_is_asked_only_where_workdeck_is_found(tmp_path: Path) -> None:
+    found = q.questions({"PATH": ""}, CHECKOUT)
+    question = next(x for x in found if x.id == "workdeck")
+    assert question.default is False and "找不到 workdeck" in question.note
+    # Nothing to ask without the command: the answer is no, and no reply is used for it.
+    replies = iter([str(tmp_path / "data"), "", "", "", "", "", ""])
+    answers = q.ask(found, {}, lambda _prompt: next(replies), lambda _text: None)
+    assert answers["workdeck"] is False and answers["user_settings"] is True
+    folder = tmp_path / "npm"
+    folder.mkdir()
+    (folder / "workdeck.cmd").write_text("@echo off\r\n", encoding="utf-8")
+    (folder / "workdeck").write_text("#!/bin/sh\n", encoding="utf-8")
+    (folder / "workdeck").chmod(0o755)
+    here = q.questions({"PATH": str(folder)}, CHECKOUT)
+    question = next(x for x in here if x.id == "workdeck")
+    assert question.default is True and "替换" in question.note
+    prompts: list[str] = []
+
+    def read(prompt: str) -> str:
+        prompts.append(prompt)
+        return {"数据目录": str(tmp_path / "data"), "workdeck": "否"}.get(
+            next((k for k in ("数据目录", "workdeck") if k in prompt), ""), ""
+        )
+
+    answers = q.ask(here, {}, read, lambda _text: None)
+    assert answers["workdeck"] is False
+    assert any("workdeck 门户" in p and "（默认 是）" in p for p in prompts)
+    normalized, problems = q.normalize({"home": "C:/data"}, here)
+    assert normalized["workdeck"] is True and not problems

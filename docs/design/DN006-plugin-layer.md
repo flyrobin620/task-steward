@@ -1,6 +1,6 @@
 # DN006 插件层：宿主集成、会话、人类渠道与数据存储
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/；T272 §8.9.4a 默认例行项 session-scan；T279 §6.3 claude-code 生成的 skill 清单，§8.1a 每一轮结束都 `wrap_up`；T282 §9.7 主会话自我更新：主会话可以运行 `host render`；T283 §9.8 按改动决定步骤的自我更新、§9.9 运行版本的记录、§8.10 Dashboard 常驻服务；T293 §8.9.5 读过正文、判定不转出的消息记在缓存中，之后不再读正文；T305 分发与安装移到 DN009：§6.2 宿主集成增加安装操作、§8.10 与 §9.7 安装脚本的会话例外、§9.1 安装脚本管理的检出、§9.8 `install` 与 `host_rules` 改为重跑安装）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/；T272 §8.9.4a 默认例行项 session-scan；T279 §6.3 claude-code 生成的 skill 清单，§8.1a 每一轮结束都 `wrap_up`；T282 §9.7 主会话自我更新：主会话可以运行 `host render`；T283 §9.8 按改动决定步骤的自我更新、§9.9 运行版本的记录、§8.10 Dashboard 常驻服务；T293 §8.9.5 读过正文、判定不转出的消息记在缓存中，之后不再读正文；T305 分发与安装移到 DN009：§6.2 宿主集成增加安装操作、§8.10 与 §9.7 安装脚本的会话例外、§9.1 安装脚本管理的检出、§9.8 `install` 与 `host_rules` 改为重跑安装；T309 §8.10 workdeck 插件 manifest 与会话链接的 `data-workdeck-session`）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN008 校验原则](DN008-guardrails.md) · [DN009 分发与安装](DN009-distribution-and-install.md) · 实现：[CC006 Claude Code 插件](claude-code/CC006-plugins.md)
 
@@ -612,11 +612,13 @@ Dashboard 应用：
 
   ```html
   <a class="session" href="<会话地址>" data-tsw-session="<session_ref>" data-tsw-task="<任务 ID>"
-     data-tsw-attempt="<attempt>" data-tsw-adapter="<会话适配器>">会话名</a>
+     data-tsw-attempt="<attempt>" data-tsw-adapter="<会话适配器>"
+     data-workdeck-session="<session_ref>">会话名</a>
   ```
 
   - `href` 是会话适配器给出的会话地址：`claude-app` 的格式见 [CC006 §3](claude-code/CC006-plugins.md)。没有记录适配器的 attempt（导入或较早的记录）按 `claude-app` 处理。其他适配器没有会话地址时渲染为 `<span class="session">`，属性相同，没有 `href`。
   - 四个 `data-tsw-*` 属性是对嵌入方的契约，只增不删。嵌入方（例如把本应用挂在自己路径前缀下的门户）按 `data-tsw-session` 识别会话，可以改写链接或接管点击，例如改为打开自己的会话页。嵌入方不应依赖 class 与链接文字。
+  - `data-workdeck-session`（T309）是 workdeck 插件协议的标准属性（workdeck DN005 §11.3）：值与 `data-tsw-session` 相同，所有适配器的会话链接都带。workdeck 门户凭它接管点击、在门户中打开会话，插件 manifest 不必声明 `sessionLinks`（见下方“workdeck 插件 manifest”）。它与四个 `data-tsw-*` 属性一样只增不删；`data-tsw-*` 照旧提供给其他嵌入方。
   - 详细页的 `<main>` 带 `data-tsw-task="<任务 ID>"`，嵌入方据此识别当前显示的是哪个任务；详细页地址 `tasks/<任务 ID>` 也是契约的一部分，嵌入方可以从会话跳到对应任务的详细页。
 - 路径与代理：应用内的链接都用相对路径（看板到详细页 `tasks/<ID>`，详细页回看板 `../`，到依赖任务 `<ID>`，报告 `../runs/...`），不写主机与端口。应用挂在路径前缀下（如 `/plugins/<id>/`）经代理访问时，这些链接即使不经代理改写也解析到前缀之下。按钮照旧请求 `/api/tasks/...`，由代理补上前缀。令牌、cookie、`Host` / `Origin` 核对、CSP 与 `X-TSW-Token` 都不变：详细页使用与看板相同的 CSP、meta 令牌与脚本。
 - 会话标签端点（与嵌入方的约定，用户 2026-11-18 要求，T297）：嵌入方的门户列出 agent 会话时，由本应用告诉它哪些会话属于 TaskSteward、是哪个任务的哪个 attempt、什么角色。契约由嵌入方 workdeck 定义（workdeck DN005 §10、决定 0023：插件给会话加标签，workdeck 不认识任务工具），取代 workdeck 中直接读本数据目录 `cache/state.sqlite` 的 tsw annotator；端点上线后 workdeck 删除 annotator。
@@ -635,6 +637,26 @@ Dashboard 应用：
   5. 回答：`{"labels": {"<会话 ID>": [{"text": "…", "title": "…", "link": "/…"}]}}`，请求中的每个会话都有一项，没有标签的为空数组。`text`、`title` 是纯文本，各至多 256 个字符（超出截断），每个会话至多 64 个标签；`link` 是本应用 URL 空间中以 `/` 开头的路径，嵌入方加上挂载前缀（`/plugins/<id>`），没有链接时不带这个字段。投影无法读取时返回 503（JSON，带原因），嵌入方保留上次的标签。
   6. 刷新与开销：嵌入方每个刷新间隔（默认 10 秒）对全部列出的会话查询一次，超时 2 秒。每次请求读三张小表并按 ID 过滤，不读账本全文，不渲染页面。
   7. 契约：按 workdeck DN009 的规则只增不删，双方忽略不认识的字段，新字段可选；本应用的单任务视图地址 `tasks/<任务 ID>` 本来就是契约（见上方“会话链接”）。
+- workdeck 插件 manifest（与嵌入方的约定，用户 2026-11-20 要求，T309）：workdeck 用一个 manifest 描述插件，`workdeck plugin add` 读取它把插件挂进门户（workdeck DN005 §11、决定 0030：插件协议，workdeck 不认识具体插件）。本应用按当前安装生成自己的 manifest，用户不再手写。
+  1. 内容（workdeck 插件协议第 1 版）：
+
+     | 字段 | 值 | 理由 |
+     | --- | --- | --- |
+     | `workdeckPlugin` | `1` | 协议版本 |
+     | `id`、`name`、`description` | `tsw`、`TaskSteward Dashboard`、一句说明 | `id` 是门户中的挂载名 `/plugins/tsw/` |
+     | `spawn` | 运行时的 Python 解释器（有控制台输出的那个），参数 `-X utf8 -m tsw status serve --no-open --home <数据目录>`，工作目录为产品检出，不加环境变量 | workdeck 启动并停止它，读它输出中的第一个回环地址（带一次性令牌）；输出经管道，`-X utf8` 让它按 UTF-8 写，中文提示不出错（与垫片相同） |
+     | `auth` | `{"type": "query-token"}` | workdeck 的代理用启动地址中的令牌换 cookie（workdeck DN005 §7），页面照常可用、按钮照常带页面里的令牌 |
+     | `labels` | `{"path": "/workdeck/labels", "refreshSeconds": 10}` | 会话标签端点（见上方） |
+     | `sessionLinks` | 不写 | 会话链接带标准属性 `data-workdeck-session`（见上方“会话链接”） |
+
+     宿主相关的部分（解释器的选择、Windows 上的命令形式）见 [CC006 §13](claude-code/CC006-plugins.md)。
+  2. 为什么由 workdeck 启动自己的实例，而不指向常驻服务：manifest 不能带凭据（workdeck 拒绝带 `token` 的 `url`），代理只能用启动地址中的一次性令牌登录；常驻服务的令牌只由用户在终端用 `tsw dashboard open` 生成、只存摘要（见上方“常驻服务”第 3 条），不能交给 workdeck。所以 workdeck 按 `spawn` 启动一个与终端运行的 `tsw status serve` 相同的实例：每次启动新令牌、任选端口、只监听回环地址，令牌只在 workdeck daemon 的内存中。它与常驻服务读同一个账本，按钮同样经 `status-app` 渠道写入；这是用户安装的程序按用户加入的插件配置启动的，不是会话替用户启动（workdeck daemon 不在宿主会话的环境中运行，上方第 2 条的拒绝照常生效）。
+  3. 为什么不是随产品的固定文件：解释器、产品检出与数据目录因机器而异；PATH 中的 `tsw` 垫片是脚本（Windows 上为 `tsw.cmd`），不经 shell 的 `spawn` 不能启动它。所以 manifest 由 tsw 在运行时按自己的解释器、检出与数据目录生成，三处提供同一份内容：
+     - `GET /.well-known/workdeck-plugin.json`：终端运行的 Dashboard 与常驻服务都提供，用户运行 `workdeck plugin add http://127.0.0.1:<端口>/` 即可接入。与 `/healthz` 一样不需要令牌（`workdeck plugin add` 在登录之前读取它）、照常核对 `Host`、不带 CORS 头；内容只有上表的字段与本机路径，不含令牌与账本数据。
+     - `tsw dashboard workdeck-manifest [--id <id>] [--out <文件>]`：输出同一份 manifest（JSON），`--out` 写成不带 BOM 的 UTF-8 文件供 `workdeck plugin add <文件>` 使用。只读、不需要 Dashboard 在运行；会话中可以运行，但不能用 `--out`（写文件不经宿主护栏的路径核对）。`--id` 在一台机器上接入多个数据目录时区分挂载名。
+     - `tsw setup` 的可选步骤（DN009 §5）：本机有 `workdeck` 命令、用户同意时，安装脚本生成 manifest 并运行 `workdeck plugin add`。
+  4. 接入之后：门户为 TaskSteward 的会话显示标签（会话标签端点），标签链接打开单任务视图；Dashboard 页面上的会话链接经 `data-workdeck-session` 在门户中打开会话。workdeck 侧不需要为 tsw 做任何配置。
+  5. 契约：manifest 按 workdeck DN009 的规则只增不删，双方忽略不认识的字段；字段的值随安装变化（重新生成即可），`id` 默认 `tsw` 不变。
 - follow-up（T270）：卡片（STATUS.html 与 Dashboard 应用都是）在有 `open` 的 follow-up 时显示“follow-up N”，Dashboard 应用中它链接到详细页的 follow-up 一节；由 follow-up 转来的任务在卡片上列出来源任务。筛选区的「follow-up」快捷项（见下方“顶部计数卡”）点击后只看有 `open` 条目的任务（包括已验收、已取消的卡片）。
 - 名称（用户 2026-11-11 要求，T273）：页面与应用对用户显示的名称是 **TaskSteward Dashboard**：静态页与 Dashboard 应用的页面标题与页首、单任务视图的标题（`<任务> · TaskSteward Dashboard`）、终端输出与文档都用这个名称（文档中简称 Dashboard 应用、Dashboard 静态页）。名称之外的契约不变：命令 `tsw status serve`、生成文件 `views/STATUS.html`、配置键 `control.status_page`、渠道 `status-app`、浏览器本地存储的键都保持原样；新增 `tsw dashboard` 作为 `tsw status serve` 的别名（选项相同，同样在宿主会话中拒绝）。
 - 顶部计数卡（T273）：计数为 0 的卡片不显示。卡片分两组：

@@ -692,7 +692,7 @@
       "id": "UC-DIRECT-003",
       "title": "Dashboard 应用的单任务视图与会话链接（DN006 §8.10）",
       "actor": "用户 / 嵌入 Dashboard 应用的页面",
-      "acceptance": "GET /tasks/<任务> 与看板同一令牌 cookie 与 Host 核对，返回只读的单任务视图（已归档任务也可打开，不存在的任务 404 并给出返回看板的链接）；视图带与看板相同的 CSP、meta 令牌与脚本，按钮与卡片相同；依次列出概况、当前需求与 revision 历史、每个 attempt（阶段、会话链接、适配器、执行目录、分支、任务书）、当前提交与评审周期、轮次、产出、依赖与被依赖、资源与集成、全部提问与判断、决定、暂停、进展记录与本任务最近 200 条账本事件（改号后保留原号的事件），缺少的数据显示为空；应用内链接全为相对路径（看板 → tasks/<任务>，视图 → ../#task-<任务>、依赖 <任务>、报告 ../runs/...），不含主机与端口；看板卡片（当前 attempt，静态 STATUS.html 也有）与视图（每个 attempt）对有 session_ref 的 attempt 渲染会话链接 class=session，带 data-tsw-session、data-tsw-task、data-tsw-attempt、data-tsw-adapter，claude-app（或没有适配器记录）的地址为 claude://claude.ai/epitaxy/<session_ref>，其他适配器无地址时渲染为不带 href 的 span；视图的 main 带 data-tsw-task；静态 STATUS.html 没有详情链接",
+      "acceptance": "GET /tasks/<任务> 与看板同一令牌 cookie 与 Host 核对，返回只读的单任务视图（已归档任务也可打开，不存在的任务 404 并给出返回看板的链接）；视图带与看板相同的 CSP、meta 令牌与脚本，按钮与卡片相同；依次列出概况、当前需求与 revision 历史、每个 attempt（阶段、会话链接、适配器、执行目录、分支、任务书）、当前提交与评审周期、轮次、产出、依赖与被依赖、资源与集成、全部提问与判断、决定、暂停、进展记录与本任务最近 200 条账本事件（改号后保留原号的事件），缺少的数据显示为空；应用内链接全为相对路径（看板 → tasks/<任务>，视图 → ../#task-<任务>、依赖 <任务>、报告 ../runs/...），不含主机与端口；看板卡片（当前 attempt，静态 STATUS.html 也有）与视图（每个 attempt）对有 session_ref 的 attempt 渲染会话链接 class=session，带 data-tsw-session、data-tsw-task、data-tsw-attempt、data-tsw-adapter 与 data-workdeck-session（T309，见 UC-DIRECT-009），claude-app（或没有适配器记录）的地址为 claude://claude.ai/epitaxy/<session_ref>，其他适配器无地址时渲染为不带 href 的 span；视图的 main 带 data-tsw-task；静态 STATUS.html 没有详情链接",
       "surfaces": [
         "cli"
       ],
@@ -1316,6 +1316,30 @@
       }
     },
     {
+      "id": "UC-DIRECT-009",
+      "title": "Dashboard 的 workdeck 插件 manifest 与会话链接的标准属性 data-workdeck-session（T309，DN006 §8.10，CC006 §13，workdeck DN005 §11）",
+      "actor": "用户 / workdeck plugin add / 嵌入 Dashboard 的 workdeck 门户",
+      "acceptance": "tsw 按当前安装生成 workdeck 插件协议第 1 版的 manifest：workdeckPlugin 1、id（默认 tsw，须符合 [a-z0-9][a-z0-9-]{0,31}，否则以 invalid_plugin_id 拒绝）、name、description、spawn（command 为生成它的解释器，pythonw.exe 换成同目录的 python.exe；args 为 -X utf8 -m tsw status serve --no-open --home <数据目录>；cwd 为产品检出；不加 env）、auth query-token、labels /workdeck/labels 每 10 秒；不含 sessionLinks、url 与任何令牌。Dashboard（tsw status serve、tsw dashboard 与常驻服务）在 GET /.well-known/workdeck-plugin.json 不经令牌返回它（JSON，照常核对 Host，不设 cookie、不带 CORS 头），内容用该进程自己的解释器、检出与数据目录；tsw dashboard workdeck-manifest [--id] 把同一份 manifest 输出到 stdout（任何会话可运行），--out <文件> 写成不带 BOM、LF 换行的 UTF-8 文件，在宿主会话中拒绝 --out（不写文件）；宿主护栏放行会话中的 tsw dashboard workdeck-manifest。看板卡片、单任务视图与静态 STATUS.html 的会话链接（a 或没有地址时的 span）在 data-tsw-* 之外带 data-workdeck-session=<session_ref>（所有适配器，按 HTML 转义）",
+      "surfaces": [
+        "cli",
+        "hook"
+      ],
+      "claims": [
+        "cli:dashboard workdeck-manifest"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；接入本机真实 workdeck（workdeck plugin add、标签与会话跳转）由任务报告中的本机运行记录（T309）"
+      }
+    },
+    {
       "id": "UC-SETUP-001",
       "title": "安装脚本 tsw setup 与两条安装路径的入口（T308，DN009，CC009）",
       "actor": "用户 / 终端入口 setup.ps1 / 会话入口 setup skill",
@@ -1362,6 +1386,27 @@
         "component": "按会话角色放行由 CLI 与 hook 以独立进程覆盖",
         "conformance": "不经过插件接口",
         "live": "本机 live 在会话外的终端与未绑定的会话环境中运行安装（UC-SETUP-001 的 live 场景）；worker 被拒绝由 surface 以独立进程覆盖"
+      }
+    },
+    {
+      "id": "UC-SETUP-003",
+      "title": "tsw setup 的可选步骤：把 Dashboard 接入本机的 workdeck 门户（T309，DN009 §5 第 7 步，CC006 §13）",
+      "actor": "用户 / tsw setup / workdeck 命令行",
+      "acceptance": "问题清单增加 workdeck（布尔）：PATH 中找到 workdeck 命令时默认是并在终端中询问，找不到时默认否且不询问；旧的保存答案中没有这一项时按否处理（重跑不替用户接入）。install 的 workdeck 步骤在 dashboard 之后：答案为否或找不到命令时 skipped；数据目录未建好时 todo；按安装的解释器、检出与数据目录生成 manifest（UC-DIRECT-009），install.json 中记下的摘要等于它时 ok 且不调用 workdeck；否则 plan 列出要启动的命令与 workdeck plugin list 中是否已有同 id 的插件（replaces），install 先在 install.json 记下 id 与 existed_before，把 manifest 写到临时文件运行 workdeck plugin add <文件> --replace（之后删除临时文件），成功时记下 added 与摘要；workdeck 失败时这一步为 failed，带输出末尾与手工命令，其他步骤照常完成，verify 的 workdeck 检查失败（退出码 3），修正后重跑即补上。verify 在安装接入过（或失败过）时核对记下的摘要等于按当前目标重新生成的摘要。uninstall 对安装加入的插件运行 workdeck plugin remove <id>（被替换的旧项不恢复），失败只报告；数据目录不删除",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component"
+      ],
+      "omittedTiers": {
+        "surface": "tsw setup 的命令行表面由 UC-SETUP-001 覆盖；这一步在 component 中经独立进程运行 tsw setup 与替身 workdeck",
+        "conformance": "不经过插件接口；workdeck 由替身代替（模拟）",
+        "live": "本机真实 workdeck 的 plugin add 记在任务报告（T309）；setup-e2e 的隔离运行不接入用户的 workdeck"
       }
     }
   ]

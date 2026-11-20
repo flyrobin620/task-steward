@@ -1,0 +1,194 @@
+"""The Dashboard as a workdeck plugin on real files, sockets and subprocesses (T309).
+
+UC-DIRECT-009 (DN006 §8.10): the Dashboard serves its manifest at
+``/.well-known/workdeck-plugin.json``. UC-SETUP-003 (DN009 §5 step 7, CC006 §13): ``tsw setup``
+hands the manifest to ``workdeck plugin add``. workdeck is the stand-in
+``tests/fixtures/fake_workdeck.py`` (simulated); Claude Code's plugin commands, the user ``Path``
+and Task Scheduler are stand-ins as in ``test_setup.py``.
+"""
+
+from __future__ import annotations
+
+import http.client
+import json
+import sys
+import threading
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from tests.setup_harness import (
+    fake_claude,
+    fake_workdeck,
+    make_product,
+    record,
+    run_setup,
+    setup_env,
+    workdeck_calls,
+    write_answers,
+)
+from tsw.home import Home
+from tsw.host import workdeck
+from tsw.host.status_app import StatusApp, make_server
+from tsw.host.version import REPO_ROOT
+
+mark = pytest.mark
+UC = "UC-DIRECT-009"
+SETUP = "UC-SETUP-003"
+
+
+@pytest.fixture
+def served(home: Home) -> Iterator[StatusApp]:
+    app = StatusApp(home, token="tok-w")
+    server = make_server(app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield app
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def get(app: StatusApp, path: str, host: str | None = None) -> tuple[int, dict[str, str], bytes]:
+    conn = http.client.HTTPConnection("127.0.0.1", app.port, timeout=30)
+    conn.request("GET", path, headers={"Host": host or f"127.0.0.1:{app.port}"})
+    response = conn.getresponse()
+    out = (response.status, dict(response.getheaders()), response.read())
+    conn.close()
+    return out
+
+
+@mark.use_case(UC)
+def test_the_dashboard_serves_its_manifest_without_a_token(home: Home, served: StatusApp) -> None:
+    status, headers, body = get(served, workdeck.WELL_KNOWN_PATH)
+    assert status == 200 and headers["Content-Type"] == "application/json; charset=utf-8"
+    value = json.loads(body)
+    assert value == workdeck.manifest(home.root, python=sys.executable, checkout=REPO_ROOT)
+    assert value["spawn"]["args"][-2:] == ["--home", str(home.root.resolve())]
+    # No token, no cookie and no CORS header: only what the manifest describes.
+    assert "tok-w" not in body.decode("utf-8")
+    assert "Set-Cookie" not in headers and "Access-Control-Allow-Origin" not in headers
+    # The Host check still applies (DNS rebinding), and the board still needs the token.
+    assert get(served, workdeck.WELL_KNOWN_PATH, host=f"evil.example:{served.port}")[0] == 403
+    assert get(served, "/")[0] == 403
+
+
+# ---------------------------------------------------------------------- tsw setup
+
+
+def install(product: Path, answers: Path, env: dict[str, str], claude: Path) -> dict[str, Any]:
+    code, out, text = run_setup(
+        product,
+        "install",
+        "--answers",
+        str(answers),
+        "--claude",
+        str(claude),
+        "--no-browser",
+        env=env,
+    )
+    assert out, text
+    out["_code"] = code
+    return out
+
+
+def step(out: dict[str, Any], name: str) -> dict[str, Any]:
+    return next(s for s in out["steps"] if s["step"] == name)
+
+
+def entries(config: Path) -> dict[str, Any]:
+    data = json.loads(config.read_text(encoding="utf-8"))
+    return {p["id"]: p for p in data["plugins"]}
+
+
+@mark.use_case(SETUP)
+def test_setup_adds_replaces_and_removes_the_workdeck_plugin(tmp_path: Path) -> None:
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    home = tmp_path / "data"
+    env = setup_env(tmp_path)
+    config = fake_workdeck(tmp_path, env)
+    # The user's own entry under the same id (T306 wrote one by hand).
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        json.dumps({"port": 1, "plugins": [{"id": "tsw", "spawn": {"command": "tsw"}}]}),
+        encoding="utf-8",
+    )
+    answers = write_answers(tmp_path, home, workdeck=True)
+    code, planned, text = run_setup(product, "plan", "--answers", str(answers), env=env)
+    assert code == 0, text
+    assert step(planned, "workdeck")["state"] == "todo"  # no data directory yet
+    out = install(product, answers, env, claude)
+    assert out["_code"] == 0, out
+    done = step(out, "workdeck")
+    assert done["state"] == "done" and done["replaces"] is True
+    calls = workdeck_calls(tmp_path)
+    assert calls[0] == "plugin list"
+    added = calls[1].split(" ")
+    assert added[:2] == ["plugin", "add"] and added[-1] == "--replace"
+    assert not Path(added[2]).exists()  # the temporary manifest is gone
+    wanted = workdeck.manifest(home, python=sys.executable, checkout=product)
+    entry = entries(config)["tsw"]
+    assert entry == {k: v for k, v in wanted.items() if k != "workdeckPlugin"}
+    assert json.loads(config.read_text(encoding="utf-8"))["port"] == 1  # the rest is kept
+    owned = record(env)["steps"]["workdeck"]
+    assert owned["added"] is True and owned["existed_before"] is True
+    assert owned["digest"] == workdeck.digest(wanted)
+    checks = {c["check"]: c for c in out["verify"]["checks"]}
+    assert checks["workdeck"]["ok"] is True and out["verify"]["ok"] is True
+    # A rerun with the same manifest does not call workdeck again.
+    again = install(product, answers, env, claude)
+    assert step(again, "workdeck")["state"] == "ok"
+    assert len(workdeck_calls(tmp_path)) == 2
+    # Uninstall removes the entry the install added; the data directory stays.
+    code, removed, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
+    assert code == 0, text
+    assert removed["removed"]["workdeck"]["ok"] is True
+    assert workdeck_calls(tmp_path)[-1] == "plugin remove tsw"
+    assert "tsw" not in entries(config) and (home / "tsw-home.json").is_file()
+
+
+@mark.use_case(SETUP)
+def test_a_workdeck_failure_is_reported_and_the_install_goes_on(tmp_path: Path) -> None:
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    home = tmp_path / "data"
+    env = setup_env(tmp_path, FAKE_WORKDECK_FAIL="add")
+    config = fake_workdeck(tmp_path, env)
+    out = install(product, write_answers(tmp_path, home, workdeck=True), env, claude)
+    failed = step(out, "workdeck")
+    assert failed["state"] == "failed" and "workdeck plugin add" in failed["problem"]
+    assert "workdeck-manifest --out" in failed["manual"]
+    assert any("failed (stand-in)" in line for line in failed["output"])
+    assert record(env)["status"] == "installed" and not config.exists()
+    # verify says so; nothing else failed.
+    assert out["verify"]["failed"] == ["workdeck"] and out["_code"] == 3
+    # Fixed: the rerun adds it.
+    env.pop("FAKE_WORKDECK_FAIL")
+    again = install(product, write_answers(tmp_path, home, workdeck=True), env, claude)
+    assert step(again, "workdeck")["state"] == "done" and again["verify"]["ok"] is True
+    assert "tsw" in entries(config)
+
+
+@mark.use_case(SETUP)
+def test_no_workdeck_and_older_saved_answers_leave_workdeck_alone(tmp_path: Path) -> None:
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    home = tmp_path / "data"
+    env = setup_env(tmp_path)
+    # Without the command the answer defaults to no and the step is skipped.
+    out = install(product, write_answers(tmp_path, home), env, claude)
+    assert out["_code"] == 0, out
+    assert step(out, "workdeck")["state"] == "skipped"
+    assert "workdeck" not in record(env)["steps"]
+    # Answers saved before the question existed: a bare rerun does not wire workdeck, even
+    # where workdeck is installed now.
+    saved = Path(env["TSW_STATE_DIR"]) / "setup-answers.json"
+    old = json.loads(saved.read_text(encoding="utf-8"))
+    old.pop("workdeck", None)
+    saved.write_text(json.dumps(old), encoding="utf-8")
+    fake_workdeck(tmp_path, env)
+    code, rerun, text = run_setup(product, "install", "--no-browser", env=env)
+    assert code == 0, text
+    assert step(rerun, "workdeck")["state"] == "skipped"
+    assert workdeck_calls(tmp_path) == []

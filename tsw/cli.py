@@ -32,7 +32,7 @@ from tsw.home import (
     remember_home,
     resolve_home,
 )
-from tsw.host import dashboard_service
+from tsw.host import dashboard_service, workdeck
 from tsw.host.claude_code import install_hint, render_instructions
 from tsw.host.guard import run as run_guard
 from tsw.host.identity import (
@@ -361,6 +361,30 @@ def _cmd_dashboard_status(args: argparse.Namespace) -> dict[str, Any]:
     config = load_config(home)
     state = dashboard_service.status(home, os.environ, _dashboard_port(home, strict=False))
     return state if config.valid else {**state, "config_problems": config.problems}
+
+
+def _cmd_dashboard_workdeck_manifest(args: argparse.Namespace) -> dict[str, Any]:
+    """The Dashboard's workdeck plugin manifest (DN006 §8.10, CC006 §13; T309): printed, or with
+    ``--out`` written as UTF-8 without a BOM for ``workdeck plugin add <file>``. A session may
+    print it but not write it: ``--out`` is a write the host guard does not see."""
+    if args.out:
+        direct.require_outside_session(os.environ, "tsw dashboard workdeck-manifest --out ")
+    home = _home(args)
+    value = workdeck.manifest(
+        home.root, python=sys.executable, checkout=REPO_ROOT, plugin_id=args.id
+    )
+    text = workdeck.to_json(value)
+    if args.out:
+        out = Path(args.out)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        return {
+            "written": str(out.resolve()),
+            "id": value["id"],
+            "next": f"workdeck plugin add {out}",
+        }
+    sys.stdout.write(text)
+    sys.stdout.flush()
+    return {"_silent": True}
 
 
 def _cmd_dashboard_service(args: argparse.Namespace) -> dict[str, Any]:
@@ -1092,6 +1116,14 @@ def _add_dashboard_service(dashboard: argparse.ArgumentParser, add: Any) -> None
     add(service, "restart", _cmd_dashboard_restart, "重启常驻服务（主会话或终端）")
     add(service, "status", _cmd_dashboard_status, "常驻服务的状态（只读）")
     add(service, "service", _cmd_dashboard_service, "运行常驻服务（由计划任务调用）")
+    manifest = add(
+        service,
+        "workdeck-manifest",
+        _cmd_dashboard_workdeck_manifest,
+        "输出 Dashboard 的 workdeck 插件 manifest（JSON；供 workdeck plugin add 使用）",
+    )
+    manifest.add_argument("--id", default=workdeck.DEFAULT_ID, help="门户中的插件 id（默认 tsw）")
+    manifest.add_argument("--out", help="写成文件（UTF-8，不带 BOM；会话中不可用）")
 
 
 def iter_commands(parser: argparse.ArgumentParser | None = None) -> list[str]:

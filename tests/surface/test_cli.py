@@ -224,6 +224,7 @@ def test_command_inventory_is_known() -> None:
             "dashboard service",
             "dashboard status",
             "dashboard uninstall",
+            "dashboard workdeck-manifest",
             "guard",
             "home",
             "host install-hint",

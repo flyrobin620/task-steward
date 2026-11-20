@@ -46,11 +46,13 @@ from tsw.context.index import index_path, read_card
 from tsw.errors import TswError, rejected
 from tsw.events import Event, utc_now
 from tsw.home import Home
+from tsw.host import workdeck
 from tsw.host.markdown import MAX_SOURCE_CHARS, render_markdown
 from tsw.host.preference_view import parse_filter, render_preferences
 from tsw.host.session_labels import LABELS_PATH, MAX_LABELS_BODY, answer, requested_ids
 from tsw.host.status import AppView, Revision, render
 from tsw.host.task_view import card_state, not_found, render_task, timeline
+from tsw.host.version import REPO_ROOT
 from tsw.ledger import Ledger
 from tsw.storage.fs import FsStorage
 
@@ -140,6 +142,11 @@ class StatusApp:
         # The message reference given to each command_id the preference page sent, so a retry
         # carries the same source and the ledger returns the first result (PR #53 review).
         self._refs: dict[str, str] = {}
+
+    def workdeck_manifest(self) -> dict[str, Any]:
+        """This Dashboard's workdeck plugin manifest: its own interpreter, product checkout and
+        data directory, so the hosted service and a terminal run give the same one."""
+        return workdeck.manifest(self.home.root, python=sys.executable, checkout=REPO_ROOT)
 
     def admits(self, token: str) -> bool:
         """Whether a presented token signs in: this run's, or one the hosted service lists."""
@@ -386,6 +393,11 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             url = urlsplit(self.path)
             if url.path == HEALTH_PATH and app.health is not None:
                 self._json(HTTPStatus.OK, app.health)
+                return
+            if url.path == workdeck.WELL_KNOWN_PATH:
+                # Token-free like /healthz: `workdeck plugin add` reads it before any sign-in. It
+                # holds local paths only, no token and no ledger data (DN006 §8.10, T309).
+                self._json(HTTPStatus.OK, app.workdeck_manifest())
                 return
             given = parse_qs(url.query).get("token", [""])[0]
             if url.path == "/" and given:

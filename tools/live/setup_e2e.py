@@ -152,6 +152,7 @@ def answers(run: Run) -> dict[str, Any]:
         "host": "claude-code",
         "dashboard": False,
         "dashboard_port": 47899,
+        "workdeck": False,  # the real workdeck is the user's: never wired from a test run (T309)
         "user_settings": True,
     }
 

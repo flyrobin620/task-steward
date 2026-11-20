@@ -29,6 +29,17 @@ TIERS = ("unit", "component", "surface", "conformance")
 FAKE_SCHTASKS = Path(__file__).resolve().parent / "fixtures" / "fake_schtasks.py"
 
 
+def without_workdeck(path: str) -> str:
+    """``path`` without the folders that hold a ``workdeck`` command."""
+    names = ("workdeck", "workdeck.cmd", "workdeck.exe", "workdeck.ps1")
+    kept = [
+        folder
+        for folder in path.split(os.pathsep)
+        if not (folder and any((Path(folder) / name).is_file() for name in names))
+    ]
+    return os.pathsep.join(kept)
+
+
 @pytest.fixture(autouse=True)
 def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for key in list(os.environ):
@@ -49,6 +60,9 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("TSW_REG", str(tmp_path / "state" / "fake-reg.json"))
     for key in ("LOCALAPPDATA", "ProgramFiles"):
         monkeypatch.setenv(key, str(tmp_path / key.lower()))
+    # The real workdeck stays out of reach (T309): a test that needs one puts the stand-in
+    # tests/fixtures/fake_workdeck.py on PATH itself.
+    monkeypatch.setenv("PATH", without_workdeck(os.environ.get("PATH", "")))
     return data_home
 
 

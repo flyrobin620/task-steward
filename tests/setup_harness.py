@@ -153,3 +153,25 @@ def settings(env: dict[str, str]) -> dict[str, Any]:
 
 def record(env: dict[str, str]) -> dict[str, Any]:
     return json.loads((Path(env["TSW_STATE_DIR"]) / "install.json").read_text(encoding="utf-8"))
+
+
+def fake_workdeck(tmp_path: Path, env: dict[str, str]) -> Path:
+    """Put a ``workdeck.cmd`` running the stand-in ``tests/fixtures/fake_workdeck.py`` first on
+    ``env``'s PATH; its configuration is ``workdeck.json`` in the test, its calls go to
+    ``workdeck.log``. Returns the configuration file."""
+    bin_dir = tmp_path / "workdeck-bin"
+    bin_dir.mkdir(exist_ok=True)
+    script = FIXTURES / "fake_workdeck.py"
+    (bin_dir / "workdeck.cmd").write_text(
+        f'@"{sys.executable}" "{script}" %*\r\n', encoding="utf-8"
+    )
+    config = tmp_path / "workdeck" / "workdeck.json"
+    env["FAKE_WORKDECK_LOG"] = str(tmp_path / "workdeck.log")
+    env["FAKE_WORKDECK_CONFIG"] = str(config)
+    env["PATH"] = os.pathsep.join([str(bin_dir), env.get("PATH", "")])
+    return config
+
+
+def workdeck_calls(tmp_path: Path) -> list[str]:
+    log = tmp_path / "workdeck.log"
+    return log.read_text(encoding="utf-8").splitlines() if log.is_file() else []

@@ -124,6 +124,7 @@ def test_a_second_install_changes_nothing(tmp_path: Path) -> None:
         "user_settings": "ok",
         "render": "ok",
         "dashboard": "skipped",
+        "workdeck": "skipped",  # no workdeck command in the test (T309)
     }
     assert len(claude_calls(tmp_path)) == before_calls  # no claude command ran again
     assert settings(env) == before_settings

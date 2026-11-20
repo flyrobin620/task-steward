@@ -110,6 +110,9 @@ def session_link(task_id: str, attempt: dict[str, Any] | None) -> str:
 
     ``data-tsw-session``, ``data-tsw-task``, ``data-tsw-attempt`` and ``data-tsw-adapter`` are a
     contract with pages that embed this one: they only grow, never change.
+    ``data-workdeck-session`` (T309) is the workdeck plugin protocol's standard attribute (workdeck
+    DN005 §11.3): the same session id, so the workdeck portal opens the session with no
+    ``sessionLinks`` in the plugin's manifest.
     """
     ref = attempt.get("session_ref") if attempt else None
     if not attempt or not ref:
@@ -118,7 +121,8 @@ def session_link(task_id: str, attempt: dict[str, Any] | None) -> str:
     label = attempt.get("session_name") or ref
     attrs = (
         f'class="session" data-tsw-session="{_e(ref)}" data-tsw-task="{_e(task_id)}" '
-        f'data-tsw-attempt="{_e(attempt["attempt"])}" data-tsw-adapter="{_e(adapter)}"'
+        f'data-tsw-attempt="{_e(attempt["attempt"])}" data-tsw-adapter="{_e(adapter)}" '
+        f'data-workdeck-session="{_e(ref)}"'
     )
     href = session_href(adapter, str(ref))
     if href is None:

@@ -38,6 +38,8 @@ HOST_CLI_COMMANDS = frozenset(
         "host install-hint",
         "host update-plan",
         "dashboard status",
+        # Prints the Dashboard's workdeck manifest (T309); its ``--out`` is refused in a session.
+        "dashboard workdeck-manifest",
         "lease show",
         "ledger audit",
         # The install script's read-only commands run in any session (DN009 §8, CC008 §5.8).

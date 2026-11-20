@@ -93,6 +93,7 @@ setup 在会话中提问（同样要求用户给出数据目录位置）并做�
   - `tsw`（无扩展名的 sh 脚本）：`exec "<python>" -X utf8 "<检出>/plugin/bin/tsw_launch.py" "$@"`（Git Bash，即 Claude 的 Bash 工具）。
   - 实测：只有 `.cmd` 时 Git Bash 找不到命令；两个都有时 Git Bash、cmd、PowerShell 都能找到。
 - Dashboard 常驻服务：复用 `tsw dashboard install`（CC006 §12）。
+- 接入 workdeck（T309）：manifest 的命令形式与 `workdeck plugin add` 的调用见 CC006 §13。
 - 实测环境注意：在数据目录之下用独立的 `CLAUDE_CONFIG_DIR` 添加 GitHub 市场，Claude Code 最后一步的目录重命名会以 `EPERM` 失败（同一操作在 `%TEMP%` 下成功）；live 场景的临时配置放在 `%TEMP%` 下。
 
 ## 9. 待验证（live）与 T308 的结论

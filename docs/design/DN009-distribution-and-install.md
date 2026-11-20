@@ -1,6 +1,6 @@
 # DN009 分发与安装
 
-- 状态：已确认（T305；用户 2026-11-19 确认两条安装路径与本文的 D1–D3，插件名不改；同日决定数据目录必填、setup 不配置仓库，§6）
+- 状态：已确认（T305；用户 2026-11-19 确认两条安装路径与本文的 D1–D3，插件名不改；同日决定数据目录必填、setup 不配置仓库，§6；T309 §5 第 7 步接入 workdeck，用户 2026-11-20 确认）
 - 日期：2026-11-19
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN003 统一配置](DN003-unified-config.md) · [DN006 插件层](DN006-plugin-layer.md) · [DN008 校验原则](DN008-guardrails.md) · 实现：[CC009 Claude Code 上的安装](claude-code/CC009-install.md)
 
@@ -79,7 +79,8 @@ tsw 的工具服务在会话启动时载入（DN006 §9.8），用户级 PATH �
 4. **用户设置**（D2，用户同意时）：`apply_user_settings`；不同意时输出要手工加入的文本。
 5. **`tsw host render`**：生成数据目录中的主会话说明、skill、设置与 worker 说明，并更新插件副本（DN006 §6.2）。
 6. **Dashboard**（用户选择且操作系统已支持时）：`tsw dashboard install`，然后 `tsw dashboard open`（DN006 §8.10；令牌不出现在任何输出中）。
-7. 记下安装完成，运行安装阶段的 `verify`（§9）。
+7. **接入 workdeck**（本机有 `workdeck` 命令且用户同意时，T309）：按安装记录中的解释器、检出与数据目录生成 workdeck 插件 manifest（DN006 §8.10“workdeck 插件 manifest”），运行 `workdeck plugin add <manifest> --replace`。`install.json` 记下 manifest 的摘要与“由安装脚本加入”；摘要不变时跳过。`plan` 列出 workdeck 中是否已有同 `id` 的插件，有时写明将替换它（workdeck 先备份自己的配置）。workdeck 拒绝或失败时，这一步报告原因与可以手工运行的命令，不影响其他步骤。
+8. 记下安装完成，运行安装阶段的 `verify`（§9）。
 
 ## 6. 要问用户的配置
 
@@ -94,6 +95,7 @@ tsw 的工具服务在会话启动时载入（DN006 §9.8），用户级 PATH �
 | 人类渠道：只在会话中，或另加外部渠道 | 只在会话中 | `plugins.human_channels`、`input.channels` |
 | 宿主（session provider） | 列出已实现宿主集成的宿主，只有一个时直接选定 | `plugins.host_integration`、`plugins.sessions` |
 | 是否把 Dashboard 装成登录时启动的服务；端口 | 操作系统支持时是，`47800` | `tsw dashboard install`、`dashboard.port` |
+| 是否把 Dashboard 接入本机的 workdeck 门户（T309） | 找到 `workdeck` 命令时是，否则否 | `workdeck plugin add`、`install.json` |
 | 是否允许安装脚本维护宿主用户设置 | 是（备份后合并） | `install.json` |
 
 ### 6.1 仓库在安装之后配置
@@ -138,6 +140,7 @@ tsw 的工具服务在会话启动时载入（DN006 §9.8），用户级 PATH �
 - 插件来源指向检出，插件副本等于检出 HEAD；
 - `tsw home` 找到数据目录，`tsw config validate` 通过；宿主侧放行规则没有缺失；
 - `tsw dashboard status`（已安装时）；
+- workdeck（安装脚本接入过时）：记下的 manifest 摘要等于按当前目标重新生成的摘要（解释器、检出或数据目录变化后不等，修正为重跑 `install`）；workdeck 侧的插件状态由 `workdeck plugin list` 查看，`verify` 不读 workdeck 的配置；
 - 不加载用户 site-packages 时运行时仍能加载，工具服务能完成一次握手。
 
 只能在重新加载后确认的项列为“待生效”（`pending_reload`），不算失败；其余项失败时说明原因，修正后重跑 `install`。
@@ -148,7 +151,7 @@ tsw 的工具服务在会话启动时载入（DN006 §9.8），用户级 PATH �
 
 - **升级**：在主会话中要求更新，主会话按现有的自我更新流程做（DN006 §9.8）：拉取并快进检出、`update-plan`、`host render`（含插件副本）、重启 Dashboard、按配置重新加载。`update-plan` 的 `install` 类别改为：垫片模板或安装步骤改变时，重新运行 `tsw setup install`（主会话中按 §8 可以直接运行，或在终端运行）；`host_rules` 在用户同意由安装脚本维护时同样重跑安装。
 - **修复**：重跑任一路径；已有安装时先 `check`，只做缺少或不一致的部分。
-- **卸载**：`tsw setup uninstall`（终端，或主会话中的 setup 入口）：`tsw dashboard uninstall`；`remove(install_record)`；删除垫片与它加入的 PATH 项。**数据目录永远不删**（账本是用户的数据），只告诉用户位置与 `tsw backup` 的用法；检出由用户自己删除（会话路径中 setup 克隆的检出，经用户确认后可删）。
+- **卸载**：`tsw setup uninstall`（终端，或主会话中的 setup 入口）：`tsw dashboard uninstall`；安装脚本接入过 workdeck 时 `workdeck plugin remove <id>`（被替换掉的旧插件项不恢复，在 workdeck 的配置备份中）；`remove(install_record)`；删除垫片与它加入的 PATH 项。**数据目录永远不删**（账本是用户的数据），只告诉用户位置与 `tsw backup` 的用法；检出由用户自己删除（会话路径中 setup 克隆的检出，经用户确认后可删）。
 
 ## 11. 产品仓库的位置（D1）
 
