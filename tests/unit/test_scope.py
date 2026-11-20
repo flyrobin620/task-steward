@@ -7,7 +7,8 @@ from typing import Any
 
 import pytest
 
-from tools.scope import glob_regex, load_map, resolve, validate_map
+from tools.gate import STAGE_JOBS, STAGE_STEPS
+from tools.scope import STAGES, glob_regex, load_map, resolve, validate_map
 
 ALL = ["lint", "docs", "test"]
 DOCS_ONLY = ["lint", "docs"]
@@ -122,6 +123,22 @@ def test_globs() -> None:
     assert not glob_regex("tools/*.py").match("tools/live/x.py")
     assert glob_regex("tools/?.py").match("tools/a.py")
     assert not glob_regex("README.md").match("READMExmd")
+
+
+def test_a_map_without_the_test_stage_is_refused(repo_map: dict[str, Any]) -> None:
+    broken = copy.deepcopy(repo_map)
+    del broken["stages"]["test"]
+    for component in broken["components"]:
+        component["stages"] = [s for s in component["stages"] if s != "test"]
+    problems = validate_map(broken)
+    assert len(problems) == 1
+    assert problems[0].startswith("阶段必须恰好是 ['lint', 'docs', 'test']")
+    assert problems[0].endswith("实际为 ['lint', 'docs']")
+
+
+def test_scope_and_gate_know_the_same_stages() -> None:
+    assert tuple(STAGE_STEPS) == STAGES
+    assert tuple(STAGE_JOBS) == STAGES
 
 
 def test_an_invalid_map_is_refused(repo_map: dict[str, Any]) -> None:

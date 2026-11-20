@@ -27,6 +27,9 @@ ROOT = Path(__file__).resolve().parent.parent
 MAP_PATH = "tools/scope.json"
 RESOLVER_PATH = "tools/scope.py"
 WORKFLOW_PATH = ".github/workflows/ci.yml"
+# The stages the workflow and the Gate check know (tools/gate.py STAGE_STEPS), in order. The map
+# must define exactly these: a map without ``test`` would let every change skip the tests.
+STAGES = ("lint", "docs", "test")
 
 
 def glob_regex(glob: str) -> re.Pattern[str]:
@@ -57,8 +60,10 @@ def validate_map(scope_map: Mapping[str, Any]) -> list[str]:
     """What is wrong with a component map: its stages, component names and paths."""
     problems: list[str] = []
     stages = list(scope_map.get("stages") or {})
-    if not stages:
-        problems.append("没有定义任何阶段")
+    if tuple(stages) != STAGES:
+        problems.append(
+            f"阶段必须恰好是 {list(STAGES)}（workflow 与 Gate 认识的阶段），实际为 {stages}"
+        )
     problems += [
         f"always: 未知阶段 {stage}" for stage in scope_map.get("always", []) if stage not in stages
     ]

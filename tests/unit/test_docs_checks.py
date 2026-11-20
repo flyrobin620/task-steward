@@ -123,6 +123,25 @@ def test_a_missing_script_an_unknown_word_and_an_unhandled_label_fail(tmp_path: 
     ]
 
 
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        "# the label 'ci:all' selects every stage\nrun: echo\n",
+        "run: echo  # 'ci:all' is handled elsewhere\n",
+        "if: contains(labels, 'ci:allx')\n",
+        "if: contains(labels, 'ci:all-stages')\n",
+    ],
+)
+def test_a_label_named_only_in_a_comment_or_inside_a_longer_label_fails(
+    tmp_path: Path, workflow: str
+) -> None:
+    _rules(tmp_path, "标签 `ci:all`\n")
+    _write(tmp_path / ".github" / "workflows" / "ci.yml", workflow)
+    assert automation.check(tmp_path) == [
+        "docs/development/ci.md:1: 标签 ci:all 没有被 .github/workflows 处理"
+    ]
+
+
 def test_the_repository_rule_documents_pass() -> None:
     assert automation.check(docs.ROOT) == []
 

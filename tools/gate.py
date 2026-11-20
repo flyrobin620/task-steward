@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT))
 from tools.checks import catalog as catalog_check  # noqa: E402
 from tools.checks import stdlib_only  # noqa: E402
 from tools.checks.repo import utf8_stdio  # noqa: E402
+from tools.scope import STAGES as SCOPE_STAGES  # noqa: E402
 from tsw.cli import iter_commands  # noqa: E402
 from tsw.host.mcp import tool_names as mcp_tool_names  # noqa: E402
 from tsw.machine.runner import tool_names  # noqa: E402
@@ -50,7 +51,8 @@ STAGE_STEPS = {
     "docs": ("docs", "catalog-static"),
     "test": ("tests", "catalog"),
 }
-STAGE_JOBS = {"lint": "lint", "docs": "docs", "test": "test"}
+STAGE_JOBS = {stage: stage for stage in SCOPE_STAGES}
+assert set(STAGE_STEPS) == set(SCOPE_STAGES), "tools/scope.py STAGES and STAGE_STEPS disagree"
 CI_TIERS = ("unit", "component", "surface", "conformance")
 MAX_JOBS = 8
 
