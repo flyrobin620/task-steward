@@ -126,4 +126,5 @@ live 中另外发现并已处理：
 
 1. **终端路径是 Windows 上的推荐路径**（§2 第一段不变）：`git clone` + `setup.ps1`，不需要退出 app，最后重启 app。README 与 §2 先写它。
 2. **会话路径改为“先在终端准备插件，其余在会话中做完”**：在 PowerShell 中（Claude app 完全退出时）`claude plugin marketplace add https://github.com/flyrobin620/task-steward.git` 与 `claude plugin install task-steward@task-steward`，再打开 app，在任意新会话中输入 `/task-steward:setup`。§2 第二段改为这三步，并写明要先退出 app 的原因。Claude Code 修复 app 运行时的改名问题、或 app 中的插件窗口能成功添加之后，再恢复“全在会话中”的写法。
-3. **安装后的主会话**（DN009 §15.2）：会话入口的 setup skill 在安装成功后用 `mcp__ccd_session__start_session` 创建主会话（`cwd` 为数据目录、`use_worktree: false`、标题“TaskSteward 主会话”、`prompt` 为示例任务的提示语），再用 `mcp__ccd_session_mgmt__detach_session` 与安装会话分离；新文件夹的信任确认由 app 弹出、用户点击。新会话能否在不重启 app 的情况下用上新的用户设置（`env.TSW_HOME`、`env.TSW_PYTHON`）与改指后的插件待 live 验证：不能时 skill 改为请用户重启 app 后在数据目录新建会话并输入那句提示语。终端入口输出同样的说明。
+3. **安装后的引导**（DN009 §15.2）：试装确认新会话要在重启 app 之后才用上新的用户设置与插件，所以 setup skill 不创建会话，只在最后告诉用户：完全退出并重新打开 Claude app，在数据目录新建会话，输入“开始示例任务”。终端入口输出同样的说明。
+4. **示例 skill**（DN009 §15.3）：`tsw-demo` 生成到数据目录的 `.claude/skills/tsw-demo/SKILL.md`，由主会话在用户说“开始示例任务”时使用；它只给出任务的规格、开始前的说明与每一步要告诉用户的话，登记、派发、验收都走主会话的现有工具与 skill。
