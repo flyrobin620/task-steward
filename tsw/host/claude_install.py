@@ -187,32 +187,45 @@ def remove_plugin(env: Mapping[str, str], claude: str, owned: Mapping[str, Any])
     source = cast("dict[str, Any]", before) if isinstance(before, dict) else None
     had_plugin = bool(owned.get("installed_before"))
     ran: list[dict[str, Any]] = []
-    notes: list[str] = []
-    current = marketplace_source(env)
+
+    def step(*args: str) -> bool:
+        result = run_claude(claude, env, *args)
+        ran.append(result)
+        return result.get("returncode") == 0
+
     location = source_location(source)
     if source is not None and location is None:
-        notes.append("安装前的插件市场来源无法识别，保持现状")
-    elif not _same_source(current, source):
-        if current is not None:
-            ran.append(run_claude(claude, env, "plugin", "marketplace", "remove", MARKETPLACE))
-        if location is not None:
-            ran.append(run_claude(claude, env, "plugin", "marketplace", "add", location))
-            notes.append(f"插件市场改回安装前的来源：{location}")
+        return {
+            "ran": ran,
+            "ok": False,
+            "problem": "安装前的插件市场来源无法识别，没有改动；请手工恢复",
+            "before": source,
+        }
+    current = marketplace_source(env)
+    if not _same_source(current, source):
+        if current is not None and not step("plugin", "marketplace", "remove", MARKETPLACE):
+            return {"ran": ran, "ok": False, "problem": "移除插件市场失败"}
+        if location is not None and not step("plugin", "marketplace", "add", location):
+            return {"ran": ran, "ok": False, "problem": f"恢复插件市场 {location} 失败"}
     user = [c for c in installed_copies(env) if c.get("scope") == "user"]
     if had_plugin and not user and location is not None:
-        ran.append(run_claude(claude, env, "plugin", "install", PLUGIN_ID, "--scope", "user"))
-    elif not had_plugin and user:
-        ran.append(run_claude(claude, env, "plugin", "uninstall", PLUGIN_ID, "--scope", "user"))
+        if not step("plugin", "install", PLUGIN_ID, "--scope", "user"):
+            return {"ran": ran, "ok": False, "problem": "从原来源重新安装插件失败"}
+    elif not had_plugin and user and not step("plugin", "uninstall", PLUGIN_ID, "--scope", "user"):
+        return {"ran": ran, "ok": False, "problem": "卸载插件失败"}
+    user = [c for c in installed_copies(env) if c.get("scope") == "user"]
+    restored = _same_source(marketplace_source(env), source)
+    if not (restored and bool(user) == had_plugin):
+        return {"ran": ran, "ok": False, "problem": "插件与市场没有回到安装前的状态"}
+    notes: list[str] = []
+    if location is not None and ran:
+        notes.append(f"插件市场改回安装前的来源：{location}")
     if had_plugin:
         notes.append(
             "插件在安装前就已安装（用户范围），已按原来的来源保留；要完全移除时运行 "
             f"claude plugin uninstall {PLUGIN_ID} 与 claude plugin marketplace remove {MARKETPLACE}"
         )
-    user = [c for c in installed_copies(env) if c.get("scope") == "user"]
-    restored = (source is not None and location is None) or _same_source(
-        marketplace_source(env), source
-    )
-    return {"ran": ran, "notes": notes, "ok": restored and bool(user) == had_plugin}
+    return {"ran": ran, "notes": notes, "ok": True}
 
 
 # ---------------------------------------------------------------------- user settings

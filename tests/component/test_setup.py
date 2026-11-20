@@ -526,3 +526,31 @@ def test_uninstall_restores_a_marketplace_that_had_no_user_install(tmp_path: Pat
     ]
     after = json.loads((plugins / "installed_plugins.json").read_text("utf-8"))
     assert after["plugins"]["task-steward@task-steward"] == [project]
+
+
+@pytest.mark.use_case(UC)
+def test_an_uninstall_whose_plugin_restore_fails_stops_and_can_be_run_again(
+    tmp_path: Path,
+) -> None:
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    mine = make_product(tmp_path, "developer-checkout")
+    env = setup_env(tmp_path)
+    _claude(claude, env, "plugin", "marketplace", "add", str(mine))
+    _claude(claude, env, "plugin", "install", "task-steward@task-steward", "--scope", "user")
+    assert install(product, write_answers(tmp_path, tmp_path / "data"), env, claude)[0] == 0
+    shims = Path(env["TSW_STATE_DIR"]) / "bin"
+    # The marketplace is removed, then adding the old source fails (no network, say).
+    failing = {**env, "FAKE_CLAUDE_FAIL": "marketplace add"}
+    code, out, _ = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=failing)
+    assert code == 3 and out["details"]["reason"] == "uninstall_incomplete"
+    assert out["details"]["removed"]["plugin"]["problem"].startswith("恢复插件市场")
+    assert record(env)["status"] == "uninstalling"
+    assert (shims / "tsw.cmd").is_file() and settings(env)["env"]["TSW_HOME"]  # untouched
+    # Once the cause is gone the same command finishes the job.
+    code, out, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
+    assert code == 0, text
+    assert claude_calls(tmp_path)[-2:] == [
+        f"plugin marketplace add {mine}",
+        "plugin install task-steward@task-steward --scope user",
+    ]
+    assert record(env)["status"] == "uninstalled" and not shims.exists()

@@ -781,6 +781,17 @@ def uninstall(ctx: Context) -> dict[str, Any]:
         done["plugin"] = claude_install.remove_plugin(ctx.env, ctx.claude, plugin)
     else:
         done["plugin"] = {"ok": False, "note": "找不到 claude 命令行，插件没有卸载"}
+    if not done["plugin"].get("ok"):
+        # Stop before the settings, the shims and Path: the user keeps a working tsw and the
+        # record to run the uninstall again once the cause is fixed (T308 review r3 F9).
+        ctx.record.set(status="uninstalling")
+        raise rejected(
+            "插件没有恢复到安装前的状态，卸载停在这一步（用户设置、垫片与 PATH 未动）；"
+            "按 plugin 中的输出修正原因（例如网络）后重新运行 tsw setup uninstall",
+            reason="uninstall_incomplete",
+            step="plugin",
+            removed=done,
+        )
     owned = ctx.record.step("user_settings")
     if owned:
         done["user_settings"] = claude_install.remove_user_settings(ctx.env, owned, ctx.backups)
