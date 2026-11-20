@@ -342,6 +342,9 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     # The plan requires the repository in the configuration (G-PLAN): the demo adds its entry
     # with the user's confirmation first (second trial, T308). A new environment gets the tour.
     assert '"path": ["repositories", "tsw-demo"]' in example and "config_change" in example
+    # An existing entry of that name is reused only when it points at no folder and allows no
+    # delivery; otherwise the demo stops (review r8 F1).
+    assert "不覆盖、不登记、不派发" in example
     assert "`task_list` 为空" in example and "/orchestrate" in example
     orchestrate = skill.read_text(encoding="utf-8")
     assert "`task_list` 为空" in orchestrate and "`tsw-demo` skill" in orchestrate

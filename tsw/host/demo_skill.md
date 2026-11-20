@@ -33,7 +33,7 @@ description: "TaskSteward 新手导览与示例任务：主会话发现账本中
 
 用户确认后：
 
-1. `config_show` 取 `file_sha256`；`config_change`：`ops` 为 `[{"op": "set", "path": ["repositories", "tsw-demo"], "value": {"delivery": {"push": false, "create_pr": false, "merge": false}}}]`（不写 `path`：tsw 不建 worktree，任务在数据目录的 `work/<任务>/<attempt>/` 中执行）；`reason` 写“示例任务的仓库条目（不指向本机目录、不交付）”；`user_source` 为用户上一步确认的原话（`channel` 为 `main-session`，`message_ref` 为 hook 给出的消息编号），`target` 为 `["config", <file_sha256>, "authorize"]`。已有 `tsw-demo` 条目时跳过。
+1. `config_show` 取 `file_sha256`；`config_change`：`ops` 为 `[{"op": "set", "path": ["repositories", "tsw-demo"], "value": {"delivery": {"push": false, "create_pr": false, "merge": false}}}]`（不写 `path`：tsw 不建 worktree，任务在数据目录的 `work/<任务>/<attempt>/` 中执行）；`reason` 写“示例任务的仓库条目（不指向本机目录、不交付）”；`user_source` 为用户上一步确认的原话（`channel` 为 `main-session`，`message_ref` 为 hook 给出的消息编号），`target` 为 `["config", <file_sha256>, "authorize"]`。已有 `tsw-demo` 条目时先用 `config_show` 核对：没有 `path`，`delivery` 的 `push`、`create_pr`、`merge` 都不是 true，这样的条目直接复用；否则（同名条目指向真实仓库或允许交付）停下，告诉用户冲突在哪里，请用户自己处理（改名或改配置），不覆盖、不登记、不派发。
 2. `task_register`：
    - `title`：`示例：TaskSteward 示例任务报告`
    - `repo`：`tsw-demo`
