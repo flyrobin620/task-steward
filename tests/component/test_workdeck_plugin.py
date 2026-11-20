@@ -117,7 +117,9 @@ def test_setup_adds_replaces_and_removes_the_workdeck_plugin(tmp_path: Path) -> 
         encoding="utf-8",
     )
     answers = write_answers(tmp_path, home, workdeck=True)
-    code, planned, text = run_setup(product, "plan", "--answers", str(answers), env=env)
+    code, planned, text = run_setup(
+        product, "plan", "--answers", str(answers), "--claude", str(claude), env=env
+    )
     assert code == 0, text
     assert step(planned, "workdeck")["state"] == "todo"  # no data directory yet
     out = install(product, answers, env, claude)
