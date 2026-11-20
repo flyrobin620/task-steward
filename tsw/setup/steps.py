@@ -570,8 +570,10 @@ def _workdeck(ctx: Context, apply: bool) -> dict[str, Any]:
     if command is None:
         return {"state": "skipped", "note": "找不到 workdeck 命令"}
     root = ctx.home_root
-    if root is None or not (root / MARKER).is_file():
-        return {"state": "todo", "note": "数据目录建好之后接入"}
+    if root is None:
+        return {"state": "todo", "note": "还没有给出数据目录位置"}
+    # The manifest needs only the data directory's path: the plan before the directory exists
+    # shows what will be started and replaced as well (PR #65 review).
     value = workdeck.manifest(root, python=ctx.python, checkout=ctx.checkout)
     wanted = workdeck.digest(value)
     plugin_id = str(value["id"])
@@ -580,11 +582,20 @@ def _workdeck(ctx: Context, apply: bool) -> dict[str, Any]:
         return {"state": "ok", "id": plugin_id}
     entries = _workdeck_entries(command, ctx.env)
     existed = None if entries is None else plugin_id in entries
+    starts = " ".join([value["spawn"]["command"], *value["spawn"]["args"]])
+    replacing = {
+        True: f"；替换 workdeck 中已有的插件 {plugin_id}",
+        None: "；读不到 workdeck 的插件列表",
+    }
     result: dict[str, Any] = {
         "state": "todo",
         "id": plugin_id,
-        "starts": " ".join([value["spawn"]["command"], *value["spawn"]["args"]]),
+        "starts": starts,
         "replaces": existed,
+        "actions": [
+            f"workdeck plugin add <manifest> --replace（插件 {plugin_id} 启动：{starts}"
+            f"{replacing.get(existed, '')}）"
+        ],
     }
     if not apply:
         return result

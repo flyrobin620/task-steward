@@ -121,14 +121,19 @@ def test_setup_adds_replaces_and_removes_the_workdeck_plugin(tmp_path: Path) -> 
         product, "plan", "--answers", str(answers), "--claude", str(claude), env=env
     )
     assert code == 0, text
-    assert step(planned, "workdeck")["state"] == "todo"  # no data directory yet
+    # Before the data directory exists the plan already says what will start and be replaced,
+    # in the actions the terminal shows before asking (PR #65 review).
+    planned_step = step(planned, "workdeck")
+    assert planned_step["state"] == "todo" and planned_step["replaces"] is True
+    assert planned_step["starts"].endswith(f"--home {home.resolve()}")
+    assert "替换 workdeck 中已有的插件 tsw" in planned_step["actions"][0]
     out = install(product, answers, env, claude)
     assert out["_code"] == 0, out
     done = step(out, "workdeck")
     assert done["state"] == "done" and done["replaces"] is True
     calls = workdeck_calls(tmp_path)
-    assert calls[0] == "plugin list"
-    added = calls[1].split(" ")
+    assert calls[:2] == ["plugin list", "plugin list"]  # the plan's, then the install's
+    added = calls[2].split(" ")
     assert added[:2] == ["plugin", "add"] and added[-1] == "--replace"
     assert not Path(added[2]).exists()  # the temporary manifest is gone
     wanted = workdeck.manifest(home, python=sys.executable, checkout=product)
@@ -143,7 +148,7 @@ def test_setup_adds_replaces_and_removes_the_workdeck_plugin(tmp_path: Path) -> 
     # A rerun with the same manifest does not call workdeck again.
     again = install(product, answers, env, claude)
     assert step(again, "workdeck")["state"] == "ok"
-    assert len(workdeck_calls(tmp_path)) == 2
+    assert len(workdeck_calls(tmp_path)) == 3
     # Uninstall removes the entry the install added; the data directory stays.
     code, removed, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
     assert code == 0, text
