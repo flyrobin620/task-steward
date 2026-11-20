@@ -608,9 +608,31 @@ def _workdeck(ctx: Context, apply: bool) -> dict[str, Any]:
             "workdeck-manifest --out <文件>，再 workdeck plugin add <文件> --replace",
         )
         return result
+    if (
+        entry.get("failed_at")
+        and "unchanged" in output
+        and not _workdeck_running(command, ctx.env, plugin_id)
+    ):
+        # The entry was written before the restart failed; workdeck does not restart for an
+        # unchanged entry, so the plugin still is not running (review T309 r2 F3).
+        ctx.record.finish("workdeck", added=True, digest=wanted, failed_at=utc_now())
+        result.update(
+            state="failed",
+            problem="workdeck 的配置中已有这个插件，但 workdeck daemon 没有在运行它"
+            "（上次重启失败）",
+            output=_tail(output),
+            manual="重启 workdeck daemon（workdeck setup verify 查看原因）后重跑 tsw setup install",
+        )
+        return result
     ctx.record.finish("workdeck", added=True, digest=wanted, failed_at=None)
     result.update(state="done", output=_tail(output))
     return result
+
+
+def _workdeck_running(command: str, env: Mapping[str, str], plugin_id: str) -> bool:
+    """Whether ``workdeck plugin list`` says the daemon runs the plugin: ``running: <id> ready``."""
+    code, output = _run_workdeck(command, env, "plugin", "list")
+    return code == 0 and f"running: {plugin_id} ready" in output.splitlines()
 
 
 def _port(home: Home) -> int:
@@ -962,19 +984,27 @@ def _remove_workdeck(ctx: Context, wired: Mapping[str, Any]) -> dict[str, Any]:
         return {"ok": False, "note": f"找不到 workdeck 命令，插件 {plugin_id} 没有移除"}
     entries = _workdeck_entries(command, ctx.env)
     root = ctx.home_root
-    if entries is not None and root is not None:
-        python = str(ctx.record.get("python") or ctx.python)
-        mine = workdeck.describe(workdeck.manifest(root, python=python, checkout=ctx.checkout))
-        if plugin_id not in entries:
-            ctx.record.finish("workdeck", added=False)
-            return {"ok": True, "id": plugin_id, "note": "workdeck 中已没有这个插件"}
-        if entries[plugin_id] != mine:
-            ctx.record.finish("workdeck", added=False)
-            return {
-                "ok": True,
-                "id": plugin_id,
-                "note": "workdeck 中的这个插件已不是安装加入的那一项，保留",
-            }
+    if entries is None or root is None:
+        # Without the list there is nothing to tell our entry from one the user put there
+        # since: keep it and the record, and say how to finish (review T309 r2 F4).
+        return {
+            "ok": False,
+            "id": plugin_id,
+            "note": "读不到 workdeck 的插件列表，插件没有移除；确认它仍是安装加入的那一项后运行 "
+            f"workdeck plugin remove {plugin_id}",
+        }
+    python = str(ctx.record.get("python") or ctx.python)
+    mine = workdeck.describe(workdeck.manifest(root, python=python, checkout=ctx.checkout))
+    if plugin_id not in entries:
+        ctx.record.finish("workdeck", added=False)
+        return {"ok": True, "id": plugin_id, "note": "workdeck 中已没有这个插件"}
+    if entries[plugin_id] != mine:
+        ctx.record.finish("workdeck", added=False)
+        return {
+            "ok": True,
+            "id": plugin_id,
+            "note": "workdeck 中的这个插件已不是安装加入的那一项，保留",
+        }
     code, output = _run_workdeck(command, ctx.env, "plugin", "remove", plugin_id)
     if code == 0:
         ctx.record.finish("workdeck", added=False)

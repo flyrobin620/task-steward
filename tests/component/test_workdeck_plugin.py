@@ -214,6 +214,22 @@ def test_an_add_that_failed_after_workdeck_wrote_it_is_still_removed(tmp_path: P
     owned = record(env)["steps"]["workdeck"]
     assert owned["added"] is True and owned["failed_at"]
     assert out["verify"]["failed"] == ["workdeck"]
+    # A rerun: workdeck finds the entry unchanged and does not restart its daemon, which still
+    # does not run the plugin; the step stays failed (review T309 r2 F3).
+    env.pop("FAKE_WORKDECK_FAIL")
+    answers = tmp_path / "answers.json"
+    again = install(product, answers, env, claude)
+    assert step(again, "workdeck")["state"] == "failed"
+    assert "没有在运行" in step(again, "workdeck")["problem"]
+    assert again["verify"]["failed"] == ["workdeck"]
+    # Once the daemon runs it, the rerun clears the failure.
+    env["FAKE_WORKDECK_RUNNING"] = "1"
+    fixed = install(product, answers, env, claude)
+    assert step(fixed, "workdeck")["state"] == "done" and fixed["verify"]["ok"] is True
+    assert (
+        "failed_at" not in record(env)["steps"]["workdeck"]
+        or not record(env)["steps"]["workdeck"]["failed_at"]
+    )
     code, removed, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
     assert code == 0, text
     assert removed["removed"]["workdeck"]["ok"] is True
@@ -237,3 +253,25 @@ def test_uninstall_keeps_an_entry_the_user_changed_since(tmp_path: Path) -> None
     assert "保留" in removed["removed"]["workdeck"]["note"]
     assert entries(config)["tsw"]["name"] == "mine"
     assert not any(call.startswith("plugin remove") for call in workdeck_calls(tmp_path))
+
+
+@mark.use_case(SETUP)
+def test_uninstall_removes_nothing_when_it_cannot_read_the_list(tmp_path: Path) -> None:
+    # Without the list our entry cannot be told from the user's (review T309 r2 F4).
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    home = tmp_path / "data"
+    env = setup_env(tmp_path)
+    config = fake_workdeck(tmp_path, env)
+    out = install(product, write_answers(tmp_path, home, workdeck=True), env, claude)
+    assert out["_code"] == 0, out
+    data = json.loads(config.read_text(encoding="utf-8"))
+    data["plugins"] = [{"id": "tsw", "name": "mine", "spawn": {"command": "other"}}]
+    config.write_text(json.dumps(data), encoding="utf-8")
+    env["FAKE_WORKDECK_FAIL"] = "list"
+    code, removed, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
+    assert code == 0, text
+    result = removed["removed"]["workdeck"]
+    assert result["ok"] is False and "workdeck plugin remove tsw" in result["note"]
+    assert entries(config)["tsw"]["name"] == "mine"
+    assert not any(call.startswith("plugin remove") for call in workdeck_calls(tmp_path))
+    assert record(env)["steps"]["workdeck"]["added"] is True

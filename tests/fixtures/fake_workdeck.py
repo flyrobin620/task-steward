@@ -6,7 +6,8 @@ It keeps the ``plugins`` of a ``workdeck.json`` at ``FAKE_WORKDECK_CONFIG`` the 
 one under the same id needs ``--replace``) and appends every call's arguments to
 ``FAKE_WORKDECK_LOG``. ``FAKE_WORKDECK_FAIL=<verb>`` makes that verb fail (exit 1) before it
 changes anything; ``FAKE_WORKDECK_FAIL=restart`` makes ``add`` fail after writing the
-configuration, as workdeck does when its daemon does not come back.
+configuration, as workdeck does when its daemon does not come back. ``FAKE_WORKDECK_RUNNING=1``:
+``list`` reports the daemon running every plugin (``running: <id> ready``).
 
     plugin add <manifest file> [--replace]
     plugin list            <id> <name> <kind> <upstream>, tab-separated (describeUpstream)
@@ -46,7 +47,11 @@ if verb == "list":
         started = " ".join([spawn.get("command", ""), *spawn.get("args", [])])
         where = f" (in {spawn['cwd']})" if spawn.get("cwd") else ""
         print(f"{p['id']}\t{p.get('name', p['id'])}\tspawn\tstarts: {started}{where}")
-    print("the daemon is not running (stand-in)")
+    if os.environ.get("FAKE_WORKDECK_RUNNING"):
+        for p in plugins:
+            print(f"running: {p['id']} ready")
+    else:
+        print("the daemon is not running (stand-in)")
 elif verb == "add":
     raw = Path(args[2]).read_bytes()
     if raw.startswith(b"\xef\xbb\xbf"):

@@ -79,7 +79,7 @@ tsw 的工具服务在会话启动时载入（DN006 §9.8），用户级 PATH �
 4. **用户设置**（D2，用户同意时）：`apply_user_settings`；不同意时输出要手工加入的文本。
 5. **`tsw host render`**：生成数据目录中的主会话说明、skill、设置与 worker 说明，并更新插件副本（DN006 §6.2）。
 6. **Dashboard**（用户选择且操作系统已支持时）：`tsw dashboard install`，然后 `tsw dashboard open`（DN006 §8.10；令牌不出现在任何输出中）。
-7. **接入 workdeck**（本机有 `workdeck` 命令且用户同意时，T309）：按安装记录中的解释器、检出与数据目录生成 workdeck 插件 manifest（DN006 §8.10“workdeck 插件 manifest”），运行 `workdeck plugin add <manifest> --replace`。`install.json` 记下 manifest 的摘要与“由安装脚本加入”；摘要不变时跳过。`plan` 列出 workdeck 中是否已有同 `id` 的插件，有时写明将替换它（workdeck 先备份自己的配置）。workdeck 拒绝或失败时，这一步报告原因与可以手工运行的命令，不影响其他步骤；workdeck 先写配置、再重启它的 daemon，所以失败后 `workdeck plugin list` 中已是这份 manifest 时仍记为“由安装脚本加入”（卸载时要移除）。旧的答案文件（保存的或用 `--answers` 给出的）中没有这一项时按“否”处理，重跑不替用户接入。
+7. **接入 workdeck**（本机有 `workdeck` 命令且用户同意时，T309）：按安装记录中的解释器、检出与数据目录生成 workdeck 插件 manifest（DN006 §8.10“workdeck 插件 manifest”），运行 `workdeck plugin add <manifest> --replace`。`install.json` 记下 manifest 的摘要与“由安装脚本加入”；摘要不变时跳过。`plan` 列出 workdeck 中是否已有同 `id` 的插件，有时写明将替换它（workdeck 先备份自己的配置）。workdeck 拒绝或失败时，这一步报告原因与可以手工运行的命令，不影响其他步骤；workdeck 先写配置、再重启它的 daemon，所以失败后 `workdeck plugin list` 中已是这份 manifest 时仍记为“由安装脚本加入”（卸载时要移除）；之后重跑时 workdeck 对未变的配置不重启 daemon，这一步要等 `workdeck plugin list` 显示 daemon 在运行这个插件才算完成。旧的答案文件（保存的或用 `--answers` 给出的）中没有这一项时按“否”处理，重跑不替用户接入。
 8. 记下安装完成，运行安装阶段的 `verify`（§9）。
 
 ## 6. 要问用户的配置
@@ -151,7 +151,7 @@ tsw 的工具服务在会话启动时载入（DN006 §9.8），用户级 PATH �
 
 - **升级**：在主会话中要求更新，主会话按现有的自我更新流程做（DN006 §9.8）：拉取并快进检出、`update-plan`、`host render`（含插件副本）、重启 Dashboard、按配置重新加载。`update-plan` 的 `install` 类别改为：垫片模板或安装步骤改变时，重新运行 `tsw setup install`（主会话中按 §8 可以直接运行，或在终端运行）；`host_rules` 在用户同意由安装脚本维护时同样重跑安装。
 - **修复**：重跑任一路径；已有安装时先 `check`，只做缺少或不一致的部分。
-- **卸载**：`tsw setup uninstall`（终端，或主会话中的 setup 入口）：`tsw dashboard uninstall`；安装脚本接入过 workdeck 时，`workdeck plugin list` 中该 `id` 仍是安装加入的那一项才 `workdeck plugin remove <id>`（用户之后改过的保留；被替换掉的旧插件项不恢复，在 workdeck 的配置备份中）；`remove(install_record)`；删除垫片与它加入的 PATH 项。**数据目录永远不删**（账本是用户的数据），只告诉用户位置与 `tsw backup` 的用法；检出由用户自己删除（会话路径中 setup 克隆的检出，经用户确认后可删）。
+- **卸载**：`tsw setup uninstall`（终端，或主会话中的 setup 入口）：`tsw dashboard uninstall`；安装脚本接入过 workdeck 时，`workdeck plugin list` 中该 `id` 仍是安装加入的那一项才 `workdeck plugin remove <id>`（用户之后改过的保留；读不到列表时不移除，报告手工命令；被替换掉的旧插件项不恢复，在 workdeck 的配置备份中）；`remove(install_record)`；删除垫片与它加入的 PATH 项。**数据目录永远不删**（账本是用户的数据），只告诉用户位置与 `tsw backup` 的用法；检出由用户自己删除（会话路径中 setup 克隆的检出，经用户确认后可删）。
 
 ## 11. 产品仓库的位置（D1）
 
