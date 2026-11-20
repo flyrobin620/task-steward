@@ -8,12 +8,17 @@ point into the test's temporary directory; ``schtasks`` is the stand-in
 for a data directory that claims the current directory before ``TSW_HOME``
 (``tsw.home.claiming_home``), so the tests refuse to run from a checkout inside one: they and
 the processes they start would use that data directory.
+
+Test processes do not flush to the disk (``_without_disk_flushes``): see that function.
 """
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import json
 import os
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -29,8 +34,13 @@ TIERS = ("unit", "component", "surface", "conformance")
 FAKE_SCHTASKS = Path(__file__).resolve().parent / "fixtures" / "fake_schtasks.py"
 
 
+@functools.lru_cache(maxsize=8)
 def without_workdeck(path: str) -> str:
-    """``path`` without the folders that hold a ``workdeck`` command."""
+    """``path`` without the folders that hold a ``workdeck`` command.
+
+    Cached per ``PATH`` value: the autouse fixture calls it for every test, and checking every
+    folder of a long ``PATH`` each time costs hundreds of file lookups per test (T317).
+    """
     names = ("workdeck", "workdeck.cmd", "workdeck.exe", "workdeck.ps1")
     kept = [
         folder
@@ -102,8 +112,47 @@ class _Recorder:
 
 _RECORDER_KEY = pytest.StashKey[_Recorder]()
 
+# ---------------------------------------------------------------------- disk flushes
+
+_SQLITE_CONNECT = sqlite3.connect
+_NO_FLUSHES = pytest.MonkeyPatch()
+
+
+def _no_fsync(fd: int) -> None:
+    del fd
+
+
+def _connect_without_sync(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+    conn = _SQLITE_CONNECT(*args, **kwargs)
+    # A file that is not a database, or is read-only or locked, fails here as it would on the
+    # first statement; that statement still fails the same way, so the error is left to it.
+    with contextlib.suppress(sqlite3.Error):
+        conn.execute("PRAGMA synchronous = OFF")
+    return conn
+
+
+def _without_disk_flushes() -> None:
+    """Turn off flushes to the disk in this test process (T317).
+
+    tsw flushes every ledger append, derived file and SQLite commit (``os.fsync``, SQLite
+    ``synchronous``). Several test processes flushing at once on a CI runner wait on the disk:
+    four parallel shards made each flush about 30 times slower and the component tier 5 to 10
+    times slower. A flush only matters when the machine loses power, which no test does, so the
+    tests replace this part of the platform; every tsw code path still runs, writes and replaces
+    files and commits transactions as before. Processes the tests start (``tsw``, MCP servers,
+    hooks) keep flushing.
+    """
+    _NO_FLUSHES.setattr(os, "fsync", _no_fsync)
+    _NO_FLUSHES.setattr(sqlite3, "connect", _connect_without_sync)
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    del config
+    _NO_FLUSHES.undo()
+
 
 def pytest_configure(config: pytest.Config) -> None:
+    _without_disk_flushes()
     target = os.environ.get(RESULTS_ENV)
     if target:
         config.stash[_RECORDER_KEY] = _Recorder(Path(target))

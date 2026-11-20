@@ -667,6 +667,8 @@ def test_full_text_filters_by_scope_before_counting(home: Home) -> None:
     svc = service(h)
     svc.index.refresh()
     with svc.index.connection() as conn:
+        # One transaction: 500 autocommit inserts cost 30-85 s on a CI runner's disk (T317).
+        conn.execute("BEGIN")
         for _ in range(250):
             cur = conn.execute(
                 "INSERT INTO docs(task_id, kind, ref, chars) VALUES('T004', 'spec', 'x', 1)"
@@ -675,6 +677,7 @@ def test_full_text_filters_by_scope_before_counting(home: Home) -> None:
                 "INSERT INTO fts_docs(rowid, body) VALUES(?, ?)",
                 (cur.lastrowid, "下载链接 " * 20),
             )
+        conn.execute("COMMIT")
     hits = svc.search(ORCH_READER, {"query": "下载链接", "repo": "demo"})["hits"]
     assert [x["task_id"] for x in hits] == ["T001"]
 

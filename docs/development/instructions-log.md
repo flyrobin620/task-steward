@@ -26,3 +26,4 @@
 | 2026-11-11 | 新增 live 场景 `change-e2e`（任务经主会话技术验收后，用户在 worker 会话中追加要求，worker 自己登记需求变更并重新交付，主会话再次验收） | — | `testing-layers.md` 的场景表与运行方式 | T262：worker 凭用户在本会话中的原话登记需求变更（DN002 §5.1a），需要真实 app 中的证据 |
 | 2026-11-19 | 分发方式的 `TODO(decision)` 改为已决定：本仓库自带插件市场清单，两条安装路径（终端、宿主会话），安装后插件来源指向本机检出，不发布到包仓库 | `release.md`（提议：按标签安装） | 同一位置，设计见 DN009 | T305：用户确认分发与安装设计（D1–D3） |
 | 2026-11-20 | `main` 的保护规则已由 ruleset `main protection` 启用（必需检查 `Gate`、要求 PR、解决对话、分支须最新、禁止直接推送与强推，admin 可绕过仅用于紧急修复）；写明 agent 用所有者账号合并时不绕过 | `review.md`“合并” | 同一位置 | T316：按 [0001](../decisions/0001-development-process.md) 启用，用户 2026-11-20 决定 admin 可绕过 |
+| 2026-11-20 | 测试进程不刷盘（`os.fsync` 为空操作，SQLite `synchronous = OFF`）；测试启动的子进程照常刷盘 | — | `test-environments.md` 的 CI 层级 | T317：并行的测试进程同时刷盘时在 CI runner 上排队，component 层级慢 5–10 倍 |

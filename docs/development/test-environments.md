@@ -14,6 +14,10 @@
 - 不联网，不调用模型，不访问 GitHub。临时 git 仓库没有远端，测试中不执行 push。
 - MCP server 与 hooks 走 stdio，不占用端口；需要端口时动态分配，不用固定端口。
 - 并发运行的测试不共享进程级环境变量、锁文件或数据目录。
+- 测试进程不刷盘：`tests/conftest.py` 把 `os.fsync` 换成空操作，并给每个 SQLite 连接设
+  `synchronous = OFF`。刷盘只在机器断电时才有区别，测试不模拟断电；而几个并行的测试进程同时刷盘时，
+  CI runner 上每次刷盘要排队等磁盘（T317 实测慢约 30 倍）。这替换的是平台的落盘保证，tsw 的代码路径
+  照常运行；测试启动的子进程（`tsw`、MCP server、hooks）照常刷盘。
 - 录制的平台样本（hooks payload、`codex app-server` JSON-RPC 记录、`get_session` 回执）放在
   `tests/fixtures/`，提交前去除会话 ID 以外的个人信息（用户名、本机路径、主机名）。
 
