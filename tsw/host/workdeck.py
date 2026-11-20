@@ -87,6 +87,14 @@ def manifest(
     }
 
 
+def describe(value: dict[str, Any]) -> str:
+    """What ``workdeck plugin list`` shows for a spawned plugin (workdeck's ``describeUpstream``):
+    ``starts: <command> <args…> (in <cwd>)``. It tells our entry from another one there."""
+    spawn = value["spawn"]
+    started = " ".join([spawn["command"], *spawn.get("args", [])])
+    return f"starts: {started}" + (f" (in {spawn['cwd']})" if spawn.get("cwd") else "")
+
+
 def to_json(value: dict[str, Any]) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2) + "\n"
 

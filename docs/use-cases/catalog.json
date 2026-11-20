@@ -1392,7 +1392,7 @@
       "id": "UC-SETUP-003",
       "title": "tsw setup 的可选步骤：把 Dashboard 接入本机的 workdeck 门户（T309，DN009 §5 第 7 步，CC006 §13）",
       "actor": "用户 / tsw setup / workdeck 命令行",
-      "acceptance": "问题清单增加 workdeck（布尔）：PATH 中找到 workdeck 命令时默认是并在终端中询问，找不到时默认否且不询问；旧的保存答案中没有这一项时按否处理（重跑不替用户接入）。install 的 workdeck 步骤在 dashboard 之后：答案为否或找不到命令时 skipped；数据目录未建好时 todo；按安装的解释器、检出与数据目录生成 manifest（UC-DIRECT-009），install.json 中记下的摘要等于它时 ok 且不调用 workdeck；否则 plan 列出要启动的命令与 workdeck plugin list 中是否已有同 id 的插件（replaces），install 先在 install.json 记下 id 与 existed_before，把 manifest 写到临时文件运行 workdeck plugin add <文件> --replace（之后删除临时文件），成功时记下 added 与摘要；workdeck 失败时这一步为 failed，带输出末尾与手工命令，其他步骤照常完成，verify 的 workdeck 检查失败（退出码 3），修正后重跑即补上。verify 在安装接入过（或失败过）时核对记下的摘要等于按当前目标重新生成的摘要。uninstall 对安装加入的插件运行 workdeck plugin remove <id>（被替换的旧项不恢复），失败只报告；数据目录不删除",
+      "acceptance": "问题清单增加 workdeck（布尔）：PATH 中找到 workdeck 命令时默认是并在终端中询问，找不到时默认否且不询问；旧的答案文件（保存的或用 --answers 给出的）中没有这一项时按否处理（重跑不替用户接入）。install 的 workdeck 步骤在 dashboard 之后：答案为否或找不到命令时 skipped；数据目录未建好时 todo；按安装的解释器、检出与数据目录生成 manifest（UC-DIRECT-009），install.json 中记下的摘要等于它时 ok 且不调用 workdeck；否则 plan 列出要启动的命令与 workdeck plugin list 中是否已有同 id 的插件（replaces），install 先在 install.json 记下 id 与 existed_before，把 manifest 写到临时文件运行 workdeck plugin add <文件> --replace（之后删除临时文件），成功时记下 added 与摘要；workdeck 失败时这一步为 failed，带输出末尾与手工命令，其他步骤照常完成，verify 的 workdeck 检查失败（退出码 3），修正后重跑即补上；失败前 workdeck 已写入配置（workdeck plugin list 中该 id 的启动描述等于这份 manifest）时记为已加入。verify 在安装接入过（或失败过）时核对记下的摘要等于按当前目标重新生成的摘要。uninstall 对安装加入（或中断前已写入）的插件，在 workdeck plugin list 中该 id 仍是这份 manifest 时运行 workdeck plugin remove <id>，用户之后改过的保留（被替换的旧项不恢复），失败只报告；数据目录不删除",
       "surfaces": [
         "cli"
       ],

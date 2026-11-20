@@ -111,3 +111,13 @@ def test_a_session_may_print_the_manifest_but_not_install_the_dashboard(tmp_path
         assert problem(allowed) is None
         assert problem("python -m tsw dashboard workdeck-manifest --id x") is None
         assert problem("tsw dashboard install") is not None
+
+
+@mark.use_case(UC)
+def test_describe_matches_what_workdeck_lists_for_a_spawned_plugin(tmp_path: Path) -> None:
+    value = workdeck.manifest(tmp_path / "d", python="py.exe", checkout=tmp_path / "p")
+    # workdeck's describeUpstream: `starts: ${[command, ...args].join(' ')} (in ${cwd})`.
+    args = " ".join(value["spawn"]["args"])
+    assert workdeck.describe(value) == f"starts: py.exe {args} (in {(tmp_path / 'p').resolve()})"
+    bare = {"spawn": {"command": "x"}}
+    assert workdeck.describe(bare) == "starts: x"

@@ -192,3 +192,48 @@ def test_no_workdeck_and_older_saved_answers_leave_workdeck_alone(tmp_path: Path
     assert code == 0, text
     assert step(rerun, "workdeck")["state"] == "skipped"
     assert workdeck_calls(tmp_path) == []
+    # The same old answers given with --answers (review T309 r1 F1).
+    given = tmp_path / "old-answers.json"
+    given.write_text(json.dumps(old), encoding="utf-8")
+    again = install(product, given, env, claude)
+    assert again["_code"] == 0, again
+    assert step(again, "workdeck")["state"] == "skipped"
+    assert workdeck_calls(tmp_path) == []
+
+
+@mark.use_case(SETUP)
+def test_an_add_that_failed_after_workdeck_wrote_it_is_still_removed(tmp_path: Path) -> None:
+    # workdeck writes its configuration, then its daemon does not come back (review T309 r1 F2).
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    home = tmp_path / "data"
+    env = setup_env(tmp_path, FAKE_WORKDECK_FAIL="restart")
+    config = fake_workdeck(tmp_path, env)
+    out = install(product, write_answers(tmp_path, home, workdeck=True), env, claude)
+    assert step(out, "workdeck")["state"] == "failed"
+    assert "tsw" in entries(config)
+    owned = record(env)["steps"]["workdeck"]
+    assert owned["added"] is True and owned["failed_at"]
+    assert out["verify"]["failed"] == ["workdeck"]
+    code, removed, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
+    assert code == 0, text
+    assert removed["removed"]["workdeck"]["ok"] is True
+    assert "tsw" not in entries(config)
+
+
+@mark.use_case(SETUP)
+def test_uninstall_keeps_an_entry_the_user_changed_since(tmp_path: Path) -> None:
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    home = tmp_path / "data"
+    env = setup_env(tmp_path)
+    config = fake_workdeck(tmp_path, env)
+    out = install(product, write_answers(tmp_path, home, workdeck=True), env, claude)
+    assert out["_code"] == 0, out
+    # The user points the tsw plugin elsewhere by hand.
+    data = json.loads(config.read_text(encoding="utf-8"))
+    data["plugins"] = [{"id": "tsw", "name": "mine", "spawn": {"command": "other"}}]
+    config.write_text(json.dumps(data), encoding="utf-8")
+    code, removed, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
+    assert code == 0, text
+    assert "保留" in removed["removed"]["workdeck"]["note"]
+    assert entries(config)["tsw"]["name"] == "mine"
+    assert not any(call.startswith("plugin remove") for call in workdeck_calls(tmp_path))

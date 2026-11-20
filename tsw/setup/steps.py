@@ -132,8 +132,10 @@ def context(
         raw = load_answers(Path(answers_file))
     elif answers_path(environ).is_file():
         raw = load_answers(answers_path(environ))
-        # Answers saved before the workdeck question (T309): a rerun does not add the plugin
-        # on the user's behalf; they answer it in the next interactive run.
+    if answers is None and raw:
+        # An answers file written before the workdeck question (T309), saved or given with
+        # --answers: the install does not add the plugin on the user's behalf; they answer the
+        # question in an interactive run (review T309 r1 F1).
         raw.setdefault("workdeck", False)
     normalized, problems = normalize(raw, qs) if (raw or require_answers) else ({}, [])
     if not raw and not require_answers:
@@ -534,12 +536,18 @@ def _run_workdeck(command: str, env: Mapping[str, str], *args: str) -> tuple[int
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
-def _workdeck_ids(command: str, env: Mapping[str, str]) -> list[str] | None:
-    """The plugin ids ``workdeck plugin list`` shows (``<id>\\t<name>\\t…`` lines), or None."""
+def _workdeck_entries(command: str, env: Mapping[str, str]) -> dict[str, str] | None:
+    """The configured plugins ``workdeck plugin list`` shows, id -> what it starts or reaches
+    (``<id>\\t<name>\\t<kind>\\t<upstream>`` lines), or None when the command fails."""
     code, output = _run_workdeck(command, env, "plugin", "list")
     if code != 0:
         return None
-    return [line.split("\t", 1)[0].strip() for line in output.splitlines() if "\t" in line]
+    found: dict[str, str] = {}
+    for line in output.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 4:
+            found[parts[0].strip()] = parts[3].strip()
+    return found
 
 
 def _tail(output: str, lines: int = 8) -> list[str]:
@@ -564,10 +572,10 @@ def _workdeck(ctx: Context, apply: bool) -> dict[str, Any]:
     wanted = workdeck.digest(value)
     plugin_id = str(value["id"])
     entry = ctx.record.step("workdeck")
-    if entry.get("added") and entry.get("digest") == wanted:
+    if entry.get("added") and entry.get("digest") == wanted and not entry.get("failed_at"):
         return {"state": "ok", "id": plugin_id}
-    ids = _workdeck_ids(command, ctx.env)
-    existed = None if ids is None else plugin_id in ids
+    entries = _workdeck_entries(command, ctx.env)
+    existed = None if entries is None else plugin_id in entries
     result: dict[str, Any] = {
         "state": "todo",
         "id": plugin_id,
@@ -582,7 +590,16 @@ def _workdeck(ctx: Context, apply: bool) -> dict[str, Any]:
         path.write_text(workdeck.to_json(value), encoding="utf-8", newline="\n")
         code, output = _run_workdeck(command, ctx.env, "plugin", "add", str(path), "--replace")
     if code != 0:
-        ctx.record.finish("workdeck", added=bool(entry.get("added")), failed_at=utc_now())
+        # workdeck writes its configuration before it restarts the daemon (review T309 r1
+        # F2): an add that failed afterwards still left our entry, which uninstall must remove.
+        after = _workdeck_entries(command, ctx.env) or {}
+        ours = after.get(plugin_id) == workdeck.describe(value)
+        ctx.record.finish(
+            "workdeck",
+            added=ours or bool(entry.get("added")),
+            digest=wanted if ours else entry.get("digest"),
+            failed_at=utc_now(),
+        )
         result.update(
             state="failed",
             problem=f"workdeck plugin add 失败（退出码 {code}）",
@@ -797,7 +814,9 @@ def verify(
             checks.append(
                 _check(
                     "workdeck",
-                    bool(wired.get("added")) and wired.get("digest") == current,
+                    bool(wired.get("added"))
+                    and wired.get("digest") == current
+                    and not wired.get("failed_at"),
                     {"id": wired.get("id"), "recorded": wired.get("digest"), "current": current},
                 )
             )
@@ -887,8 +906,8 @@ def uninstall(ctx: Context) -> dict[str, Any]:
         done["dashboard"] = dashboard_service.uninstall(open_home(root), ctx.env)
         ctx.record.finish("dashboard", installed=False)
     wired = ctx.record.step("workdeck")
-    if wired.get("added"):
-        done["workdeck"] = _remove_workdeck(ctx, str(wired.get("id") or workdeck.DEFAULT_ID))
+    if wired.get("added") or wired.get("state") == "started":
+        done["workdeck"] = _remove_workdeck(ctx, wired)
     plugin = ctx.record.step("plugin")
     if not plugin:
         done["plugin"] = {"ok": True, "note": "安装没有动过插件，保留"}
@@ -932,12 +951,30 @@ def uninstall(ctx: Context) -> dict[str, Any]:
     }
 
 
-def _remove_workdeck(ctx: Context, plugin_id: str) -> dict[str, Any]:
+def _remove_workdeck(ctx: Context, wired: Mapping[str, Any]) -> dict[str, Any]:
     """``workdeck plugin remove <id>`` for the entry the install added (DN009 §10); an entry it
-    replaced is not brought back (it is in workdeck's backup). A failure is reported, not fatal."""
+    replaced is not brought back (it is in workdeck's backup). Removed only while workdeck still
+    has our entry: an entry the user changed since is kept, and an add interrupted after
+    workdeck wrote it is removed too. A failure is reported, not fatal."""
+    plugin_id = str(wired.get("id") or workdeck.DEFAULT_ID)
     command = _workdeck_command(ctx.env)
     if command is None:
         return {"ok": False, "note": f"找不到 workdeck 命令，插件 {plugin_id} 没有移除"}
+    entries = _workdeck_entries(command, ctx.env)
+    root = ctx.home_root
+    if entries is not None and root is not None:
+        python = str(ctx.record.get("python") or ctx.python)
+        mine = workdeck.describe(workdeck.manifest(root, python=python, checkout=ctx.checkout))
+        if plugin_id not in entries:
+            ctx.record.finish("workdeck", added=False)
+            return {"ok": True, "id": plugin_id, "note": "workdeck 中已没有这个插件"}
+        if entries[plugin_id] != mine:
+            ctx.record.finish("workdeck", added=False)
+            return {
+                "ok": True,
+                "id": plugin_id,
+                "note": "workdeck 中的这个插件已不是安装加入的那一项，保留",
+            }
     code, output = _run_workdeck(command, ctx.env, "plugin", "remove", plugin_id)
     if code == 0:
         ctx.record.finish("workdeck", added=False)

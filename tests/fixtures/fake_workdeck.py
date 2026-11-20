@@ -4,10 +4,12 @@ workdeck is outside this repository.
 It keeps the ``plugins`` of a ``workdeck.json`` at ``FAKE_WORKDECK_CONFIG`` the way workdeck does
 (the manifest's entry without ``workdeckPlugin``; an identical entry is ``unchanged``, a different
 one under the same id needs ``--replace``) and appends every call's arguments to
-``FAKE_WORKDECK_LOG``. ``FAKE_WORKDECK_FAIL=<verb>`` makes that verb fail (exit 1).
+``FAKE_WORKDECK_LOG``. ``FAKE_WORKDECK_FAIL=<verb>`` makes that verb fail (exit 1) before it
+changes anything; ``FAKE_WORKDECK_FAIL=restart`` makes ``add`` fail after writing the
+configuration, as workdeck does when its daemon does not come back.
 
     plugin add <manifest file> [--replace]
-    plugin list            <id>\t<name>\t<kind>\t<what it starts> lines
+    plugin list            <id> <name> <kind> <upstream>, tab-separated (describeUpstream)
     plugin remove <id>
 """
 
@@ -41,7 +43,9 @@ if verb == "list":
         print("no plugins (add one with workdeck plugin add)")
     for p in plugins:
         spawn = p.get("spawn") or {}
-        print(f"{p['id']}\t{p.get('name', p['id'])}\tspawn\tstarts: {spawn.get('command')}")
+        started = " ".join([spawn.get("command", ""), *spawn.get("args", [])])
+        where = f" (in {spawn['cwd']})" if spawn.get("cwd") else ""
+        print(f"{p['id']}\t{p.get('name', p['id'])}\tspawn\tstarts: {started}{where}")
     print("the daemon is not running (stand-in)")
 elif verb == "add":
     raw = Path(args[2]).read_bytes()
@@ -65,6 +69,9 @@ elif verb == "add":
         plugins[at] = manifest
     save()
     print(f"[config] {'added' if at is None else 'replaced'}: {config}")
+    if os.environ.get("FAKE_WORKDECK_FAIL") == "restart":
+        print("[restart] FAILED: the daemon did not come back (stand-in)", file=sys.stderr)
+        sys.exit(1)
 else:
     before = len(plugins)
     data["plugins"] = [p for p in plugins if p["id"] != args[2]]
