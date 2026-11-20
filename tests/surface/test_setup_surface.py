@@ -196,9 +196,10 @@ def powershell(script: Path, *args: str, env: dict[str, str], stdin: str = "") -
 
 
 def bare_path() -> str:
-    """Windows' own folders only: no Python, git or claude on PATH."""
+    """Windows' own System32 folders only: no Python, git or claude on PATH. The Windows folder
+    itself is left out: the Python launcher ``py.exe`` lives there (CI runners have it)."""
     root = os.environ.get("SYSTEMROOT", r"C:\Windows")
-    return ";".join([rf"{root}\System32", root, rf"{root}\System32\WindowsPowerShell\v1.0"])
+    return ";".join([rf"{root}\System32", rf"{root}\System32\WindowsPowerShell\v1.0"])
 
 
 @pytest.mark.use_case(UC)
@@ -234,7 +235,7 @@ def test_the_probe_reports_missing_items_and_installs_with_winget(tmp_path: Path
     script = REPO_ROOT / "plugin" / "setup" / "prereq.ps1"
     proc = powershell(script, "-Json", env=env)
     found = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert set(found["missing"]) >= {"python", "claude"}
+    assert set(found["missing"]) >= {"python", "claude"}, found
     assert any("Claude Code" in note for note in found["notes"])
     proc = powershell(script, "-Json", "-Install", "python", env=env)
     found = json.loads(proc.stdout.strip().splitlines()[-1])
