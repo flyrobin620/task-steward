@@ -87,7 +87,7 @@ def answers(home: Path, **overrides: Any) -> dict[str, Any]:
     values: dict[str, Any] = {
         "home": str(home),
         "language": "zh-CN",
-        "reviewer": "claude-headless",
+        "reviewer": "codex-app-server",
         "human_channels": "in-session",
         "host": "claude-code",
         "dashboard": False,

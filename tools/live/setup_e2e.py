@@ -147,7 +147,7 @@ def answers(run: Run) -> dict[str, Any]:
     return {
         "home": str(run.home),
         "language": "zh-CN",
-        "reviewer": "claude-headless",
+        "reviewer": "codex-app-server",
         "human_channels": "in-session",
         "host": "claude-code",
         "dashboard": False,
@@ -178,7 +178,7 @@ def terminal_path(run: Run, source: str) -> None:
         run.run(["git", "clone", "-q", source, str(run.checkout)], env=env).returncode == 0,
     )
     a = answers(run)
-    replies = [a["home"], "", "claude-headless", "", "否", "", "", "是"]
+    replies = [a["home"], "", "", "", "否", "", "", "是"]
     proc = run.run(
         [
             "powershell",

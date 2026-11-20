@@ -45,7 +45,14 @@ from tsw.host.claude_code import AUTO_MODE_RULES, render_instructions
 from tsw.host.plugin_copy import update as update_plugin
 from tsw.host.version import REPO_ROOT, head, render_record
 from tsw.setup import winenv
-from tsw.setup.questions import Question, config_differences, config_layer, normalize, questions
+from tsw.setup.questions import (
+    Question,
+    config_differences,
+    config_layer,
+    normalize,
+    questions,
+    reviewer_warning,
+)
 from tsw.setup.record import (
     InstallRecord,
     answers_path,
@@ -249,6 +256,7 @@ def check(ctx: Context, *, with_questions: bool = False) -> dict[str, Any]:
         "shims": str(ctx.shims),
         "path_has_shims": winenv.has_entry(value, ctx.shims) if value is not None else False,
         "problems": problems,
+        "warnings": [w for w in (reviewer_warning(ctx.env),) if w],
         # Not "ok": check only reports, so a problem is not a failure of the command.
         "ready": not problems,
     }
@@ -705,6 +713,7 @@ def plan(ctx: Context) -> dict[str, Any]:
         "steps": steps,
         "todo": [s["step"] for s in steps if s.get("state") in ("todo", "blocked")],
         "problems": checked["problems"],
+        "warnings": checked["warnings"],
         "ok": checked["ready"],
         "next": "确认后运行 tsw setup install（终端入口与会话入口会先请你确认）"
         if checked["ready"]
@@ -741,6 +750,7 @@ def install(ctx: Context, *, open_browser: bool = True) -> dict[str, Any]:
         "next": RESTART.format(home=root),
         "start_command": START_COMMAND,
         "demo_prompt": DEMO_PROMPT,
+        "warnings": checked["warnings"],
         "repositories": "要管理的仓库不在安装中配置：重启后在主会话中告诉它要管理哪些仓库，由主会话"
         "逐个加入配置（DN009 §6.1）",
     }

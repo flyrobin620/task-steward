@@ -39,7 +39,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/setup
 "<python>" -X utf8 "<checkout>/plugin/bin/tsw_launch.py" setup check --questions --git "<git>" --json
 ```
 
-- `problems` 中除 `home：…`（还没有数据目录位置）以外的问题先转告用户，解决后重新运行。
+- `problems` 中除 `home：…`（还没有数据目录位置）以外的问题先转告用户，解决后重新运行。`warnings` 也转告用户（例如没有 Codex：安装可以继续，但任务完成不了自评审，要先装好并登录 Codex）。
 - `questions` 是唯一的问题清单。`asked_by` 为 `entry` 的（产品检出）已在第 2 步问过，不再问。按顺序在对话中一项一项问，每项说明 `note` 与默认值：
   - `home`（数据目录位置）**必填，没有默认值**：用户没有给出时再问，不要替用户选一个路径。用户给出已有的数据目录时复用它。提问时说明：在数据目录（那个文件夹本身）中打开的会话是主会话，建议之后在数据目录中新建会话工作；本会话即使就在那个文件夹里也可以安装，安装结束时它会记为让出租约，不会自动领取（DN009 §15.1）。
   - `host` 只有一个选项时直接选定，不必问。

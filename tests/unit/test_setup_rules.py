@@ -45,7 +45,7 @@ def test_answers_get_defaults_and_are_checked() -> None:
     answers, problems = q.normalize({"home": home, "dashboard": "否", "user_settings": "yes"}, qs())
     assert problems == []
     assert answers["language"] == "zh-CN"
-    assert answers["reviewer"] == "claude-headless"  # no codex on this PATH
+    assert answers["reviewer"] == "codex-app-server"  # the one implemented reviewer
     assert answers["dashboard"] is False and answers["user_settings"] is True
     assert answers["dashboard_port"] == 47800 and answers["host"] == "claude-code"
     assert answers["checkout"] == str(CHECKOUT)
@@ -296,3 +296,12 @@ def test_the_workdeck_question_is_asked_only_where_workdeck_is_found(tmp_path: P
     assert any("workdeck 门户" in p and "（默认 是）" in p for p in prompts)
     normalized, problems = q.normalize({"home": "C:/data"}, here)
     assert normalized["workdeck"] is True and not problems
+
+
+@pytest.mark.use_case(UC)
+def test_only_implemented_reviewers_are_offered_and_a_missing_codex_is_a_warning() -> None:
+    reviewer = next(x for x in qs() if x.id == "reviewer")
+    assert reviewer.choices == ("codex-app-server",) and reviewer.default == "codex-app-server"
+    _, problems = q.normalize({"home": str(Path.cwd() / "d"), "reviewer": "claude-headless"}, qs())
+    assert any(p.startswith("reviewer：") for p in problems)
+    assert q.reviewer_warning({"PATH": ""}) is not None  # install goes on, tasks cannot review

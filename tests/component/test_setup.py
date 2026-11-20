@@ -77,7 +77,7 @@ def test_a_terminal_install_from_nothing_reaches_a_verified_install(tmp_path: Pa
     assert marker["rendered"]["commit"] == git(product, "rev-parse", "HEAD")
     assert (product / ".local" / "tsw-home").read_text(encoding="utf-8").strip() == str(home)
     config = json.loads((home / "config" / "task-steward.json").read_text(encoding="utf-8"))
-    assert config["roles"]["reviewer"]["session"] == "claude-headless"
+    assert "roles" not in config  # the default reviewer, Codex
     assert config["dashboard"]["port"] == 47801
     assert "repositories" not in config and "accounts" not in config
     assert (home / "CLAUDE.md").is_file() and (home / "roles" / "worker.md").is_file()

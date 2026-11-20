@@ -76,7 +76,7 @@ def test_the_terminal_flow_asks_shows_the_plan_and_installs(tmp_path: Path) -> N
         "",  # the data directory is required: asked again
         str(home),
         "",  # language
-        "claude-headless",
+        "",  # reviewer: the one implemented reviewer
         "",  # human channels
         "否",  # no Dashboard service
         "",  # port
@@ -273,7 +273,7 @@ def test_setup_ps1_runs_the_interactive_install(tmp_path: Path) -> None:
         [str(claude.parent), str(Path(sys.executable).parent), env["PATH"]]
     )
     home = tmp_path / "data"
-    replies = [str(home), "", "claude-headless", "", "否", "", "", "是"]
+    replies = [str(home), "", "", "", "否", "", "", "是"]
     proc = powershell(product / "setup.ps1", "-NoBrowser", env=env, stdin="\n".join(replies) + "\n")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert (home / "tsw-home.json").is_file()
@@ -337,7 +337,7 @@ def test_a_rerun_uses_the_saved_answers_and_manual_settings_are_shown(tmp_path: 
     product, claude = make_product(tmp_path), fake_claude(tmp_path)
     env = setup_env(tmp_path)
     home = tmp_path / "data"
-    replies = [str(home), "", "claude-headless", "", "否", "", "否", "是"]
+    replies = [str(home), "", "", "", "否", "", "否", "是"]
     launcher = product / "plugin" / "bin" / "tsw_launch.py"
     proc = subprocess.run(
         [

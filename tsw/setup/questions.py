@@ -61,9 +61,30 @@ class Question:
         return out
 
 
+def implemented_reviewers() -> tuple[str, ...]:
+    """The reviewers ``review_run`` implements in this version: only these are offered (the user's
+    decision of 2026-11-20, T308; the others are follow-up F-T308-1)."""
+    from tsw.review.run import REVIEWERS as IMPLEMENTED  # noqa: PLC0415  (command line only)
+
+    return tuple(name for name in REVIEWERS if name in IMPLEMENTED)
+
+
 def detected_reviewer(env: Mapping[str, str]) -> str:
-    """An independent reviewer when its command line is found, else the host's own form."""
-    return "codex-app-server" if shutil.which("codex", path=env.get("PATH")) else "claude-headless"
+    """The first implemented reviewer (Codex); ``check`` warns when its command line is missing."""
+    del env
+    return implemented_reviewers()[0]
+
+
+def reviewer_warning(env: Mapping[str, str]) -> str | None:
+    """Why tasks could not finish their self-review on this machine, or None."""
+    if shutil.which("codex", path=env.get("PATH")):
+        return None
+    return (
+        "codex：找不到 Codex 命令行。本版本的 worker 自评"
+        "审只实现了 Codex 评审器（codex-app-server）："
+        "请安装并登录 Codex（例如 npm install -g @openai/codex，再 codex login），否则任务完成不了"
+        "自评审。安装可以照常完成，之后装好 Codex 即可"
+    )
 
 
 def workdeck_found(env: Mapping[str, str]) -> bool:
@@ -106,10 +127,9 @@ def questions(env: Mapping[str, str], checkout: Path) -> list[Question]:
             "choice",
             "roles.reviewer",
             default=detected_reviewer(env),
-            choices=REVIEWERS,
-            note="codex-app-server 是独立的 Codex 评审器（需要已登录的 codex 命令行）；"
-            "claude-headless 是 Claude Code 自己的只读形态（模型与 worker 不同）。默认按本机是否有 "
-            "codex 命令决定",
+            choices=implemented_reviewers(),
+            note="本版本只实现了 Codex 评审器 codex-app-server（需要已登录的 codex 命令行）；"
+            "Claude 与 Copilot CLI 评审器以后提供",
         ),
         Question(
             "human_channels",

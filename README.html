@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="a1c396dc29eed4920656afa17105736a9e7957b4bd3a4ee5aee40f3b2dc5e21d">
+<meta name="tsw-source-sha256" content="1094230ea7b39c46259c7af8b1bc2a073d7b69f7d95fcabdafa1ea52fa13ce7b">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -58,7 +58,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p>所有改动遵循 <a href="AGENTS.md">AGENTS.md</a>：开始前先读它，再按其中的表读对应的专题文档。</p>
 <table><thead><tr><th>文档</th><th>内容</th></tr></thead><tbody><tr><td><a href="docs/development/workflow.md">开发流程</a></td><td>从改代码到合并的每一步：门禁、证据、失败处理</td></tr><tr><td><a href="docs/development/testing-layers.md">测试层级</a></td><td>unit、component、surface、conformance、live 五个层级与 live 场景</td></tr><tr><td><a href="docs/development/test-environments.md">测试环境</a></td><td>临时数据目录、子进程环境隔离、live 运行清单与清理</td></tr><tr><td><a href="docs/development/use-cases.md">use-case 目录</a></td><td>use case 与状态迁移清单、测试标记、目录检查</td></tr><tr><td><a href="docs/development/ci.md">CI</a></td><td>GitHub Actions（Windows）、阶段与汇总检查 <code>Gate</code></td></tr><tr><td><a href="docs/development/review.md">评审与合并</a></td><td>独立评审、PR 模板、合并条件与需要用户确认的范围</td></tr><tr><td><a href="docs/development/code-quality.md">代码质量</a></td><td>警告即错误、只依赖标准库、开发依赖</td></tr><tr><td><a href="docs/development/compatibility.md">兼容性</a></td><td>账本、配置、插件接口等契约的版本规则</td></tr><tr><td><a href="docs/development/docs.md">文档</a></td><td>语言与格式、HTML 生成、设计文档、公开仓库卫生</td></tr><tr><td><a href="docs/development/release.md">发布</a></td><td>版本与发布（v1 开发期间不发布）</td></tr><tr><td><a href="docs/decisions/README.md">决定记录</a></td><td>已确认的决定</td></tr></tbody></table>
 <h2 id="开始使用开发中">开始使用（开发中）</h2>
-<p>前提：Windows、Python 3.10+、git、Claude Code（桌面 app 与 <code>claude</code> 命令行）。运行时只依赖标准库，不需要 pip。两条安装路径任选其一，各自在一处做完（<a href="docs/design/DN009-distribution-and-install.html">DN009</a>、<a href="docs/design/claude-code/CC009-install.html">CC009</a>）。</p>
+<p>前提：Windows、Python 3.10+、git、Claude Code（桌面 app 与 <code>claude</code> 命令行），以及用作 worker 自评审的 Codex 命令行（<code>codex</code>，已登录；本版本只实现了 Codex 评审器，没有它安装照常完成，但任务完成不了自评审）。运行时只依赖标准库，不需要 pip。两条安装路径任选其一，各自在一处做完（<a href="docs/design/DN009-distribution-and-install.html">DN009</a>、<a href="docs/design/claude-code/CC009-install.html">CC009</a>）。</p>
 <p><strong>在终端安装</strong>（PowerShell）：</p>
 <pre><code class="lang-powershell">git clone https://github.com/flyrobin620/task-steward.git &quot;$env:LOCALAPPDATA\TaskSteward\task-steward&quot;
 &amp; &quot;$env:LOCALAPPDATA\TaskSteward\task-steward\setup.ps1&quot;</code></pre>

@@ -35,7 +35,7 @@ claude plugin install task-steward@task-steward
 
 然后打开 Claude app，在任意一个新会话中输入 `/task-steward:setup`。setup 在会话中提问（同样要求用户给出数据目录位置）并做完，最后请用户重启 Claude app、在数据目录中新建会话并输入 `/orchestrate`。过程中 Claude 会请用户批准几条命令（克隆仓库、写用户设置与 PATH、登记 Dashboard 计划任务等）。
 
-两条路径的前提相同：Python 3.10+、git、Claude Code（桌面 app 与 `claude` CLI）。安装不配置要管理的仓库；重启后在主会话中告诉它要管理哪些仓库，由主会话逐个加入配置（DN009 §6.1）。
+两条路径的前提相同：Python 3.10+、git、Claude Code（桌面 app 与 `claude` CLI），以及已登录的 Codex 命令行（本版本唯一实现的评审器；没有时安装照常完成并给出警告，DN009 §6）。安装不配置要管理的仓库；重启后在主会话中告诉它要管理哪些仓库，由主会话逐个加入配置（DN009 §6.1）。
 
 ## 3. 插件与市场
 

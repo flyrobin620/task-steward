@@ -62,7 +62,7 @@
 
 ## 开始使用（开发中）
 
-前提：Windows、Python 3.10+、git、Claude Code（桌面 app 与 `claude` 命令行）。运行时只依赖标准库，不需要 pip。两条安装路径任选其一，各自在一处做完（[DN009](docs/design/DN009-distribution-and-install.md)、[CC009](docs/design/claude-code/CC009-install.md)）。
+前提：Windows、Python 3.10+、git、Claude Code（桌面 app 与 `claude` 命令行），以及用作 worker 自评审的 Codex 命令行（`codex`，已登录；本版本只实现了 Codex 评审器，没有它安装照常完成，但任务完成不了自评审）。运行时只依赖标准库，不需要 pip。两条安装路径任选其一，各自在一处做完（[DN009](docs/design/DN009-distribution-and-install.md)、[CC009](docs/design/claude-code/CC009-install.md)）。
 
 **在终端安装**（PowerShell）：
 

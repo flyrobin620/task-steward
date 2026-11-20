@@ -713,6 +713,9 @@ def _say_plan(planned: dict[str, Any]) -> None:
             print(f"      {step['problem']}")
     for problem in planned["problems"]:
         print(f"  问题：{problem}")
+    notes: list[str] = planned.get("warnings") or []
+    for warning in notes:
+        print(f"  注意：{warning}")
 
 
 def _setup_interactive(args: argparse.Namespace) -> dict[str, Any]:
@@ -769,6 +772,9 @@ def _say_installed(result: dict[str, Any]) -> dict[str, Any]:
         mark = {True: "通过", False: "失败", None: "未核对"}[check["ok"]]
         extra = "（重启后生效）" if check.get("pending_reload") else ""
         print(f"  核对 {check['check']}：{mark}{extra}")
+    warnings: list[str] = result.get("warnings") or []
+    for warning in warnings:
+        print(f"  注意：{warning}")
     out: dict[str, Any] = {
         "installed": True,
         "record": result["record"],
