@@ -120,7 +120,7 @@ live 中另外发现并已处理：
 | --- | --- | --- |
 | 桌面 app 中不能直接运行 `/plugin install … --marketplace …`（app 打开“Add marketplace”窗口） | app 的斜杠命令与 CLI 不同 | §2 的会话路径不再写这条命令 |
 | “Add marketplace”窗口添加 GitHub 市场报 “Couldn't write to the plugins directory”；同一台机器上 app 运行时 `claude plugin marketplace add https://…git` 以 `EPERM … rename '…\plugins\marketplaces\temp_git_…..clone'` 失败，完全退出 app 后成功 | 运行中的 app 占用 `~/.claude/plugins/marketplaces`，Claude Code 把克隆移到位的改名被拒（与 T305 E7 在受监视目录下看到的相同） | 见下 |
-| 安装会话领取了调度租约 | 安装会话的文件夹就是数据目录（DN009 §15.1） | `tsw setup` 在会话中拒绝把会话文件夹作为数据目录 |
+| 安装会话领取了调度租约 | 安装会话的文件夹就是数据目录，重新加载后它被认作主会话并在会话开始时领取租约 | 照常安装；未绑定数据目录的安装会话在安装完成后记为让出，不再自动领取（用户 M-T308-5 决定，DN009 §15.1） |
 
 **GitHub 市场只能在 app 退出时添加**，所以“全在 app 会话中完成”在 Windows 上做不到第一步。本地目录市场（`claude plugin marketplace add <检出>`）不克隆、不在 `marketplaces/` 中改名，终端路径用的就是它（app 运行时是否也成功待 live 确认）。提议：
 
