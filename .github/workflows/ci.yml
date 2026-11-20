@@ -1,10 +1,14 @@
 # CI for every pull request and every push to main (docs/development/ci.md).
 # All stages run on Windows; the aggregate `Gate` job is the only required status check.
+# `scope` selects the stages a change needs (tools/scope.py, tools/scope.json): lint and docs run
+# every time, test when the change needs it; a push to main runs every stage.
 # No secrets are used. Changes to this file need the repository owner's confirmation.
 name: CI
 
 on:
   pull_request:
+    # labeled and unlabeled: the label `ci:all` takes effect without a new push.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
 
@@ -20,6 +24,44 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
+  # The plan: which stages this change needs. The checkout of a pull request is its merge commit,
+  # so the first parent is main as the PR would merge into it. A path no component owns fails the
+  # scope; a push to main and the label `ci:all` select every stage.
+  scope:
+    name: scope
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      stages: ${{ steps.plan.outputs.stages }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Plan the stages of this change
+        id: plan
+        shell: bash
+        timeout-minutes: 5
+        env:
+          EVENT: ${{ github.event_name }}
+          FORCE_ALL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:all') }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            python tools/scope.py --base HEAD^1 --out results/plan/plan.json --all "push to main"
+          elif [ "$FORCE_ALL" = true ]; then
+            python tools/scope.py --base HEAD^1 --out results/plan/plan.json --all "label ci:all"
+          else
+            python tools/scope.py --base HEAD^1 --out results/plan/plan.json
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: plan
+          path: results/plan
+
   lint:
     name: lint
     runs-on: windows-latest
@@ -55,8 +97,8 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      - name: Documentation, links, diagrams and privacy scan
-        run: python tools/gate.py --steps docs --results-dir results/docs
+      - name: Documentation, links, diagrams, privacy scan and the static catalog check
+        run: python tools/gate.py --steps docs,catalog-static --results-dir results/docs
         timeout-minutes: 5
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
@@ -66,6 +108,8 @@ jobs:
 
   test:
     name: test (${{ matrix.python }})
+    needs: scope
+    if: ${{ needs.scope.result == 'success' && contains(fromJSON(needs.scope.outputs.stages), 'test') }}
     runs-on: windows-latest
     timeout-minutes: 40
     strategy:
@@ -99,7 +143,7 @@ jobs:
   gate:
     name: Gate
     if: ${{ always() }}
-    needs: [lint, docs, test]
+    needs: [scope, lint, docs, test]
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -112,7 +156,7 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
-      - name: Verify every stage and its evidence
+      - name: Verify the plan, every stage and its evidence
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: python tools/gate.py --verify-ci artifacts

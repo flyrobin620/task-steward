@@ -1,0 +1,58 @@
+{
+  "$comment": "CI's component map (docs/development/ci.md, tools/scope.py). Every changed path must match a component; the stages of every matched component are selected, together with the stages in 'always'. A path that matches no component fails the scope. A change to this file, the resolver or a workflow selects every stage.",
+  "stages": {
+    "lint": "ruff, ruff format, pyright, actionlint and the standard-library check (gate.py --steps lint,stdlib)",
+    "docs": "the docs check, the privacy scan and the static catalog check (gate.py --steps docs,catalog-static)",
+    "test": "every CI test tier and the catalog coverage of this run, on each Python version (gate.py --steps tests,catalog)"
+  },
+  "always": ["lint", "docs"],
+  "components": [
+    {
+      "name": "pipeline",
+      "paths": [".github/workflows/**", "tools/**"],
+      "stages": ["lint", "docs", "test"]
+    },
+    {
+      "name": "toolchain",
+      "paths": ["pyproject.toml", "requirements-dev.txt", ".gitattributes", ".gitignore"],
+      "stages": ["lint", "docs", "test"]
+    },
+    {
+      "name": "runtime",
+      "paths": ["tsw/**", "plugin/**", ".claude-plugin/**", "setup.ps1"],
+      "stages": ["lint", "docs", "test"]
+    },
+    {
+      "name": "tests",
+      "paths": ["tests/**"],
+      "stages": ["lint", "docs", "test"]
+    },
+    {
+      "name": "inputs of the tests and the catalog check",
+      "paths": ["docs/use-cases/**", "docs/design/DN002-task-state-machine.md"],
+      "stages": ["lint", "docs", "test"]
+    },
+    {
+      "name": "documentation",
+      "paths": [
+        "docs/**",
+        "README.md",
+        "README.html",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "**/AGENTS.md",
+        "LICENSE"
+      ],
+      "stages": ["lint", "docs"]
+    },
+    {
+      "name": "repository governance",
+      "paths": [
+        ".github/copilot-instructions.md",
+        ".github/pull_request_template.md",
+        ".github/dependabot.yml"
+      ],
+      "stages": ["lint", "docs"]
+    }
+  ]
+}

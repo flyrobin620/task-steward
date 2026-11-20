@@ -4,9 +4,11 @@ Usage:
     python tools/docs.py render            regenerate every HTML view
     python tools/docs.py check             fail when anything is out of date or broken
 
-``check`` verifies that every HTML view equals a fresh rendering of its Markdown source, that
-relative links (and anchors into HTML views) resolve, that the design diagrams pass their own
-validation, and runs the privacy scan (docs/development/docs.md).
+``check`` verifies that every HTML view equals a fresh rendering of its Markdown source and that
+no HTML file is left without a source, that relative links (and anchors into HTML views) resolve,
+that the design diagrams pass their own validation, that the commands and CI labels the rule
+documents name exist (docs/development/ci.md), and runs the privacy scan
+(docs/development/docs.md).
 
 The renderer supports the Markdown subset the documents use: headings, paragraphs, nested
 lists, tables, fenced code, block quotes, images (SVG inlined), links and inline code / bold.
@@ -27,6 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tools.checks import automation  # noqa: E402
 from tools.checks.privacy import scan as privacy_scan  # noqa: E402
 from tools.checks.repo import tracked_files, utf8_stdio  # noqa: E402
 
@@ -319,9 +322,18 @@ def render_all(root: Path = ROOT) -> list[Path]:
 # ---------------------------------------------------------------------- checks
 
 
-def check_views(root: Path = ROOT) -> list[str]:
+def check_views(root: Path = ROOT, files: Iterable[Path] | None = None) -> list[str]:
+    """Every view is current, and every HTML file among ``files`` (default: the tracked files) in
+    the repository root or under ``docs/`` is the view of a source: a document deleted or renamed
+    leaves no view behind."""
     problems: list[str] = []
     sources = html_sources(root)
+    views = {source.with_suffix(".html").resolve() for source in sources}
+    for path in tracked_files(root) if files is None else files:
+        rel = path.relative_to(root).as_posix()
+        documentation = "/" not in rel or rel.startswith("docs/")
+        if path.suffix == ".html" and documentation and path.resolve() not in views:
+            problems.append(f"{rel}: 孤立的 HTML，没有对应的 Markdown 来源；删除它或补上来源")
     with_html = {path.resolve() for path in sources}
     for source in sources:
         target = source.with_suffix(".html")
@@ -399,9 +411,10 @@ def check(root: Path = ROOT) -> list[str]:
     files = tracked_files(root)
     linkable = [p for p in files if p.suffix in (".md", ".html")]
     return [
-        *check_views(root),
+        *check_views(root, files),
         *check_links(linkable, root),
         *check_diagrams(root),
+        *automation.check(root),
         *privacy_scan(files, root),
     ]
 

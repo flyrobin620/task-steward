@@ -6,10 +6,12 @@
     python tools/gate.py --verify-ci DIR ...     the aggregate CI ``Gate`` check
 
 Steps: ``lint`` (ruff, ruff format, pyright, actionlint), ``stdlib`` (runtime imports only the
-standard library), ``docs`` (tools/docs.py check), ``tests`` (each tier on its own, its test
-files split into ``--jobs`` parallel pytest processes whose results are merged),
-``catalog`` (use-case and transition coverage of this run). Results go to ``--results-dir``
-(default ``.local/gate/<run id>/``) together with ``summary.json``.
+standard library), ``docs`` (tools/docs.py check), ``catalog-static`` (the part of the catalog
+check that needs no test results), ``tests`` (each tier on its own, its test files split into
+``--jobs`` parallel pytest processes whose results are merged), ``catalog`` (the whole catalog
+check: the static part and the use-case and transition coverage of this run, written to
+``catalog-coverage.json``). Results go to ``--results-dir`` (default ``.local/gate/<run id>/``)
+together with ``summary.json``.
 
 A tier that collects no tests, or does not write a fresh result file, fails the gate.
 """
@@ -39,7 +41,16 @@ from tsw.cli import iter_commands  # noqa: E402
 from tsw.host.mcp import tool_names as mcp_tool_names  # noqa: E402
 from tsw.machine.runner import tool_names  # noqa: E402
 
-STEPS = ("lint", "stdlib", "docs", "tests", "catalog")
+STEPS = ("lint", "stdlib", "docs", "catalog-static", "tests", "catalog")
+DEFAULT_STEPS = ("lint", "stdlib", "docs", "tests", "catalog")
+# The CI stages (tools/scope.json), the summary steps each stage's evidence must have passed, and
+# which artifacts belong to a stage: ``test`` runs once per Python version (``test-<version>``).
+STAGE_STEPS = {
+    "lint": ("lint", "stdlib"),
+    "docs": ("docs", "catalog-static"),
+    "test": ("tests", "catalog"),
+}
+STAGE_JOBS = {"lint": "lint", "docs": "docs", "test": "test"}
 CI_TIERS = ("unit", "component", "surface", "conformance")
 MAX_JOBS = 8
 
@@ -283,14 +294,23 @@ class Gate:
         print(f"    行覆盖率（只报告，不作门禁）：{totals[0]}")
         return []
 
+    def _static_catalog(self) -> list[str]:
+        return catalog_check.check_static(
+            ROOT, iter_commands(), tools=tool_names(), mcp_tools=mcp_tool_names()
+        )
+
+    def catalog_static(self) -> None:
+        problems = self._static_catalog()
+        self.record("catalog-static", not problems, problems)
+
     def catalog(self, tiers_run: set[str]) -> None:
-        problems, not_verified = catalog_check.check(
-            ROOT,
-            self.test_results,
-            tiers_run,
-            iter_commands(),
-            tools=tool_names(),
-            mcp_tools=mcp_tool_names(),
+        problems = self._static_catalog()
+        coverage, not_verified, report = catalog_check.check_coverage(
+            ROOT, self.test_results, tiers_run
+        )
+        problems += coverage
+        (self.results_dir / "catalog-coverage.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         self.record("catalog", not problems, problems + [f"未验证：{n}" for n in not_verified])
 
@@ -317,40 +337,102 @@ class Gate:
         return ok
 
 
-def verify_ci(artifacts: Path, needs_json: str, expected: list[str]) -> int:
-    """The aggregate ``Gate`` job: every needed job succeeded and left a fresh, passing summary."""
+def _stage_of(artifact: str) -> str:
+    """The CI stage an evidence artifact belongs to: ``test-3.13`` is the ``test`` stage."""
+    return artifact.split("-", 1)[0]
+
+
+def _verify_evidence(artifacts: Path, name: str, run_id: str | None) -> list[str]:
+    """A selected stage's artifact: a fresh, passing summary with its steps and evidence files."""
+    path = artifacts / name / "summary.json"
+    if not path.is_file():
+        return [f"缺少证据：{name}/summary.json"]
     problems: list[str] = []
-    needs: dict[str, Any] = json.loads(needs_json or "{}")
+    summary = json.loads(path.read_text(encoding="utf-8"))
+    if not summary.get("ok"):
+        problems.append(f"{name}: 门禁未通过")
+    if run_id and summary.get("github_run", {}).get("id") != run_id:
+        problems.append(f"{name}: 证据不是本次运行生成的")
+    steps = summary.get("steps", {})
+    problems.extend(
+        f"{name}: 步骤 {step} 没有通过"
+        for step in STAGE_STEPS.get(_stage_of(name), ())
+        if steps.get(step, {}).get("status") != "passed"
+    )
+    for tier, counts in summary.get("tiers", {}).items():
+        if counts.get("collected", 0) == 0:
+            problems.append(f"{name}: {tier} 层级没有发现测试")
+    if _stage_of(name) == "test":
+        if set(summary.get("tiers", {})) != set(CI_TIERS):
+            problems.append(f"{name}: 测试层级不完整 {sorted(summary.get('tiers', {}))}")
+        evidence = [f"{tier}.json" for tier in CI_TIERS] + ["coverage.txt", "catalog-coverage.json"]
+        problems.extend(
+            f"{name}: 缺少证据文件 {file}"
+            for file in evidence
+            if not (artifacts / name / file).is_file()
+        )
+    return problems
+
+
+def verify_plan(artifacts: Path, needs: dict[str, Any], expected: list[str]) -> list[str]:
+    """Problems of a CI run judged against its plan (docs/development/ci.md).
+
+    ``needs`` is the workflow's ``needs`` context of the ``Gate`` job, ``expected`` the evidence
+    artifacts of every stage. The plan (``plan/plan.json``, written by tools/scope.py) must be
+    this run's, for this commit, and the one the stages used; a selected stage must succeed and
+    leave fresh, passing evidence; a stage the plan did not select must be skipped.
+    """
+    problems: list[str] = []
+    run_id = os.environ.get("GITHUB_RUN_ID")
+    scope = needs.get("scope", {})
+    if scope.get("result") != "success":
+        problems.append(f"任务 scope 的结果为 {scope.get('result')}")
+    plan_path = artifacts / "plan" / "plan.json"
+    if not plan_path.is_file():
+        return [*problems, "缺少证据：plan/plan.json"]
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    stages = list(plan.get("stages", []))
+    sha = os.environ.get("GITHUB_SHA")
+    if sha and plan.get("head") != sha:
+        problems.append(f"计划不是为本次提交生成的：{plan.get('head')} ≠ {sha}")
+    if plan.get("unmapped"):
+        problems.append(f"计划中有不属于任何组件的路径：{plan['unmapped']}")
+    try:
+        used = json.loads(scope.get("outputs", {}).get("stages") or "null")
+    except json.JSONDecodeError:
+        used = None
+    if used != stages:
+        problems.append(f"记录的计划 {stages} 与各阶段使用的计划 {used} 不一致")
+    unknown = [stage for stage in stages if stage not in STAGE_JOBS]
+    if unknown:
+        problems.append(f"计划中有未知阶段 {unknown}")
+    for stage, job in STAGE_JOBS.items():
+        result = needs.get(job, {}).get("result")
+        names = [name for name in expected if _stage_of(name) == stage]
+        if stage in stages:
+            if result != "success":
+                problems.append(f"计划选中的阶段 {stage} 的结果为 {result}")
+            for name in names:
+                problems += _verify_evidence(artifacts, name, run_id)
+        else:
+            if result != "skipped":
+                problems.append(f"计划没有选中的阶段 {stage} 的结果为 {result}，应为 skipped")
+            problems.extend(
+                f"计划没有选中的阶段 {stage} 留下了证据 {name}"
+                for name in names
+                if (artifacts / name).exists()
+            )
     problems.extend(
         f"任务 {job} 的结果为 {info.get('result')}"
         for job, info in needs.items()
-        if info.get("result") != "success"
+        if job != "scope" and job not in STAGE_JOBS.values() and info.get("result") != "success"
     )
-    run_id = os.environ.get("GITHUB_RUN_ID")
-    for name in expected:
-        path = artifacts / name / "summary.json"
-        if not path.is_file():
-            problems.append(f"缺少证据：{name}/summary.json")
-            continue
-        summary = json.loads(path.read_text(encoding="utf-8"))
-        if not summary.get("ok"):
-            problems.append(f"{name}: 门禁未通过")
-        if run_id and summary.get("github_run", {}).get("id") != run_id:
-            problems.append(f"{name}: 证据不是本次运行生成的")
-        for tier, counts in summary.get("tiers", {}).items():
-            if counts.get("collected", 0) == 0:
-                problems.append(f"{name}: {tier} 层级没有发现测试")
-        if name.startswith("test-"):
-            if set(summary.get("tiers", {})) != set(CI_TIERS):
-                problems.append(f"{name}: 测试层级不完整 {sorted(summary.get('tiers', {}))}")
-            evidence = [f"{tier}.json" for tier in CI_TIERS] + ["coverage.txt"]
-            problems.extend(
-                f"{name}: 缺少证据文件 {file}"
-                for file in evidence
-                if not (artifacts / name / file).is_file()
-            )
-            if summary.get("steps", {}).get("catalog", {}).get("status") != "passed":
-                problems.append(f"{name}: 目录检查没有通过")
+    return problems
+
+
+def verify_ci(artifacts: Path, needs_json: str, expected: list[str]) -> int:
+    """The aggregate ``Gate`` job: ``verify_plan`` printed, as an exit code."""
+    problems = verify_plan(artifacts, json.loads(needs_json or "{}"), expected)
     for problem in problems:
         print(problem)
     print("Gate: " + ("OK" if not problems else "FAILED"))
@@ -360,7 +442,7 @@ def verify_ci(artifacts: Path, needs_json: str, expected: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     utf8_stdio()
     parser = argparse.ArgumentParser(description="TaskSteward gate")
-    parser.add_argument("--steps", default=",".join(STEPS))
+    parser.add_argument("--steps", default=",".join(DEFAULT_STEPS))
     parser.add_argument("--tier", action="append", choices=CI_TIERS)
     parser.add_argument(
         "--jobs",
@@ -395,6 +477,8 @@ def main(argv: list[str] | None = None) -> int:
         gate.stdlib()
     if "docs" in steps:
         gate.docs()
+    if "catalog-static" in steps:
+        gate.catalog_static()
     if "tests" in steps:
         gate.tests(tiers, args.jobs)
     if "catalog" in steps:

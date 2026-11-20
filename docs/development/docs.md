@@ -17,7 +17,8 @@
 - Markdown 是来源，HTML 由 `tools/docs.py render` 生成，绝不手工编辑。HTML 自包含，可离线打开并打印，
   内嵌图使用同目录的 SVG。
 - 生成的 HTML 记录来源 Markdown 的 SHA-256；`tools/docs.py check` 在两者不一致时失败（报告“已过期”），
-  并检查相对链接与锚点有效。
+  并检查相对链接与锚点有效。来源与视图双向一致：仓库根目录与 `docs/` 下没有来源的 HTML
+  （例如文档删除或改名后留下的旧视图）同样使检查失败。
 - 改 Markdown 的同一个 PR 里重新生成 HTML。
 - HTML 中指向其他文档的链接：对方有 HTML 版（README、设计文档）时指向 `.html`，只有 Markdown 的文档
   （`AGENTS.md`、开发规则、决定记录）保留 `.md` 链接。检查工具核对每个链接的目标存在。
