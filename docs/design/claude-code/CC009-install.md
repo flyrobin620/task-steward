@@ -1,6 +1,6 @@
 # CC009 Claude Code 上的安装
 
-- 状态：已确认（T305；用户 2026-11-19 确认；同日决定数据目录必填、setup 不配置仓库，DN009 §6）；T308 实现，§5 增加插件使用的解释器 `env.TSW_PYTHON`，§9 记录 live 结论
+- 状态：已确认（T305；用户 2026-11-19 确认；同日决定数据目录必填、setup 不配置仓库，DN009 §6）；T308 实现，§5 增加插件使用的解释器 `env.TSW_PYTHON`，§9 记录 live 结论；§10 试装发现与修改（用户 2026-11-20 确认）
 - 日期：2026-11-19
 - 实现：[DN009 分发与安装](../DN009-distribution-and-install.md)
 - 相关：[CC006 Claude Code 插件](CC006-plugins.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -15,24 +15,25 @@ DN009 的两条安装路径在 Claude Code（Windows 上的 Claude 桌面 app �
 
 ![在 Claude Code 上安装 TaskSteward：两条各自在一处完成的路径](CC009-install-paths.svg)
 
-**在终端安装**（PowerShell）：
+图中会话路径的第一步（`/plugin install … --marketplace …`）在 Windows 的 Claude 桌面 app 中不可行（§10）：按下文改为先在终端准备插件。
+
+**在终端安装**（PowerShell，Windows 上推荐）：
 
 ```powershell
 git clone https://github.com/flyrobin620/task-steward.git "$env:LOCALAPPDATA\TaskSteward\task-steward"
 & "$env:LOCALAPPDATA\TaskSteward\task-steward\setup.ps1"
 ```
 
-脚本会问几个问题（数据目录位置必须由用户给出，没有默认值），做完后请用户重启 Claude app，在这个数据目录中打开一个会话。
+脚本会问几个问题（数据目录位置必须由用户给出，没有默认值），做完后请用户重启 Claude app，在这个数据目录中新建一个会话（主会话），输入“开始示例任务”（DN009 §15.2）。
 
-**在 Claude 中安装**（在任意一个会话中逐条输入）：
+**在 Claude 中安装**：先完全退出 Claude app（app 运行时添加 GitHub 插件市场会以 EPERM 失败，§10），在 PowerShell 中运行：
 
-```text
-/plugin install task-steward --marketplace https://github.com/flyrobin620/task-steward.git
-/reload-plugins
-/task-steward:setup
+```powershell
+claude plugin marketplace add https://github.com/flyrobin620/task-steward.git
+claude plugin install task-steward@task-steward
 ```
 
-setup 在会话中提问（同样要求用户给出数据目录位置）并做完，最后请用户重启 Claude app。过程中 Claude 会请用户批准几条命令（克隆仓库、写用户设置与 PATH、登记 Dashboard 计划任务等）。
+然后打开 Claude app，在任意一个新会话中输入 `/task-steward:setup`。setup 在会话中提问（同样要求用户给出数据目录位置）并做完，最后请用户重启 Claude app、在数据目录中新建会话并输入“开始示例任务”。过程中 Claude 会请用户批准几条命令（克隆仓库、写用户设置与 PATH、登记 Dashboard 计划任务等）。
 
 两条路径的前提相同：Python 3.10+、git、Claude Code（桌面 app 与 `claude` CLI）。安装不配置要管理的仓库；重启后在主会话中告诉它要管理哪些仓库，由主会话逐个加入配置（DN009 §6.1）。
 
@@ -112,3 +113,20 @@ live 中另外发现并已处理：
 
 - 开发者机器上 pip 可编辑安装的 `tsw.exe`（Python 的 `Scripts`）在 PATH 中排在垫片之前时，`tsw` 不是垫片；`verify --after-reload` 的 `path_effective` 报告失败并写明原因（删除另一个 `tsw`，或把垫片目录移前）。没有产品检出的用户不受影响。
 - `tsw setup uninstall` 经 `tsw.cmd` 运行时，cmd 在命令结束后还会再读这个文件：卸载时立刻删除它会以 “The system cannot find the path specified” 与退出码 1 结束。垫片设置 `TSW_SHIM`，卸载把正在运行的 `tsw.cmd` 交给一个分离的 cmd 稍后删除（也跳出调用者的作业对象）。
+
+## 10. 试装发现与修改（T308）
+
+用户 2026-11-20 在另一台 Windows 机器（Claude Code 2.1.318）上试装会话路径：
+
+| 发现 | 原因 | 提议 |
+| --- | --- | --- |
+| 桌面 app 中不能直接运行 `/plugin install … --marketplace …`（app 打开“Add marketplace”窗口） | app 的斜杠命令与 CLI 不同 | §2 的会话路径不再写这条命令 |
+| “Add marketplace”窗口添加 GitHub 市场报 “Couldn't write to the plugins directory”；同一台机器上 app 运行时 `claude plugin marketplace add https://…git` 以 `EPERM … rename '…\plugins\marketplaces\temp_git_…..clone'` 失败，完全退出 app 后成功 | 运行中的 app 占用 `~/.claude/plugins/marketplaces`，Claude Code 把克隆移到位的改名被拒（与 T305 E7 在受监视目录下看到的相同） | 见下 |
+| 安装会话领取了调度租约 | 安装会话的文件夹就是数据目录，重新加载后它被认作主会话并在会话开始时领取租约 | 照常安装；未绑定数据目录的安装会话在安装完成后记为让出，不再自动领取（用户 M-T308-5 决定，DN009 §15.1） |
+
+**GitHub 市场只能在 app 退出时添加**，所以“全在 app 会话中完成”在 Windows 上做不到第一步。本地目录市场（`claude plugin marketplace add <检出>`）不克隆、不在 `marketplaces/` 中改名，终端路径用的就是它（app 运行时是否也成功由用户试装确认）。用户确认的修改：
+
+1. **终端路径是 Windows 上的推荐路径**（§2 第一段不变）：`git clone` + `setup.ps1`，不需要退出 app，最后重启 app。README 与 §2 先写它。
+2. **会话路径改为“先在终端准备插件，其余在会话中做完”**：在 PowerShell 中（Claude app 完全退出时）`claude plugin marketplace add https://github.com/flyrobin620/task-steward.git` 与 `claude plugin install task-steward@task-steward`，再打开 app，在任意新会话中输入 `/task-steward:setup`。§2 第二段改为这三步，并写明要先退出 app 的原因。Claude Code 修复 app 运行时的改名问题、或 app 中的插件窗口能成功添加之后，再恢复“全在会话中”的写法。
+3. **安装后的引导**（DN009 §15.2）：试装确认新会话要在重启 app 之后才用上新的用户设置与插件，所以 setup skill 不创建会话，只在最后告诉用户：完全退出并重新打开 Claude app，在数据目录新建会话，输入“开始示例任务”。终端入口输出同样的说明。
+4. **示例 skill**（DN009 §15.3）：`tsw-demo` 生成到数据目录的 `.claude/skills/tsw-demo/SKILL.md`，由主会话在用户说“开始示例任务”时使用；它只给出任务的规格、开始前的说明与每一步要告诉用户的话，登记、派发、验收都走主会话的现有工具与 skill。

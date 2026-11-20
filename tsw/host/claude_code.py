@@ -5,9 +5,10 @@ and the hooks. It is enabled at user scope, so it carries no orchestrator skill.
 generates the orchestrator's instructions into the data directory: ``CLAUDE.md`` and the project
 skills ``.claude/skills/orchestrate/SKILL.md``, ``handle-input`` (questions handed over by the
 routine session, CC006 §6.4), ``task-intake`` (intake and writing briefs, CC006 §10.2),
-``tsw-update`` (the self-update, CC006 §11.3) and the human channels' skills (``teams-chat``,
-CC006 §7), and ``gh-account`` (which gh account a repository uses, for one command at a
-time; CC006 §10.1), the one of them a worker in a repository worktree is pointed at by its brief.
+``tsw-update`` (the self-update, CC006 §11.3), ``tsw-demo`` (the example task, DN009 §15.3)
+and the human channels' skills (``teams-chat``, CC006 §7), and ``gh-account`` (which gh
+account a repository uses, for one command at a time; CC006 §10.1), the one of them a worker in
+a repository worktree is pointed at by its brief.
 Sessions whose directory is under the data directory and not in a git repository (the routine
 session, a worker without a repository worktree) also discover them; a worker in a repository
 worktree does not (CC006 §8). A worker's own instructions are not a skill: they are copied from
@@ -52,6 +53,9 @@ UPDATE_SKILL_PATH = Path(".claude") / "skills" / "tsw-update" / "SKILL.md"
 # The human channels' own skills (P3, CC006 §7): how the main session sends through a channel
 # and registers what comes back. handle-input names the channel; its skill has the details.
 CHANNEL_SKILLS = {"teams-chat": Path(__file__).resolve().parent / "teams_chat_skill.md"}
+# The example task the main session runs when the user says so after the install (DN009 §15.3).
+DEMO_SKILL = Path(__file__).resolve().parent / "demo_skill.md"
+DEMO_SKILL_PATH = Path(".claude") / "skills" / "tsw-demo" / "SKILL.md"
 SETTINGS_PATH = Path(".claude") / "settings.json"
 WORKER_SETTINGS_PATH = Path(".claude") / "settings.local.json"
 # The plugin ``task-steward`` registers the MCP server ``tsw`` (plugin/.mcp.json).
@@ -120,6 +124,8 @@ def render_instructions(home: Home) -> list[Path]:
     atomic_write(gh_account, GH_ACCOUNT_SKILL.read_bytes())
     update = home.root / UPDATE_SKILL_PATH
     atomic_write(update, UPDATE_SKILL.read_bytes())
+    demo = home.root / DEMO_SKILL_PATH
+    atomic_write(demo, DEMO_SKILL.read_bytes())
     channels: list[Path] = []
     for name, source in CHANNEL_SKILLS.items():
         channel = home.root / ".claude" / "skills" / name / "SKILL.md"
@@ -135,6 +141,7 @@ def render_instructions(home: Home) -> list[Path]:
         task_intake,
         gh_account,
         update,
+        demo,
         *channels,
         settings,
         *roles,

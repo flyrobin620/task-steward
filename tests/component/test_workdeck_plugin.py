@@ -1,7 +1,7 @@
 """The Dashboard as a workdeck plugin on real files, sockets and subprocesses (T309).
 
 UC-DIRECT-009 (DN006 §8.10): the Dashboard serves its manifest at
-``/.well-known/workdeck-plugin.json``. UC-SETUP-003 (DN009 §5 step 7, CC006 §13): ``tsw setup``
+``/.well-known/workdeck-plugin.json``. UC-SETUP-004 (DN009 §5 step 7, CC006 §13): ``tsw setup``
 hands the manifest to ``workdeck plugin add``. workdeck is the stand-in
 ``tests/fixtures/fake_workdeck.py`` (simulated); Claude Code's plugin commands, the user ``Path``
 and Task Scheduler are stand-ins as in ``test_setup.py``.
@@ -36,7 +36,7 @@ from tsw.host.version import REPO_ROOT
 
 mark = pytest.mark
 UC = "UC-DIRECT-009"
-SETUP = "UC-SETUP-003"
+SETUP = "UC-SETUP-004"
 
 
 @pytest.fixture

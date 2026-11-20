@@ -73,9 +73,13 @@ MIN_PYTHON = (3, 10)
 HANDSHAKE_TIMEOUT_SECONDS = 60
 MCP_PROTOCOL = "2025-06-18"
 RESTART = (
-    "重启 Claude app（完全退出再打开），然后在数据目录 {home} 中打开一个会话作为主会话；"
-    "之后在主会话或新的终端中运行 tsw setup verify --after-reload 核对重新加载之后的结果"
+    "1. 完全退出并重新打开 Claude app（新的用户设置与插件在重新打开后才生效）；"
+    "2. 在数据目录 {home} 中新建一个会话，它是主会话；"
+    "3. 在主会话中输入“开始示例任务”，看 TaskSteward 怎样执行一个任务"
+    "（可以跳过，之后随时说这句话）。"
+    "需要时在主会话或新的终端中运行 tsw setup verify --after-reload 核对重新加载之后的结果"
 )
+DEMO_PROMPT = "开始示例任务"
 
 
 @dataclass
@@ -700,8 +704,18 @@ def install(ctx: Context, *, open_browser: bool = True) -> dict[str, Any]:
         raise rejected(
             "安装的前提不满足", reason="setup_preconditions", problems=checked["problems"]
         )
-    ctx.record.set(status="installing", started_at=utc_now())
-    results = [_run_step(ctx, name, apply=True, open_browser=open_browser) for name in STEPS]
+    installer = _installer_session(ctx)
+    # Recorded before anything changes: a rerun in the same session after a failure, when the
+    # session's folder is by then the data directory, is still the installer (review r6 F1).
+    ctx.record.set(status="installing", started_at=utc_now(), installer_session=installer)
+    results: list[dict[str, Any]] = []
+    stood_down: str | None = None
+    for name in STEPS:
+        results.append(_run_step(ctx, name, apply=True, open_browser=open_browser))
+        if name == "home":
+            # As soon as the data directory exists: a later step that fails leaves no session
+            # that would take the lease at its next start.
+            stood_down = _stand_down_installer(ctx, installer)
     ctx.record.set(status="installed", completed_at=utc_now())
     verification = verify(ctx)
     root = ctx.home_root
@@ -711,12 +725,61 @@ def install(ctx: Context, *, open_browser: bool = True) -> dict[str, Any]:
         "verify": verification,
         "record": str(ctx.record.path),
         "next": RESTART.format(home=root),
+        "demo_prompt": DEMO_PROMPT,
         "repositories": "要管理的仓库不在安装中配置：重启后在主会话中告诉它要管理哪些仓库，由主会话"
         "逐个加入配置（DN009 §6.1）",
     }
+    if stood_down:
+        out["install_session"] = {
+            "session_id": stood_down,
+            "note": "本会话（安装会话）记为让出租约：之后它在会话开始时不自动领取调度租约；"
+            "请在数据目录中新建会话作为主会话（DN009 §15.1）",
+        }
     if not verification["ok"]:
         out["ok"] = False
     return out
+
+
+def _installer_session(ctx: Context) -> str | None:
+    """The session this install runs in when it is bound to no data directory (role none): it
+    stands down after the install (DN009 §15.1). The main session rerunning the install, and a
+    terminal, are not recorded."""
+    from tsw.host.identity import SESSION_ENV  # noqa: PLC0415
+    from tsw.host.identity import resolve as resolve_identity  # noqa: PLC0415
+    from tsw.ledger import Ledger  # noqa: PLC0415
+
+    session = ctx.env.get(SESSION_ENV)
+    root = ctx.home_root
+    if not session:
+        return None
+    if ctx.record.get("installer_session") == session:
+        return session  # the same install again, after a failure or as a repair
+    if root is None or not (root / MARKER).is_file():
+        return session
+    home = open_home(root)
+    with Ledger(home).view() as conn:
+        who = resolve_identity(conn, home, ctx.env, Path.cwd())
+    return session if who.role == "none" and not who.pending else None
+
+
+def _stand_down_installer(ctx: Context, session: str | None) -> str | None:
+    if session is None or ctx.home_root is None:
+        return None
+    from tsw import lease  # noqa: PLC0415
+    from tsw.ledger import Ledger  # noqa: PLC0415
+
+    home = open_home(ctx.home_root)
+    ledger = Ledger(home)
+    with ledger.view() as conn:
+        held = lease.lease_row(conn)
+        if lease.stood_down(conn, session) is not None:
+            return session
+        if held is not None and held["holder_session"] == session:
+            return None
+    ledger.commit(
+        lease.stand_down(session, machine=lease.this_machine(), via="setup", actor={"role": "cli"})
+    )
+    return session
 
 
 # ---------------------------------------------------------------------- verify

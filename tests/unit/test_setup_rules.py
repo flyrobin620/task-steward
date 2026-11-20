@@ -263,7 +263,7 @@ def test_the_hook_keeps_workers_from_installing_the_host(
         assert problem is not None and "不能运行 tsw setup" in problem
 
 
-WORKDECK = "UC-SETUP-003"
+WORKDECK = "UC-SETUP-004"
 
 
 @pytest.mark.use_case(WORKDECK)
