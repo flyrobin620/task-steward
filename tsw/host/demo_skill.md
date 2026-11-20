@@ -14,7 +14,7 @@ description: "TaskSteward 新手导览与示例任务：主会话发现账本中
 1. **你在哪里**：这个会话在数据目录中打开，是 TaskSteward 的主会话：它受理、规划任务，把任务派发给 worker 会话（侧栏中可见），处理它们的回传，核验后交给你验收。以后开主会话也是这样：在数据目录新建会话，输入 `/orchestrate`；旧的主会话还持有调度租约时新会话只读，先在旧主会话中让它交接（`orchestrate` skill 的“交接主会话”），旧会话已不在时按同一节接管。
 2. **状态都在账本中**：任务、问题、评审、验收都记在数据目录的账本里，会话结束或重启都不会丢；Dashboard 是账本的视图。
 3. **当前配置**（`config_show` 读出后列出）：交流语言 `control.language`、评审器 `roles.reviewer`、需要你决定的事怎样找到你 `plugins.human_channels` 与超时 `input.in_session_timeout_minutes`、Dashboard 端口 `dashboard.port`。说明以后可以让主会话改（`config_change`，权限类的要你的原话）。
-4. **Dashboard**：已安装常驻服务时在终端运行 `tsw dashboard open`，否则运行 `tsw dashboard`（都由你在会话外的终端运行）。
+4. **Dashboard**：在 Bash 中运行只读的 `tsw dashboard status --json`。`installed` 为 true 时，直接给出可点击的链接（结果中的 `url`，例如 `http://127.0.0.1:47800/`），请用户点开，说明之后任务的进展都在那里看；页面要求登录时（第一次在这个浏览器打开、或令牌已失效），请用户在会话外的终端运行一次 `tsw dashboard open`。`running` 为 false 时告诉用户服务没在运行，可以在终端运行 `tsw dashboard open` 或重新登录系统。没有安装常驻服务时，请用户在会话外的终端运行 `tsw dashboard`（它打开浏览器）。
 5. **怎样开始真实工作**：告诉主会话要管理哪些仓库（本机路径、是否允许推送、开 PR、合并），它逐个加入配置；然后用一句话描述要做的事，它会登记任务、写任务书并派发。
 6. **提议示例任务**：问用户要不要先跑一个示例任务（下一节），看一遍一个任务从登记到验收的全过程。用户不要时结束导览，之后随时说“开始示例任务”。
 
@@ -25,7 +25,7 @@ description: "TaskSteward 新手导览与示例任务：主会话发现账本中
 - 主会话会在配置中加入一个示例仓库条目 `tsw-demo`（不指向任何本机目录，不推送、不开 PR、不合并），登记一个示例任务并派发给 worker 会话；worker 写一份报告，内容就是这个任务自己的执行过程。
 - 需要模型调用：一个 worker 会话与配置的评审器各若干轮。先用 `config_show` 看 `roles.reviewer.session`：本版本的自评审只实现了 `codex-app-server`（需要已登录的 `codex` 命令行）；配置的是别的评审器时，worker 的自评审会以 `reviewer_not_implemented` 失败，示例任务完成不了。此时不开始，告诉用户原因，并说明怎样改用 Codex（安装、登录 `codex`，再让主会话把 `roles.reviewer` 改回 `codex-app-server`，要用户原话）。
 - 过程中 worker 会在它自己的会话里问用户一个问题；用户可以回答，也可以故意不答，看超时后的处理。
-- 请用户打开 Dashboard（第 1 节第 4 条）。
+- 请用户打开 Dashboard（第 1 节第 4 条）：装了常驻服务时直接给出链接。
 
 用户的确认就是加入 `tsw-demo` 条目的原话（新增仓库是权限类改动，DN003 §7.2）。用户没有明确同意时不开始。
 
@@ -52,7 +52,7 @@ description: "TaskSteward 新手导览与示例任务：主会话发现账本中
 
 ## 4. 执行中告诉用户的话
 
-- 派发后：请用户在 Dashboard 中看这个任务从“待受理”经“就绪”“派发中”到“执行中”，并点开任务卡片的「详情」，看单任务视图中的任务书、attempt 与会话链接（点击在 app 中打开 worker 会话）。
+- 派发后：装了常驻服务时给出两个链接：看板（`<url>`）与这个任务的单任务视图（`<url>tasks/<任务>`，例如 `http://127.0.0.1:47800/tasks/T001`），请用户点开，在看板上看这个任务从“待受理”经“就绪”“派发中”到“执行中”，在单任务视图中看任务书、attempt 与会话链接（点击在 app 中打开 worker 会话）；之后每次提到进展（提问、评审、提交）都附上单任务视图的链接。没装常驻服务时请用户在 `tsw dashboard` 打开的页面中点任务卡片的「详情」。
 - worker 提问时（`attention` 或 inbox 中出现它的问题，或用户问起）：提醒用户到 worker 会话中回答；也可以不答，配置的超时（`input.in_session_timeout_minutes`）之后例行会话把问题转交给你，届时按 `handle-input` skill 处理，并告诉用户这就是超时转交。
 - 自评审进行时：告诉用户 Dashboard 的单任务视图会列出评审轮次。
 
@@ -60,7 +60,7 @@ description: "TaskSteward 新手导览与示例任务：主会话发现账本中
 
 1. 按 `orchestrate` skill 的“核验与验收”做技术验收（G-ACCEPT），核对报告包含第 3 节验收的每一条。
 2. 在会话中用几句话概括报告（问题与答复、评审轮次与意见、经过的状态），给出报告路径 `runs/<任务>/<attempt>/result.md` 与 html。
-3. 引导用户在 Dashboard 中：
+3. 引导用户在 Dashboard 中（装了常驻服务时附上看板与单任务视图的链接）：
    - 看板：任务现在是“完成·待用户验收”；切换“按时间顺序”与“任务流”视图；
    - 单任务视图：任务书与 revision、attempt 与会话、评审轮次、问题与答复、follow-up、时间线，以及报告链接；
    - 页首的“长期偏好”：偏好候选在这里确认或不记；

@@ -349,6 +349,8 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     # cleanup keeps the entry by default; a later main session needs the handoff.
     assert '"principal": "session-owner"' in example and "reviewer_not_implemented" in example
     assert "默认都保留" in example and "交接主会话" in example
+    # With the hosted Dashboard the main session gives clickable links (M-T308-10).
+    assert "tsw dashboard status --json" in example and "<url>tasks/<任务>" in example
     assert "`task_list` 为空" in example and "/orchestrate" in example
     orchestrate = skill.read_text(encoding="utf-8")
     assert "`task_list` 为空" in orchestrate and "`tsw-demo` skill" in orchestrate
