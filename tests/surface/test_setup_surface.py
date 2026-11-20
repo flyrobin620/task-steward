@@ -31,6 +31,20 @@ from tests.support import REPO_ROOT, child_env, run_tsw
 from tests.surface.test_self_update_surface import bound_worker_home
 
 UC = "UC-SETUP-001"
+
+
+def stood_down(home: Path, session: str) -> str | None:
+    """How ``session`` stood down in ``home``'s ledger, or None."""
+    from tsw.home import open_home  # noqa: PLC0415
+    from tsw.ledger import Ledger  # noqa: PLC0415
+
+    with Ledger(open_home(home)).view() as conn:
+        row = conn.execute(
+            "SELECT via FROM lease_stood_down WHERE session_id = ?", (session,)
+        ).fetchone()
+    return None if row is None else str(row["via"])
+
+
 GATE = "UC-SETUP-002"
 POWERSHELL = "powershell"
 
@@ -95,7 +109,7 @@ def test_a_session_bound_to_no_data_directory_may_install(tmp_path: Path) -> Non
     product, claude = make_product(tmp_path), fake_claude(tmp_path)
     env = setup_env(tmp_path, CLAUDE_CODE_HOST_SESSION_ID="first-install", CLAUDECODE="1")
     answers = write_answers(tmp_path, tmp_path / "data")
-    code, _, text = run_setup(
+    code, out, text = run_setup(
         product,
         "install",
         "--answers",
@@ -107,6 +121,11 @@ def test_a_session_bound_to_no_data_directory_may_install(tmp_path: Path) -> Non
     )
     assert code == 0, text
     assert record(env)["status"] == "installed"
+    # The install session does not take the lease when it is later opened as the main
+    # session: it stands down (DN009 §15.1, the user's decision of 2026-11-20).
+    assert out["install_session"]["session_id"] == "first-install"
+    assert stood_down(tmp_path / "data", "first-install") == "setup"
+    assert "开始示例任务" in out["next"] and out["demo_prompt"] == "开始示例任务"
 
 
 @pytest.mark.use_case(GATE)
@@ -121,6 +140,7 @@ def test_the_main_session_may_rerun_the_install(tmp_path: Path) -> None:
     code, out, text = run_setup(product, *args, env=main, cwd=home)
     assert code == 0, text
     assert {s["state"] for s in out["steps"]} <= {"ok", "skipped"}
+    assert "install_session" not in out and stood_down(home, "orch-9") is None
 
 
 @pytest.mark.use_case(GATE)

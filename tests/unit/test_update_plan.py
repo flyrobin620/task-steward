@@ -34,6 +34,7 @@ CLAUDE_CODE_NEW = 'X = 2\nCLAUDE_MD = """# 数据目录\n- 先读 tsw-update。\
         ("plugin/bin/tsw_launch.py", ["plugin"]),
         ("tsw/host/orchestrate_skill.md", ["rendered"]),
         ("tsw/host/update_skill.md", ["rendered"]),
+        ("tsw/host/demo_skill.md", ["rendered"]),
         ("tsw/host/claude_code.py", ["rendered", "runtime", "dashboard"]),
         ("tsw/roles.py", ["rendered", "runtime", "dashboard"]),
         ("tsw/ledger.py", ["runtime", "dashboard"]),
@@ -265,3 +266,9 @@ def test_a_rebuilt_projection_and_a_reinstall_are_not_pending() -> None:
     }
     assert planned["ledger_rebuild"]["pending"] is False  # this code reads the projection
     assert planned["reinstall"]["pending"] is False and planned["reinstall"]["manual"] is True
+
+
+@pytest.mark.use_case("UC-SETUP-003")
+def test_the_demo_skill_is_a_rendered_skill() -> None:
+    assert up.classify("tsw/host/demo_skill.md") == ["rendered"]
+    assert up.SKILLS["tsw/host/demo_skill.md"] == "tsw-demo"

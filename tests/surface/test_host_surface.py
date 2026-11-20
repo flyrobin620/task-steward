@@ -244,6 +244,7 @@ def test_one_orchestrator_hands_the_lease_to_another(home: Path) -> None:
 
 
 @pytest.mark.use_case("UC-HOST-004")
+@pytest.mark.use_case("UC-SETUP-003")
 def test_plugin_package_and_generated_files(home: Path) -> None:
     manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert manifest["name"] == "task-steward"
@@ -297,6 +298,7 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     task_intake = home / ".claude" / "skills" / "task-intake" / "SKILL.md"
     gh_account = home / ".claude" / "skills" / "gh-account" / "SKILL.md"
     update = home / ".claude" / "skills" / "tsw-update" / "SKILL.md"
+    demo = home / ".claude" / "skills" / "tsw-demo" / "SKILL.md"
     assert [Path(p) for p in out["written"]] == [
         home / "CLAUDE.md",
         skill,
@@ -304,6 +306,7 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
         task_intake,
         gh_account,
         update,
+        demo,
         teams_chat,
         settings,
         home / "roles" / "worker.md",
@@ -329,6 +332,13 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     sources = REPO_ROOT / "tsw" / "host"
     assert task_intake.read_bytes() == (sources / "task_intake_skill.md").read_bytes()
     assert gh_account.read_bytes() == (sources / "gh_account_skill.md").read_bytes()
+    # The example task the user starts after the install (DN009 §15.3, T308).
+    assert demo.read_bytes() == (sources / "demo_skill.md").read_bytes()
+    example = demo.read_text(encoding="utf-8")
+    assert example.startswith("---\nname: tsw-demo\ndescription: ")
+    assert "开始示例任务" in example and "`repo`：`tsw-demo`" in example
+    assert "ask_user" in example and "review_run" in example and "follow_up_record" in example
+    assert "input.in_session_timeout_minutes" in example
     intake = task_intake.read_text(encoding="utf-8")
     assert intake.startswith("---\nname: task-intake\ndescription: ")
     # Retrieval, goals that open with the user's words, checkable acceptance, the read set,

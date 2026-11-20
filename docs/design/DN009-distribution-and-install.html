@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="65505718cf928fc844a774eed9b77b4767b499cfa7e21d29aa2d13fc73b5e8d7">
+<meta name="tsw-source-sha256" content="a66601f287a9201cd901b34563057f1d847bc8ffe6f25b3603b12afb0b423894">
 <title>DN009 分发与安装</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -45,7 +45,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <nav class="toc"><h2>目录</h2><a class="l2" href="#1-目标与范围">1. 目标与范围</a><a class="l2" href="#2-原则">2. 原则</a><a class="l2" href="#3-组成">3. 组成</a><a class="l2" href="#4-两条路径">4. 两条路径</a><a class="l3" href="#41-终端路径">4.1 终端路径</a><a class="l3" href="#42-会话路径">4.2 会话路径</a><a class="l3" href="#43-不可避免的重新加载">4.3 不可避免的重新加载</a><a class="l2" href="#5-tsw-setup-install-的步骤">5. tsw setup install 的步骤</a><a class="l2" href="#6-要问用户的配置">6. 要问用户的配置</a><a class="l3" href="#61-仓库在安装之后配置">6.1 仓库在安装之后配置</a><a class="l2" href="#7-用户设置与-pathd2">7. 用户设置与 PATH（D2）</a><a class="l2" href="#8-会话中的例外d3">8. 会话中的例外（D3）</a><a class="l2" href="#9-验证">9. 验证</a><a class="l2" href="#10-幂等升级修复与卸载">10. 幂等、升级、修复与卸载</a><a class="l2" href="#11-产品仓库的位置d1">11. 产品仓库的位置（D1）</a><a class="l2" href="#12-操作系统">12. 操作系统</a><a class="l2" href="#13-对其他文档的影响">13. 对其他文档的影响</a><a class="l2" href="#14-待验证">14. 待验证</a><a class="l2" href="#15-安装之后第一个主会话与示例任务提议t308">15. 安装之后：第一个主会话与示例任务（提议，T308）</a><a class="l3" href="#151-安装会话不领租约">15.1 安装会话不领租约</a><a class="l3" href="#152-安装后的引导">15.2 安装后的引导</a><a class="l3" href="#153-示例任务">15.3 示例任务</a><a class="l2" href="#附录-a备选方案存档">附录 A：备选方案存档</a></nav>
 <main>
 <h1>DN009 分发与安装</h1>
-<ul><li>状态：已确认（T305；用户 2026-11-19 确认两条安装路径与本文的 D1–D3，插件名不改；同日决定数据目录必填、setup 不配置仓库，§6）；§15 安装后的引导与示例任务（T308，用户 2026-11-20 确认的部分见各小节）</li><li>日期：2026-11-19</li><li>相关：<a href="DN001-architecture.html">DN001 总体架构</a> · <a href="DN003-unified-config.html">DN003 统一配置</a> · <a href="DN006-plugin-layer.html">DN006 插件层</a> · <a href="DN008-guardrails.html">DN008 校验原则</a> · 实现：<a href="claude-code/CC009-install.html">CC009 Claude Code 上的安装</a></li></ul>
+<ul><li>状态：已确认（T305；用户 2026-11-19 确认两条安装路径与本文的 D1–D3，插件名不改；同日决定数据目录必填、setup 不配置仓库，§6）；§15 安装后的引导与示例任务（T308，用户 2026-11-20 确认）</li><li>日期：2026-11-19</li><li>相关：<a href="DN001-architecture.html">DN001 总体架构</a> · <a href="DN003-unified-config.html">DN003 统一配置</a> · <a href="DN006-plugin-layer.html">DN006 插件层</a> · <a href="DN008-guardrails.html">DN008 校验原则</a> · 实现：<a href="claude-code/CC009-install.html">CC009 Claude Code 上的安装</a></li></ul>
 <h2 id="1-目标与范围">1. 目标与范围</h2>
 <p>让没有产品检出的用户从零用上 TaskSteward：拿到运行时、在宿主中挂上 tsw、建好自己的数据目录与基础配置，最后在数据目录中打开主会话。要管理的仓库不在安装中配置，安装后由用户在主会话中逐个加入（§6.1）。</p>
 <ul><li><strong>两条路径，各自在一处完成</strong>：用户可以全在终端里装，也可以全在宿主会话里装，中途不需要换到另一处。</li><li><strong>确定的步骤只有一份</strong>：两条路径调用同一个安装脚本 <code>tsw setup</code>，入口只负责提问并把答案交给它。</li><li><strong>安装之后只有一个来源</strong>：宿主运行的插件副本与 tsw 运行时都来自同一个本机产品检出，之后的更新走现有的自我更新流程（DN006 §9.8）。</li><li>不发布到任何包仓库，不需要令牌。</li><li>本文与宿主无关；各宿主的命令、插件形式与限制写在各自的实现文档中（见开头的“实现”）。</li></ul>
@@ -255,7 +255,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <h2 id="14-待验证">14. 待验证</h2>
 <ul><li>两条路径在干净环境中各从零走到主会话可用（live）；</li><li>一位没有产品检出的用户真实试装；</li><li>没有解释器或 git 的机器上的探测与安装；</li><li>macOS / Linux 全部。</li></ul>
 <h2 id="15-安装之后第一个主会话与示例任务提议t308">15. 安装之后：第一个主会话与示例任务（提议，T308）</h2>
-<p>用户 2026-11-20 在另一台机器上试装后提出（T308，M-T308-4）：安装完毕后应提示用户用一个新会话在数据目录中开始工作，并引导用户执行一个示例任务，由它直观展示 tsw 的主要功能；安装会话本身不应成为主会话。本节是提议，经用户确认后实现。</p>
+<p>用户 2026-11-20 在另一台机器上试装后提出（T308，M-T308-4）：安装完毕后应提示用户用一个新会话在数据目录中开始工作，并引导用户执行一个示例任务，由它直观展示 tsw 的主要功能；安装会话本身不应成为主会话。用户 2026-11-20 确认本节（M-T308-5、M-T308-6、M-T308-7）。</p>
 <h3 id="151-安装会话不领租约">15.1 安装会话不领租约</h3>
 <p>在数据目录（就是那个文件夹本身）中打开的会话是主会话（DN001、CC008 §5.2），主会话在会话开始时租约空闲就自动领取（DN001 §6.4）。试装中用户在一个新建的空文件夹里打开会话，又把这个文件夹答成数据目录：安装完成、宿主重新加载后，这个安装会话按规则被认作主会话，领取了调度租约，而用户并没有让它编排。</p>
 <p>用户 2026-11-20 决定（M-T308-5）：不拒绝这样的安装，照常安装，只是安装会话不领租约。做法沿用“让出过租约的会话”（DN001 §6.4）：</p>

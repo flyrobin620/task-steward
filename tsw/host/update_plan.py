@@ -72,6 +72,7 @@ SKILLS = {
     "tsw/host/gh_account_skill.md": "gh-account",
     "tsw/host/teams_chat_skill.md": "teams-chat",
     "tsw/host/update_skill.md": "tsw-update",
+    "tsw/host/demo_skill.md": "tsw-demo",
 }
 ACTIVE_PHASES = ("starting", "standby", "live")
 TASK_ID = re.compile(r"(?<![A-Za-z0-9_])T\d{3,6}(?![A-Za-z0-9_])")

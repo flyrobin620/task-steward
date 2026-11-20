@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="b84390d32dc7c9c540f653e6d36fec48bfebdc27edcd0028beed31c703fcaaa0">
+<meta name="tsw-source-sha256" content="e091bbbc5cd872c246b86cee9385b7a54b380d1c5554b5e68d34ee1534f71973">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -62,13 +62,13 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p><strong>在终端安装</strong>（PowerShell）：</p>
 <pre><code class="lang-powershell">git clone https://github.com/flyrobin620/task-steward.git &quot;$env:LOCALAPPDATA\TaskSteward\task-steward&quot;
 &amp; &quot;$env:LOCALAPPDATA\TaskSteward\task-steward\setup.ps1&quot;</code></pre>
-<p>脚本先探测 Python、git 与 Claude Code（缺少 Python 或 git 时问你是否用 winget 安装），再问几个问题（数据目录位置必须由你给出，没有默认值），显示计划请你确认，然后做完全部步骤并核对。做完后重启 Claude app，在这个数据目录中打开一个会话，它就是主会话。</p>
-<p><strong>在 Claude 中安装</strong>（在任意一个会话中逐条输入）：</p>
-<pre><code class="lang-text">/plugin install task-steward --marketplace https://github.com/flyrobin620/task-steward.git
-/reload-plugins
-/task-steward:setup</code></pre>
-<p>setup 在会话中提问（同样要求你给出数据目录位置）并做完，最后请你重启 Claude app。过程中 Claude 会请你批准几条命令（克隆仓库、写用户设置与 PATH、登记 Dashboard 计划任务等）。</p>
-<p>两条路径做的事相同（<code>tsw setup install</code>）：在 <code>%LOCALAPPDATA%\TaskSteward\bin</code> 放 <code>tsw</code> 垫片并加入用户级 PATH、把插件来源指向本机检出、建好数据目录与基础配置、在 Claude Code 用户设置中写入数据目录位置（<code>env.TSW_HOME</code>）、插件使用的解释器（<code>env.TSW_PYTHON</code>）与三条 auto 模式规则（先备份）、生成主会话的说明与 skill、按你的选择登记 Dashboard 常驻服务。安装记录在 <code>%LOCALAPPDATA%\TaskSteward\install.json</code>；重跑任一路径只做缺少或不一致的部分。要管理的仓库不在安装中配置：重启后在主会话中告诉它要管理哪些仓库，由主会话逐个加入配置。之后的更新在主会话中说“更新 tsw”。卸载用 <code>tsw setup uninstall</code>（数据目录永远不删）。</p>
+<p>脚本先探测 Python、git 与 Claude Code（缺少 Python 或 git 时问你是否用 winget 安装），再问几个问题（数据目录位置必须由你给出，没有默认值），显示计划请你确认，然后做完全部步骤并核对。Windows 上推荐这条路径。</p>
+<p><strong>在 Claude 中安装</strong>：先完全退出 Claude app（app 运行时添加 GitHub 插件市场会失败），在 PowerShell 中运行：</p>
+<pre><code class="lang-powershell">claude plugin marketplace add https://github.com/flyrobin620/task-steward.git
+claude plugin install task-steward@task-steward</code></pre>
+<p>然后打开 Claude app，在任意一个新会话中输入 <code>/task-steward:setup</code>。setup 在会话中提问（同样要求你给出数据目录位置）并做完。过程中 Claude 会请你批准几条命令（克隆仓库、写用户设置与 PATH、登记 Dashboard 计划任务等）。</p>
+<p><strong>装好之后</strong>：完全退出并重新打开 Claude app，在数据目录中新建一个会话（它是主会话），输入“开始示例任务”：主会话登记一个示例任务并派发给 worker，worker 写一份记录这个任务自己执行过程的报告（状态机、向你提问与超时转交、与评审器的互动、follow-up），最后引导你在 Dashboard 中看报告并验收。</p>
+<p>两条路径做的事相同（<code>tsw setup install</code>）：在 <code>%LOCALAPPDATA%\TaskSteward\bin</code> 放 <code>tsw</code> 垫片并加入用户级 PATH、把插件来源指向本机检出、建好数据目录与基础配置、在 Claude Code 用户设置中写入数据目录位置（<code>env.TSW_HOME</code>）、插件使用的解释器（<code>env.TSW_PYTHON</code>）与三条 auto 模式规则（先备份）、生成主会话的说明与 skill、按你的选择登记 Dashboard 常驻服务。安装记录在 <code>%LOCALAPPDATA%\TaskSteward\install.json</code>；重跑任一路径只做缺少或不一致的部分。要管理的仓库不在安装中配置：重启后在主会话中告诉它要管理哪些仓库，由主会话逐个加入配置。之后的更新在主会话中说“更新 tsw”。卸载用 <code>tsw setup uninstall</code>：它把安装脚本改动的东西恢复原样（Dashboard 服务、用户设置、<code>tsw</code> 垫片与 PATH；插件与市场回到安装前的状态，安装前就已装好的插件保留），数据目录与产品检出永远不删。要从干净的环境重装，再删除数据目录与 <code>%LOCALAPPDATA%\TaskSteward</code>，并在 app 退出时运行 <code>claude plugin uninstall task-steward@task-steward</code> 与 <code>claude plugin marketplace remove task-steward</code>。</p>
 <p>开发者也可以在本仓库中用可编辑安装代替垫片：<code>python -m pip install -e .</code>，再 <code>tsw init --home &lt;数据目录&gt; --remember</code>（把数据目录记在本仓库的 <code>.local/tsw-home</code>，终端不必设置 <code>TSW_HOME</code>）；插件与用户设置的安装步骤见 <code>tsw host install-hint</code>。</p>
 <h3 id="哪些命令在哪里运行">哪些命令在哪里运行</h3>
 <ul><li><strong>运行时</strong>（tsw 的代码）在产品检出中：安装后 PATH 中的 <code>tsw</code> 垫片运行检出中的启动器，在任何目录都找得到它。Claude Code 的会话通过插件里的启动器运行 tsw。</li><li><strong>数据目录</strong>（账本、任务书、报告）按顺序定位：当前目录所在的、声明了 <code>claim_sessions</code> 的数据目录（只用于 live 测试隔离）→ 环境变量 <code>TSW_HOME</code> → 本仓库的 <code>.local/tsw-home</code> → <code>~/.tsw</code>。<code>tsw home</code> 显示找到的目录和依据。</li><li><strong>当前目录</strong>只影响两件事：上面的 <code>claim_sessions</code>，以及 <code>tsw review run</code>（在 worker 的 worktree 中评审当前 HEAD）。其他命令在哪个目录运行都一样；<code>backup</code>、<code>restore</code> 的相对路径按当前目录解析。</li><li>这些命令由你在<strong>会话外的终端</strong>中运行。Claude 会话中只能运行只读命令，写操作经 tsw MCP 工具；验收、退回、取消和 Dashboard 应用在任何会话中都会被拒绝，以免会话替你做决定（<a href="docs/design/DN006-plugin-layer.html">DN006 §8.10</a>）。例外是自我更新：你在主会话中说“更新 tsw”，主会话按 <code>tsw-update</code> skill 拉取、运行 <code>tsw host update-plan</code> 与 <code>tsw host render</code>、重启 Dashboard 常驻服务（<code>tsw dashboard restart</code>），再按配置 <code>update</code> 请你重启 Claude app（或换到接班主会话、输入 <code>/compact</code>）；其他会话运行这些命令会被拒绝（<a href="docs/design/DN006-plugin-layer.html">DN006 §9.8</a>）。安装脚本 <code>tsw setup install</code> / <code>uninstall</code> 也可以在还没有绑定数据目录的会话（第一次安装）与主会话中运行，worker 与例行会话会被拒绝（<a href="docs/design/DN009-distribution-and-install.html">DN009 §8</a>）。</li></ul>

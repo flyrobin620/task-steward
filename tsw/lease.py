@@ -163,6 +163,23 @@ def acquire(
     )
 
 
+def stand_down(session_id: str, *, machine: str, via: str, actor: Mapping[str, Any]) -> Command:
+    """Record that ``session_id`` does not take the lease at session start (DN001 §6.4), without
+    any lease change: the session that ran the first install (``via: setup``, DN009 §15.1)."""
+
+    def build(ctx: CommitContext) -> list[EventDraft]:
+        lease = lease_row(ctx.conn)
+        if lease is not None and lease["holder_session"] == session_id:
+            raise rejected("持有租约的会话要让出请用 lease_release", reason="lease_held")
+        return [_stand_down(session_id, machine, via)]
+
+    return Command(
+        actor=actor,
+        input={"op": "lease.stand_down", "session_id": session_id, "via": via},
+        build=build,
+    )
+
+
 def release(session_id: str, *, machine: str, actor: Mapping[str, Any]) -> Command:
     def build(ctx: CommitContext) -> list[EventDraft]:
         lease = lease_row(ctx.conn)
