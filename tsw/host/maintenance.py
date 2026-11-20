@@ -217,9 +217,12 @@ class Maintenance:
                 rehearsed = False
                 used.update(pending)
                 pending = []
-            elif event.type == EVENT and event.data.get("params_digest") == params_digest:
-                if event.data.get("kind") == "import_dry_run":
-                    rehearsed = True
+            elif (
+                event.type == EVENT
+                and event.data.get("params_digest") == params_digest
+                and event.data.get("kind") == "import_dry_run"
+            ):
+                rehearsed = True
             if event.type == EVENT and event.data.get("kind") == "import_authorized":
                 pending.append(confedit.source_ref(event.data.get("user_source")))
         if not rehearsed:
