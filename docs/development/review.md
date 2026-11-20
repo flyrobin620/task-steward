@@ -40,3 +40,5 @@
   确认，新增或删除护栏规则、改变已确认的决定除外。
 - 仓库所有者（admin 角色）可以绕过保护规则，仅用于紧急修复，并在 PR 中写明原因。agent 使用的也是
   所有者账号，合并时不绕过（不用 `gh pr merge --admin` 或直接推送 `main`）。
+
+<!-- T318 scope experiment: not for merge -->
