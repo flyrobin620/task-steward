@@ -1,6 +1,6 @@
 # CC009 Claude Code 上的安装
 
-- 状态：已确认（T305；用户 2026-11-19 确认；同日决定数据目录必填、setup 不配置仓库，DN009 §6）；T308 实现，§5 增加插件使用的解释器 `env.TSW_PYTHON`，§9 记录 live 结论
+- 状态：已确认（T305；用户 2026-11-19 确认；同日决定数据目录必填、setup 不配置仓库，DN009 §6）；T308 实现，§5 增加插件使用的解释器 `env.TSW_PYTHON`，§9 记录 live 结论；§10 试装发现与修改为提议（待用户确认）
 - 日期：2026-11-19
 - 实现：[DN009 分发与安装](../DN009-distribution-and-install.md)
 - 相关：[CC006 Claude Code 插件](CC006-plugins.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -111,3 +111,19 @@ live 中另外发现并已处理：
 
 - 开发者机器上 pip 可编辑安装的 `tsw.exe`（Python 的 `Scripts`）在 PATH 中排在垫片之前时，`tsw` 不是垫片；`verify --after-reload` 的 `path_effective` 报告失败并写明原因（删除另一个 `tsw`，或把垫片目录移前）。没有产品检出的用户不受影响。
 - `tsw setup uninstall` 经 `tsw.cmd` 运行时，cmd 在命令结束后还会再读这个文件：卸载时立刻删除它会以 “The system cannot find the path specified” 与退出码 1 结束。垫片设置 `TSW_SHIM`，卸载把正在运行的 `tsw.cmd` 交给一个分离的 cmd 稍后删除（也跳出调用者的作业对象）。
+
+## 10. 试装发现与修改（提议，T308）
+
+用户 2026-11-20 在另一台 Windows 机器（Claude Code 2.1.318）上试装会话路径：
+
+| 发现 | 原因 | 提议 |
+| --- | --- | --- |
+| 桌面 app 中不能直接运行 `/plugin install … --marketplace …`（app 打开“Add marketplace”窗口） | app 的斜杠命令与 CLI 不同 | §2 的会话路径不再写这条命令 |
+| “Add marketplace”窗口添加 GitHub 市场报 “Couldn't write to the plugins directory”；同一台机器上 app 运行时 `claude plugin marketplace add https://…git` 以 `EPERM … rename '…\plugins\marketplaces\temp_git_…..clone'` 失败，完全退出 app 后成功 | 运行中的 app 占用 `~/.claude/plugins/marketplaces`，Claude Code 把克隆移到位的改名被拒（与 T305 E7 在受监视目录下看到的相同） | 见下 |
+| 安装会话领取了调度租约 | 安装会话的文件夹就是数据目录（DN009 §15.1） | `tsw setup` 在会话中拒绝把会话文件夹作为数据目录 |
+
+**GitHub 市场只能在 app 退出时添加**，所以“全在 app 会话中完成”在 Windows 上做不到第一步。本地目录市场（`claude plugin marketplace add <检出>`）不克隆、不在 `marketplaces/` 中改名，终端路径用的就是它（app 运行时是否也成功待 live 确认）。提议：
+
+1. **终端路径是 Windows 上的推荐路径**（§2 第一段不变）：`git clone` + `setup.ps1`，不需要退出 app，最后重启 app。README 与 §2 先写它。
+2. **会话路径改为“先在终端准备插件，其余在会话中做完”**：在 PowerShell 中（Claude app 完全退出时）`claude plugin marketplace add https://github.com/flyrobin620/task-steward.git` 与 `claude plugin install task-steward@task-steward`，再打开 app，在任意新会话中输入 `/task-steward:setup`。§2 第二段改为这三步，并写明要先退出 app 的原因。Claude Code 修复 app 运行时的改名问题、或 app 中的插件窗口能成功添加之后，再恢复“全在会话中”的写法。
+3. **安装后的主会话**（DN009 §15.2）：会话入口的 setup skill 在安装成功后用 `mcp__ccd_session__start_session` 创建主会话（`cwd` 为数据目录、`use_worktree: false`、标题“TaskSteward 主会话”、`prompt` 为示例任务的提示语），再用 `mcp__ccd_session_mgmt__detach_session` 与安装会话分离；新文件夹的信任确认由 app 弹出、用户点击。新会话能否在不重启 app 的情况下用上新的用户设置（`env.TSW_HOME`、`env.TSW_PYTHON`）与改指后的插件待 live 验证：不能时 skill 改为请用户重启 app 后在数据目录新建会话并输入那句提示语。终端入口输出同样的说明。
