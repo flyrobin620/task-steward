@@ -87,6 +87,8 @@ RESTART = (
     "并提议一个示例任务，看 TaskSteward 怎样执行一个任务（可以跳过，之后随时说“开始示例任务”）。"
     "需要时在主会话或新的终端中运行 tsw setup verify --after-reload 核对重新加载之后的结果"
 )
+# Reviewers an earlier version saved as an answer although this one does not implement them.
+LEGACY_REVIEWERS = ("claude-headless",)
 DEMO_PROMPT = "开始示例任务"
 # How the user starts every main session (DN009 §15.2, M-T308-8): the orchestrate skill.
 START_COMMAND = "/orchestrate"
@@ -154,10 +156,14 @@ def context(
         raw.setdefault("workdeck", False)
     warnings: list[str] = []
     reviewer = next((q for q in qs if q.id == "reviewer"), None)
+    # Only the saved answers file, and only a value an earlier version offered: an explicit
+    # --answers keeps normalize's refusal (review r11 F3).
     if (
         answers is None
+        and not answers_file
         and reviewer is not None
-        and raw.get("reviewer") not in (None, *reviewer.choices)
+        and raw.get("reviewer") in LEGACY_REVIEWERS
+        and raw.get("reviewer") not in reviewer.choices
     ):
         # Saved by an earlier version that offered a reviewer this version does not implement
         # (review r10 F2): the rerun takes the implemented one; an existing data directory's

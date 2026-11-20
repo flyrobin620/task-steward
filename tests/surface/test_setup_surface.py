@@ -471,3 +471,10 @@ def test_saved_answers_with_an_unimplemented_reviewer_still_rerun(tmp_path: Path
     assert code == 0, text
     again = json.loads((state / "setup-answers.json").read_text("utf-8"))
     assert again["reviewer"] == "codex-app-server" and again["home"] == str(home)
+    # An answers file given explicitly is checked as it is: the reviewer is refused.
+    explicit = tmp_path / "explicit.json"
+    explicit.write_text(json.dumps(saved), encoding="utf-8")
+    code, out, _ = run_setup(
+        product, "plan", "--answers", str(explicit), "--claude", str(claude), env=env
+    )
+    assert code == 3 and any(p.startswith("reviewer：") for p in out["problems"])
