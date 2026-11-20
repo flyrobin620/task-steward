@@ -11,7 +11,7 @@ description: "TaskSteward 新手导览与示例任务：主会话发现账本中
 
 `task_list` 为空（新安装的环境）时，在回答用户这一轮的请求之前先给导览；用户说“开始示例任务”时简短导览后直接进入第 2 节。导览用几段话讲清楚，不要长篇：
 
-1. **你在哪里**：这个会话在数据目录中打开，是 TaskSteward 的主会话：它受理、规划任务，把任务派发给 worker 会话（侧栏中可见），处理它们的回传，核验后交给你验收。以后开主会话也是这样：在数据目录新建会话，输入 `/orchestrate`。
+1. **你在哪里**：这个会话在数据目录中打开，是 TaskSteward 的主会话：它受理、规划任务，把任务派发给 worker 会话（侧栏中可见），处理它们的回传，核验后交给你验收。以后开主会话也是这样：在数据目录新建会话，输入 `/orchestrate`；旧的主会话还持有调度租约时新会话只读，先在旧主会话中让它交接（`orchestrate` skill 的“交接主会话”），旧会话已不在时按同一节接管。
 2. **状态都在账本中**：任务、问题、评审、验收都记在数据目录的账本里，会话结束或重启都不会丢；Dashboard 是账本的视图。
 3. **当前配置**（`config_show` 读出后列出）：交流语言 `control.language`、评审器 `roles.reviewer`、需要你决定的事怎样找到你 `plugins.human_channels` 与超时 `input.in_session_timeout_minutes`、Dashboard 端口 `dashboard.port`。说明以后可以让主会话改（`config_change`，权限类的要你的原话）。
 4. **Dashboard**：已安装常驻服务时在终端运行 `tsw dashboard open`，否则运行 `tsw dashboard`（都由你在会话外的终端运行）。
@@ -23,7 +23,7 @@ description: "TaskSteward 新手导览与示例任务：主会话发现账本中
 用两三句话告诉用户将要发生什么，请用户确认（用 `wrap_up` 的提问与按钮）：
 
 - 主会话会在配置中加入一个示例仓库条目 `tsw-demo`（不指向任何本机目录，不推送、不开 PR、不合并），登记一个示例任务并派发给 worker 会话；worker 写一份报告，内容就是这个任务自己的执行过程。
-- 需要模型调用：一个 worker 会话与配置的评审器各若干轮。
+- 需要模型调用：一个 worker 会话与配置的评审器各若干轮。先用 `config_show` 看 `roles.reviewer.session`：本版本的自评审只实现了 `codex-app-server`（需要已登录的 `codex` 命令行）；配置的是别的评审器时，worker 的自评审会以 `reviewer_not_implemented` 失败，示例任务完成不了。此时不开始，告诉用户原因，并说明怎样改用 Codex（安装、登录 `codex`，再让主会话把 `roles.reviewer` 改回 `codex-app-server`，要用户原话）。
 - 过程中 worker 会在它自己的会话里问用户一个问题；用户可以回答，也可以故意不答，看超时后的处理。
 - 请用户打开 Dashboard（第 1 节第 4 条）。
 
@@ -33,7 +33,7 @@ description: "TaskSteward 新手导览与示例任务：主会话发现账本中
 
 用户确认后：
 
-1. `config_show` 取 `file_sha256`；`config_change`：`ops` 为 `[{"op": "set", "path": ["repositories", "tsw-demo"], "value": {"delivery": {"push": false, "create_pr": false, "merge": false}}}]`（不写 `path`：tsw 不建 worktree，任务在数据目录的 `work/<任务>/<attempt>/` 中执行）；`reason` 写“示例任务的仓库条目（不指向本机目录、不交付）”；`user_source` 为用户上一步确认的原话（`channel` 为 `main-session`，`message_ref` 为 hook 给出的消息编号），`target` 为 `["config", <file_sha256>, "authorize"]`。已有 `tsw-demo` 条目时先用 `config_show` 核对：没有 `path`，`delivery` 的 `push`、`create_pr`、`merge` 都不是 true，这样的条目直接复用；否则（同名条目指向真实仓库或允许交付）停下，告诉用户冲突在哪里，请用户自己处理（改名或改配置），不覆盖、不登记、不派发。
+1. `config_show` 取 `file_sha256`；`config_change`：`ops` 为 `[{"op": "set", "path": ["repositories", "tsw-demo"], "value": {"delivery": {"push": false, "create_pr": false, "merge": false}}}]`（不写 `path`：tsw 不建 worktree，任务在数据目录的 `work/<任务>/<attempt>/` 中执行）；`reason` 写“示例任务的仓库条目（不指向本机目录、不交付）”；`user_source` 为 `{"channel": "main-session", "principal": "session-owner", "message_ref": "main:<whoami 的 session_id>:<确认时的 UTC 时间>", "text": <用户上一步确认的原话，原样>, "target": ["config", <file_sha256>, "authorize"]}`（主会话没有 hook 给的消息编号；不要编造原话）。先用 `config_show` 看有效配置（含本机覆盖）：已有 `tsw-demo` 条目、且它没有 `path`，`delivery` 的 `push`、`create_pr`、`merge` 都不是 true 时直接复用；同名条目指向真实仓库或允许交付，或者别的仓库的 `aliases` 中有 `tsw-demo` 时停下，告诉用户冲突在哪里，请用户自己处理（改名或改配置），不覆盖、不登记、不派发。
 2. `task_register`：
    - `title`：`示例：TaskSteward 示例任务报告`
    - `repo`：`tsw-demo`
@@ -65,4 +65,4 @@ description: "TaskSteward 新手导览与示例任务：主会话发现账本中
    - 单任务视图：任务书与 revision、attempt 与会话、评审轮次、问题与答复、follow-up、时间线，以及报告链接；
    - 页首的“长期偏好”：偏好候选在这里确认或不记；
    - 验收：在卡片或单任务视图中点“验收”（或先点“退回”写一句理由，看任务回到执行、worker 按理由修改后再提交，然后再验收）。
-4. 用户验收后，告诉用户示例任务已完成；之后可以在主会话中告诉它要管理的仓库，开始真实的任务。示例任务与 `tsw-demo` 条目留着无害；用户要清理时，按 `orchestrate` skill 归档任务，`tsw-demo` 条目经 `config_change`（`{"op": "unset", "path": ["repositories", "tsw-demo"]}`）删除（同样要用户原话）。
+4. 用户验收后，告诉用户示例任务已完成；之后可以在主会话中告诉它要管理的仓库，开始真实的任务。示例任务与 `tsw-demo` 条目留着无害，默认都保留。用户要清理时，按 `orchestrate` skill 归档任务；只有用户明确要求删除 `tsw-demo` 条目、它仍是示例加入时的样子（没有 `path`、交付全关），并且没有其他未归档的任务使用它（例如示例的 follow-up 转成的任务）时，才经 `config_change`（`{"op": "unset", "path": ["repositories", "tsw-demo"]}`，附用户这次的原话）删除。

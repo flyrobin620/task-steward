@@ -73,7 +73,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/setup
 
 1. 完全退出并重新打开 Claude app：新的用户设置与插件在重新打开后才生效（试装实测），本会话不能替用户创建主会话；
 2. 在数据目录（答案中的 `home`）中新建一个会话，它是主会话；
-3. 在这个会话中输入 `/orchestrate`（`start_command`）开始主会话，以后每次开主会话都这样：新环境里主会话按 `tsw-demo` skill 先导览，并提议一个示例任务，看 TaskSteward 怎样执行一个任务、最后在 Dashboard 中看报告并验收；可以跳过，之后随时说“开始示例任务”（`demo_prompt`）。要管理的仓库也在主会话中告诉它，由它逐个加入配置。
+3. 在这个会话中输入 `/orchestrate`（`start_command`）开始主会话，以后每次开主会话都这样（换主会话时，旧主会话还持有调度租约，先在旧主会话中交接，见 orchestrate skill 的“交接主会话”）：新环境里主会话按 `tsw-demo` skill 先导览，并提议一个示例任务，看 TaskSteward 怎样执行一个任务、最后在 Dashboard 中看报告并验收；可以跳过，之后随时说“开始示例任务”（`demo_prompt`）。要管理的仓库也在主会话中告诉它，由它逐个加入配置。
 
 结果中有 `install_session` 时，告诉用户：本会话记为让出租约，之后不会自动成为编排的主会话。
 

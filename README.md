@@ -82,7 +82,7 @@ claude plugin install task-steward@task-steward
 
 然后打开 Claude app，在任意一个新会话中输入 `/task-steward:setup`。setup 在会话中提问（同样要求你给出数据目录位置）并做完。过程中 Claude 会请你批准几条命令（克隆仓库、写用户设置与 PATH、登记 Dashboard 计划任务等）。
 
-**装好之后**：完全退出并重新打开 Claude app，在数据目录中新建一个会话，输入 `/orchestrate` 开始主会话（以后每次开主会话都这样）。新环境里主会话先给你导览，并提议一个示例任务（之后随时说“开始示例任务”）：主会话登记一个示例任务并派发给 worker，worker 写一份记录这个任务自己执行过程的报告（状态机、向你提问与超时转交、与评审器的互动、follow-up），最后引导你在 Dashboard 中看报告并验收。
+**装好之后**：完全退出并重新打开 Claude app，在数据目录中新建一个会话，输入 `/orchestrate` 开始主会话（以后每次开主会话都这样；换主会话时先在旧主会话中交接调度租约，否则新会话只读）。新环境里主会话先给你导览，并提议一个示例任务（之后随时说“开始示例任务”）：主会话登记一个示例任务并派发给 worker，worker 写一份记录这个任务自己执行过程的报告（状态机、向你提问与超时转交、与评审器的互动、follow-up），最后引导你在 Dashboard 中看报告并验收。
 
 两条路径做的事相同（`tsw setup install`）：在 `%LOCALAPPDATA%\TaskSteward\bin` 放 `tsw` 垫片并加入用户级 PATH、把插件来源指向本机检出、建好数据目录与基础配置、在 Claude Code 用户设置中写入数据目录位置（`env.TSW_HOME`）、插件使用的解释器（`env.TSW_PYTHON`）与三条 auto 模式规则（先备份）、生成主会话的说明与 skill、按你的选择登记 Dashboard 常驻服务。安装记录在 `%LOCALAPPDATA%\TaskSteward\install.json`；重跑任一路径只做缺少或不一致的部分。要管理的仓库不在安装中配置：重启后在主会话中告诉它要管理哪些仓库，由主会话逐个加入配置。之后的更新在主会话中说“更新 tsw”。卸载用 `tsw setup uninstall`：它把安装脚本改动的东西恢复原样（Dashboard 服务、用户设置、`tsw` 垫片与 PATH；插件与市场回到安装前的状态，安装前就已装好的插件保留），数据目录与产品检出永远不删。要从干净的环境重装，再删除数据目录与 `%LOCALAPPDATA%\TaskSteward`，并在 app 退出时运行 `claude plugin uninstall task-steward@task-steward` 与 `claude plugin marketplace remove task-steward`。
 

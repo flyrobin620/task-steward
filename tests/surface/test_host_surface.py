@@ -344,7 +344,11 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert '"path": ["repositories", "tsw-demo"]' in example and "config_change" in example
     # An existing entry of that name is reused only when it points at no folder and allows no
     # delivery; otherwise the demo stops (review r8 F1).
-    assert "不覆盖、不登记、不派发" in example
+    assert "不覆盖、不登记、不派发" in example and "`aliases`" in example
+    # PR #69 review: no hook message IDs in the main session; the reviewer must be implemented;
+    # cleanup keeps the entry by default; a later main session needs the handoff.
+    assert '"principal": "session-owner"' in example and "reviewer_not_implemented" in example
+    assert "默认都保留" in example and "交接主会话" in example
     assert "`task_list` 为空" in example and "/orchestrate" in example
     orchestrate = skill.read_text(encoding="utf-8")
     assert "`task_list` 为空" in orchestrate and "`tsw-demo` skill" in orchestrate
