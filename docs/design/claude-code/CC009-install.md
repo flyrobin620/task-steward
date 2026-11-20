@@ -24,7 +24,7 @@ git clone https://github.com/flyrobin620/task-steward.git "$env:LOCALAPPDATA\Tas
 & "$env:LOCALAPPDATA\TaskSteward\task-steward\setup.ps1"
 ```
 
-脚本会问几个问题（数据目录位置必须由用户给出，没有默认值），做完后请用户重启 Claude app，在这个数据目录中新建一个会话（主会话），输入“开始示例任务”（DN009 §15.2）。
+脚本会问几个问题（数据目录位置必须由用户给出，没有默认值），做完后请用户重启 Claude app，在这个数据目录中新建一个会话，输入 `/orchestrate` 开始主会话（DN009 §15.2）。
 
 **在 Claude 中安装**：先完全退出 Claude app（app 运行时添加 GitHub 插件市场会以 EPERM 失败，§10），在 PowerShell 中运行：
 
@@ -33,7 +33,7 @@ claude plugin marketplace add https://github.com/flyrobin620/task-steward.git
 claude plugin install task-steward@task-steward
 ```
 
-然后打开 Claude app，在任意一个新会话中输入 `/task-steward:setup`。setup 在会话中提问（同样要求用户给出数据目录位置）并做完，最后请用户重启 Claude app、在数据目录中新建会话并输入“开始示例任务”。过程中 Claude 会请用户批准几条命令（克隆仓库、写用户设置与 PATH、登记 Dashboard 计划任务等）。
+然后打开 Claude app，在任意一个新会话中输入 `/task-steward:setup`。setup 在会话中提问（同样要求用户给出数据目录位置）并做完，最后请用户重启 Claude app、在数据目录中新建会话并输入 `/orchestrate`。过程中 Claude 会请用户批准几条命令（克隆仓库、写用户设置与 PATH、登记 Dashboard 计划任务等）。
 
 两条路径的前提相同：Python 3.10+、git、Claude Code（桌面 app 与 `claude` CLI）。安装不配置要管理的仓库；重启后在主会话中告诉它要管理哪些仓库，由主会话逐个加入配置（DN009 §6.1）。
 
@@ -128,5 +128,5 @@ live 中另外发现并已处理：
 
 1. **终端路径是 Windows 上的推荐路径**（§2 第一段不变）：`git clone` + `setup.ps1`，不需要退出 app，最后重启 app。README 与 §2 先写它。
 2. **会话路径改为“先在终端准备插件，其余在会话中做完”**：在 PowerShell 中（Claude app 完全退出时）`claude plugin marketplace add https://github.com/flyrobin620/task-steward.git` 与 `claude plugin install task-steward@task-steward`，再打开 app，在任意新会话中输入 `/task-steward:setup`。§2 第二段改为这三步，并写明要先退出 app 的原因。Claude Code 修复 app 运行时的改名问题、或 app 中的插件窗口能成功添加之后，再恢复“全在会话中”的写法。
-3. **安装后的引导**（DN009 §15.2）：试装确认新会话要在重启 app 之后才用上新的用户设置与插件，所以 setup skill 不创建会话，只在最后告诉用户：完全退出并重新打开 Claude app，在数据目录新建会话，输入“开始示例任务”。终端入口输出同样的说明。
-4. **示例 skill**（DN009 §15.3）：`tsw-demo` 生成到数据目录的 `.claude/skills/tsw-demo/SKILL.md`，由主会话在用户说“开始示例任务”时使用；它只给出任务的规格、开始前的说明与每一步要告诉用户的话，登记、派发、验收都走主会话的现有工具与 skill。
+3. **安装后的引导**（DN009 §15.2）：试装确认新会话要在重启 app 之后才用上新的用户设置与插件，所以 setup skill 不创建会话，只在最后告诉用户：完全退出并重新打开 Claude app，在数据目录新建会话，输入 `/orchestrate`（数据目录的 orchestrate skill，以后开主会话都用它）。终端入口输出同样的说明。
+4. **示例 skill**（DN009 §15.3）：`tsw-demo` 生成到数据目录的 `.claude/skills/tsw-demo/SKILL.md`，由主会话在账本中没有任务（新环境）时用于导览、在用户同意或说“开始示例任务”时用于示例任务（orchestrate skill“每次开始”第 4 条指向它）；它只给出任务的规格、开始前的说明与每一步要告诉用户的话，登记、派发、验收都走主会话的现有工具与 skill。

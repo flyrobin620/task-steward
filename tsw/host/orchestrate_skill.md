@@ -14,6 +14,7 @@ description: "TaskSteward 主会话流程：受理（细则见 task-intake）、
 1. `whoami` 确认角色；`lease_status` 确认持有调度租约（SessionStart 已尝试领取；没有租约时只读运行，不派发、不验收）。`lease_status` 的 `stood_down` 不为空时，本会话已让出租约（见“交接主会话”）：只读运行，不要自己领回。
 2. `inbox` 处理未读回传，处理完 `inbox_ack`；`attention` 查看待判断、待用户答复、需对账、需停止、stale、待启动、待预启动、待核验与暂停，以及标题或归档还没跟上的 worker 会话（`sessions`，见“会话的标题与归档”）。
 3. 只处理用户要求的事。普通解释与维护不开始执行真实待办。
+4. 新环境：`task_list` 为空（刚安装、还没有任何任务）时，先按 `tsw-demo` skill 给用户导览，并提议一个示例任务；用户说“开始示例任务”时同样按它执行。
 
 ## 受理与规划
 

@@ -1,28 +1,42 @@
 ---
 name: tsw-demo
-description: "TaskSteward 示例任务：用户说“开始示例任务”（或要求演示、试用 TaskSteward）时使用。主会话登记并执行一个不关联仓库的研究类任务，它的报告记录这个任务自己的执行过程（状态机、向用户提问与超时转交、与评审器的互动、follow-up），最后引导用户在会话与 Dashboard 中看报告并验收。只用于在数据目录打开的主会话。"
+description: "TaskSteward 新手导览与示例任务：主会话发现账本中还没有任何任务（新安装的环境）时，或用户说“开始示例任务”、要求演示或试用 TaskSteward 时使用。先给用户导览，再提议登记一个示例任务：它不关联真实仓库，报告记录这个任务自己的执行过程（状态机、向用户提问与超时转交、与评审器的互动、follow-up），最后引导用户在会话与 Dashboard 中看报告并验收。只用于在数据目录打开的主会话。"
 ---
 
-# TaskSteward 示例任务
+# TaskSteward 新手导览与示例任务
 
-本 skill 只适用于主会话（`whoami` 的角色为 orchestrator）。设计见产品仓库 DN009 §15.3。示例任务是一个普通的真实任务：登记、规划、派发、验收都按 `orchestrate` 与 `task-intake` skill 做，本 skill 只规定任务的规格和每一步要告诉用户的话。任务规格照下文原样登记，不自己改写或增删。
+本 skill 只适用于主会话（`whoami` 的角色为 orchestrator）。设计见产品仓库 DN009 §15。示例任务是一个普通的真实任务：登记、规划、派发、验收都按 `orchestrate` 与 `task-intake` skill 做，本 skill 只规定导览的内容、任务的规格和每一步要告诉用户的话。任务规格照下文原样登记，不自己改写或增删。
 
-## 1. 开始前
+## 1. 导览（新环境，或用户要求）
 
-用两三句话告诉用户将要发生什么，并请用户确认后再开始（用户说“开始示例任务”只是要求开始，不算确认费用）：
+`task_list` 为空（新安装的环境）时，在回答用户这一轮的请求之前先给导览；用户说“开始示例任务”时简短导览后直接进入第 2 节。导览用几段话讲清楚，不要长篇：
 
-- 主会话会登记一个示例任务并派发给一个 worker 会话；worker 写一份报告，内容就是这个任务自己的执行过程。
-- 需要模型调用：一个 worker 会话与配置的评审器（`roles.reviewer`，`config_show` 可查）各若干轮。
+1. **你在哪里**：这个会话在数据目录中打开，是 TaskSteward 的主会话：它受理、规划任务，把任务派发给 worker 会话（侧栏中可见），处理它们的回传，核验后交给你验收。以后开主会话也是这样：在数据目录新建会话，输入 `/orchestrate`。
+2. **状态都在账本中**：任务、问题、评审、验收都记在数据目录的账本里，会话结束或重启都不会丢；Dashboard 是账本的视图。
+3. **当前配置**（`config_show` 读出后列出）：交流语言 `control.language`、评审器 `roles.reviewer`、需要你决定的事怎样找到你 `plugins.human_channels` 与超时 `input.in_session_timeout_minutes`、Dashboard 端口 `dashboard.port`。说明以后可以让主会话改（`config_change`，权限类的要你的原话）。
+4. **Dashboard**：已安装常驻服务时在终端运行 `tsw dashboard open`，否则运行 `tsw dashboard`（都由你在会话外的终端运行）。
+5. **怎样开始真实工作**：告诉主会话要管理哪些仓库（本机路径、是否允许推送、开 PR、合并），它逐个加入配置；然后用一句话描述要做的事，它会登记任务、写任务书并派发。
+6. **提议示例任务**：问用户要不要先跑一个示例任务（下一节），看一遍一个任务从登记到验收的全过程。用户不要时结束导览，之后随时说“开始示例任务”。
+
+## 2. 开始示例任务前
+
+用两三句话告诉用户将要发生什么，请用户确认（用 `wrap_up` 的提问与按钮）：
+
+- 主会话会在配置中加入一个示例仓库条目 `tsw-demo`（不指向任何本机目录，不推送、不开 PR、不合并），登记一个示例任务并派发给 worker 会话；worker 写一份报告，内容就是这个任务自己的执行过程。
+- 需要模型调用：一个 worker 会话与配置的评审器各若干轮。
 - 过程中 worker 会在它自己的会话里问用户一个问题；用户可以回答，也可以故意不答，看超时后的处理。
-- 请用户打开 Dashboard：已安装常驻服务时在终端运行 `tsw dashboard open`，否则运行 `tsw dashboard`（这两条都由用户在会话外的终端运行）。
+- 请用户打开 Dashboard（第 1 节第 4 条）。
 
-## 2. 登记与派发
+用户的确认就是加入 `tsw-demo` 条目的原话（新增仓库是权限类改动，DN003 §7.2）。用户没有明确同意时不开始。
+
+## 3. 加入配置、登记与派发
 
 用户确认后：
 
-1. `task_register`：
+1. `config_show` 取 `file_sha256`；`config_change`：`ops` 为 `[{"op": "set", "path": ["repositories", "tsw-demo"], "value": {"delivery": {"push": false, "create_pr": false, "merge": false}}}]`（不写 `path`：tsw 不建 worktree，任务在数据目录的 `work/<任务>/<attempt>/` 中执行）；`reason` 写“示例任务的仓库条目（不指向本机目录、不交付）”；`user_source` 为用户上一步确认的原话（`channel` 为 `main-session`，`message_ref` 为 hook 给出的消息编号），`target` 为 `["config", <file_sha256>, "authorize"]`。已有 `tsw-demo` 条目时跳过。
+2. `task_register`：
    - `title`：`示例：TaskSteward 示例任务报告`
-   - `repo`：`tsw-demo`（不在配置中：任务在数据目录的 `work/<任务>/<attempt>/` 中执行，不建 worktree、不推送、不开 PR）
+   - `repo`：`tsw-demo`
    - `kind`：`research`
    - `goal`：`写一份 TaskSteward 示例任务报告，记录本任务自己的执行过程，向第一次使用 TaskSteward 的用户展示它怎样执行一个任务。`
    - `acceptance`（逐条原样）：
@@ -33,21 +47,22 @@ description: "TaskSteward 示例任务：用户说“开始示例任务”（或
      5. `用 follow_up_record 记一条 idea：“把示例报告做成一个交互式网页导览”，并在报告“follow-up 与偏好候选”一节说明 follow-up 与偏好候选是什么、用户在 Dashboard 的哪里看到它们`
      6. `报告最后一节“你接下来可以做什么”：在 Dashboard 中验收或退回本任务；在主会话中告诉它要管理哪些仓库，开始真实任务`
      7. `报告为中文（或用户在第 1 条答复中要求的语言），md 与 html 两份`
-2. `task_plan`（理由写“示例任务，无依赖”），然后按 `orchestrate` skill 预启动或派发（这一轮是用户的 turn）。派发后告诉用户 worker 会话的名称，说明它会出现在侧栏中。
+   - 已经登记过示例任务、它还在“待受理”时（例如更新 tsw 之前登记、规划被拒绝），不再重复登记，加入配置后对它继续 `task_plan`。
+3. `task_plan`（理由写“示例任务，无依赖”），然后按 `orchestrate` skill 预启动或派发（这一轮是用户的 turn）。派发后告诉用户 worker 会话的名称，说明它会出现在侧栏中。
 
-## 3. 执行中告诉用户的话
+## 4. 执行中告诉用户的话
 
 - 派发后：请用户在 Dashboard 中看这个任务从“待受理”经“就绪”“派发中”到“执行中”，并点开任务卡片的「详情」，看单任务视图中的任务书、attempt 与会话链接（点击在 app 中打开 worker 会话）。
 - worker 提问时（`attention` 或 inbox 中出现它的问题，或用户问起）：提醒用户到 worker 会话中回答；也可以不答，配置的超时（`input.in_session_timeout_minutes`）之后例行会话把问题转交给你，届时按 `handle-input` skill 处理，并告诉用户这就是超时转交。
 - 自评审进行时：告诉用户 Dashboard 的单任务视图会列出评审轮次。
 
-## 4. 提交之后
+## 5. 提交之后
 
-1. 按 `orchestrate` skill 的“核验与验收”做技术验收（G-ACCEPT），核对报告包含第 2 步验收的每一条。
+1. 按 `orchestrate` skill 的“核验与验收”做技术验收（G-ACCEPT），核对报告包含第 3 节验收的每一条。
 2. 在会话中用几句话概括报告（问题与答复、评审轮次与意见、经过的状态），给出报告路径 `runs/<任务>/<attempt>/result.md` 与 html。
 3. 引导用户在 Dashboard 中：
    - 看板：任务现在是“完成·待用户验收”；切换“按时间顺序”与“任务流”视图；
    - 单任务视图：任务书与 revision、attempt 与会话、评审轮次、问题与答复、follow-up、时间线，以及报告链接；
    - 页首的“长期偏好”：偏好候选在这里确认或不记；
    - 验收：在卡片或单任务视图中点“验收”（或先点“退回”写一句理由，看任务回到执行、worker 按理由修改后再提交，然后再验收）。
-4. 用户验收后，告诉用户示例任务已完成；之后可以在主会话中告诉它要管理的仓库，开始真实的任务。示例任务留在账本中，可以按 `orchestrate` skill 归档。
+4. 用户验收后，告诉用户示例任务已完成；之后可以在主会话中告诉它要管理的仓库，开始真实的任务。示例任务与 `tsw-demo` 条目留着无害；用户要清理时，按 `orchestrate` skill 归档任务，`tsw-demo` 条目经 `config_change`（`{"op": "unset", "path": ["repositories", "tsw-demo"]}`）删除（同样要用户原话）。

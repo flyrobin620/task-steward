@@ -75,11 +75,13 @@ MCP_PROTOCOL = "2025-06-18"
 RESTART = (
     "1. 完全退出并重新打开 Claude app（新的用户设置与插件在重新打开后才生效）；"
     "2. 在数据目录 {home} 中新建一个会话，它是主会话；"
-    "3. 在主会话中输入“开始示例任务”，看 TaskSteward 怎样执行一个任务"
-    "（可以跳过，之后随时说这句话）。"
+    "3. 在会话中输入 /orchestrate 开始主会话（以后每次开主会话都这样）；新环境里主会话先给你导览，"
+    "并提议一个示例任务，看 TaskSteward 怎样执行一个任务（可以跳过，之后随时说“开始示例任务”）。"
     "需要时在主会话或新的终端中运行 tsw setup verify --after-reload 核对重新加载之后的结果"
 )
 DEMO_PROMPT = "开始示例任务"
+# How the user starts every main session (DN009 §15.2, M-T308-8): the orchestrate skill.
+START_COMMAND = "/orchestrate"
 
 
 @dataclass
@@ -736,6 +738,7 @@ def install(ctx: Context, *, open_browser: bool = True) -> dict[str, Any]:
         "verify": verification,
         "record": str(ctx.record.path),
         "next": RESTART.format(home=root),
+        "start_command": START_COMMAND,
         "demo_prompt": DEMO_PROMPT,
         "repositories": "要管理的仓库不在安装中配置：重启后在主会话中告诉它要管理哪些仓库，由主会话"
         "逐个加入配置（DN009 §6.1）",

@@ -1390,9 +1390,9 @@
     },
     {
       "id": "UC-SETUP-003",
-      "title": "安装后的示例任务：tsw-demo skill（T308，DN009 §15.3）",
+      "title": "安装后的新手导览与示例任务：tsw-demo skill（T308，DN009 §15.2–15.3）",
       "actor": "用户 / 主会话",
-      "acceptance": "tsw host render 把产品的 tsw/host/demo_skill.md 原样生成为数据目录的 .claude/skills/tsw-demo/SKILL.md 并列在 written 中；skill 在用户说“开始示例任务”时使用，规定一个不关联仓库（repo tsw-demo）的研究类任务的标题、目标与验收原样登记：worker 用 ask_user 提一个问题、报告解释任务状态机并列出本任务经过的状态、按 input.in_session_timeout_minutes 说明超时转交、记录与评审器的互动（review_run）、用 follow_up_record 记一条 idea；开始前说明模型调用并请用户确认，提交后主会话技术验收、引导用户在 Dashboard 中查看并验收；update-plan 把 demo_skill.md 的改动归为 rendered（重读 tsw-demo）",
+      "acceptance": "tsw host render 把产品的 tsw/host/demo_skill.md 原样生成为数据目录的 .claude/skills/tsw-demo/SKILL.md 并列在 written 中；orchestrate skill 的“每次开始”在 task_list 为空（新环境）时指向它：主会话先导览（主会话与 worker、账本、当前配置、Dashboard、怎样加入仓库、以后用 /orchestrate 开主会话），再提议示例任务；用户确认后先经 config_change 以用户原话加入不写 path、交付全为 false 的 repositories.tsw-demo（G-PLAN 要求仓库在配置中），再原样登记一个研究类任务：worker 用 ask_user 提一个问题、报告解释任务状态机并列出本任务经过的状态、按 input.in_session_timeout_minutes 说明超时转交、记录写这一节之前的评审互动（之后的轮次不再写回报告）、用 follow_up_record 记一条 idea；提交后主会话技术验收、引导用户在 Dashboard 中查看并验收；install 输出 start_command（/orchestrate）与 demo_prompt；update-plan 把 demo_skill.md 的改动归为 rendered（重读 tsw-demo）",
       "surfaces": [
         "cli"
       ],

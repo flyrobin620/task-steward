@@ -125,7 +125,8 @@ def test_a_session_bound_to_no_data_directory_may_install(tmp_path: Path) -> Non
     # session: it stands down (DN009 §15.1, the user's decision of 2026-11-20).
     assert out["install_session"]["session_id"] == "first-install"
     assert stood_down(tmp_path / "data", "first-install") == "setup"
-    assert "开始示例任务" in out["next"] and out["demo_prompt"] == "开始示例任务"
+    assert "/orchestrate" in out["next"] and out["start_command"] == "/orchestrate"
+    assert out["demo_prompt"] == "开始示例任务"
 
 
 @pytest.mark.use_case(GATE)
