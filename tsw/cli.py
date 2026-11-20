@@ -721,7 +721,11 @@ def _say_plan(planned: dict[str, Any]) -> None:
 def _setup_interactive(args: argparse.Namespace) -> dict[str, Any]:
     """The terminal entry's flow (DN009 §4.1): check, ask, show the plan, confirm, install."""
     first = _setup_context(args, require=False)
-    checked = setup_steps.check(first)
+    # Only the machine can block here: saved answers that no longer hold are asked again below.
+    bare = setup_steps.context(
+        os.environ, answers={}, python=args.python, claude=args.claude, require_answers=False
+    )
+    checked = setup_steps.check(bare)
     blocking = [p for p in checked["problems"] if not p.startswith("home：")]
     print(f"产品检出：{checked['checkout']['path']}（{checked['checkout']['head']}）")
     print(f"Python：{checked['python']['path']}（{checked['python']['version']}）")

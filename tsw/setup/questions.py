@@ -311,6 +311,8 @@ def ask(
             answers[q.id] = False  # no workdeck command here: nothing to ask (T309)
             continue
         default = previous.get(q.id, q.default)
+        if default not in (None, "") and normalize({q.id: default}, [q])[1]:
+            default = q.default  # an earlier answer this version no longer accepts
         while True:
             hint = ""
             if q.choices:

@@ -428,3 +428,46 @@ def test_an_install_session_in_the_data_directory_stands_down_even_after_a_failu
     with Ledger(open_home(home)).view() as conn:
         held = lease.lease_row(conn)
     assert held is None or held["holder_session"] != "in-place"
+
+
+@pytest.mark.use_case(UC)
+def test_saved_answers_with_an_unimplemented_reviewer_still_rerun(tmp_path: Path) -> None:
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    env = setup_env(tmp_path)
+    home = tmp_path / "data"
+    # An earlier version saved claude-headless when no codex was found.
+    state = Path(env["TSW_STATE_DIR"])
+    state.mkdir(parents=True, exist_ok=True)
+    saved = {
+        "home": str(home),
+        "language": "zh-CN",
+        "reviewer": "claude-headless",
+        "human_channels": "in-session",
+        "host": "claude-code",
+        "dashboard": False,
+        "dashboard_port": 47801,
+        "user_settings": True,
+    }
+    (state / "setup-answers.json").write_text(json.dumps(saved), encoding="utf-8")
+    # The bare rerun (update-plan's reinstall) takes the implemented reviewer and says so.
+    code, out, text = run_setup(
+        product, "install", "--claude", str(claude), "--no-browser", env=env
+    )
+    assert code == 0, text
+    assert any(w.startswith("reviewer：答案中的评审器 claude-headless") for w in out["warnings"])
+    # The interactive entry asks again instead of stopping before the questions.
+    (state / "setup-answers.json").write_text(json.dumps(saved), encoding="utf-8")
+    replies = ["", "", "", "", "否", "", "", "是"]
+    code, out, text = run_setup(
+        product,
+        "install",
+        "--interactive",
+        "--no-browser",
+        "--claude",
+        str(claude),
+        env=env,
+        stdin="\n".join(replies) + "\n",
+    )
+    assert code == 0, text
+    again = json.loads((state / "setup-answers.json").read_text("utf-8"))
+    assert again["reviewer"] == "codex-app-server" and again["home"] == str(home)

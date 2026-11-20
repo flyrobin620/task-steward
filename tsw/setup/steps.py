@@ -105,6 +105,7 @@ class Context:
     problems: list[str]
     record: InstallRecord
     questions: list[Question] = field(default_factory=list[Question])
+    warnings: list[str] = field(default_factory=list[str])
 
     @property
     def home_root(self) -> Path | None:
@@ -151,6 +152,22 @@ def context(
         # --answers: the install does not add the plugin on the user's behalf; they answer the
         # question in an interactive run (review T309 r1 F1).
         raw.setdefault("workdeck", False)
+    warnings: list[str] = []
+    reviewer = next((q for q in qs if q.id == "reviewer"), None)
+    if (
+        answers is None
+        and reviewer is not None
+        and raw.get("reviewer") not in (None, *reviewer.choices)
+    ):
+        # Saved by an earlier version that offered a reviewer this version does not implement
+        # (review r10 F2): the rerun takes the implemented one; an existing data directory's
+        # configuration is not changed by the install (§5 step 3).
+        warnings.append(
+            f"reviewer：答案中的评审器 {raw['reviewer']} 本版本没有实现，改用 {reviewer.default}；"
+            "已有数据目录的配置不改，需要时在主会话中让它把 roles.reviewer 改为 "
+            f"{reviewer.default}（要你的原话）"
+        )
+        raw["reviewer"] = reviewer.default
     normalized, problems = normalize(raw, qs) if (raw or require_answers) else ({}, [])
     if not raw and not require_answers:
         problems = []
@@ -176,6 +193,7 @@ def context(
         problems=problems,
         record=record,
         questions=qs,
+        warnings=warnings,
     )
 
 
@@ -256,7 +274,7 @@ def check(ctx: Context, *, with_questions: bool = False) -> dict[str, Any]:
         "shims": str(ctx.shims),
         "path_has_shims": winenv.has_entry(value, ctx.shims) if value is not None else False,
         "problems": problems,
-        "warnings": [w for w in (reviewer_warning(ctx.env),) if w],
+        "warnings": [*ctx.warnings, *[w for w in (reviewer_warning(ctx.env),) if w]],
         # Not "ok": check only reports, so a problem is not a failure of the command.
         "ready": not problems,
     }
