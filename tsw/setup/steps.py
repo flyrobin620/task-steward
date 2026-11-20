@@ -564,10 +564,18 @@ def install(ctx: Context, *, open_browser: bool = True) -> dict[str, Any]:
             "安装的前提不满足", reason="setup_preconditions", problems=checked["problems"]
         )
     installer = _installer_session(ctx)
-    ctx.record.set(status="installing", started_at=utc_now())
-    results = [_run_step(ctx, name, apply=True, open_browser=open_browser) for name in STEPS]
+    # Recorded before anything changes: a rerun in the same session after a failure, when the
+    # session's folder is by then the data directory, is still the installer (review r6 F1).
+    ctx.record.set(status="installing", started_at=utc_now(), installer_session=installer)
+    results: list[dict[str, Any]] = []
+    stood_down: str | None = None
+    for name in STEPS:
+        results.append(_run_step(ctx, name, apply=True, open_browser=open_browser))
+        if name == "home":
+            # As soon as the data directory exists: a later step that fails leaves no session
+            # that would take the lease at its next start.
+            stood_down = _stand_down_installer(ctx, installer)
     ctx.record.set(status="installed", completed_at=utc_now())
-    stood_down = _stand_down_installer(ctx, installer)
     verification = verify(ctx)
     root = ctx.home_root
     out: dict[str, Any] = {
@@ -603,6 +611,8 @@ def _installer_session(ctx: Context) -> str | None:
     root = ctx.home_root
     if not session:
         return None
+    if ctx.record.get("installer_session") == session:
+        return session  # the same install again, after a failure or as a repair
     if root is None or not (root / MARKER).is_file():
         return session
     home = open_home(root)
@@ -628,7 +638,6 @@ def _stand_down_installer(ctx: Context, session: str | None) -> str | None:
     ledger.commit(
         lease.stand_down(session, machine=lease.this_machine(), via="setup", actor={"role": "cli"})
     )
-    ctx.record.set(install_session=session)
     return session
 
 

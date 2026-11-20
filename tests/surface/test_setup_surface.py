@@ -384,3 +384,46 @@ def test_git_outside_path_is_given_by_the_probe(tmp_path: Path) -> None:
     _, out, _ = run_setup(product, "check", "--git", git_path, env=env)
     assert not any(p.startswith("git：") for p in out["problems"])
     assert out["checkout"]["head"] == git(product, "rev-parse", "HEAD")
+
+
+@pytest.mark.use_case(GATE)
+def test_an_install_session_in_the_data_directory_stands_down_even_after_a_failure(
+    tmp_path: Path,
+) -> None:
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    home = tmp_path / "data"
+    home.mkdir()  # the session's own (empty) folder becomes the data directory
+    env = setup_env(tmp_path, CLAUDE_CODE_HOST_SESSION_ID="in-place", CLAUDECODE="1")
+    answers = write_answers(tmp_path, home)
+    args = ("install", "--answers", str(answers), "--claude", str(claude), "--no-browser")
+    # The user settings cannot be written (not JSON): the install fails after the home step.
+    settings_file = Path(env["CLAUDE_CONFIG_DIR"]) / "settings.json"
+    settings_file.write_text("{not json", encoding="utf-8")
+    code, _, _ = run_setup(product, *args, env=env, cwd=home)
+    assert code == 3 and stood_down(home, "in-place") == "setup"
+    settings_file.write_text("{}", encoding="utf-8")
+    # The rerun in the same session, whose folder is now the data directory, still counts as
+    # the installer; a SessionStart there does not take the lease.
+    code, out, text = run_setup(product, *args, env=env, cwd=home)
+    assert code == 0, text
+    assert out["install_session"]["session_id"] == "in-place"
+    launcher = product / "plugin" / "bin" / "tsw_launch.py"
+    hook = subprocess.run(
+        [sys.executable, "-X", "utf8", str(launcher), "guard", "SessionStart"],
+        input=json.dumps({"session_id": "in-place", "cwd": str(home)}),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env={**env, "TSW_HOME": str(home)},
+        cwd=str(home),
+        timeout=120,
+        check=False,
+    )
+    assert hook.returncode == 0, hook.stderr
+    from tsw import lease  # noqa: PLC0415
+    from tsw.home import open_home  # noqa: PLC0415
+    from tsw.ledger import Ledger  # noqa: PLC0415
+
+    with Ledger(open_home(home)).view() as conn:
+        held = lease.lease_row(conn)
+    assert held is None or held["holder_session"] != "in-place"

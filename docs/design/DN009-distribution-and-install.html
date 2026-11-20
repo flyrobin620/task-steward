@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="a66601f287a9201cd901b34563057f1d847bc8ffe6f25b3603b12afb0b423894">
+<meta name="tsw-source-sha256" content="65467a9d1384bdd750cc55d8c56e2767745c5dd33a572be58146fa0da79109b3">
 <title>DN009 分发与安装</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -259,14 +259,14 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <h3 id="151-安装会话不领租约">15.1 安装会话不领租约</h3>
 <p>在数据目录（就是那个文件夹本身）中打开的会话是主会话（DN001、CC008 §5.2），主会话在会话开始时租约空闲就自动领取（DN001 §6.4）。试装中用户在一个新建的空文件夹里打开会话，又把这个文件夹答成数据目录：安装完成、宿主重新加载后，这个安装会话按规则被认作主会话，领取了调度租约，而用户并没有让它编排。</p>
 <p>用户 2026-11-20 决定（M-T308-5）：不拒绝这样的安装，照常安装，只是安装会话不领租约。做法沿用“让出过租约的会话”（DN001 §6.4）：</p>
-<ul><li><code>tsw setup install</code> 在一个会话中运行、且这个会话当时没有绑定任何数据目录（第一次安装，角色为 none）时，安装完成后在新数据目录的账本中把这个会话记为让出（<code>controller.lease_stood_down</code>，<code>via: setup</code>）。之后它在会话开始时不自动领取租约，只读运行；用户在这个会话中明确要求它担任主会话时，它显式 <code>lease_acquire</code>，与交接后的旧主会话相同。</li><li>主会话中重跑安装（修复、升级）不记让出：它本来就是主会话。终端中运行没有会话，不记。</li><li>会话入口在提问数据目录时说明：在数据目录中打开的会话是主会话，建议在数据目录之外的会话中安装、之后在数据目录中开新会话工作（§15.2）；不强制。</li></ul>
+<ul><li><code>tsw setup install</code> 在一个会话中运行、且这个会话当时没有绑定任何数据目录（第一次安装，角色为 none）时，数据目录建好后立即在它的账本中把这个会话记为让出（之后的步骤失败也已记下；会话 ID 先写进 <code>install.json</code>，同一会话重跑时仍认作安装会话）（<code>controller.lease_stood_down</code>，<code>via: setup</code>）。之后它在会话开始时不自动领取租约，只读运行；用户在这个会话中明确要求它担任主会话时，它显式 <code>lease_acquire</code>，与交接后的旧主会话相同。</li><li>主会话中重跑安装（修复、升级）不记让出：它本来就是主会话。终端中运行没有会话，不记。</li><li>会话入口在提问数据目录时说明：在数据目录中打开的会话是主会话，建议在数据目录之外的会话中安装、之后在数据目录中开新会话工作（§15.2）；不强制。</li></ul>
 <h3 id="152-安装后的引导">15.2 安装后的引导</h3>
 <p>用户 2026-11-20 确认（M-T308-6）：安装之后必须重新加载宿主，新会话才用上新的用户设置与插件（试装实测），所以安装会话不替用户创建主会话。<code>tsw setup install</code> 结束时（安装阶段的 <code>verify</code> 之后）的 <code>next</code> 与两个入口都告诉用户三件事：</p>
 <ol><li>重新加载宿主（Claude Code：完全退出并重新打开 Claude app）；</li><li>在数据目录中新建一个会话，它是主会话；</li><li>在主会话中输入“开始示例任务”，看一遍 tsw 怎样执行一个任务（§15.3）；不想现在看可以跳过，之后随时说这句话。要管理的仓库同样在主会话中告诉它（§6.1）。</li></ol>
 <h3 id="153-示例任务">15.3 示例任务</h3>
 <p>用户 2026-11-20 决定（M-T308-6）：示例任务不需要命令，也不建示例仓库，完全在会话中完成。主会话有一个示例 skill（<code>tsw-demo</code>，与 orchestrate、task-intake 一样由 <code>tsw host render</code> 生成到数据目录），用户说“开始示例任务”时主会话按它执行：用<strong>一个真实的任务</strong>走一遍 tsw 本身的功能，任务的报告记录它自己的执行过程，最后引导用户在会话与 Dashboard 中看报告、用 Dashboard 的功能并验收。运行需要模型调用（一个 worker 会话与评审），开始前告诉用户并请用户确认。</p>
 <p><strong>任务</strong>：研究类任务，不关联任何仓库（仓库名 <code>tsw-demo</code> 不在配置中，执行目录是数据目录的 <code>work/&lt;任务&gt;/&lt;attempt&gt;/</code>，不建 worktree、不推送、不开 PR）。目标是写一份“TaskSteward 示例任务报告”，内容就是这个任务自己的执行过程。目标、验收与提问点写在 skill 中，主会话原样登记，不自己发挥。验收要求报告包含：</p>
-<table><thead><tr><th>报告中的一节</th><th>展示什么</th><th>来源</th></tr></thead><tbody><tr><td>任务的一生</td><td>简要解释任务状态机（受理、计划、派发、执行、自评审、待验收、验收，以及退回、暂停、取消），并列出本任务实际经过的状态与时间</td><td>DN002；本任务的账本（<code>context_task</code>）</td></tr><tr><td>向用户提问</td><td>worker 在自己的会话中向用户提一个问题（例如报告的侧重：给新用户看的入门，还是内部机制），按答复写报告；说明按配置 <code>input.in_session_timeout_minutes</code>（默认 10 分钟）无人回答时，问题由例行会话转交主会话、主会话代答或经人类渠道转达，用户之后的答复记为迟到答复、以用户的话为准</td><td>worker 说明、DN006 §8.1；本任务的问题记录</td></tr><tr><td>与评审器的互动</td><td>自评审的轮次、每轮的意见与处置（修复、拒绝及理由）、定稿；说明评审器由配置 <code>roles.reviewer</code> 决定、阻断意见与预算（<code>review.max_rounds</code>）</td><td>DN004；本任务的评审记录</td></tr><tr><td>记录 follow-up 与偏好候选</td><td>worker 记一条 follow-up（例如“把示例报告做成网页导览”），说明 follow-up 与偏好候选是什么、在 Dashboard 中哪里看到</td><td>DN002 §5.7、DN007 §6.3</td></tr><tr><td>你接下来可以做什么</td><td>在 Dashboard 中验收或退回、在主会话中加入仓库开始真实任务</td><td>—</td></tr></tbody></table>
+<table><thead><tr><th>报告中的一节</th><th>展示什么</th><th>来源</th></tr></thead><tbody><tr><td>任务的一生</td><td>简要解释任务状态机（受理、计划、派发、执行、自评审、待验收、验收，以及退回、暂停、取消），并列出本任务实际经过的状态与时间</td><td>DN002；本任务的账本（<code>context_task</code>）</td></tr><tr><td>向用户提问</td><td>worker 在自己的会话中向用户提一个问题（例如报告的侧重：给新用户看的入门，还是内部机制），按答复写报告；说明按配置 <code>input.in_session_timeout_minutes</code>（默认 10 分钟）无人回答时，问题由例行会话转交主会话、主会话代答或经人类渠道转达，用户之后的答复记为迟到答复、以用户的话为准</td><td>worker 说明、DN006 §8.1；本任务的问题记录</td></tr><tr><td>与评审器的互动</td><td>写这一节之前各轮自评审的意见与处置（修复、拒绝及理由）；补写后的补审不再写回报告，报告指向 Dashboard 中的评审轮次（否则每次补写都引出新一轮）；说明评审器由配置 <code>roles.reviewer</code> 决定、阻断意见与预算（<code>review.max_rounds</code>）</td><td>DN004；本任务的评审记录</td></tr><tr><td>记录 follow-up 与偏好候选</td><td>worker 记一条 follow-up（例如“把示例报告做成网页导览”），说明 follow-up 与偏好候选是什么、在 Dashboard 中哪里看到</td><td>DN002 §5.7、DN007 §6.3</td></tr><tr><td>你接下来可以做什么</td><td>在 Dashboard 中验收或退回、在主会话中加入仓库开始真实任务</td><td>—</td></tr></tbody></table>
 <p><strong>用户看到什么</strong>：开始时主会话说明会发生什么、请用户打开 Dashboard（已安装常驻服务时 <code>tsw dashboard open</code>，否则 <code>tsw dashboard</code>）；worker 提问时提醒用户去侧栏的 worker 会话回答，也可以故意不答，看超时转交；任务提交后主会话做技术验收，在会话中简述报告并给出报告路径，然后引导用户在 Dashboard 中看看板与任务流、打开单任务视图（任务书、attempt 与会话链接、评审轮次、问题、follow-up、时间线、报告），最后在 Dashboard 中验收（或退回一次，看任务回到执行）。</p>
 <p><strong>之后</strong>：示例任务与普通任务一样留在账本中，用户可以归档它；不删除账本（§10）。</p>
 <h2 id="附录-a备选方案存档">附录 A：备选方案存档</h2>
