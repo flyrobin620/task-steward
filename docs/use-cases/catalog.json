@@ -1451,6 +1451,27 @@
         "conformance": "不经过插件接口；workdeck 由替身代替（模拟）",
         "live": "本机真实 workdeck 的 plugin add 记在任务报告（T309）；setup-e2e 的隔离运行不接入用户的 workdeck"
       }
+    },
+    {
+      "id": "UC-SETUP-005",
+      "title": "终端入口的方向键交互、颜色与回退（T326，DN009 §16，CC009 §11）",
+      "actor": "用户 / 终端入口 setup.ps1 / tsw setup install --interactive",
+      "acceptance": "标准输入与标准输出都是能打开转义序列处理的控制台、TERM 不是 dumb、没有 --plain，且操作系统实现了逐键读取（目前为 Windows 的 msvcrt.getwch）时，install --interactive 用方向键界面：环境段逐项标 √ / ×；问题段按唯一的问题清单逐项提问，选择题与是否题用 ↑↓（←→、Home、End、数字键）移动、回车确认，是否题 y / n 直接选定，选择题中 Esc 回到上一问；路径、语言与端口用 input() 输入，回车采用默认值（上次的答案或默认值），必填项为空或校验失败时显示原因并重问；答完的问题收成一行“√ 名称：答案”（选项带说明 labels），入口已决定的产品检出与单一宿主、找不到命令时的 workdeck 只显示一行；答案在计划前保存；计划段按步骤显示状态与动作后，用方向键选“按计划安装 / 修改某个答案 / 取消”，修改后重新保存答案并重新生成计划，取消时不执行任何步骤、答案保留；安装段经 install 的进度回调逐步显示“正在…”并在原处改为结果；核对段逐项显示，失败的附原因；下一步段分条显示 next 并突出 /orchestrate；Ctrl+C 任何时候取消且不执行安装步骤；结束时不打印键值结果（--json 时仍输出 JSON），核对失败时退出码 3。宽字符按两列、折行按终端列数计算，擦除与重画只涉及自己写的行。设置了非空 NO_COLOR 时不用颜色（光标行反显）；标准输出编码不能表示 ► √ × – 时改用 ASCII。标准输入不是控制台（管道、重定向）或加 --plain 时回到逐行文字问答，文字与输入格式不变，只有标准输出是控制台时加颜色。setup.ps1 在控制台中把“现在用 winget 安装 … 吗”改为方向键（或 y / n）选择并着色，输入或输出被重定向时用 Read-Host；-Plain 传给 --plain。问题清单（check --questions）的选择题增加 labels 字段。",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口；控制台由脚本给定按键的替身代替（模拟）",
+        "live": "真实控制台（Windows Terminal 与 conhost）中的 setup.ps1 由本机手工实测并截图，记在任务报告（T326）；没有自动化的 live 场景"
+      }
     }
   ]
 }

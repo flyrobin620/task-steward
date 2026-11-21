@@ -45,6 +45,29 @@ NO_REVIEW = "none"
 REVIEWERS = ("codex-app-server", "claude-subagent", "copilot-cli", NO_REVIEW)
 # The command line each reviewer that tsw starts needs.
 COMMANDS = {"codex-app-server": "codex", "copilot-cli": "copilot"}
+# What each choice means, shown next to its value (DN009 §16.3); a choice without one shows its
+# value only.
+CHOICE_LABELS: dict[str, str] = {
+    "codex-app-server": "Codex",
+    "claude-subagent": "Claude 只读子代理",
+    "copilot-cli": "GitHub Copilot CLI",
+    "none": "不做自评审",
+    "in-session": "只在会话中",
+    "teams-chat": "另加 Teams 自聊",
+    "claude-code": "Claude Code",
+}
+SHORT_NAMES: dict[str, str] = {
+    "home": "数据目录",
+    "checkout": "产品检出",
+    "language": "交流语言",
+    "reviewer": "评审器",
+    "human_channels": "怎样找到你",
+    "host": "宿主",
+    "dashboard": "Dashboard 常驻服务",
+    "dashboard_port": "Dashboard 端口",
+    "workdeck": "接入 workdeck",
+    "user_settings": "维护 Claude Code 用户设置",
+}
 
 
 @dataclass(frozen=True)
@@ -60,6 +83,16 @@ class Question:
     asked_by: str = "setup"  # setup | entry (asked before tsw setup runs)
     extra: dict[str, Any] = field(default_factory=dict[str, Any])
 
+    @property
+    def short(self) -> str:
+        """The question's name on the line it collapses to once answered (DN009 §16.3)."""
+        return SHORT_NAMES.get(self.id, self.id)
+
+    @property
+    def labels(self) -> dict[str, str]:
+        """What each choice means (DN009 §16.3); choices without one are left out."""
+        return {c: CHOICE_LABELS[c] for c in self.choices if c in CHOICE_LABELS}
+
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
             "id": self.id,
@@ -72,6 +105,8 @@ class Question:
         }
         if self.choices:
             out["choices"] = list(self.choices)
+            if self.labels:
+                out["labels"] = self.labels
         if self.note:
             out["note"] = self.note
         return out
@@ -326,6 +361,25 @@ def config_differences(values: Mapping[str, Any], answers: Mapping[str, Any]) ->
     return found
 
 
+def preset(q: Question) -> tuple[Any] | None:
+    """The answer of a question that is not asked on this machine, in a 1-tuple: a single host
+    is chosen without asking, and without a workdeck command there is nothing to ask (T309)."""
+    if q.id == "host" and len(q.choices) == 1:
+        return (q.choices[0],)
+    if q.id == "workdeck" and q.default is False:
+        return (False,)
+    return None
+
+
+def starting_default(q: Question, previous: Mapping[str, Any]) -> Any:
+    """The answer offered first: an earlier answer this version still accepts, else the
+    question's default."""
+    default = previous.get(q.id, q.default)
+    if default not in (None, "") and normalize({q.id: default}, [q])[1]:
+        return q.default  # an earlier answer this version no longer accepts
+    return default
+
+
 def ask(
     qs: list[Question],
     previous: Mapping[str, Any],
@@ -339,15 +393,11 @@ def ask(
         if q.asked_by != "setup":
             say(f"{q.prompt}：{q.default}（{q.note}）")
             continue
-        if q.id == "host" and len(q.choices) == 1:
-            answers[q.id] = q.choices[0]
+        fixed = preset(q)
+        if fixed is not None:
+            answers[q.id] = fixed[0]
             continue
-        if q.id == "workdeck" and q.default is False:
-            answers[q.id] = False  # no workdeck command here: nothing to ask (T309)
-            continue
-        default = previous.get(q.id, q.default)
-        if default not in (None, "") and normalize({q.id: default}, [q])[1]:
-            default = q.default  # an earlier answer this version no longer accepts
+        default = starting_default(q, previous)
         while True:
             hint = ""
             if q.choices:

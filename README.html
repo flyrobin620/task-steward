@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="9a9c44335f0a342dbf0e7018bcf2ccf6e0dbafe1191d647564f9be9501350fc9">
+<meta name="tsw-source-sha256" content="75dbb1629e7db6ea1f61d091b557b35f84a4181c729b545bdfc42ffa7ca65631">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -62,7 +62,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p><strong>在终端安装</strong>（PowerShell）：</p>
 <pre><code class="lang-powershell">git clone https://github.com/flyrobin620/task-steward.git &quot;$env:LOCALAPPDATA\TaskSteward\task-steward&quot;
 &amp; &quot;$env:LOCALAPPDATA\TaskSteward\task-steward\setup.ps1&quot;</code></pre>
-<p>脚本先探测 Python、git 与 Claude Code（缺少 Python 或 git 时问你是否用 winget 安装），再问几个问题（数据目录位置必须由你给出，没有默认值），显示计划请你确认，然后做完全部步骤并核对。Windows 上推荐这条路径。</p>
+<p>脚本先探测 Python、git 与 Claude Code（缺少 Python 或 git 时问你是否用 winget 安装），再问几个问题（选择题用方向键与回车选择；数据目录位置必须由你给出，没有默认值），显示计划请你确认，然后做完全部步骤并核对。不在交互终端中运行或加 <code>-Plain</code> 时改为逐行文字问答。Windows 上推荐这条路径。</p>
 <p><strong>在 Claude 中安装</strong>：先完全退出 Claude app（app 运行时添加 GitHub 插件市场会失败），在 PowerShell 中运行：</p>
 <pre><code class="lang-powershell">claude plugin marketplace add https://github.com/flyrobin620/task-steward.git
 claude plugin install task-steward@task-steward</code></pre>
