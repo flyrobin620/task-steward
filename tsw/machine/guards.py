@@ -26,6 +26,10 @@ USER_CHANNELS = ("main-session", "in-session", "teams-chat", "hub-portal")
 # only the terminal commands and the STATUS app take, records them; sessions cannot use them.
 DIRECT_CHANNELS = ("user-cli", "status-app")
 SOURCE_FIELDS = ("channel", "principal", "message_ref", "text")
+# Where the user's words came in, when not typed in the session itself (DN006 §8.11): a message
+# the user sent through the workdeck portal to the main session. Only the orchestrator's own
+# channel carries it; in a worker the host records such a message as typed in the session.
+SOURCE_VIA = {"workdeck": ("main-session",)}
 
 
 def g_plan(row: Mapping[str, Any], config: EffectiveConfig) -> str:
@@ -315,6 +319,14 @@ def verified_source(
         raise rejected("用户来源字段不完整", reason="g_user", missing=missing)
     if source["channel"] not in channels:
         raise rejected("用户来源的渠道无效", reason="g_user", channel=source["channel"])
+    via = source.get("via")
+    if via is not None and source["channel"] not in SOURCE_VIA.get(str(via), ()):
+        raise rejected(
+            "用户来源的 via 无效：目前只有 workdeck，且只用于渠道 main-session",
+            reason="g_user",
+            via=via,
+            channel=source["channel"],
+        )
     target = source.get("target")
     if not isinstance(target, list) or list(target) != expected:  # pyright: ignore[reportUnknownArgumentType]
         raise rejected(mismatch, reason="g_user", expected=expected, target=target)
