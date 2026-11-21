@@ -383,11 +383,14 @@ def test_the_dashboard_lets_its_own_requests_carry_a_referer(h: Harness, dashboa
         (f"/preferences?all=1&token={dashboard.token}", "./preferences?all=1"),
         (f"/tasks/T001?token={dashboard.token}", "./T001"),
         (f"/runs/T001/?token={dashboard.token}&view=html", "./?view=html"),
+        (f"/preferences?token=&token={dashboard.token}&token=x", "./preferences"),
     ):
         status, sent, _ = dashboard.request("GET", path, headers={"Cookie": ""})
         assert (status, sent["Location"]) == (303, location), path
         assert sent["Set-Cookie"].startswith(f"tsw_status_{dashboard.port}={dashboard.token};")
-    assert policy("/preferences?token=wrong")[0] == 403
+    # A token parameter never renders a page, whatever the cookie: a wrong or empty one is refused.
+    for path in ("/preferences?token=wrong", "/tasks/T001?token=", "/?token="):
+        assert policy(path)[0] == 403, path
     # A button request that carries this page's Referer, as a browser now sends it, is accepted.
     button = {"X-TSW-Token": dashboard.token, "Origin": origin, "Referer": f"{origin}/"}
     status, sent, raw = dashboard.request("POST", "/api/tasks/T001/accept", {"revision": 1}, button)

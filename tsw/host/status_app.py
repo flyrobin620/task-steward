@@ -422,11 +422,12 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 self._json(HTTPStatus.OK, app.workdeck_manifest())
                 return
             query = parse_qsl(url.query, keep_blank_values=True)
-            given = next((value for key, value in query if key == "token"), "")
-            if given:
-                # Any page opened with the token signs in and drops the token from the address,
-                # so no page keeps it where the same-origin Referer would carry it (T333).
-                if not app.admits(given):
+            presented = [value for key, value in query if key == "token"]
+            if presented:
+                # Any page opened with a token parameter signs in and drops every one of them from
+                # the address, so none stays where the same-origin Referer would carry it (T333).
+                given = next((value for value in presented if app.admits(value)), None)
+                if given is None:
                     self._text(HTTPStatus.FORBIDDEN, "令牌无效：请打开 tsw status serve 输出的地址")
                     return
                 cookie = f"{COOKIE}_{app.port}={given}; HttpOnly; SameSite=Strict; Path=/"
