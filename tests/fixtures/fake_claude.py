@@ -5,7 +5,8 @@ Prints the stream-json events the real CLI prints (shape taken from the recorded
 ``tests/fixtures/claude/final-answer.jsonl``). Each run takes the next entry of the JSON list in
 ``FAKE_REVIEWER_ANSWERS``: ``"echo-pass"`` reads the request file named in the prompt and passes
 the head it asks for; an object may set ``content``, ``model`` (the model the answer claims),
-``init_model``, ``session`` (the session ID the result reports), ``is_error`` and ``exit``. Every
+``init_model``, ``session`` (the session ID the result reports), ``is_error``, ``exit`` and
+``sleep`` (seconds to hang after the first event). Every
 command line is appended to ``FAKE_REVIEWER_LOG`` as one JSON line, with the working directory
 and the names of the inherited variables that start with ``CLAUDE``, ``ANTHROPIC`` or ``TSW``.
 """
@@ -14,6 +15,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 
@@ -75,6 +77,9 @@ def main() -> int:
             "permissionMode": option(argv, "--permission-mode"),
         }
     )
+    if answer.get("sleep"):  # print the start, then hang: the run times out
+        sys.stdout.flush()
+        time.sleep(float(answer["sleep"]))
     is_error = bool(answer.get("is_error"))
     if not is_error:
         emit(

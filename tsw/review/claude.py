@@ -130,10 +130,12 @@ def run_review(
         tree.end()
         for reader in readers:
             reader.join(timeout=10)
+        # What it printed so far is kept as evidence (rK-raw.txt); timedOut keeps it from being
+        # taken as an answer.
         return ReviewRun(
             thread_id=session,
             status="timedOut",
-            final_message=None,
+            final_message="".join(lines) or None,
             model=None,
             error=f"claude 在 {timeout_seconds} 秒内没有结束",
         )

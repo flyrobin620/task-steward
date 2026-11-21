@@ -220,6 +220,22 @@ def test_a_claude_run_past_its_time_is_ended(tmp_path: Path) -> None:
         "p", cwd=tmp_path, model="m", effort="high", timeout_seconds=3, executable=str(wrapper)
     )
     assert run.status == "timedOut" and "3 秒" in str(run.error)
+    assert run.model is None
+
+
+def test_a_timed_out_claude_round_keeps_what_it_printed(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # PR #78 review: the output collected before the timeout is the evidence (rK-raw.txt).
+    wrapper = fake_claude(tmp_path, [{"sleep": 30}], monkeypatch)
+    config = claude_config(wrapper)
+    config["roles"]["reviewer"]["timeout_seconds"] = 5
+    h = Harness(home, config)
+    workdir = live_worker(h, tmp_path)
+    out = review(h, workdir, head="draft-1")
+    assert out["outcome"] == "review.failed" and "5 秒" in out["error"]
+    raw = (review_dir(h) / "r1-raw.txt").read_text(encoding="utf-8")
+    assert '"subtype": "init"' in raw
 
 
 def test_a_round_the_removed_subagent_opened_is_retried_by_the_configured_reviewer(

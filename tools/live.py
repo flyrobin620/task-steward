@@ -615,7 +615,8 @@ def review_with(
         kind = {
             "codex-app-server": "codex-thread",
             "copilot-cli": "copilot-session",
-            "claude-headless": "claude-session",
+            # Not an app session: nothing to archive, the CLI keeps its record (CC004 §6).
+            "claude-headless": "claude-cli-session",
         }.get(reviewer, "reviewer-session")
         run.record(kind, f"T001-a1-r{round_no}", reviewer=reviewer)
         calls += 1
