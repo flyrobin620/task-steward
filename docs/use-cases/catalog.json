@@ -436,7 +436,7 @@
       "id": "UC-REVIEW-003",
       "title": "用户关闭自评审（review.self_review，DN004 §9）",
       "actor": "用户 / worker / 主会话",
-      "acceptance": "review.self_review 或 repositories.<id>.self_review 为 off 时（仓库的值覆盖全局值）：任务书写明自评审关闭及来源键；review_run 与 review_start 以 self_review_off 拒绝，不开新一轮；worker 从 executing（或关闭前已进入的 triaging）直接 submit，G-SUBMIT 不检查评审条件，其他条件照常，worker.submitted 记录评审模式与来源键；G-ACCEPT 不复核评审，task.accepted 记录 review_mode off；开启时提交照旧需要评审，也记录模式；两个键都是权限类键；旧键 review.required 等仍被拒绝",
+      "acceptance": "review.self_review 或 repositories.<id>.self_review 为 off 时（仓库的值覆盖全局值）：任务书写明自评审关闭及来源键；review_run 与 review_start 以 self_review_off 拒绝，不开新一轮；worker 从 executing（或关闭前已进入的 triaging、revising）直接 submit，G-SUBMIT 不检查评审条件，其他条件照常，worker.submitted 记录评审模式与来源键；G-ACCEPT 不复核评审，task.accepted 记录 review_mode off；开启时提交照旧需要评审，也记录模式；两个键都是权限类键；旧键 review.required 等仍被拒绝",
       "surfaces": [
         "mcp",
         "cli"

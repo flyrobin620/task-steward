@@ -72,6 +72,7 @@ worker 完成任务成果后，**由 worker 自己**启动配置的只读评审�
 - 开轮（`review_start`）后渲染 `runs/Txxx/aN/review/rK-request.md`（需要时连同 `rK-diff.patch`），调用评审器，结果写入 `rK.json`、调用信息写入 `rK-run.json`（范围、线程或子代理 ID、模型、effort、是否续用），然后记录 `review_complete`。评审器报错、启动失败、超时、输出不是 JSON、不满足契约，或 `reviewed_head` 与本轮 HEAD 不一致（Git 缩写须解析为同一提交，非 Git 成果标识须完全相同）时，保存原始输出 `rK-raw.txt` 并记录 `review_fail`；开轮后的任何异常都以失败收尾。任务处于 `reviewing`（E02）时再次调用即在同一轮、按落账的 `head` 与 `base` 重试；落账的范围同样要是执行目录中的完整提交（轮次可能是直接用 `review_start` 开的），否则不调用评审器、记录失败。
 - 子代理方式：第一次调用开轮并返回启动指示（结果中 `status` 为 `awaiting_agent`），这时任务停在 `reviewing`。第二次调用带 `round`（必须是本周期正在进行的一轮）与 `result`；子代理没有交回结果（报错、被中断、宿主找不到子代理类型）时改带 `error`，记录 `review_fail`。在 `reviewing` 中不带 `result` 与 `error` 再调用，即 E02 重试：按落账的范围重写请求，再次给出启动指示。子代理在 worker 的 turn 内运行，worker 在交回结果或失败之前不结束 turn（Stop hook 提示，§8）。
 - 每轮请求都带当前 revision 的目标与验收原文；需求变更（E07）开启新周期后不续用旧线程，按新需求完整评审。
+- 正在进行的一轮（`reviewing`）由开轮时的评审器完成：重试与交回结果都沿用开轮时记录的评审会话适配器与模型，即使配置已经改了；新的一轮才用新的配置。新一轮开始前先检查自评审是否关闭（§9），关闭时不再检查评审器。
 - 默认评审器 `codex-app-server` 的进程与线程管理见 [CX004 §4](codex/CX004-reviewer.md)，`copilot-cli` 见 [CP004](copilot/CP004-reviewer.md)。
 - `codex-exec` 与 `claude-headless`（附录 A）尚未实现：配置为评审会话时 `review_run` 返回 `UNSUPPORTED`，不落账新的一轮。
 
@@ -204,7 +205,7 @@ worker 的 `result.md` / `result.html` 增加“自评审”一节：
 
 - **配置**：`review.self_review`（`required` 默认 / `off`）对所有任务生效；`repositories.<id>.self_review` 对该仓库的任务覆盖全局值。两者都是权限类键（DN003 §7.2），改动要附用户原话。主会话与 worker 都不能为某个任务临时关闭自评审。
 - **取值时机**：按任务所属仓库，在每次 `review_run`、`review_start` 与 `submit` 时读取当时的配置。任务书写明“自评审：关闭（来源键）”或“自评审：开启”。
-- **关闭时**：`review_run` 与 `review_start` 以 `self_review_off` 拒绝；worker 在 `executing`（或关闭前已进入的 `triaging`）中直接 `submit`（T13）。G-SUBMIT 不检查评审条件（评审轮次、最后评审 HEAD、`finalize`、阻断项处置），其他条件照常：报告 md 与 html、合并与主分支 CI、live 说明、工作树。`worker.submitted` 记录 `review: {"mode": "off", "source": <生效的键>}`。
+- **关闭时**：`review_run` 与 `review_start` 以 `self_review_off` 拒绝；worker 在 `executing`（或关闭前已进入的 `triaging`、`revising`）中直接 `submit`（T13）。G-SUBMIT 不检查评审条件（评审轮次、最后评审 HEAD、`finalize`、阻断项处置），其他条件照常：报告 md 与 html、合并与主分支 CI、live 说明、工作树。`worker.submitted` 记录 `review: {"mode": "off", "source": <生效的键>}`。
 - **关闭前已有的轮次**：照常留在证据中、写进报告，但不再约束提交；正在进行的一轮（`reviewing`）要先以完成或失败结束。
 - **重新开启**：改回 `required` 后，尚未提交的任务按评审必经的规则提交（本周期没有有效评审时先 `review_run`）；已提交的任务不受影响。
 - **报告与验收**：报告的“自评审”一节写“未做（配置关闭，来源键）”。主会话在 G-ACCEPT 中核对提交记录的模式与来源，不要求评审证据。

@@ -592,3 +592,24 @@ def test_with_self_review_on_a_submission_still_needs_its_review(home: Home) -> 
     h.submit(w, "T001")
     submission = json.loads(h.task("T001")["submission"])
     assert submission["review"] == {"mode": "required", "source": "review.self_review"}
+
+
+@mark.use_case("UC-REVIEW-003")
+@mark.transition("T13")
+def test_self_review_turned_off_while_revising_can_still_submit(home: Home) -> None:
+    # PR #74 review: a task in revising when the user turns self-review off is not stuck.
+    h, w = started(home)
+    round_no = h.review_round(w, "T001", "h1", [HIGH])
+    h.run(
+        "review_triage",
+        w,
+        task_id="T001",
+        round=round_no,
+        items=[{"finding": "F1", "action": "fix"}],
+    )
+    h.run("review_decide", w, task_id="T001", round=round_no, decision="iterate", head="h1")
+    assert h.task("T001")["substate"] == "revising"
+    off = Harness(home, {"review": {"self_review": "off"}})
+    off.submit(w, "T001", head="h2")
+    submission = json.loads(off.task("T001")["submission"])
+    assert submission["review"]["mode"] == "off" and submission["rounds"] == [round_no]

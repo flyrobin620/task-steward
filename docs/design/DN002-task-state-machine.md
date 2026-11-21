@@ -114,7 +114,7 @@
 | E06 | triaging | executing | `worker.self_check_failed` | 自查发现遗漏（验收项未完成、报告缺失），或定稿后 HEAD 有变化需要补审；不开启新周期 |
 | E07 | executing、reviewing、triaging、revising | executing | `task.requirement_changed` | 主会话转达新 revision，或 worker 登记用户在本会话中提出的变更（§5.1a）；进行中的评审中止，旧评审对新 revision 失效；开启新提交周期 |
 
-`triaging` 中 worker 决定 `finalize`（每个阻断项都已按 G-SUBMIT 处置，且终版 HEAD 已评审）后，直接经 T13 离开 `in_progress`。用户关闭了自评审（DN004 §9）时，worker 从 `executing`（或关闭前已进入的 `triaging`）直接经 T13 提交，不经过 E01–E06。定稿后若 HEAD 又有变化（例如修正报告链接），需对差异再评审一轮，经 E06 → E01，同样受本周期预算限制。阻断项需要延后、或修复超出本任务范围时，worker 不能自行 defer，而是记录 `review.defer_requested` 交主会话判断：主会话可以批准延后（列入已知问题）、要求继续修复，或交给人类。
+`triaging` 中 worker 决定 `finalize`（每个阻断项都已按 G-SUBMIT 处置，且终版 HEAD 已评审）后，直接经 T13 离开 `in_progress`。用户关闭了自评审（DN004 §9）时，worker 从 `executing`（或关闭前已进入的 `triaging`、`revising`）直接经 T13 提交，不经过 E01–E06。定稿后若 HEAD 又有变化（例如修正报告链接），需对差异再评审一轮，经 E06 → E01，同样受本周期预算限制。阻断项需要延后、或修复超出本任务范围时，worker 不能自行 defer，而是记录 `review.defer_requested` 交主会话判断：主会话可以批准延后（列入已知问题）、要求继续修复，或交给人类。
 
 **R-ROUND（评审计数）**：每条 `review.started` 事件在同一事件中原子地把轮次编号设为该 attempt 上一轮编号 + 1（首轮为 1），并把本周期轮次计数 + 1；E02 重试只增加本轮重试计数，不增加轮次。
 

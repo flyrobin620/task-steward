@@ -530,9 +530,11 @@ def submit(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     def build(ctx: CommitContext) -> list[EventDraft]:
         row, current = task_and_attempt(ctx.conn, env, task_id)
         mode, mode_source = self_review_mode(env.config, row["repo"])
-        # With self-review off the worker submits from executing, or from the triage it had
-        # reached before it was turned off (DN004 §9).
-        require_substate(row, *(("executing", "triaging") if mode == "off" else ("triaging",)))
+        # With self-review off the worker submits from executing, or from the triage or
+        # revision it had reached before it was turned off (DN004 §9).
+        require_substate(
+            row, *(("executing", "triaging", "revising") if mode == "off" else ("triaging",))
+        )
         attempt_id = str(current["attempt"])
         if not worktree_clean and not (diff_note and diff_note.strip()):
             raise rejected("工作树不干净时必须说明差异", reason="g_submit", check="worktree")

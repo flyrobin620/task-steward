@@ -151,12 +151,19 @@ def test_answers_only_for_the_open_round_of_the_subagent(
     with pytest.raises(TswError) as no_round:
         review(h, workdir, result=json.dumps(result("d1")))
     assert no_round.value.details["reason"] == "round_missing"
-    # A reviewer tsw runs itself never takes an answer from the worker.
+    assert "review.completed" not in types(h) and "review.failed" not in types(h)
+    # The open round belongs to the subagent even after the user picks Codex again.
     Harness(home, {"roles": {"reviewer": {"executable": sys.executable}}})
+    done = review(h, workdir, round_no=1, result=json.dumps(result("d1")))
+    assert done["verdict"] == "pass"
+
+
+def test_a_reviewer_tsw_runs_never_takes_an_answer(home: Home, tmp_path: Path) -> None:
+    h = Harness(home, {"roles": {"reviewer": {"executable": sys.executable}}})
+    workdir = live_worker(h, tmp_path)
     with pytest.raises(TswError) as direct:
         review(h, workdir, round_no=1, result=json.dumps(result("d1")))
     assert direct.value.details["reason"] == "not_agent_reviewer"
-    assert "review.completed" not in types(h) and "review.failed" not in types(h)
 
 
 # ---------------------------------------------------------------------- copilot-cli
@@ -355,3 +362,67 @@ def test_a_new_reviewer_of_a_research_task_gets_the_last_triage(home: Home, tmp_
     text = (review_dir(h) / "r2-request.md").read_text(encoding="utf-8")
     assert "没有上一轮的上下文" in text and "F1（high）：fix" in text and "改了第 2 节" in text
     assert str(review_dir(h) / "r1.json") in text and "draft-1" in text
+
+
+@pytest.mark.use_case("UC-REVIEW-003")
+def test_self_review_off_is_said_before_any_reviewer_check(home: Home, tmp_path: Path) -> None:
+    # PR #74 review: no Codex on the machine still answers self_review_off, not unavailable.
+    h = Harness(
+        home,
+        {
+            "review": {"self_review": "off"},
+            "roles": {"reviewer": {"executable": str(tmp_path / "no-codex.exe")}},
+        },
+    )
+    workdir = live_worker(h, tmp_path)
+    with pytest.raises(TswError) as refused:
+        review(h, workdir, head="d1")
+    assert refused.value.details["reason"] == "self_review_off"
+
+
+def test_a_fresh_thread_still_gets_the_last_triage(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # PR #74 review: review.incremental "fresh" keeps round 1's findings and triage.
+    from tests.component.test_review_run import FakeReviewer  # noqa: PLC0415
+
+    h = Harness(home, {"review": {"incremental": "fresh"}})
+    workdir = live_worker(h, tmp_path)
+    fake = FakeReviewer(
+        result("draft-1", HIGH, verdict="changes_requested"), result("draft-2", verdict="pass")
+    )
+    monkeypatch.setitem(review_run.REVIEWERS, "codex-app-server", fake)
+    review(h, workdir, head="draft-1")
+    h.run(
+        "review_triage",
+        WORKER,
+        task_id="T001",
+        round=1,
+        items=[{"finding": "F1", "action": "fix", "verification": "补了测试"}],
+    )
+    h.run("review_decide", WORKER, task_id="T001", round=1, decision="iterate", head="draft-1")
+    review(h, workdir, head="draft-2")
+    assert fake.calls[1]["resume_thread"] is None
+    prompt = fake.calls[1]["prompt"]
+    assert "没有上一轮的上下文" in prompt and "F1（high）：fix" in prompt
+
+
+def test_an_open_round_is_finished_by_the_reviewer_that_opened_it(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # PR #74 review: after a failed Copilot round the user switches to the subagent; the retry
+    # of the open round still goes to Copilot, the next round to the subagent.
+    wrapper = fake_copilot(tmp_path, [{"error": "boom"}, "echo-pass"], monkeypatch)
+    h, workdir, head = copilot_worker(home, tmp_path, wrapper)
+    failed = review(h, workdir)
+    assert failed["outcome"] == "review.failed"
+    Harness(home, {"roles": {"reviewer": {**SUBAGENT, "executable": str(wrapper)}}})
+    retried = review(h, workdir)
+    assert (retried["round"], retried["verdict"]) == (1, "pass")
+    assert len(calls(tmp_path)) == 2
+    meta = json.loads((review_dir(h) / "r1-run.json").read_text(encoding="utf-8"))
+    assert (meta["session"], meta["model"]) == ("copilot-cli", "gpt-6.1-sol")
+    h.run("review_triage", WORKER, task_id="T001", round=1, items=[])
+    h.run("review_decide", WORKER, task_id="T001", round=1, decision="finalize", head=head)
+    h.run("self_check_failed", WORKER, task_id="T001", reason="再审")
+    assert review(h, workdir)["status"] == "awaiting_agent"

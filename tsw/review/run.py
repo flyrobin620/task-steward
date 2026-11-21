@@ -132,8 +132,34 @@ def run_round(
     ledger = ledger_for(home, config, machine)
     with ledger.view() as conn:
         who = resolve(conn, home, env, cwd)
-    _require_worker(who)
-    session = str(config.get("roles.reviewer.session"))
+        _require_worker(who)
+        row = row_dict(
+            conn.execute("SELECT * FROM tasks WHERE task_id = ?", (who.task_id,)).fetchone()
+        )
+        opened = (
+            row_dict(
+                conn.execute(
+                    "SELECT reviewer FROM review_rounds WHERE task_id = ? AND attempt = ? "
+                    "AND verdict IS NULL ORDER BY round DESC LIMIT 1",
+                    (who.task_id, who.attempt),
+                ).fetchone()
+            )
+            if row is not None and row["substate"] == "reviewing"
+            else None
+        )
+    assert row is not None
+    configured = str(config.get("roles.reviewer.session"))
+    model = str(config.get("roles.reviewer.model"))
+    session = configured
+    if opened is not None:
+        # An open round is finished (retried or answered) by the reviewer that opened it, even
+        # when the configuration has changed since.
+        recorded = loads(opened["reviewer"], {})
+        session = str(recorded.get("session") or configured)
+        model = str(recorded.get("model") or model) if session != configured else model
+    else:
+        # A new round: the user's choice not to self-review comes before any reviewer check.
+        guards.require_self_review(config, row)
     reviewer = REVIEWERS.get(session)
     if reviewer is None and session not in AGENT_REVIEWERS:
         raise TswError(
@@ -161,7 +187,7 @@ def run_round(
         reviewer=reviewer,
         executable=executable,
         session=session,
-        model=str(config.get("roles.reviewer.model")),
+        model=model,
     )
     lock = FileLock(home.locks_dir / f"review-{who.task_id}-{who.attempt}.lock", timeout=0)
     try:
@@ -363,13 +389,9 @@ def _review(
         and ctx.config.get("review.incremental") == "resume_thread"
     ):
         resume = _thread_of(review_dir, int(previous["round"]))
-    # A reviewer that cannot keep a thread, or a new one, gets the full scope with the last
-    # round's triage (DN006 §7.4); one that resumes its thread gets only the increment.
-    carried = (
-        previous
-        if (resume or (previous is not None and (not incremental or not same_reviewer)))
-        else None
-    )
+    # Whoever reviews gets the last round's triage: the increment when it resumes its own
+    # thread, else the full scope (a fresh thread, a reviewer without threads, another reviewer).
+    carried = previous
     diffs: dict[str, str] = {}
     if ctx.session in NO_SHELL and is_git:
         diffs = _write_diffs(
