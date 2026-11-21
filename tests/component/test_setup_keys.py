@@ -112,7 +112,7 @@ def test_choices_are_made_with_keys_and_answered_questions_collapse(tmp_path: Pa
     # (the last step of both plans, and of the install)
     assert screen.count(" 计划") == 2 and len(re.findall(r"– 接入 workdeck +不做", screen)) == 3
     assert re.search(r"√ Claude Code 插件 +已完成", screen) and "正在" not in screen
-    assert "√ 插件来源指向检出  通过" in screen
+    assert re.search(r"√ 插件来源指向检出 +通过", screen)
     assert "下一步" in screen and "/orchestrate" in screen
     # Colour and cursor sequences were written; the screen model accepted every one of them.
     assert "\x1b[32m√\x1b[0m" in out["output"] and "\x1b[?25l" in out["output"]

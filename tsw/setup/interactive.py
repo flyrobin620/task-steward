@@ -216,7 +216,8 @@ def _run_keys(args: argparse.Namespace, screen: _Screen) -> dict[str, Any]:
     screen.say(f" {style.bold(style.accent('TaskSteward 安装'))}")
     screen.title("环境")
     checkout = checked["checkout"]
-    screen.say(f" {style.mark('ok')} 产品检出  {checkout['path']}  {style.dim(checkout['head'])}")
+    head = str(checkout["head"] or "")[:12]
+    screen.say(f" {style.mark('ok')} 产品检出  {checkout['path']}  {style.dim(head)}")
     python = checked["python"]
     screen.say(f" {style.mark('ok')} Python    {python['path']}  {style.dim(python['version'])}")
     claude = checked["claude"]
@@ -354,8 +355,7 @@ def _ask_one(screen: _Screen, q: Question, default: Any, position: str, *, back:
 
 
 def _option(label: str, value: str, is_default: bool) -> Option:
-    detail = " ".join(part for part in (value, "（默认）" if is_default else "") if part)
-    return Option(label, detail)
+    return Option(label, value + ("（默认）" if is_default else ""))
 
 
 def _change_one(screen: _Screen, qs: list[Question], answers: dict[str, Any]) -> None:
@@ -427,7 +427,7 @@ def _install(screen: _Screen, ctx: setup_steps.Context, *, open_browser: bool) -
         title = STEP_TITLES.get(name, name)
         if result is None:
             running[:] = [name]
-            current.line(f" {style.mark('doing')} 正在{title}…")
+            current.line(f" {style.mark('doing')} {title}  {style.accent('正在执行…')}")
             return
         title += " " * (width - display_width(title))
         current.erase()
@@ -460,8 +460,11 @@ def _show_result(screen: _Screen, result: dict[str, Any]) -> None:
     style = screen.style
     screen.title("核对")
     marks: dict[bool | None, str] = {True: "ok", False: "bad", None: "skip"}
-    for check in result["verify"]["checks"]:
+    checks: list[dict[str, Any]] = result["verify"]["checks"]
+    width = max(display_width(CHECK_TITLES.get(c["check"], c["check"])) for c in checks)
+    for check in checks:
         title = CHECK_TITLES.get(check["check"], check["check"])
+        title += " " * (width - display_width(title))
         extra = "（重启后生效）" if check.get("pending_reload") else ""
         word = {True: "通过", False: "失败", None: "未核对"}[check["ok"]]
         text = f"{title}  {word}{extra}"
