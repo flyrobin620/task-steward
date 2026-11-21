@@ -82,10 +82,6 @@ function Select-TswYesNo([string]$Question) {
     return ($index -eq 0)
 }
 
-if ($script:Keys) {
-    Write-Host ' TaskSteward 安装' -ForegroundColor Cyan
-    Write-Host ''
-}
 $found = Get-TswPrereqs
 foreach ($name in 'python', 'git') {
     if ($found[$name]) { continue }
