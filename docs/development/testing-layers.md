@@ -11,7 +11,7 @@
 | `component` | 真实文件系统、SQLite、git 与子进程上的行为：账本提交锁、检查点与投影、`rebuild`、备份恢复、写入闸门、worktree 创建；崩溃恢复与并发 | 临时数据目录与临时 git 仓库；多进程用确定性屏障；故障注入点 | 真实；故障注入单独标注 | 本地门禁、CI |
 | `surface` | 对外表面：`tsw` CLI、stdio MCP server、hooks、插件包结构 | CLI 作为独立进程运行，分别断言退出码、stdout、stderr；MCP 经真实 stdio 与 JSON-RPC 序列化；hooks 以独立进程读取录制的真实 payload | 真实（payload 为录制样本） | 本地门禁、CI |
 | `conformance` | 每类插件接口的一致性套件（DN006 §5.2）：幂等、结果未知时对账、错误码、能力声明 | 对每个插件实现运行同一套件；本仓库之外的平台用 stub 或录制回放替代 | 模拟（stub / 录制回放） | 本地门禁、CI |
-| `live` | 真实宿主与真实评审器：Claude 桌面 app 中的主会话与 worker 全流程、`codex app-server`、Copilot CLI 与 Claude 子代理的只读评审 | 本机真实 app、真实 CLI 与模型；隔离的临时数据目录与临时仓库 | 真实 | 只在本机，绝不在 CI |
+| `live` | 真实宿主与真实评审器：Claude 桌面 app 中的主会话与 worker 全流程、`codex app-server`、Copilot CLI 与 `claude -p` 的只读评审 | 本机真实 app、真实 CLI 与模型；隔离的临时数据目录与临时仓库 | 真实 | 只在本机，绝不在 CI |
 
 - 每次汇报都写明运行了哪些层级（数量与结果），以及没有运行的层级和原因。
 - 真实、模拟和故障注入的证据分开写。替代外部平台的 stub 或录制回放属于模拟证据，不能写成真实证据。
@@ -33,7 +33,7 @@ live 层级调用真实 app 与模型，有费用，并且需要用户在场（�
 | worker 登记会话中的需求变更（DN002 §5.1a：hook 记录用户消息、`requirement_change`、T28 后重新交付） | `change-e2e`：主会话技术验收后，用户在 worker 会话中追加要求；worker 引用 hook 记录的原话登记变更（T28），重新评审、合并、提交，主会话从 inbox 得知并再次验收 |
 | worker 会话的标题与归档（DN002 §5.8：`session_check` / `session_record`、例行项 `session-scan`、主会话 Stop hook 的提醒） | `title-e2e`：预启动带“[待命]”前缀的会话派发后去掉它；用户在终端验收后例行会话转告主会话加“[已验收]”前缀；用户改过名的会话取消后不改名、不弹确认；用户归档已取消的任务后主会话按 `sessions.archive_on_archive` 归档其会话 |
 | P2 `claude-app` 适配器（会话创建、对账、投递、唤醒） | `host-e2e` |
-| P2 评审器适配器（`codex-app-server`、`claude-subagent`、`copilot-cli`）或评审协议（DN004） | `reviewer`：每种已实现的评审器在固定样例上各做一次全量评审与一次增量评审，核对只读（目标目录无写入）与输出 schema；未实现的评审器报告为“未验证” |
+| P2 评审器适配器（`codex-app-server`、`claude-headless`、`copilot-cli`）或评审协议（DN004） | `reviewer`：每种已实现的评审器在固定样例上各做一次全量评审与一次增量评审，核对只读（目标目录无写入）与输出 schema；未实现的评审器报告为“未验证” |
 | 发布前 | 全部场景 |
 
 不能运行时（例如用户不在场），PR 中把对应层级写为“未验证”并说明原因；需要用户确认的合并不能以此跳过。

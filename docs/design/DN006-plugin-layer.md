@@ -90,7 +90,7 @@ T08（`attempt.bound`）要求两个阶段都有完成证据：**会话存在不
 {
   "name": "tsw-claude",
   "plugin_api": 1,
-  "provides": ["host_integration:claude-code", "session:claude-app", "session:claude-subagent"],
+  "provides": ["host_integration:claude-code", "session:claude-app", "session:claude-headless"],
   "requires": {"executables": ["claude"]},
   "config_schema": "schema/claude.schema.json",
   "entry": "tsw_plugins.claude:register"
@@ -178,7 +178,6 @@ class SessionCaps:
     execution: Literal["direct", "delegated"]
     interactive: bool               # 能否承载 worker（需同时满足 §4.1 的关联标记）
     oneshot: bool                   # 能否完成一次性调用并返回最终消息
-    oneshot_via: Literal["process", "worker_agent"]  # process：tsw 启动进程同步等待；worker_agent：worker 启动宿主子代理后交回结果（DN004 §3）
     read_only_enforced: bool        # 能否由宿主强制只读（评审器必需）
     incremental: bool               # oneshot 能否续用同一线程做增量评审
     user_direct_chat: bool          # 用户能否在会话里直接对话
@@ -220,8 +219,7 @@ class SessionAdapter(Protocol):
 | 实现 | 方式 | interactive | oneshot（只读方式） | 增量续用 | 用户直接对话 | dispatch_window |
 | --- | --- | --- | --- | --- | --- | --- |
 | `claude-app` | delegated | 是（做法见 [CC006 §3](claude-code/CC006-plugins.md)）；支持预启动 | 否（只能由模型调用，tsw 无法同步等结果） | — | 是（侧栏子会话） | 是 |
-| `claude-subagent` | delegated（worker 的模型启动） | 否 | 是（`worker_agent`）：插件提供的只读子代理 `task-steward:reviewer`，工具白名单（[CC004](claude-code/CC004-reviewer.md)） | 否（每轮新子代理，附上轮意见与增量 diff） | 否 | 否 |
-| `claude-headless`（未实现） | direct | 待验证（Agent SDK 会话） | 是：`claude -p`，严格只读工具白名单（不采用，调用约定存档于 [CC004 附录 A](claude-code/CC004-reviewer.md)） | 是（`--resume`） | 否 | 否 |
+| `claude-headless` | direct | 待验证（Agent SDK 会话） | 是：`claude -p`，只开放 `Read`、`Grep`、`Glob`，`dontAsk`，不加载插件、hooks 与 MCP（[CC004](claude-code/CC004-reviewer.md)，T331 实测） | 是（`--resume`） | 否 | 否 |
 | `codex-app-server` | direct | 暂不承载 worker（B7：不能按名称或目录及时找回线程） | 是：一次性线程，`sandbox=read-only` | 是（keep / resume thread） | 是（受管独立线程） | 否 |
 | `codex-exec` | direct | 否 | 是：`codex exec`，`--sandbox read-only` | 否（每轮全量 + 上轮意见） | 否 | 否 |
 | `copilot-app` | delegated | 是：`create_session` / `send_session_message`（interactive），按会话名对账 | 否 | — | 是（app 独立会话） | 待验证 |
@@ -248,9 +246,9 @@ interactive 动作（`create`、`deliver_brief`、`send`、`stop`、`observe`、
 | --- | --- | --- |
 | 主会话 | `roles.orchestrator.session` | 主会话所在宿主；用户在该宿主中打开主会话 |
 | worker | `roles.worker.session` | `interactive`；若 `execution=delegated`，必须与主会话是同一宿主（委托操作只能由同宿主的主会话执行） |
-| 评审器 | `roles.reviewer.session`（可选 `fallback_session`） | `oneshot`、`read_only_enforced`，并且 `direct`，或 `oneshot_via=worker_agent` 且与 worker 的会话适配器在同一宿主；`incremental` 可选，没有时每轮全量评审并附上轮意见 |
+| 评审器 | `roles.reviewer.session`（可选 `fallback_session`） | `oneshot`、`direct`、`read_only_enforced`；`incremental` 可选，没有时每轮全量评审并附上轮意见 |
 
-评审为什么不能交给主会话：worker 要在自己的流程里拿到结构化意见再决定迭代，而一般的 delegated 实现只能由主会话模型执行，既无法在 worker 的流程中返回，也会把评审拉进主会话的上下文。因此 `claude-app`、`copilot-app` 不能做评审器。`worker_agent` 是例外：它由 worker 自己的模型在自己的 turn 中启动宿主子代理，结果在同一 turn 内交回 `review_run`（DN004 §3），不经过主会话，所以要求与 worker 同一宿主（`claude-subagent` 要求 worker 为 `claude-app`）。
+评审为什么必须 `direct`：worker 调用 `review_run` 后需要同步拿到结构化意见再决定迭代，而 delegated 实现只能由模型执行，既无法同步返回，也要由某个模型把结果交回 tsw。交回的结果不能证明出自评审器：由 worker 的模型启动宿主子代理、再交回结果的方式（T325 的 `claude-subagent`）因此在 T331 删除（DN004 §3，CC004 附录 A）。`claude-app`、`copilot-app` 不能做评审器，同一宿主的 direct 形态（`claude-headless`）可以。
 
 评审协议（评审包渲染、输出 schema 校验、轮次与周期计数、增量范围）属于核心，与选用哪个会话适配器无关（DN004）。配置校验在评审器与 worker 使用同一模型时给出警告（不阻止），提醒评审视角的独立性下降。
 
@@ -899,15 +897,15 @@ worker 在 Claude app，评审用 Codex：
 
 ### 10.2 只有 Claude Code（没有 Codex）
 
-评审改用 worker 会话中的只读子代理，并选与 worker 不同的模型（别名，CC004 §4）：
+评审改用同一宿主的 direct 形态（tsw 启动的 `claude -p`，CC004），并选与 worker 不同的模型：
 
 ```json
 {
-  "plugins": {"host_integration": "claude-code", "sessions": ["claude-app", "claude-subagent"]},
+  "plugins": {"host_integration": "claude-code", "sessions": ["claude-app", "claude-headless"]},
   "roles": {
     "orchestrator": {"session": "claude-app"},
     "worker": {"session": "claude-app", "model": "claude-opus-5-5"},
-    "reviewer": {"session": "claude-subagent", "fallback_session": null, "model": "sonnet", "effort": "high"}
+    "reviewer": {"session": "claude-headless", "fallback_session": null, "model": "claude-sonnet-5-5", "effort": "high"}
   }
 }
 ```
@@ -981,7 +979,7 @@ worker 用 direct 的 remote-hub 会话，主会话可以在任何宿主：
 | `wake=poll` 或 `none` | worker 提交后主会话不能被即时唤醒 | 主会话在每个用户 turn 和定时唤醒时读取 inbox；Dashboard 页面显示“待主会话处理” |
 | `dispatch_window=true` | 自动 turn 中不能在任务目录创建会话 | DN002 G-WINDOW 与预启动（§5.6）生效：在用户 turn 中预启动，之后任何 turn 都可投递任务书 |
 | P1 规则为 `advisory` | 写入范围等规则只是提示 | G-ACCEPT 增加范围核对；报告标注提示级 |
-| 没有能做评审器的会话适配器（oneshot + 只读，direct 或同宿主的 worker_agent） | 无法评审，不能满足 G-SUBMIT | 配置校验失败，不能派发；用户也可以关闭自评审（DN004 §9） |
+| 没有满足 oneshot + direct + 只读的会话适配器 | 无法评审，不能满足 G-SUBMIT | 配置校验失败，不能派发；用户也可以关闭自评审（DN004 §9） |
 
 ## 12. 对其他文档的影响
 
@@ -1002,7 +1000,7 @@ worker 用 direct 的 remote-hub 会话，主会话可以在任何宿主：
 | B5 | Codex App Server 的 `workspace-write` 可写根足以作为 worker 写入边界 | 降级为 advisory，并在 G-ACCEPT 核对 |
 | B6 | 宿主会话内的定时唤醒可以承载例行会话（Claude Code 的验证项见 CC006 §6.5） | 例行会话的规则只在主会话运行 `sync` 或给例行会话发消息时执行 |
 | B7 | Codex App Server 创建线程时可写入可检索的标题或元数据 | **PoC 部分成立**：`thread/name/set` 可写可读，但未归档线程在 30 秒以上都不能按名称或目录列出（线程来源记为 `vscode`）。`codex-app-server` 暂只做评审，tsw 以 `thread/start` 的同步返回值登记线程 ID |
-| B8 | `claude -p` 能只读、非交互地运行，并可用 `--resume` 续用 | **PoC 成立，需特定参数**：清除宿主环境变量、严格工具白名单、显式模型（[CC004 附录 A](claude-code/CC004-reviewer.md)）。T325 起 Claude 评审器改用子代理（`claude-subagent`），`claude-headless` 不实现 |
+| B8 | `claude -p` 能只读、非交互地运行，并可用 `--resume` 续用 | **T331 实测成立**：清除继承的宿主环境变量、`--tools` 只读工具、`dontAsk`、`--safe-mode` 不加载插件与 hooks、显式模型，`--session-id` / `--resume` 续用（[CC004 §2](claude-code/CC004-reviewer.md)）。T325 曾改用子代理（`claude-subagent`），T331 删除 |
 
 ## 附录 A：备选方案存档
 

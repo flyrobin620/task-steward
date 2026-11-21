@@ -28,7 +28,7 @@
   },
   "plugins": {
     "host_integration": "claude-code",
-    "sessions": ["claude-app", "claude-subagent", "codex-app-server", "codex-exec", "copilot-cli"],
+    "sessions": ["claude-app", "claude-headless", "codex-app-server", "codex-exec", "copilot-cli"],
     "human_channels": ["in-session", "teams-chat"],
     "storage": {"use": "fs"}
   },
@@ -182,8 +182,8 @@
 | `worker.context` | `fresh` | 固定 fresh；`fork` 会把主会话长上下文带入，不允许 |
 | `worker.prompt_template` | 路径 | worker 启动指令模板，可用变量：`{task_id}` `{attempt}` `{brief_path}` `{writable_roots}` `{report_paths}` |
 | `worker.allow_in_task_subagents` | 布尔 | worker 能否在自己任务内使用 Agent 子代理 |
-| `reviewer.session` / `fallback_session` | 会话适配器名 | 评审所用会话适配器，可与主会话、worker 不同；须具备 `oneshot`、`read_only_enforced`，并且是 `direct`，或与 worker 同宿主的 `worker_agent`（DN006 §7.4）。本版本实现了 `codex-app-server`、`claude-subagent`、`copilot-cli`（DN004 §3.1） |
-| `reviewer.model` / `effort` / `timeout_seconds` | — | 默认 `gpt-6-astra` / `medium`；只读由所选适配器强制，不另设字段。`claude-subagent` 的模型取 `sonnet`、`opus`、`haiku`、`fable` 之一（CC004 §4），`timeout_seconds` 对它不起作用（子代理在 worker 的 turn 内运行）；`copilot-cli` 的模型须是 Copilot 允许的模型（CP004 §4） |
+| `reviewer.session` / `fallback_session` | 会话适配器名 | 评审所用会话适配器，可与主会话、worker 不同；须具备 `oneshot`、`direct`、`read_only_enforced`（DN006 §7.4）。本版本实现了 `codex-app-server`、`claude-headless`、`copilot-cli`（DN004 §3.1）；`claude-subagent` 已删除（T331），配置中出现时校验失败并给出改法 |
+| `reviewer.model` / `effort` / `timeout_seconds` | — | 默认 `gpt-6-astra` / `medium`；只读由所选适配器强制，不另设字段。`claude-headless` 的模型可以是完整 ID（如 `claude-sonnet-5-5`，须与实际模型一致）或别名 `sonnet`、`opus`、`haiku`、`fable`（实际模型须属于该家族，CC004 §4）；`copilot-cli` 的模型须是 Copilot 允许的模型（CP004 §4） |
 | `routine.session` | 会话适配器名 | 承载例行会话（DN006 §8.9）的会话适配器，须具备 `interactive` 与 `timer`；delegated 适配器必须与主会话同一宿主 |
 | `routine.model` / `effort` / `permission_mode` | 同上 | 默认 `claude-sonnet-5-5` / `low` / `auto`：例行会话只执行 tsw 算好的动作，不需要强模型；权限模式不能高于主会话：没有显式设置时取默认值与主会话模式中较低的一个，显式设置得更高时校验失败 |
 
@@ -198,7 +198,7 @@
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
 | `plugins.host_integration` | `claude-code` | 宿主集成（DN006 §6）：生成流程说明、工具注册与规则执行配置 |
-| `plugins.sessions` | `claude-app`、`claude-subagent`、`codex-app-server`、`codex-exec`、`copilot-cli` | 加载的会话适配器；`roles.*.session` 只能引用其中的实现 |
+| `plugins.sessions` | `claude-app`、`claude-headless`、`codex-app-server`、`codex-exec`、`copilot-cli` | 加载的会话适配器；`roles.*.session` 只能引用其中的实现 |
 | `plugins.human_channels` | `in-session`、`teams-chat` | 主会话把转交来、应由用户决定的问题交给用户的方式（DN006 §8.6）：`in-session` 在主会话中直接问，`teams-chat` 经 Teams 渠道插件；worker 在自己会话中的提问不受它控制 |
 | `plugins.storage.use` | `fs` | `fs` 或 `fs+git`（数据目录作为用户私有 Git 仓库） |
 | `input.triage` | `orchestrator_judgment` | `orchestrator_judgment`：主会话在授权边界内综合判断（DN006 §8.2）；`human_direct`：主会话不判断，一律交给人类 |
