@@ -21,19 +21,27 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'plugin\setup\prereq.ps1')
 
-# The arrow-key choice needs a console on both sides (CC009 §11); otherwise lines, as before.
+# The arrow-key choice needs a console on both sides and a terminal that is not "dumb"; colour
+# also needs no NO_COLOR (DN009 §16.4, CC009 §11). Otherwise lines, as before.
 $script:Keys = -not $Plain -and -not [Console]::IsInputRedirected -and
-    -not [Console]::IsOutputRedirected -and $Host.Name -eq 'ConsoleHost'
+    -not [Console]::IsOutputRedirected -and $Host.Name -eq 'ConsoleHost' -and $env:TERM -ne 'dumb'
+$script:Color = $script:Keys -and -not $env:NO_COLOR
 $script:Marks = @{ ok = [char]0x221A; bad = [char]0x00D7; warn = '!'; cursor = [char]0x25BA }
 
-function Write-TswMark([string]$Kind, [string]$Text) {
-    $color = @{ ok = 'Green'; bad = 'Red'; warn = 'Yellow' }[$Kind]
-    if ($script:Keys) {
-        Write-Host " $($script:Marks[$Kind]) " -ForegroundColor $color -NoNewline
-        Write-Host $Text
+function Write-TswText([string]$Text, [string]$Color, [switch]$NoNewline) {
+    if ($script:Color -and $Color) {
+        Write-Host $Text -ForegroundColor $Color -NoNewline:$NoNewline
     } else {
-        Write-Host $Text
+        Write-Host $Text -NoNewline:$NoNewline
     }
+}
+
+function Write-TswMark([string]$Kind, [string]$Text) {
+    if ($script:Keys) {
+        $color = @{ ok = 'Green'; bad = 'Red'; warn = 'Yellow' }[$Kind]
+        Write-TswText " $($script:Marks[$Kind]) " $color -NoNewline
+    }
+    Write-Host $Text
 }
 
 function Select-TswYesNo([string]$Question) {
@@ -45,7 +53,7 @@ function Select-TswYesNo([string]$Question) {
     $options = @('是', '否')
     $index = 0
     Write-Host ''
-    Write-Host " $Question" -ForegroundColor White
+    Write-TswText " $Question" 'White'
     $first = $true
     [Console]::CursorVisible = $false
     try {
@@ -54,12 +62,12 @@ function Select-TswYesNo([string]$Question) {
             $first = $false
             for ($i = 0; $i -lt $options.Count; $i++) {
                 if ($i -eq $index) {
-                    Write-Host "   $($script:Marks.cursor) $($options[$i])  " -ForegroundColor Cyan
+                    Write-TswText "   $($script:Marks.cursor) $($options[$i])  " 'Cyan'
                 } else {
                     Write-Host "     $($options[$i])  "
                 }
             }
-            Write-Host '   ↑↓ 选择  回车 确认  y / n 直接选  Ctrl+C 取消' -ForegroundColor DarkGray
+            Write-TswText '   ↑↓ 选择  回车 确认  y / n 直接选  Ctrl+C 取消' 'DarkGray'
             $key = [Console]::ReadKey($true)
             $char = "$($key.KeyChar)".ToLowerInvariant()
             if ($char -eq 'y') { $index = 0; break }

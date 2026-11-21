@@ -123,20 +123,25 @@ def test_ctrl_c_cancels_before_anything_is_installed(tmp_path: Path) -> None:
     home = tmp_path / "data"
     out = drive(tmp_path, [["line", str(home)], ["line", ""], "interrupt"])
     assert out["code"] == 0 and out["left"] == []
-    assert out["result"] == {"_silent": True, "installed": False}
+    assert out["result"] == {"_silent": True, "installed": False, "note": "已取消，没有安装"}
     assert "已取消，没有执行任何安装步骤" in out["screen"]
     assert not (Path(out["env"]["TSW_STATE_DIR"]) / "install.json").exists()
     assert not home.exists()
 
 
 @pytest.mark.use_case(UC)
-def test_cancelling_at_the_plan_keeps_the_answers(tmp_path: Path) -> None:
+@pytest.mark.parametrize("json_flag", [(), ("--json",)])
+def test_cancelling_at_the_plan_keeps_the_answers(
+    tmp_path: Path, json_flag: tuple[str, ...]
+) -> None:
     home = tmp_path / "data"
     keys: list[Any] = [["line", str(home)], ["line", "en-US"], "enter", "enter", "y"]
     keys += [["line", ""], "enter", "up", "enter"]  # the plan: “取消”, the last option
-    out = drive(tmp_path, keys)
+    out = drive(tmp_path, keys, *json_flag)
     assert out["code"] == 0 and out["left"] == []
-    assert out["result"] == {"_silent": True, "installed": False}
+    # The screen said it all; with --json the cancelled result is still the JSON (DN009 §16.3).
+    assert out["result"].pop("_silent", False) is not bool(json_flag)
+    assert out["result"]["installed"] is False and out["result"]["answers_file"]
     assert saved_answers(out["env"])["language"] == "en-US"
     assert saved_answers(out["env"])["dashboard"] is True
     assert "没有安装；答案已保存在" in out["screen"]

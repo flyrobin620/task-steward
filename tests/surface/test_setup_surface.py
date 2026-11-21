@@ -266,6 +266,7 @@ def test_the_probe_reports_missing_items_and_installs_with_winget(tmp_path: Path
 
 
 @pytest.mark.use_case(UC)
+@pytest.mark.use_case("UC-SETUP-005")
 def test_setup_ps1_runs_the_interactive_install(tmp_path: Path) -> None:
     product, claude = make_product(tmp_path), fake_claude(tmp_path)
     env = setup_env(tmp_path)

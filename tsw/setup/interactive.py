@@ -206,7 +206,13 @@ def run_keys(args: argparse.Namespace, console: Console, style: Style) -> dict[s
     except Cancelled:
         screen.say()
         screen.say(f" {style.mark('warn')} {style.warn('已取消，没有执行任何安装步骤')}")
-        return {"_silent": True, "installed": False}
+        return _quiet(args, {"installed": False, "note": "已取消，没有安装"})
+
+
+def _quiet(args: argparse.Namespace, result: dict[str, Any]) -> dict[str, Any]:
+    """The screen has said it all: no key-value lines after it, except the JSON ``--json``
+    asks for (DN009 §16.3)."""
+    return result if args.json else {"_silent": True, **result}
 
 
 def _run_keys(args: argparse.Namespace, screen: _Screen) -> dict[str, Any]:
@@ -236,20 +242,21 @@ def _run_keys(args: argparse.Namespace, screen: _Screen) -> dict[str, Any]:
         _show_plan(screen, planned)
         if not planned["ok"]:
             raise _preconditions(planned["problems"])
-        head = ["", f" {style.bold('按上面的计划安装吗？')}"]
+        question = ["", f" {style.bold('按上面的计划安装吗？')}"]
         options = [Option("按计划安装"), Option("修改某个答案"), Option("取消", "答案已保存")]
-        picked = choose(screen.console, style, head, options, 0)
+        picked = choose(screen.console, style, question, options, 0)
         if picked == 0:
             break
         if picked == 2:
             screen.say(f" {style.mark('skip')} 没有安装；答案已保存在 {path}")
-            return {"_silent": True, "installed": False}
+            note = "没有安装；答案已保存"
+            return _quiet(args, {"installed": False, "answers_file": str(path), "note": note})
         _change_one(screen, first.questions, answers)
     result = _install(screen, ctx, open_browser=not args.no_browser)
     if args.json:
         return result
     _show_result(screen, result)
-    return {"_silent": True, "ok": result["verify"]["ok"]}
+    return _quiet(args, {"ok": result["verify"]["ok"]})
 
 
 def _asked(q: Question) -> bool:
@@ -456,14 +463,19 @@ def _install(screen: _Screen, ctx: setup_steps.Context, *, open_browser: bool) -
         raise
 
 
+def _check_title(check: dict[str, Any]) -> str:
+    name = str(check["check"])
+    return CHECK_TITLES.get(name, name)
+
+
 def _show_result(screen: _Screen, result: dict[str, Any]) -> None:
     style = screen.style
     screen.title("核对")
     marks: dict[bool | None, str] = {True: "ok", False: "bad", None: "skip"}
     checks: list[dict[str, Any]] = result["verify"]["checks"]
-    width = max(display_width(CHECK_TITLES.get(c["check"], c["check"])) for c in checks)
+    width = max(display_width(_check_title(c)) for c in checks)
     for check in checks:
-        title = CHECK_TITLES.get(check["check"], check["check"])
+        title = _check_title(check)
         title += " " * (width - display_width(title))
         extra = "（重启后生效）" if check.get("pending_reload") else ""
         word = {True: "通过", False: "失败", None: "未核对"}[check["ok"]]

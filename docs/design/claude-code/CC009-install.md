@@ -140,5 +140,5 @@ DN009 §16 在 Windows 上的做法。`setup.ps1` 由 Windows PowerShell 5.1 运
 - **文字输入**：仍用 `input()`，保留控制台的行编辑、历史、粘贴与中文输入法。
 - **宽度**：收起已回答的问题时，按 `shutil.get_terminal_size()` 的列数与 `unicodedata.east_asian_width`（中文占两列）计算每行实际占了几行，再上移清除。
 - **字形**：符号用 WGL4 字符集中的 `►` `√` `×` `–`（旧控制台的默认字体 Consolas 等都有）；入口用 `-X utf8` 运行 Python，控制台输出走宽字符接口，中文与符号都能显示。
-- **入口自己的提问**：`setup.ps1` 中“现在用 winget 安装 … 吗”改为方向键选择（“是 / 否”）：用 `[Console]::ReadKey($true)` 读键、`[Console]::SetCursorPosition` 重画两行、`Write-Host -ForegroundColor` 着色（不依赖转义序列，旧控制台也能显示）；`[Console]::IsInputRedirected` 或 `IsOutputRedirected` 为真、宿主不是控制台（`$Host.Name` 不是 `ConsoleHost`）或加了 `-Plain` 时回退到现在的 `Read-Host`；`-Plain` 同时传给 `--plain`。环境探测的结果行同样着色。会话入口（setup skill）运行的探测脚本 `prereq.ps1` 不提问，不变。
+- **入口自己的提问**：`setup.ps1` 中“现在用 winget 安装 … 吗”改为方向键选择（“是 / 否”）：用 `[Console]::ReadKey($true)` 读键、`[Console]::SetCursorPosition` 重画两行、`Write-Host -ForegroundColor` 着色（不依赖转义序列，旧控制台也能显示）；`[Console]::IsInputRedirected` 或 `IsOutputRedirected` 为真、宿主不是控制台（`$Host.Name` 不是 `ConsoleHost`）、`TERM=dumb` 或加了 `-Plain` 时回退到现在的 `Read-Host`，设置了非空的 `NO_COLOR` 时照常选择、不着色（与 DN009 §16.4 相同）；`-Plain` 同时传给 `--plain`。环境探测的结果行同样着色。会话入口（setup skill）运行的探测脚本 `prereq.ps1` 不提问，不变。
 - **测试**：Windows 上的 CI 中标准输入是管道，现有的 `setup.ps1` 表层测试走回退路径；方向键界面由 component 测试注入按键覆盖；真实控制台（Windows Terminal 与 conhost 各一次）由本机实测并截图。
