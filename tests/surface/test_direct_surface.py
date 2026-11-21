@@ -377,6 +377,17 @@ def test_the_dashboard_lets_its_own_requests_carry_a_referer(h: Harness, dashboa
     for path in ("/", "/tasks/T001", "/preferences"):
         assert policy(path) == (200, "same-origin"), path
     assert policy("/nothing-here") == (404, "same-origin")
+    # Any page opened with the token signs in and leaves the token out of its address, so the
+    # Referer cannot carry it; the redirect is relative and keeps the other parameters (PR #76).
+    for path, location in (
+        (f"/preferences?all=1&token={dashboard.token}", "./preferences?all=1"),
+        (f"/tasks/T001?token={dashboard.token}", "./T001"),
+        (f"/runs/T001/?token={dashboard.token}&view=html", "./?view=html"),
+    ):
+        status, sent, _ = dashboard.request("GET", path, headers={"Cookie": ""})
+        assert (status, sent["Location"]) == (303, location), path
+        assert sent["Set-Cookie"].startswith(f"tsw_status_{dashboard.port}={dashboard.token};")
+    assert policy("/preferences?token=wrong")[0] == 403
     # A button request that carries this page's Referer, as a browser now sends it, is accepted.
     button = {"X-TSW-Token": dashboard.token, "Origin": origin, "Referer": f"{origin}/"}
     status, sent, raw = dashboard.request("POST", "/api/tasks/T001/accept", {"revision": 1}, button)
