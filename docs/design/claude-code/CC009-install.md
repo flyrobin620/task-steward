@@ -1,6 +1,6 @@
 # CC009 Claude Code 上的安装
 
-- 状态：已确认（T305；用户 2026-11-19 确认；同日决定数据目录必填、setup 不配置仓库，DN009 §6）；T308 实现，§5 增加插件使用的解释器 `env.TSW_PYTHON`，§9 记录 live 结论；§10 试装发现与修改（用户 2026-11-20 确认）
+- 状态：已确认（T305；用户 2026-11-19 确认；同日决定数据目录必填、setup 不配置仓库，DN009 §6）；T308 实现，§5 增加插件使用的解释器 `env.TSW_PYTHON`，§9 记录 live 结论；§10 试装发现与修改（用户 2026-11-20 确认）；§11 Windows 终端中的交互（T326，提议）
 - 日期：2026-11-19
 - 实现：[DN009 分发与安装](../DN009-distribution-and-install.md)
 - 相关：[CC006 Claude Code 插件](CC006-plugins.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -130,3 +130,15 @@ live 中另外发现并已处理：
 2. **会话路径改为“先在终端准备插件，其余在会话中做完”**：在 PowerShell 中（Claude app 完全退出时）`claude plugin marketplace add https://github.com/flyrobin620/task-steward.git` 与 `claude plugin install task-steward@task-steward`，再打开 app，在任意新会话中输入 `/task-steward:setup`。§2 第二段改为这三步，并写明要先退出 app 的原因。Claude Code 修复 app 运行时的改名问题、或 app 中的插件窗口能成功添加之后，再恢复“全在会话中”的写法。
 3. **安装后的引导**（DN009 §15.2）：试装确认新会话要在重启 app 之后才用上新的用户设置与插件，所以 setup skill 不创建会话，只在最后告诉用户：完全退出并重新打开 Claude app，在数据目录新建会话，输入 `/orchestrate`（数据目录的 orchestrate skill，以后开主会话都用它）。终端入口输出同样的说明。
 4. **示例 skill**（DN009 §15.3）：`tsw-demo` 生成到数据目录的 `.claude/skills/tsw-demo/SKILL.md`，由主会话在账本中没有任务（新环境）时用于导览、在用户同意或说“开始示例任务”时用于示例任务（orchestrate skill“每次开始”第 4 条指向它）；它只给出任务的规格、开始前的说明与每一步要告诉用户的话，登记、派发、验收都走主会话的现有工具与 skill。
+
+## 11. Windows 终端中的交互（提议，T326）
+
+DN009 §16 在 Windows 上的做法。`setup.ps1` 由 Windows PowerShell 5.1 运行，可能在 Windows Terminal 中，也可能在旧的控制台窗口（conhost）中；Python 子进程继承同一个控制台。
+
+- **转义序列**：Windows 10 1511 起控制台支持 ANSI 转义序列，但旧控制台默认不处理。交互层启动时用标准库 `ctypes` 对标准输出句柄 `GetConsoleMode` / `SetConsoleMode` 加上 `ENABLE_VIRTUAL_TERMINAL_PROCESSING`（`0x0004`），退出时（含 Ctrl+C 与异常）恢复原来的模式；设置失败（不是控制台、或系统太旧）时按 DN009 §16.4 回退。Windows Terminal 本来就处理，设置照样成功。
+- **按键**：`msvcrt.getwch()` 逐键读取，不回显。方向键等功能键先返回前缀 `\x00` 或 `\xe0`，再返回键码：`H` 上、`P` 下、`K` 左、`M` 右；回车为 `\r`，Esc 为 `\x1b`。Ctrl+C 在控制台的处理输入模式下以 `KeyboardInterrupt` 到达，读到 `\x03` 时同样当作取消。
+- **文字输入**：仍用 `input()`，保留控制台的行编辑、历史、粘贴与中文输入法。
+- **宽度**：收起已回答的问题时，按 `shutil.get_terminal_size()` 的列数与 `unicodedata.east_asian_width`（中文占两列）计算每行实际占了几行，再上移清除。
+- **字形**：符号用 WGL4 字符集中的 `►` `√` `×` `–`（旧控制台的默认字体 Consolas 等都有）；入口用 `-X utf8` 运行 Python，控制台输出走宽字符接口，中文与符号都能显示。
+- **入口自己的提问**：`setup.ps1` 中“现在用 winget 安装 … 吗”改为方向键选择（“是 / 否”）：用 `[Console]::ReadKey($true)` 读键、`[Console]::SetCursorPosition` 重画两行、`Write-Host -ForegroundColor` 着色（不依赖转义序列，旧控制台也能显示）；`[Console]::IsInputRedirected` 或 `IsOutputRedirected` 为真时回退到现在的 `Read-Host`。环境探测的结果行同样着色。会话入口（setup skill）运行的探测脚本 `prereq.ps1` 不提问，不变。
+- **测试**：Windows 上的 CI 中标准输入是管道，现有的 `setup.ps1` 表层测试走回退路径；方向键界面由 component 测试注入按键覆盖；真实控制台（Windows Terminal 与 conhost 各一次）由本机实测并截图。
