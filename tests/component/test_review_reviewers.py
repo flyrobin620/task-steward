@@ -416,7 +416,10 @@ def test_an_open_round_is_finished_by_the_reviewer_that_opened_it(
     h, workdir, head = copilot_worker(home, tmp_path, wrapper)
     failed = review(h, workdir)
     assert failed["outcome"] == "review.failed"
-    Harness(home, {"roles": {"reviewer": {**SUBAGENT, "executable": str(wrapper)}}})
+    # The command line configured now is not Copilot's: the round keeps the one it ran with.
+    other = tmp_path / "not-copilot.cmd"
+    other.write_text("@exit 9\r\n", encoding="utf-8")
+    Harness(home, {"roles": {"reviewer": {**SUBAGENT, "model": "haiku", "executable": str(other)}}})
     retried = review(h, workdir)
     assert (retried["round"], retried["verdict"]) == (1, "pass")
     assert len(calls(tmp_path)) == 2
@@ -426,3 +429,14 @@ def test_an_open_round_is_finished_by_the_reviewer_that_opened_it(
     h.run("review_decide", WORKER, task_id="T001", round=1, decision="finalize", head=head)
     h.run("self_check_failed", WORKER, task_id="T001", reason="再审")
     assert review(h, workdir)["status"] == "awaiting_agent"
+
+
+def test_a_retried_subagent_round_keeps_its_model(home: Home, tmp_path: Path) -> None:
+    # Review r5 F4: the same reviewer with a new model still finishes the open round as opened.
+    h = Harness(home, {"roles": {"reviewer": SUBAGENT}})
+    workdir = live_worker(h, tmp_path)
+    review(h, workdir, head="d1")
+    review(h, workdir, round_no=1, error="interrupted")
+    Harness(home, {"roles": {"reviewer": {**SUBAGENT, "model": "haiku"}}})
+    again = review(h, workdir)
+    assert again["agent"]["model"] == "sonnet"

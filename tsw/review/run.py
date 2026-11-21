@@ -139,7 +139,7 @@ def run_round(
         opened = (
             row_dict(
                 conn.execute(
-                    "SELECT reviewer FROM review_rounds WHERE task_id = ? AND attempt = ? "
+                    "SELECT round, reviewer FROM review_rounds WHERE task_id = ? AND attempt = ? "
                     "AND verdict IS NULL ORDER BY round DESC LIMIT 1",
                     (who.task_id, who.attempt),
                 ).fetchone()
@@ -151,12 +151,23 @@ def run_round(
     configured = str(config.get("roles.reviewer.session"))
     model = str(config.get("roles.reviewer.model"))
     session = configured
+    configured_executable = config.get("roles.reviewer.executable")
+    executable_setting = configured_executable
     if opened is not None:
-        # An open round is finished (retried or answered) by the reviewer that opened it, even
-        # when the configuration has changed since.
+        # An open round is finished (retried or answered) by the reviewer and model that opened
+        # it, even when the configuration has changed since.
         recorded = loads(opened["reviewer"], {})
         session = str(recorded.get("session") or configured)
-        model = str(recorded.get("model") or model) if session != configured else model
+        model = str(recorded.get("model") or model)
+        if session != configured:
+            # The configured command line now belongs to another reviewer: the round keeps the
+            # one it was first called with, else the reviewer's own default command.
+            earlier = _read_meta(
+                home.root / "runs" / str(who.task_id) / str(who.attempt) / "review",
+                int(opened["round"]),
+            )
+            kept = (earlier or {}).get("executable")
+            executable_setting = kept if isinstance(kept, str) and kept else None
     else:
         # A new round: the user's choice not to self-review comes before any reviewer check.
         guards.require_self_review(config, row)
@@ -177,7 +188,7 @@ def run_round(
     executable = None
     if reviewer is not None:
         resolver = EXECUTABLES.get(session, resolve_executable)
-        executable = resolver(config.get("roles.reviewer.executable"))
+        executable = resolver(executable_setting)
     ctx = Context(
         home=home,
         config=config,
@@ -429,6 +440,7 @@ def _review(
         "model": ctx.model,
         "effort": ctx.config.get("roles.reviewer.effort"),
         "thread_id": None,
+        "executable": ctx.executable,
         "resumed": resume,
         "retry": retry,
         "status": None,
