@@ -40,7 +40,7 @@ from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urlsplit
 
 from tsw import direct
 from tsw.config import load_config
@@ -82,6 +82,19 @@ SERVED_CSP = (
 def _strings(value: Any) -> tuple[str, ...]:
     items: list[Any] = value if isinstance(value, list) else []  # pyright: ignore[reportUnknownVariableType]
     return tuple(str(item) for item in items)
+
+
+def without_token(path: str, query: list[tuple[str, str]]) -> str:
+    """Where a page opened with ``?token=`` goes once signed in: that page, minus the token.
+
+    The root stays ``/`` as before; any other page is addressed relative to itself, so it resolves
+    under a proxy's path prefix even when the proxy does not rewrite ``Location`` (DN006 §8.10).
+    """
+    rest = urlencode([(key, value) for key, value in query if key != "token"])
+    suffix = f"?{rest}" if rest else ""
+    if path == "/":
+        return "/" + suffix
+    return "./" + path.rsplit("/", 1)[1] + suffix
 
 
 def history(events: Iterable[Event]) -> dict[str, list[Revision]]:
@@ -375,7 +388,10 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Referrer-Policy", "no-referrer")
+            # same-origin, not no-referrer: behind the workdeck gateway, App Service's built-in
+            # authentication refuses a cookie-authenticated POST without a Referer (T333). Other
+            # sites still get none, and the address carries no token after the first visit.
+            self.send_header("Referrer-Policy", "same-origin")
             self.send_header("X-Frame-Options", "DENY")
             for key, value in (extra or {}).items():
                 self.send_header(key, value)
@@ -405,9 +421,13 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 # holds local paths only, no token and no ledger data (DN006 §8.10, T309).
                 self._json(HTTPStatus.OK, app.workdeck_manifest())
                 return
-            given = parse_qs(url.query).get("token", [""])[0]
-            if url.path == "/" and given:
-                if not app.admits(given):
+            query = parse_qsl(url.query, keep_blank_values=True)
+            presented = [value for key, value in query if key == "token"]
+            if presented:
+                # Any page opened with a token parameter signs in and drops every one of them from
+                # the address, so none stays where the same-origin Referer would carry it (T333).
+                given = next((value for value in presented if app.admits(value)), None)
+                if given is None:
                     self._text(HTTPStatus.FORBIDDEN, "令牌无效：请打开 tsw status serve 输出的地址")
                     return
                 cookie = f"{COOKIE}_{app.port}={given}; HttpOnly; SameSite=Strict; Path=/"
@@ -417,7 +437,7 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                     HTTPStatus.SEE_OTHER,
                     b"",
                     "text/plain; charset=utf-8",
-                    {"Location": "/", "Set-Cookie": cookie},
+                    {"Location": without_token(url.path, query), "Set-Cookie": cookie},
                 )
                 return
             token = self._cookie_token()
