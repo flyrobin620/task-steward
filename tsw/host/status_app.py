@@ -33,6 +33,7 @@ import socket
 import sqlite3
 import sys
 import threading
+import time
 import webbrowser
 from collections.abc import Callable, Iterable, Mapping
 from http import HTTPStatus
@@ -64,7 +65,8 @@ TOKEN_HEADER = "X-TSW-Token"
 # Files a page may link to (``tsw.host.status.link_for``), served read-only.
 SERVED_DIRS = ("runs", "legacy")
 MAX_BODY = 16 * 1024
-# How long, and how much, a connection is read after its answer before it is closed (_Server).
+# How long in all, and how much, a connection is read after its answer before it is closed
+# (_Server).
 LINGER_SECONDS = 2.0
 LINGER_BYTES = 8 << 20
 # The preference page's retries (command_id) remembered by one server run.
@@ -610,15 +612,19 @@ class _Server(ThreadingHTTPServer):
     before its body is read (a foreign origin, no token, a body too large) leaves the body
     unread, and closing a socket with unread data resets the connection on Windows, so the
     client lost the answer (ConnectionAbortedError 10053). Reading stops at the client's close,
-    after ``LINGER_SECONDS`` without data, or after ``LINGER_BYTES``."""
+    ``LINGER_SECONDS`` after the answer in all, or after ``LINGER_BYTES``."""
 
     def shutdown_request(self, request: Any) -> None:
         sock: socket.socket = request
+        deadline = time.monotonic() + LINGER_SECONDS
         try:
             sock.shutdown(socket.SHUT_WR)  # the answer is complete; the client may close
-            sock.settimeout(LINGER_SECONDS)
             read = 0
             while read < LINGER_BYTES:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                sock.settimeout(left)
                 chunk = sock.recv(65536)
                 if not chunk:
                     break

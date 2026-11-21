@@ -6,8 +6,10 @@ import http.client
 import json
 import re
 import shutil
+import socket
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -253,6 +255,26 @@ def test_a_request_refused_before_its_body_is_read_still_gets_its_answer(app: Ap
     for _ in range(10):
         assert app.request("POST", path, body, {"Origin": "http://evil.example"})[0] == 403
         assert app.request("POST", path, body)[0] == 403
+    # A client that keeps trickling a refused body is cut off about two seconds after the
+    # answer in all, not two seconds after each piece.
+    with socket.create_connection(("127.0.0.1", app.port), timeout=10) as raw:
+        head = (
+            f"POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{app.port}\r\n"
+            "Origin: http://evil.example\r\nContent-Type: application/json\r\n"
+            "Content-Length: 100000\r\n\r\n"
+        )
+        raw.sendall(head.encode("ascii"))
+        assert raw.recv(64).startswith(b"HTTP/1.0 403")
+        start = time.monotonic()
+        closed = False
+        while time.monotonic() - start < 6:
+            try:
+                raw.sendall(b"x")
+            except OSError:
+                closed = True
+                break
+            time.sleep(0.5)
+        assert closed and time.monotonic() - start < 4.5
 
 
 @mark.use_case("UC-DIRECT-002")
