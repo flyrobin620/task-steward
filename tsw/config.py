@@ -831,7 +831,9 @@ def self_review_mode(config: EffectiveConfig, repo: str | None) -> tuple[str, st
     a repository's ``self_review`` overrides ``review.self_review``."""
     name = resolve_repository(config, repo) if repo else None
     if name is not None:
-        mode = config.get(f"repositories.{name}.self_review")
+        # Indexed by the whole ID: a repository ID may contain dots (DN003 §7.2).
+        entry = (config.get("repositories", {}) or {}).get(name)
+        mode = entry.get("self_review") if isinstance(entry, dict) else None
         if mode in SELF_REVIEW:
             return str(mode), f"repositories.{name}.self_review"
     mode = config.get("review.self_review")

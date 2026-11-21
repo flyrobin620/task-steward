@@ -288,3 +288,70 @@ def test_with_self_review_off_there_is_no_round(home: Home, tmp_path: Path) -> N
     assert "review.started" not in types(h)
     brief = (h.home.root / "runs" / "T001" / "a1" / "brief.md").read_text(encoding="utf-8")
     assert "- 自评审：关闭（`review.self_review`）" in brief
+
+
+def test_a_changed_reviewer_starts_afresh_with_the_last_triage(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Review r1 F2: the subagent's ID is never handed to Copilot as a session to resume.
+    h = Harness(home, {"roles": {"reviewer": SUBAGENT}})
+    workdir = tmp_path / "repo"
+    _, head = git_repo(workdir)
+    live_worker(h, tmp_path, workdir)
+    review(h, workdir)
+    found = json.dumps(result(head, HIGH, verdict="changes_requested"))
+    review(h, workdir, round_no=1, result=found, agent_id="agent-1")
+    h.run(
+        "review_triage",
+        WORKER,
+        task_id="T001",
+        round=1,
+        items=[{"finding": "F1", "action": "reject", "reason": "不成立"}],
+    )
+    h.run("review_decide", WORKER, task_id="T001", round=1, decision="finalize", head=head)
+    h.run("self_check_failed", WORKER, task_id="T001", reason="改用 Copilot 再审")
+    wrapper = fake_copilot(tmp_path, ["echo-pass"], monkeypatch)
+    Harness(
+        home,
+        {
+            "roles": {
+                "reviewer": {
+                    "session": "copilot-cli",
+                    "model": "gpt-6.1-sol",
+                    "executable": str(wrapper),
+                }
+            }
+        },
+    )
+    second = review(h, workdir)
+    assert second["verdict"] == "pass"
+    argv = calls(tmp_path)[0]["argv"]
+    assert "--resume" not in argv and "agent-1" not in argv
+    text = (review_dir(h) / "r2-request.md").read_text(encoding="utf-8")
+    assert "没有上一轮的上下文" in text and "F1（high）：reject" in text
+    assert str(review_dir(h) / "r1.json") in text
+
+
+def test_a_new_reviewer_of_a_research_task_gets_the_last_triage(home: Home, tmp_path: Path) -> None:
+    # Review r1 F3: without git, a fresh reviewer still gets round 1's findings and triage.
+    h = Harness(home, {"roles": {"reviewer": SUBAGENT}})
+    workdir = live_worker(h, tmp_path)
+    review(h, workdir, head="draft-1")
+    review(
+        h,
+        workdir,
+        round_no=1,
+        result=json.dumps(result("draft-1", HIGH, verdict="changes_requested")),
+    )
+    h.run(
+        "review_triage",
+        WORKER,
+        task_id="T001",
+        round=1,
+        items=[{"finding": "F1", "action": "fix", "verification": "改了第 2 节"}],
+    )
+    h.run("review_decide", WORKER, task_id="T001", round=1, decision="iterate", head="draft-1")
+    review(h, workdir, head="draft-2")
+    text = (review_dir(h) / "r2-request.md").read_text(encoding="utf-8")
+    assert "没有上一轮的上下文" in text and "F1（high）：fix" in text and "改了第 2 节" in text
+    assert str(review_dir(h) / "r1.json") in text and "draft-1" in text

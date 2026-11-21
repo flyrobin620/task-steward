@@ -390,3 +390,22 @@ def test_update_and_dashboard_settings(home: Home) -> None:
     assert any(p.startswith("update.reload") for p in problems)
     assert "dashboard.port: 不能小于 1024" in problems
     assert "dashboard.port: 不能大于 65535" in _problems(home, {"dashboard": {"port": 70000}})
+
+
+@pytest.mark.use_case("UC-REVIEW-003")
+def test_a_dotted_repository_id_keeps_its_own_self_review(home: Home) -> None:
+    # Review r1 F1: the repository's value is read by its whole ID, in both directions.
+    for whole, own in (("off", "required"), ("required", "off")):
+        _write(
+            home,
+            CONFIG_FILE,
+            {
+                "version": 1,
+                "review": {"self_review": whole},
+                "repositories": {"my.repo": {"aliases": ["mr"], "self_review": own}},
+            },
+        )
+        config = load_config(home)
+        assert config.valid, config.problems
+        for name in ("my.repo", "mr"):
+            assert self_review_mode(config, name) == (own, "repositories.my.repo.self_review")

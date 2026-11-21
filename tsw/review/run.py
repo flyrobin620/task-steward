@@ -351,15 +351,26 @@ def _review(
     resume = None
     caps = SESSIONS.get(ctx.session)
     incremental = caps is not None and caps.incremental
+    # A thread is only ever continued by the reviewer that started it: after the reviewer was
+    # changed, the next round starts afresh.
+    same_reviewer = (
+        previous is not None
+        and loads(previous.get("reviewer"), {}).get("session") == ctx.session
+    )
     if (
         previous is not None
         and incremental
+        and same_reviewer
         and ctx.config.get("review.incremental") == "resume_thread"
     ):
         resume = _thread_of(review_dir, int(previous["round"]))
-    # A reviewer that cannot keep a thread gets the full scope with the last round's triage
-    # (DN006 §7.4); one that can gets only the increment once it resumes the thread.
-    carried = previous if (resume or (previous is not None and not incremental)) else None
+    # A reviewer that cannot keep a thread, or a new one, gets the full scope with the last
+    # round's triage (DN006 §7.4); one that resumes its thread gets only the increment.
+    carried = (
+        previous
+        if (resume or (previous is not None and (not incremental or not same_reviewer)))
+        else None
+    )
     diffs: dict[str, str] = {}
     if ctx.session in NO_SHELL and is_git:
         diffs = _write_diffs(
@@ -807,24 +818,32 @@ def render_request(
         stat = git(workdir, "diff", "--stat", "--end-of-options", base, head, "--")
         if stat:
             lines += ["", "```", stat, "```"]
-        if previous is not None:
-            lines += [
-                "",
-                f"这是第 {round_no} 轮，评审者没有上一轮的上下文。"
-                f"上一轮（第 {previous['round']} 轮）"
-                f"评审的 HEAD 是 {previous['reviewed_head']}，worker 对其意见的处置：",
-                *(_disposition(f) for f in previous["findings"]),
-                "",
-                "请完整评审，并核对上述处置是否真正解决了对应问题、拒绝的理由是否成立"
-                + (
-                    f"（上一轮以来的改动见 `{diffs['increment']}`）"
-                    if diffs.get("increment")
-                    else ""
-                )
-                + "。新意见的 id 接着上一轮编号。",
-            ]
     else:
         lines.append(f"报告草稿与证据：`{workdir}`。成果标识为 {head}。")
+    if previous is not None and not resumed:
+        earlier = (
+            home.root
+            / "runs"
+            / str(task["task_id"])
+            / str(previous.get("attempt") or "")
+            / "review"
+            / f"r{previous['round']}.json"
+        )
+        lines += [
+            "",
+            f"这是第 {round_no} 轮，评审者没有上一轮的上下文。上一轮（第 {previous['round']} 轮）"
+            f"评审的成果是 {previous['reviewed_head']}，意见全文见 `{earlier}`，"
+            "worker 对这些意见的处置：",
+            *(_disposition(f) for f in previous["findings"]),
+            "",
+            "请完整评审，并核对上述处置是否真正解决了对应问题、拒绝的理由是否成立"
+            + (
+                f"（上一轮以来的改动见 `{diffs['increment']}`）"
+                if diffs.get("increment")
+                else ("" if is_git else "（报告草稿与证据在上一轮之后的变化）")
+            )
+            + "。新意见的 id 接着上一轮编号。",
+        ]
     lines += [
         "",
         f"worker 的报告草稿位于 `{home.root / 'work' / str(task['task_id'])}` 下本 attempt 的"
