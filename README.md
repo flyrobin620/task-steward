@@ -71,7 +71,7 @@ git clone https://github.com/flyrobin620/task-steward.git "$env:LOCALAPPDATA\Tas
 & "$env:LOCALAPPDATA\TaskSteward\task-steward\setup.ps1"
 ```
 
-脚本先探测 Python、git 与 Claude Code（缺少 Python 或 git 时问你是否用 winget 安装），再问几个问题（数据目录位置必须由你给出，没有默认值），显示计划请你确认，然后做完全部步骤并核对。Windows 上推荐这条路径。
+脚本先探测 Python、git 与 Claude Code（缺少 Python 或 git 时问你是否用 winget 安装），再问几个问题（选择题用方向键与回车选择；数据目录位置必须由你给出，没有默认值），显示计划请你确认，然后做完全部步骤并核对。不在交互终端中运行或加 `-Plain` 时改为逐行文字问答。Windows 上推荐这条路径。
 
 **在 Claude 中安装**：先完全退出 Claude app（app 运行时添加 GitHub 插件市场会失败），在 PowerShell 中运行：
 

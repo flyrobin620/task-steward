@@ -58,7 +58,7 @@ from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.config_tools import CONFIG_TOOLS
 from tsw.machine.runner import run_tool
 from tsw.review.run import run_round
-from tsw.setup import questions as setup_questions
+from tsw.setup import interactive as setup_interactive
 from tsw.setup import steps as setup_steps
 from tsw.setup.record import answers_path, save_answers
 from tsw.storage.fs import FsStorage, restore
@@ -692,103 +692,9 @@ def _cmd_setup_install(args: argparse.Namespace) -> dict[str, Any]:
     return setup_steps.install(ctx, open_browser=not args.no_browser)
 
 
-def _say_plan(planned: dict[str, Any]) -> None:
-    print("\n将要执行的步骤：")
-    for step in planned["steps"]:
-        state = {"ok": "已满足，跳过", "todo": "要做", "skipped": "不做", "manual": "手工"}.get(
-            step.get("state", ""), step.get("state", "")
-        )
-        print(f"  - {step['step']}：{state}")
-        actions: list[str] = step.get("actions") or []
-        for action in actions:
-            print(f"      {action}")
-        changes: list[dict[str, Any]] = step.get("diff") or []
-        for change in changes:
-            print(f"      {change['key']}：{change['before']} → {change['after']}")
-        if step.get("manual"):
-            print(f"      {step.get('note', '')}")
-            print(f"      文件：{step.get('file')}")
-            print("\n".join(f"      {line}" for line in str(step["manual"]).splitlines()))
-        if step.get("problem"):
-            print(f"      {step['problem']}")
-    for problem in planned["problems"]:
-        print(f"  问题：{problem}")
-    notes: list[str] = planned.get("warnings") or []
-    for warning in notes:
-        print(f"  注意：{warning}")
-
-
 def _setup_interactive(args: argparse.Namespace) -> dict[str, Any]:
-    """The terminal entry's flow (DN009 §4.1): check, ask, show the plan, confirm, install."""
-    first = _setup_context(args, require=False)
-    # Only the machine can block here: saved answers that no longer hold are asked again below.
-    bare = setup_steps.context(
-        os.environ, answers={}, python=args.python, claude=args.claude, require_answers=False
-    )
-    checked = setup_steps.check(bare)
-    blocking = [p for p in checked["problems"] if not p.startswith("home：")]
-    print(f"产品检出：{checked['checkout']['path']}（{checked['checkout']['head']}）")
-    print(f"Python：{checked['python']['path']}（{checked['python']['version']}）")
-    print(f"Claude Code 命令行：{checked['claude']}")
-    if blocking:
-        raise TswError(
-            ErrorCode.REJECTED, "安装的前提不满足", reason="setup_preconditions", problems=blocking
-        )
-    print("\n请回答下面的问题（直接回车采用默认值）：")
-    answers = setup_questions.ask(first.questions, first.answers, input, print)
-    path = save_answers(first.env, answers)
-    ctx = setup_steps.context(
-        os.environ,
-        answers=answers,
-        python=args.python,
-        claude=args.claude,
-        require_answers=True,
-    )
-    planned = setup_steps.plan(ctx)
-    _say_plan(planned)
-    if not planned["ok"]:
-        raise TswError(
-            ErrorCode.REJECTED,
-            "安装的前提不满足",
-            reason="setup_preconditions",
-            problems=planned["problems"],
-        )
-    reply = input("\n按上面的计划安装？[是 / 否]：").strip().lower()
-    if reply not in ("y", "yes", "是", "好"):
-        return {"installed": False, "answers_file": str(path), "note": "没有安装；答案已保存"}
-    result = setup_steps.install(ctx, open_browser=not args.no_browser)
-    if args.json:
-        return result
-    return _say_installed(result)
-
-
-def _say_installed(result: dict[str, Any]) -> dict[str, Any]:
-    """The terminal's summary of an install: each step, the checks, what to do next."""
-    print("\n安装结果：")
-    for step in result["steps"]:
-        print(f"  - {step['step']}：{step.get('state')}")
-        if step.get("manual"):
-            print(f"    {step.get('note', '')}")
-            print(f"    文件：{step.get('file')}")
-            print("\n".join(f"    {line}" for line in str(step["manual"]).splitlines()))
-    verify = result["verify"]
-    for check in verify["checks"]:
-        mark = {True: "通过", False: "失败", None: "未核对"}[check["ok"]]
-        extra = "（重启后生效）" if check.get("pending_reload") else ""
-        print(f"  核对 {check['check']}：{mark}{extra}")
-    warnings: list[str] = result.get("warnings") or []
-    for warning in warnings:
-        print(f"  注意：{warning}")
-    out: dict[str, Any] = {
-        "installed": True,
-        "record": result["record"],
-        "next": result["next"],
-        "repositories": result["repositories"],
-    }
-    if not verify["ok"]:
-        out["ok"] = False
-        out["failed"] = verify["failed"]
-    return out
+    """The terminal entry's flow (DN009 §4.1, §16): check, ask, show the plan, confirm, install."""
+    return setup_interactive.run(args)
 
 
 def _cmd_setup_verify(args: argparse.Namespace) -> dict[str, Any]:
@@ -1039,6 +945,11 @@ def build_parser() -> argparse.ArgumentParser:
     setup_install.add_argument(
         "--no-browser", action="store_true", help="装好 Dashboard 后不打开浏览器"
     )
+    setup_install.add_argument(
+        "--plain",
+        action="store_true",
+        help="和 --interactive 一起用：逐行文字问答，不用方向键界面与颜色",
+    )
     setup_verify = add(setup, "verify", _cmd_setup_verify, "只读：核对安装结果")
     setup_verify.add_argument(
         "--after-reload", action="store_true", help="重新加载宿主之后的核对（PATH、运行时版本）"
@@ -1279,9 +1190,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             detail = f" {json.dumps(exc.details, ensure_ascii=False)}" if exc.details else ""
             print(f"错误 [{exc.code.value}] {exc.message}{detail}", file=sys.stderr)
         return EXIT_CODES[exc.code]
-    if result.pop("_silent", False):
-        return 0
+    silent = result.pop("_silent", False)
     ok = bool(result.pop("ok", True))
+    if silent:
+        return 0 if ok else EXIT_CODES[ErrorCode.REJECTED]
     if args.json:
         print(json.dumps({"ok": ok, **result}, ensure_ascii=False))
     else:

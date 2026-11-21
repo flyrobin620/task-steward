@@ -745,7 +745,13 @@ def plan(ctx: Context) -> dict[str, Any]:
     }
 
 
-def install(ctx: Context, *, open_browser: bool = True) -> dict[str, Any]:
+# Called when a step of ``install`` starts (result None) and when it has finished (DN009 §16.5).
+Progress = Callable[[str, "dict[str, Any] | None"], None]
+
+
+def install(
+    ctx: Context, *, open_browser: bool = True, progress: Progress | None = None
+) -> dict[str, Any]:
     checked = check(ctx)
     if checked["problems"]:
         raise rejected(
@@ -758,7 +764,11 @@ def install(ctx: Context, *, open_browser: bool = True) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     stood_down: str | None = None
     for name in STEPS:
+        if progress:
+            progress(name, None)
         results.append(_run_step(ctx, name, apply=True, open_browser=open_browser))
+        if progress:
+            progress(name, results[-1])
         if name == "home":
             # As soon as the data directory exists: a later step that fails leaves no session
             # that would take the lease at its next start.

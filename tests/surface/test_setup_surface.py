@@ -276,6 +276,8 @@ def test_setup_ps1_runs_the_interactive_install(tmp_path: Path) -> None:
     replies = [str(home), "", "", "", "否", "", "", "是"]
     proc = powershell(product / "setup.ps1", "-NoBrowser", env=env, stdin="\n".join(replies) + "\n")
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    # Piped input and output: the line questions without colour or cursor movement (DN009 §16.4).
+    assert "\x1b" not in proc.stdout and "请回答下面的问题" in proc.stdout
     assert (home / "tsw-home.json").is_file()
     installed = record(env)
     assert installed["status"] == "installed"
