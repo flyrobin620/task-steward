@@ -357,6 +357,40 @@ def test_the_status_app_rejects_and_cancels(h: Harness, app: App) -> None:
 
 
 @mark.use_case("UC-DIRECT-002")
+@mark.use_case("UC-DIRECT-007")
+def test_the_dashboard_lets_its_own_requests_carry_a_referer(h: Harness, dashboard: App) -> None:
+    # Behind the workdeck gateway, App Service's built-in authentication refuses a POST that
+    # signs in by cookie and carries no Referer (T333): every response asks the browser to send
+    # the Referer to this origin only, and the page's write requests ask for it themselves.
+    h.complete("T001")
+    handed_back(h)
+    origin = f"http://127.0.0.1:{dashboard.port}"
+
+    def policy(path: str) -> tuple[int, str]:
+        status, sent, _ = dashboard.request("GET", path)
+        return status, sent["Referrer-Policy"]
+
+    assert policy("/") == (403, "same-origin")
+    status, sent, _ = dashboard.request("GET", f"/?token={dashboard.token}")
+    assert (status, sent["Referrer-Policy"]) == (303, "same-origin")
+    dashboard.cookie = sent["Set-Cookie"].split(";")[0]
+    for path in ("/", "/tasks/T001", "/preferences"):
+        assert policy(path) == (200, "same-origin"), path
+    assert policy("/nothing-here") == (404, "same-origin")
+    # A button request that carries this page's Referer, as a browser now sends it, is accepted.
+    button = {"X-TSW-Token": dashboard.token, "Origin": origin, "Referer": f"{origin}/"}
+    status, sent, raw = dashboard.request("POST", "/api/tasks/T001/accept", {"revision": 1}, button)
+    assert (status, sent["Referrer-Policy"], json.loads(raw)["ok"]) == (200, "same-origin", True)
+    assert h.status("T001") == "accepted"
+    # The task buttons and the preference page's forms both send with fetch and set the policy.
+    calls = [call.split("});")[0] for call in APP_SCRIPT.split("await fetch(")[1:]]
+    posts = [call for call in calls if 'method: "POST"' in call]
+    assert len(calls) == 3 and len(posts) == 2, calls
+    assert all('referrerPolicy: "same-origin"' in post for post in posts), posts
+    assert "no-referrer" not in APP_SCRIPT
+
+
+@mark.use_case("UC-DIRECT-002")
 def test_the_status_app_serves_linked_reports_and_nothing_else(h: Harness, app: App) -> None:
     app.cookie = f"tsw_status_{app.port}={app.token}"
     report = h.home.path("runs", "T009", "a1", "report.html")

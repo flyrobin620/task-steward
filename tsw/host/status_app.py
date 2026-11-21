@@ -375,7 +375,10 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Referrer-Policy", "no-referrer")
+            # same-origin, not no-referrer: behind the workdeck gateway, App Service's built-in
+            # authentication refuses a cookie-authenticated POST without a Referer (T333). Other
+            # sites still get none, and the address carries no token after the first visit.
+            self.send_header("Referrer-Policy", "same-origin")
             self.send_header("X-Frame-Options", "DENY")
             for key, value in (extra or {}).items():
                 self.send_header(key, value)

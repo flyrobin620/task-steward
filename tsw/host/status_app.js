@@ -108,6 +108,7 @@
         headers: {"Content-Type": "application/json", "X-TSW-Token": token},
         body: JSON.stringify({revision, reason}),
         credentials: "same-origin",
+        referrerPolicy: "same-origin",
       });
       const body = await response.json().catch(() => ({message: `HTTP ${response.status}`}));
       if (response.ok && body.ok) {
@@ -210,6 +211,7 @@
           headers: {"Content-Type": "application/json", "X-TSW-Token": token},
           body: JSON.stringify(ask.body),
           credentials: "same-origin",
+          referrerPolicy: "same-origin",
         });
         const body = await response.json().catch(() => ({message: `HTTP ${response.status}`}));
         if (response.ok && body.ok) {
