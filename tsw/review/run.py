@@ -354,8 +354,7 @@ def _review(
     # A thread is only ever continued by the reviewer that started it: after the reviewer was
     # changed, the next round starts afresh.
     same_reviewer = (
-        previous is not None
-        and loads(previous.get("reviewer"), {}).get("session") == ctx.session
+        previous is not None and loads(previous.get("reviewer"), {}).get("session") == ctx.session
     )
     if (
         previous is not None
