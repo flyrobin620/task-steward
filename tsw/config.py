@@ -29,9 +29,11 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")
 PERMISSION_ORDER = ("ask", "edits", "auto", "full")
 SEVERITIES = ("critical", "high", "medium", "low", "info")
 SELF_REVIEW = ("required", "off")  # review.self_review (DN004 §9)
-# The model names the host's subagent tool accepts: the reviewer model of ``claude-subagent``
-# (CC004 §4). Each stands for the host's current model of that family.
-SUBAGENT_MODELS = ("sonnet", "opus", "haiku", "fable")
+# The model aliases the ``claude`` command line accepts (CC004 §4): each stands for the host's
+# current model of that family.
+CLAUDE_ALIASES = ("sonnet", "opus", "haiku", "fable")
+# Session adapters an earlier version had and this one removed, with what to use instead.
+REMOVED_SESSIONS = {"claude-subagent": "claude-headless"}
 MODEL_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 REPOSITORY_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # Fields a machine-local override may set (DN003 §5); ``*`` matches one map key.
@@ -68,7 +70,6 @@ DEFAULTS: dict[str, Any] = {
         "sessions": [
             "claude-app",
             "claude-headless",
-            "claude-subagent",
             "codex-app-server",
             "codex-exec",
             "copilot-cli",
@@ -473,13 +474,13 @@ def normalize_model_id(model: str) -> str:
 
 
 def same_model(a: str, b: str) -> bool:
-    """Whether two model names may be the same model: equal IDs, or a subagent alias such as
+    """Whether two model names may be the same model: equal IDs, or a ``claude`` alias such as
     ``opus`` and an ID of that family such as ``claude-opus-5-5``."""
     a, b = normalize_model_id(a), normalize_model_id(b)
     if a == b:
         return True
     for alias, full in ((a, b), (b, a)):
-        if alias in SUBAGENT_MODELS and full.startswith(f"claude-{alias}"):
+        if alias in CLAUDE_ALIASES and full.startswith(f"claude-{alias}"):
             return True
     return False
 
@@ -641,7 +642,9 @@ def _validate_plugins(values: dict[str, Any], problems: list[str], warnings: lis
         problems.append(f"plugins.storage.use: 本版本不提供 {storage}")
     loaded = [s for s in get(values, "plugins.sessions", []) if isinstance(s, str)]
     for name in loaded:
-        if name not in SESSIONS:
+        if name in REMOVED_SESSIONS:
+            problems.append(_removed(f"plugins.sessions 中的 {name}", name))
+        elif name not in SESSIONS:
             problems.append(f"plugins.sessions: 本版本不提供会话适配器 {name}")
     for name in get(values, "plugins.human_channels", []) or []:
         if isinstance(name, str) and name not in CHANNELS:
@@ -650,6 +653,9 @@ def _validate_plugins(values: dict[str, Any], problems: list[str], warnings: lis
     def session(role_path: str) -> str | None:
         name = get(values, role_path)
         if name is None:
+            return None
+        if isinstance(name, str) and name in REMOVED_SESSIONS:
+            problems.append(_removed(role_path, name))
             return None
         if not isinstance(name, str) or name not in loaded or name not in SESSIONS:
             problems.append(f"{role_path}: 必须是 plugins.sessions 中已加载的会话适配器")
@@ -701,14 +707,11 @@ def _validate_plugins(values: dict[str, Any], problems: list[str], warnings: lis
         if reviewer is None:
             continue
         caps = SESSIONS[reviewer]
-        # The worker's own subagent can review: it runs in the worker's turn, never in the
-        # orchestrator's (DN006 §7.4).
-        by_worker = caps.oneshot_via == "worker_agent"
         missing = [
             name
             for name, ok in (
                 ("oneshot", caps.oneshot),
-                ("direct", caps.execution == "direct" or by_worker),
+                ("direct", caps.execution == "direct"),
                 ("read_only_enforced", caps.read_only_enforced),
             )
             if not ok
@@ -716,15 +719,17 @@ def _validate_plugins(values: dict[str, Any], problems: list[str], warnings: lis
         if missing:
             problems.append(f"{role_path}: {reviewer} 不能做评审器（缺少 {', '.join(missing)}）")
             continue
-        if by_worker:
-            if worker is not None and SESSIONS[worker].host != caps.host:
-                problems.append(
-                    f"{role_path}: {reviewer} 由 worker 启动，worker 须在同一宿主（{caps.host}）"
-                )
-            if isinstance(reviewer_model, str) and reviewer_model not in SUBAGENT_MODELS:
-                problems.append(
-                    f"roles.reviewer.model: {reviewer} 的模型须为 {'、'.join(SUBAGENT_MODELS)} 之一"
-                )
+        if (
+            reviewer == "claude-headless"
+            and role_path == "roles.reviewer.session"
+            and isinstance(reviewer_model, str)
+            and reviewer_model not in CLAUDE_ALIASES
+            and not reviewer_model.startswith("claude-")
+        ):
+            problems.append(
+                f"roles.reviewer.model: {reviewer} 的模型须为 Claude 模型 ID（claude-…）"
+                f"或别名 {'、'.join(CLAUDE_ALIASES)} 之一（CC004 §4）"
+            )
     worker_model = get(values, "roles.worker.model")
     if (
         isinstance(reviewer_model, str)
@@ -732,6 +737,16 @@ def _validate_plugins(values: dict[str, Any], problems: list[str], warnings: lis
         and same_model(reviewer_model, worker_model)
     ):
         warnings.append("roles.reviewer.model 与 roles.worker.model 相同，评审视角的独立性下降")
+
+
+def _removed(where: str, name: str) -> str:
+    """How to move off a session adapter this version removed (DN004 §3.2)."""
+    instead = REMOVED_SESSIONS[name]
+    return (
+        f"{where}: 会话适配器 {name} 已删除（评审器改由 tsw 启动，T331），改为 {instead}："
+        f"roles.reviewer.session 与 plugins.sessions 中的 {name} 都换成 {instead}，"
+        "模型别名（如 sonnet）可以沿用"
+    )
 
 
 def _validate_input(values: dict[str, Any], problems: list[str], sources: dict[str, str]) -> None:

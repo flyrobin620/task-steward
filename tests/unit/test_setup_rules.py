@@ -83,7 +83,7 @@ def test_the_initial_configuration_follows_the_answers(home: Home) -> None:
     base: dict[str, Any] = {
         "home": "C:/data",
         "language": "en-US",
-        "reviewer": "claude-subagent",
+        "reviewer": "claude-headless",
         "human_channels": "teams-chat",
         "host": "claude-code",
         "dashboard": True,
@@ -94,9 +94,9 @@ def test_the_initial_configuration_follows_the_answers(home: Home) -> None:
     assert layer["plugins"]["human_channels"] == ["in-session", "teams-chat"]
     assert "sessions" not in layer["plugins"]  # the default list loads every reviewer
     assert layer["roles"]["reviewer"] == {
-        "session": "claude-subagent",
+        "session": "claude-headless",
         "fallback_session": None,
-        "model": "sonnet",
+        "model": "claude-sonnet-5-5",
         "effort": "high",
     }
     assert "repositories" not in layer and "accounts" not in layer
@@ -321,12 +321,12 @@ def test_the_workdeck_question_is_asked_only_where_workdeck_is_found(tmp_path: P
 @pytest.mark.use_case(UC)
 def test_only_implemented_reviewers_are_offered_and_a_missing_codex_is_a_warning() -> None:
     reviewer = next(x for x in qs() if x.id == "reviewer")
-    assert reviewer.choices == ("codex-app-server", "claude-subagent", "copilot-cli", "none")
+    assert reviewer.choices == ("codex-app-server", "claude-headless", "copilot-cli", "none")
     assert reviewer.default == "codex-app-server"
-    _, problems = q.normalize({"home": str(Path.cwd() / "d"), "reviewer": "claude-headless"}, qs())
+    _, problems = q.normalize({"home": str(Path.cwd() / "d"), "reviewer": "claude-subagent"}, qs())
     assert any(p.startswith("reviewer：") for p in problems)
     # The install goes on; tasks cannot review until the chosen reviewer's command is there.
     assert "codex" in str(q.reviewer_warning({"PATH": ""}))
     assert "copilot" in str(q.reviewer_warning({"PATH": ""}, "copilot-cli"))
-    assert q.reviewer_warning({"PATH": ""}, "claude-subagent") is None
+    assert "claude -p" in str(q.reviewer_warning({"PATH": ""}, "claude-headless"))
     assert q.reviewer_warning({"PATH": ""}, "none") is None

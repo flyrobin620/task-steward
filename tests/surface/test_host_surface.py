@@ -274,16 +274,12 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     assert "只在用户要求安装、修复、升级或卸载 TaskSteward 时使用" in setup_skill
     assert "${CLAUDE_PLUGIN_ROOT}/setup/prereq.ps1" in setup_skill
     assert "${CLAUDE_PLUGIN_ROOT}/setup/fetch_checkout.py" in setup_skill
-    # The one plugin agent is the read-only reviewer the worker starts (claude-subagent, CC004):
-    # read-only by its tool allowlist, never by its prompt.
-    assert sorted(p.name for p in (PLUGIN / "agents").glob("*.md")) == ["reviewer.md"]
-    reviewer = (PLUGIN / "agents" / "reviewer.md").read_text(encoding="utf-8")
-    assert reviewer.startswith("---\nname: reviewer\ndescription: ")
-    assert "\ntools: Read, Grep, Glob\n" in reviewer
-    assert "\ndisallowedTools: Bash, PowerShell, Edit, Write, NotebookEdit, Agent" in reviewer
-    assert "\nmodel:" not in reviewer  # review_run names the model each round
+    # No plugin agents: the reviewer is a process tsw starts (claude-headless, CC004), the
+    # subagent reviewer of T325 is gone (decision 0004).
+    assert not (PLUGIN / "agents").exists()
     worker = (PLUGIN / "roles" / "worker.md").read_text(encoding="utf-8")
-    assert "`status: awaiting_agent`" in worker and "自评审：关闭" in worker
+    assert "评审器由 tsw 启动" in worker and "自评审：关闭" in worker
+    assert "awaiting_agent" not in worker and "claude-subagent" not in worker
     # T279: merges may carry the gh-account skill's one account prefix, nothing joined; every
     # turn ends with wrap_up, without ask once a question no longer waits on the user.
     assert "`gh-account` skill" in worker and "|| echo none" in worker

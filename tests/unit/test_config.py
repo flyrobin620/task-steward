@@ -107,18 +107,25 @@ def test_only_the_self_review_setting_turns_review_off(home: Home) -> None:
 
 
 def test_reviewer_adapters_and_their_models(home: Home) -> None:
-    subagent = {"roles": {"reviewer": {"session": "claude-subagent", "model": "sonnet"}}}
-    assert _problems(home, subagent) == []
-    full_id = {"roles": {"reviewer": {"session": "claude-subagent", "model": "claude-sonnet-5-5"}}}
-    assert _problems(home, full_id) == [
-        "roles.reviewer.model: claude-subagent 的模型须为 sonnet、opus、haiku、fable 之一"
+    for model in ("sonnet", "claude-sonnet-5-5"):
+        claude = {"roles": {"reviewer": {"session": "claude-headless", "model": model}}}
+        assert _problems(home, claude) == []
+    other = {"roles": {"reviewer": {"session": "claude-headless", "model": "gpt-6-astra"}}}
+    assert _problems(home, other) == [
+        "roles.reviewer.model: claude-headless 的模型须为 Claude 模型 ID（claude-…）"
+        "或别名 sonnet、opus、haiku、fable 之一（CC004 §4）"
     ]
+    # T325's subagent reviewer is gone: the configuration says what to use instead.
+    removed = {"roles": {"reviewer": {"session": "claude-subagent", "model": "sonnet"}}}
+    (problem,) = _problems(home, removed)
+    assert problem.startswith("roles.reviewer.session: 会话适配器 claude-subagent 已删除")
+    assert "改为 claude-headless" in problem
     copilot = {"roles": {"reviewer": {"session": "copilot-cli", "model": "gpt-6.1-sol"}}}
     assert _problems(home, copilot) == []
-    # The worker's subagent needs a worker on the same host; the app cannot review at all.
+    # The app cannot review at all: its sessions are started by a model, not by tsw.
     app = {"roles": {"reviewer": {"session": "claude-app"}}}
     assert any("claude-app 不能做评审器" in p for p in _problems(home, app))
-    opus = {"session": "claude-subagent", "model": "opus"}
+    opus = {"session": "claude-headless", "model": "opus"}
     _write(home, CONFIG_FILE, {"version": 1, "roles": {"reviewer": opus}})
     config = load_config(home)
     assert config.valid

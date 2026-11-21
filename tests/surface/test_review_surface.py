@@ -185,12 +185,15 @@ def mcp_call(arguments: dict[str, Any], env: dict[str, str], cwd: Path) -> dict[
     return json.loads(json.loads(proc.stdout)["result"]["content"][0]["text"])
 
 
-def test_the_subagent_answer_comes_back_over_mcp_and_the_command_line(
-    home: Home, tmp_path: Path
-) -> None:
-    # claude-subagent (CC004): the first call opens the round and says how to start the
-    # subagent; the worker hands its answer back with round and result.
-    h = Harness(home, {"roles": {"reviewer": {"session": "claude-subagent", "model": "sonnet"}}})
+def test_claude_reviews_over_mcp_without_the_hosts_variables(home: Home, tmp_path: Path) -> None:
+    # claude-headless (CC004): tsw starts claude -p itself and reads the answer back; the MCP
+    # server runs inside a Claude Code session, whose variables never reach the reviewer.
+    wrapper = tmp_path / "claude.cmd"
+    fake = REPO_ROOT / "tests" / "fixtures" / "fake_claude.py"
+    wrapper.write_text(f'@"{sys.executable}" "{fake}" %*\r\n', encoding="utf-8")
+    (tmp_path / "answers.json").write_text(json.dumps(["echo-pass"]), encoding="utf-8")
+    reviewer = {"session": "claude-headless", "model": "sonnet", "executable": str(wrapper)}
+    h = Harness(home, {"roles": {"reviewer": reviewer}})
     h.register("T001", kind="research")
     h.plan("T001")
     workdir = home.root / "work" / "T001" / "a1"
@@ -207,27 +210,41 @@ def test_the_subagent_answer_comes_back_over_mcp_and_the_command_line(
         brief_delivered=True,
     )
     h.ledger.commit(lease.release("orch-1", machine="m1", actor=ORCH.actor()))
-    env = child_env(CLAUDE_CODE_HOST_SESSION_ID="w-1")
-    opened = mcp_call({"head": "draft-1"}, env, workdir)
-    assert opened["status"] == "awaiting_agent"
-    assert opened["agent"]["subagent_type"] == "task-steward:reviewer"
-    failed = mcp_call({"round": 1, "result": ""}, env, workdir)  # an empty answer is an answer
-    assert failed["outcome"] == "review.failed"
-    answer = {"verdict": "pass", "summary": "s", "reviewed_head": "draft-1", "findings": []}
-    (tmp_path / "answer.txt").write_text(json.dumps(answer), encoding="utf-8")
-    done = run_tsw(
-        "review",
-        "run",
-        "--round",
-        "1",
-        "--result-file",
-        str(tmp_path / "answer.txt"),
-        "--agent-id",
-        "a-1",
-        "--json",
-        env=env,
-        cwd=workdir,
+    env = child_env(
+        CLAUDE_CODE_HOST_SESSION_ID="w-1",
+        ANTHROPIC_BASE_URL="http://127.0.0.1:9",
+        FAKE_REVIEWER_ANSWERS=str(tmp_path / "answers.json"),
+        FAKE_REVIEWER_LOG=str(tmp_path / "claude.log"),
     )
-    assert done.returncode == 0, done.stderr
-    out = json.loads(done.stdout)
-    assert (out["round"], out["verdict"], out["thread_id"]) == (1, "pass", "a-1")
+    # The hand-back of T325's subagent reviewer is gone: said so, no round is opened.
+    refused = mcp_error({"round": 1, "result": "{}"}, env, workdir)
+    assert "不再接受交回的评审结果" in refused
+    done = mcp_call({"head": "draft-1"}, env, workdir)
+    assert (done["round"], done["verdict"], done["reviewed_head"]) == (1, "pass", "draft-1")
+    call = json.loads((tmp_path / "claude.log").read_text(encoding="utf-8").splitlines()[0])
+    assert call["inherited"] == []
+    assert done["thread_id"] == call["argv"][call["argv"].index("--session-id") + 1]
+    gone = run_tsw("review", "run", "--round", "1", "--json", env=env, cwd=workdir)
+    assert gone.returncode != 0 and "--round" in gone.stderr
+
+
+def mcp_error(arguments: dict[str, Any], env: dict[str, str], cwd: Path) -> str:
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "review_run", "arguments": arguments},
+    }
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(REPO_ROOT / "plugin" / "bin" / "tsw_launch.py"), "mcp"],
+        input=json.dumps(request) + "\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        cwd=cwd,
+        timeout=120,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout

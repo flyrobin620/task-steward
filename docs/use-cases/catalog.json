@@ -409,9 +409,9 @@
     },
     {
       "id": "UC-REVIEW-002",
-      "title": "运行配置的评审器（review_run / tsw review run）：Codex、Copilot CLI、Claude 子代理",
+      "title": "运行配置的评审器（review_run / tsw review run）：Codex、Copilot CLI、Claude（claude -p）",
       "actor": "worker",
-      "acceptance": "只有绑定任务、处于运行状态且在执行目录中的 worker 能运行，同一 attempt 同时只运行一轮；开轮前校验评审器命令与评审范围（Git 的 head/base 必须是真实提交，缺省 base 取分叉点，选项形式的输入被拒绝），校验失败不开新一轮；请求与结果由 tsw 写入 runs/ 下本 attempt 的 review/，每轮请求都带当前需求；评审器以只读方式、配置的模型与 effort 运行：codex-app-server 为只读线程，copilot-cli 为只开放 view/grep/glob 并拒绝写入、命令、记忆与网址的 copilot -p，claude-subagent 为 worker 按 review_run 返回的启动指示启动的只读子代理，结果由 worker 带 round 与 result（或 error）交回；不能运行命令的评审器由 tsw 写出本轮的 diff；同一需求周期内能续用的评审器续用上一轮线程并附上 worker 的处置，不能续用的每轮全量并附上一轮的处置与增量 diff；输出满足契约、模型与配置一致且 reviewed_head 与本轮 HEAD 一致（Git 缩写解析为同一提交）时记录 review_complete，否则以及任何开轮后的异常都保存原始输出并记录 review_fail；只接受正在进行的这一轮、由子代理评审器开启的轮次交回的结果；再次调用按落账的范围在同一轮重试，超出重试次数时记录 review.unavailable；关闭或超时时结束评审器的整个进程树；未实现的评审会话返回 UNSUPPORTED",
+      "acceptance": "只有绑定任务、处于运行状态且在执行目录中的 worker 能运行，同一 attempt 同时只运行一轮；开轮前校验评审器命令与评审范围（Git 的 head/base 必须是真实提交，缺省 base 取分叉点，选项形式的输入被拒绝），校验失败不开新一轮；请求与结果由 tsw 写入 runs/ 下本 attempt 的 review/，每轮请求都带当前需求；评审器以只读方式、配置的模型与 effort 运行：codex-app-server 为只读线程，copilot-cli 为只开放 view/grep/glob 并拒绝写入、命令、记忆与网址的 copilot -p，claude-headless 为清除继承的 CLAUDE*/ANTHROPIC*/TSW* 环境变量、只开放 Read/Grep/Glob、dontAsk、不加载插件、hooks 与 MCP 的 claude -p；评审器都由 tsw 启动，结果由 tsw 读回并记账，不接受交回的结果；不能运行命令的评审器由 tsw 写出本轮的 diff；同一需求周期内能续用的评审器续用上一轮线程并附上 worker 的处置，不能续用的每轮全量并附上一轮的处置与增量 diff；输出满足契约、模型与配置一致且 reviewed_head 与本轮 HEAD 一致（Git 缩写解析为同一提交）时记录 review_complete，否则以及任何开轮后的异常都保存原始输出并记录 review_fail；已删除的评审器（claude-subagent）开启的轮次按当前配置的评审器重试；再次调用按落账的范围在同一轮重试，超出重试次数时记录 review.unavailable；关闭或超时时结束评审器的整个进程树；未实现的评审会话返回 UNSUPPORTED",
       "surfaces": [
         "cli",
         "mcp"

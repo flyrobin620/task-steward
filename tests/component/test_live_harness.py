@@ -271,7 +271,7 @@ def test_a_reviewer_that_cannot_run_is_reported_not_verified(
     checks = [
         live.check("X1", "全量评审", True, "ok"),
         {
-            **live.check("C0", "claude-headless 可运行", False, "未实现"),
+            **live.check("E0", "codex-exec 可运行", False, "未实现"),
             "status": live.NOT_VERIFIED,
         },
     ]

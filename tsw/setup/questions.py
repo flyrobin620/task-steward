@@ -20,12 +20,11 @@ from typing import Any
 from tsw.config import DEFAULTS, VERSION
 from tsw.plugins.catalog import CHANNELS, HOST_INTEGRATIONS
 
-# The worker's own read-only subagent, with a model other than the worker's (DN006 §10.2,
-# CC004 §4).
+# ``claude -p`` started by tsw, with a model other than the worker's (DN006 §10.2, CC004 §4).
 CLAUDE_REVIEWER: dict[str, Any] = {
-    "session": "claude-subagent",
+    "session": "claude-headless",
     "fallback_session": None,
-    "model": "sonnet",
+    "model": "claude-sonnet-5-5",
     "effort": "high",
 }
 # Copilot CLI (DN006 §10.2a, CP004): the model must be one Copilot allows on this machine; the
@@ -37,19 +36,19 @@ COPILOT_REVIEWER: dict[str, Any] = {
     "effort": "medium",
 }
 LAYERS: dict[str, dict[str, Any]] = {
-    "claude-subagent": CLAUDE_REVIEWER,
+    "claude-headless": CLAUDE_REVIEWER,
     "copilot-cli": COPILOT_REVIEWER,
 }
 # No self-review at all (DN004 §9): review.self_review is off.
 NO_REVIEW = "none"
-REVIEWERS = ("codex-app-server", "claude-subagent", "copilot-cli", NO_REVIEW)
+REVIEWERS = ("codex-app-server", "claude-headless", "copilot-cli", NO_REVIEW)
 # The command line each reviewer that tsw starts needs.
-COMMANDS = {"codex-app-server": "codex", "copilot-cli": "copilot"}
+COMMANDS = {"codex-app-server": "codex", "claude-headless": "claude", "copilot-cli": "copilot"}
 # What each choice means, shown next to its value (DN009 §16.3); a choice without one shows its
 # value only.
 CHOICE_LABELS: dict[str, str] = {
     "codex-app-server": "Codex",
-    "claude-subagent": "Claude 只读子代理",
+    "claude-headless": "Claude（tsw 启动的 claude -p）",
     "copilot-cli": "GitHub Copilot CLI",
     "none": "不做自评审",
     "in-session": "只在会话中",
@@ -138,12 +137,18 @@ def reviewer_warning(env: Mapping[str, str], reviewer: str | None = None) -> str
         return (
             "copilot：找不到 GitHub Copilot CLI。选择的评审器 copilot-cli 需要已登录的 copilot "
             "命令行（例如 npm install -g @github/copilot，再 copilot login），否则任务完成不了"
-            "自评审。安装可以照常完成，之后装好即可；也可以改选 claude-subagent"
+            "自评审。安装可以照常完成，之后装好即可；也可以改选 claude-headless"
+        )
+    if command == "claude":
+        return (
+            "claude：找不到 Claude Code 命令行。选择的评审器 claude-headless 由 tsw 启动 "
+            "claude -p，需要 PATH 中有已登录的 claude 命令行（在终端运行一次 claude 登录），"
+            "否则任务完成不了自评审。安装可以照常完成，之后装好即可"
         )
     return (
         "codex：找不到 Codex 命令行。选择的评审器 codex-app-server 需要已登录的 codex 命令行"
         "（例如 npm install -g @openai/codex，再 codex login），否则任务完成不了自评审。"
-        "安装可以照常完成，之后装好 Codex 即可；也可以改选 claude-subagent（不需要另装命令行）"
+        "安装可以照常完成，之后装好 Codex 即可；也可以改选 claude-headless 或 copilot-cli"
     )
 
 
@@ -189,7 +194,7 @@ def questions(env: Mapping[str, str], checkout: Path) -> list[Question]:
             default=detected_reviewer(env),
             choices=implemented_reviewers(),
             note="codex-app-server：Codex（需要已登录的 codex 命令行）；"
-            "claude-subagent：worker 会话中的只读 Claude 子代理（不需要另装命令行）；"
+            "claude-headless：tsw 启动的只读 claude -p（需要已登录的 claude 命令行）；"
             "copilot-cli：GitHub Copilot CLI（需要已登录的 copilot 命令行）；"
             "none：不做自评审（review.self_review 为 off，DN004 §9）",
         ),
