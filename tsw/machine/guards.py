@@ -7,7 +7,7 @@ import sqlite3
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any, cast
 
-from tsw.config import EffectiveConfig, resolve_repository
+from tsw.config import EffectiveConfig, resolve_repository, self_review_mode
 from tsw.errors import rejected
 from tsw.lease import stood_down
 from tsw.machine.model import (
@@ -422,6 +422,32 @@ def g_submit(
         "rounds": [int(r["round"]) for r in completed],
         "last_reviewed_head": last["reviewed_head"],
     }
+
+
+def require_self_review(config: EffectiveConfig, task_row: Mapping[str, Any]) -> None:
+    """A review round only where the user has not turned self-review off (DN004 §9)."""
+    mode, source = self_review_mode(config, task_row["repo"])
+    if mode == "off":
+        raise rejected(
+            f"用户已关闭自评审（{source}）：直接 submit", reason="self_review_off", source=source
+        )
+
+
+def review_off_evidence(
+    conn: sqlite3.Connection, task_row: Mapping[str, Any], attempt_id: str
+) -> dict[str, Any]:
+    """The review part of a submission with self-review off (DN004 §9): no review condition is
+    checked; rounds completed before it was turned off stay in the evidence."""
+    cycle_no = int(task_row["cycle"])
+    rounds = [
+        int(r["round"])
+        for r in conn.execute(
+            "SELECT round FROM review_rounds WHERE task_id = ? AND attempt = ? AND cycle = ? "
+            "AND verdict IN ('pass', 'changes_requested') ORDER BY round",
+            (task_row["task_id"], attempt_id, cycle_no),
+        )
+    ]
+    return {"cycle": cycle_no, "rounds": rounds}
 
 
 def merge_authorized(config: EffectiveConfig, task_row: Mapping[str, Any]) -> bool:

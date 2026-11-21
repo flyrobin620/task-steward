@@ -280,7 +280,10 @@ def check(ctx: Context, *, with_questions: bool = False) -> dict[str, Any]:
         "shims": str(ctx.shims),
         "path_has_shims": winenv.has_entry(value, ctx.shims) if value is not None else False,
         "problems": problems,
-        "warnings": [*ctx.warnings, *[w for w in (reviewer_warning(ctx.env),) if w]],
+        "warnings": [
+            *ctx.warnings,
+            *[w for w in (reviewer_warning(ctx.env, ctx.answers.get("reviewer")),) if w],
+        ],
         # Not "ok": check only reports, so a problem is not a failure of the command.
         "ready": not problems,
     }

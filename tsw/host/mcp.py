@@ -287,13 +287,28 @@ HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
     "review_run": (
         ("worker",),
         "运行一轮自评审（DN004）：记录 review_start，调用配置的评审器，"
-        "按输出契约记录 review_complete 或 review_fail；可能需要数分钟到半小时",
+        "按输出契约记录 review_complete 或 review_fail；可能需要数分钟到半小时。"
+        "评审器是 worker 的子代理（claude-subagent）时，本次调用只开轮并返回 agent（启动指示），"
+        "子代理结束后再带 round 与 result（或 error）调用一次交回结果",
         {
             "type": "object",
             "properties": {
                 "head": {"type": "string", "description": "评审的 HEAD；git 执行目录默认取 HEAD"},
                 "base": {"type": "string", "description": "评审范围的起点（base..HEAD）"},
                 "notes": {"type": "string", "description": "已执行的验证命令与结果摘要等说明"},
+                "round": {
+                    "type": "integer",
+                    "description": "交回子代理结果时：上一次调用返回的轮次",
+                },
+                "result": {
+                    "type": "string",
+                    "description": "交回子代理结果时：子代理最终回复的原文（含 JSON）",
+                },
+                "error": {
+                    "type": "string",
+                    "description": "子代理没有交回结果时（报错、中断、找不到子代理类型）的原因",
+                },
+                "agent_id": {"type": "string", "description": "宿主返回的子代理 ID"},
             },
         },
     ),
@@ -398,6 +413,11 @@ class Server:
                 base=_opt_str(args, "base"),
                 notes=_opt_str(args, "notes"),
                 machine=self.machine,
+                round_no=_opt_int(args, "round"),
+                # An empty answer is still an answer (it fails the contract), not a new call.
+                result="" if args.get("result") == "" else _opt_str(args, "result"),
+                error=_opt_str(args, "error"),
+                agent_id=_opt_str(args, "agent_id"),
             )
         if name in HOST_TOOLS:
             return self._host_tool(name, args, who, config, ledger)
@@ -1013,6 +1033,15 @@ def _opt_str(args: Mapping[str, Any], key: str) -> str | None:
     if not isinstance(value, str):
         raise rejected(f"{key} 应为字符串", reason="invalid_input", field=key)
     return value or None
+
+
+def _opt_int(args: Mapping[str, Any], key: str) -> int | None:
+    value = args.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise rejected(f"{key} 应为正整数", reason="invalid_input", field=key)
+    return value
 
 
 def _valid_id(value: Any) -> bool:

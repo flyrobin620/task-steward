@@ -161,3 +161,73 @@ def test_without_a_job_the_reviewer_never_runs(
     assert refused.value.details["reason"] == "reviewer_unavailable"
     time.sleep(2)
     assert not pid_file.exists()  # ended while still suspended
+
+
+def mcp_call(arguments: dict[str, Any], env: dict[str, str], cwd: Path) -> dict[str, Any]:
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "review_run", "arguments": arguments},
+    }
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(REPO_ROOT / "plugin" / "bin" / "tsw_launch.py"), "mcp"],
+        input=json.dumps(request) + "\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        cwd=cwd,
+        timeout=120,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(json.loads(proc.stdout)["result"]["content"][0]["text"])
+
+
+def test_the_subagent_answer_comes_back_over_mcp_and_the_command_line(
+    home: Home, tmp_path: Path
+) -> None:
+    # claude-subagent (CC004): the first call opens the round and says how to start the
+    # subagent; the worker hands its answer back with round and result.
+    h = Harness(home, {"roles": {"reviewer": {"session": "claude-subagent", "model": "sonnet"}}})
+    h.register("T001", kind="research")
+    h.plan("T001")
+    workdir = home.root / "work" / "T001" / "a1"
+    workdir.mkdir(parents=True)
+    h.run("task_dispatch", task_id="T001", workdir=str(workdir), user_turn=True)
+    started = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=started["events"][0]["data"]["generation"],
+        outcome="created",
+        session_ref="w-1",
+        brief_delivered=True,
+    )
+    h.ledger.commit(lease.release("orch-1", machine="m1", actor=ORCH.actor()))
+    env = child_env(CLAUDE_CODE_HOST_SESSION_ID="w-1")
+    opened = mcp_call({"head": "draft-1"}, env, workdir)
+    assert opened["status"] == "awaiting_agent"
+    assert opened["agent"]["subagent_type"] == "task-steward:reviewer"
+    failed = mcp_call({"round": 1, "result": ""}, env, workdir)  # an empty answer is an answer
+    assert failed["outcome"] == "review.failed"
+    answer = {"verdict": "pass", "summary": "s", "reviewed_head": "draft-1", "findings": []}
+    (tmp_path / "answer.txt").write_text(json.dumps(answer), encoding="utf-8")
+    done = run_tsw(
+        "review",
+        "run",
+        "--round",
+        "1",
+        "--result-file",
+        str(tmp_path / "answer.txt"),
+        "--agent-id",
+        "a-1",
+        "--json",
+        env=env,
+        cwd=workdir,
+    )
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)
+    assert (out["round"], out["verdict"], out["thread_id"]) == (1, "pass", "a-1")

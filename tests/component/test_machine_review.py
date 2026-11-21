@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -554,3 +555,40 @@ def test_worker_tools_require_the_bound_session(home: Home) -> None:
         reason_of(lambda: h.run("progress_note", stranger, task_id="T001", text="x"))
         == "not_bound_worker"
     )
+
+
+@mark.use_case("UC-REVIEW-003")
+@mark.transition("T13")
+@mark.transition("G-SUBMIT")
+@mark.transition("G-ACCEPT")
+def test_with_self_review_off_the_worker_submits_without_a_round(home: Home) -> None:
+    # The user turned self-review off for this repository (DN004 §9); it stays on elsewhere.
+    h, w = started(
+        home,
+        repositories={"demo": {"path": "~/src/demo", "aliases": ["d"], "self_review": "off"}},
+    )
+    reviewer = {"session": "codex-app-server", "model": "gpt-6-astra"}
+    assert (
+        reason_of(lambda: h.run("review_start", w, task_id="T001", head="h1", reviewer=reviewer))
+        == "self_review_off"
+    )
+    h.submit(w, "T001")  # straight from executing
+    row = h.task("T001")
+    assert row["status"] == "verifying"
+    submission = json.loads(row["submission"])
+    assert submission["review"] == {"mode": "off", "source": "repositories.demo.self_review"}
+    assert submission["rounds"] == []
+    accepted = h.accept("T001")["events"][-1]
+    assert accepted["type"] == "task.accepted"
+    assert accepted["data"]["review_mode"] == "off" and accepted["data"]["reviews"] == []
+
+
+@mark.use_case("UC-REVIEW-003")
+@mark.transition("G-SUBMIT")
+def test_with_self_review_on_a_submission_still_needs_its_review(home: Home) -> None:
+    h, w = started(home)
+    assert reason_of(lambda: h.submit(w, "T001")) == "invalid_substate"  # executing, no round
+    h.finalize(w, "T001")
+    h.submit(w, "T001")
+    submission = json.loads(h.task("T001")["submission"])
+    assert submission["review"] == {"mode": "required", "source": "review.self_review"}

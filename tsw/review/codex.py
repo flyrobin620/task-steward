@@ -165,6 +165,7 @@ def run_review(
     resume_thread: str | None = None,
     keep_thread: bool = True,
     context_window: int | None = None,
+    **_: Any,  # options other reviewers take (add_dirs): the sandbox already reads anywhere
 ) -> ReviewRun:
     """One review turn on a read-only thread; ``resume_thread`` continues an earlier round."""
     server = AppServer(resolve_executable(executable))

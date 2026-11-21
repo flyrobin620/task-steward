@@ -15,20 +15,36 @@ import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from tsw.config import DEFAULTS, VERSION
 from tsw.plugins.catalog import CHANNELS, HOST_INTEGRATIONS
 
-# The reviewer when no independent one (Codex) is found: the host's own read-only form, with a
-# model other than the worker's (DN006 §10.2).
+# The worker's own read-only subagent, with a model other than the worker's (DN006 §10.2,
+# CC004 §4).
 CLAUDE_REVIEWER: dict[str, Any] = {
-    "session": "claude-headless",
+    "session": "claude-subagent",
     "fallback_session": None,
-    "model": "claude-sonnet-5-5",
+    "model": "sonnet",
     "effort": "high",
 }
-REVIEWERS = ("codex-app-server", "claude-headless")
+# Copilot CLI (DN006 §10.2a, CP004): the model must be one Copilot allows on this machine; the
+# user changes it in the main session when Copilot's policy pins another.
+COPILOT_REVIEWER: dict[str, Any] = {
+    "session": "copilot-cli",
+    "fallback_session": None,
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+}
+LAYERS: dict[str, dict[str, Any]] = {
+    "claude-subagent": CLAUDE_REVIEWER,
+    "copilot-cli": COPILOT_REVIEWER,
+}
+# No self-review at all (DN004 §9): review.self_review is off.
+NO_REVIEW = "none"
+REVIEWERS = ("codex-app-server", "claude-subagent", "copilot-cli", NO_REVIEW)
+# The command line each reviewer that tsw starts needs.
+COMMANDS = {"codex-app-server": "codex", "copilot-cli": "copilot"}
 
 
 @dataclass(frozen=True)
@@ -62,11 +78,12 @@ class Question:
 
 
 def implemented_reviewers() -> tuple[str, ...]:
-    """The reviewers ``review_run`` implements in this version: only these are offered (the user's
-    decision of 2026-11-20, T308; the others are follow-up F-T308-1)."""
-    from tsw.review.run import REVIEWERS as IMPLEMENTED  # noqa: PLC0415  (command line only)
+    """The reviewers ``review_run`` implements in this version, and ``none``: only these are
+    offered (the user's decision of 2026-11-20, T308; T325 added the Claude and Copilot ones)."""
+    from tsw.review.run import implemented  # noqa: PLC0415  (command line only)
 
-    return tuple(name for name in REVIEWERS if name in IMPLEMENTED)
+    found = implemented()
+    return tuple(name for name in REVIEWERS if name in found or name == NO_REVIEW)
 
 
 def detected_reviewer(env: Mapping[str, str]) -> str:
@@ -75,15 +92,23 @@ def detected_reviewer(env: Mapping[str, str]) -> str:
     return implemented_reviewers()[0]
 
 
-def reviewer_warning(env: Mapping[str, str]) -> str | None:
-    """Why tasks could not finish their self-review on this machine, or None."""
-    if shutil.which("codex", path=env.get("PATH")):
+def reviewer_warning(env: Mapping[str, str], reviewer: str | None = None) -> str | None:
+    """Why tasks could not finish their self-review on this machine with the chosen reviewer,
+    or None."""
+    name = reviewer or detected_reviewer(env)
+    command = COMMANDS.get(name)
+    if command is None or shutil.which(command, path=env.get("PATH")):
         return None
+    if command == "copilot":
+        return (
+            "copilot：找不到 GitHub Copilot CLI。选择的评审器 copilot-cli 需要已登录的 copilot "
+            "命令行（例如 npm install -g @github/copilot，再 copilot login），否则任务完成不了"
+            "自评审。安装可以照常完成，之后装好即可；也可以改选 claude-subagent"
+        )
     return (
-        "codex：找不到 Codex 命令行。本版本的 worker 自评"
-        "审只实现了 Codex 评审器（codex-app-server）："
-        "请安装并登录 Codex（例如 npm install -g @openai/codex，再 codex login），否则任务完成不了"
-        "自评审。安装可以照常完成，之后装好 Codex 即可"
+        "codex：找不到 Codex 命令行。选择的评审器 codex-app-server 需要已登录的 codex 命令行"
+        "（例如 npm install -g @openai/codex，再 codex login），否则任务完成不了自评审。"
+        "安装可以照常完成，之后装好 Codex 即可；也可以改选 claude-subagent（不需要另装命令行）"
     )
 
 
@@ -128,8 +153,10 @@ def questions(env: Mapping[str, str], checkout: Path) -> list[Question]:
             "roles.reviewer",
             default=detected_reviewer(env),
             choices=implemented_reviewers(),
-            note="本版本只实现了 Codex 评审器 codex-app-server（需要已登录的 codex 命令行）；"
-            "Claude 与 Copilot CLI 评审器以后提供",
+            note="codex-app-server：Codex（需要已登录的 codex 命令行）；"
+            "claude-subagent：worker 会话中的只读 Claude 子代理（不需要另装命令行）；"
+            "copilot-cli：GitHub Copilot CLI（需要已登录的 copilot 命令行）；"
+            "none：不做自评审（review.self_review 为 off，DN004 §9）",
         ),
         Question(
             "human_channels",
@@ -261,9 +288,11 @@ def config_layer(answers: Mapping[str, Any]) -> dict[str, Any]:
         },
         "dashboard": {"port": answers["dashboard_port"]},
     }
-    if answers.get("reviewer") == "claude-headless":
-        cast("dict[str, Any]", layer["plugins"])["sessions"] = ["claude-app", "claude-headless"]
-        layer["roles"] = {"reviewer": dict(CLAUDE_REVIEWER)}
+    reviewer = answers.get("reviewer")
+    if reviewer in LAYERS:
+        layer["roles"] = {"reviewer": dict(LAYERS[str(reviewer)])}
+    elif reviewer == NO_REVIEW:
+        layer["review"] = {"self_review": "off"}
     return layer
 
 
@@ -284,7 +313,13 @@ def config_differences(values: Mapping[str, Any], answers: Mapping[str, Any]) ->
         if mine != theirs:
             found.append(f"{dotted}：配置为 {theirs!r}，答案为 {mine!r}")
     reviewer = get(dict(values), "roles.reviewer.session")
-    if reviewer != answers.get("reviewer"):
+    off = get(dict(values), "review.self_review") == "off"
+    if answers.get("reviewer") == NO_REVIEW:
+        if not off:
+            found.append("review.self_review：配置为开启，答案为 none（不做自评审）")
+    elif off:
+        found.append(f"review.self_review：配置为 off，答案为 {answers.get('reviewer')!r}")
+    elif reviewer != answers.get("reviewer"):
         found.append(
             f"roles.reviewer.session：配置为 {reviewer!r}，答案为 {answers.get('reviewer')!r}"
         )

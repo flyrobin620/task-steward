@@ -10,7 +10,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from tsw.commands import Command, CommitContext
-from tsw.config import SEVERITIES
+from tsw.config import SEVERITIES, self_review_mode
 from tsw.errors import TswError, rejected
 from tsw.events import EventDraft
 from tsw.machine import guards, orchestrator
@@ -26,6 +26,7 @@ from tsw.machine.base import (
     text,
     tool,
 )
+from tsw.machine.guards import require_self_review
 from tsw.machine.model import (
     last_round_number,
     loads,
@@ -124,6 +125,7 @@ def review_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     def build(ctx: CommitContext) -> list[EventDraft]:
         row, current = task_and_attempt(ctx.conn, env, task_id)
         require_substate(row, "executing", "revising")
+        require_self_review(env.config, row)
         attempt_id, cycle_no = str(current["attempt"]), int(row["cycle"])
         cycle = review_cycle(ctx.conn, task_id, attempt_id, cycle_no)
         budget = guards.effective_budget(env.config, cycle)
@@ -527,11 +529,17 @@ def submit(inp: Mapping[str, Any], env: ToolEnv) -> Command:
 
     def build(ctx: CommitContext) -> list[EventDraft]:
         row, current = task_and_attempt(ctx.conn, env, task_id)
-        require_substate(row, "triaging")
+        mode, mode_source = self_review_mode(env.config, row["repo"])
+        # With self-review off the worker submits from executing, or from the triage it had
+        # reached before it was turned off (DN004 §9).
+        require_substate(row, *(("executing", "triaging") if mode == "off" else ("triaging",)))
         attempt_id = str(current["attempt"])
         if not worktree_clean and not (diff_note and diff_note.strip()):
             raise rejected("工作树不干净时必须说明差异", reason="g_submit", check="worktree")
-        evidence = guards.g_submit(ctx.conn, env.config, row, attempt_id, head)
+        if mode == "off":
+            evidence = guards.review_off_evidence(ctx.conn, row, attempt_id)
+        else:
+            evidence = guards.g_submit(ctx.conn, env.config, row, attempt_id, head)
         merged = guards.g_merge(env.config, row, head, merge, merge_skipped)
         copied: dict[str, str] = {}
         for key, rel, name in (
@@ -555,6 +563,7 @@ def submit(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             "cycle": evidence["cycle"],
             "head": head,
             "rounds": evidence["rounds"],
+            "review": {"mode": mode, "source": mode_source},
             "report": copied,
             "dependencies": dependencies,
             "worktree_clean": worktree_clean,

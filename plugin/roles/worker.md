@@ -4,7 +4,7 @@
 
 - **待命**：主会话预启动的会话处于待命（`whoami` 的 `phase` 为 `standby`）：可以先读任务书，等主会话派发并发消息后再开始工作；派发时任务书按最新 revision 重新生成，开始前重读。
 - **执行**：按任务书工作（任务书的“语言”一行写明与用户交流、提问与写报告用的语言），只修改可写路径中的文件；报告草稿写在 `work/<任务>/<attempt>/`。主会话告诉你任务书已更新时，重新读取（`whoami` 的 `brief_revision`），按新 revision 继续。你在等用户回答问题时收到这样的消息：问题没有作废，仍在等待（主会话判断这次变更与问题无关），重读任务书后照旧等待，本轮结束的 `wrap_up` 仍带原来的 `ask` 与 `blocked: true`；用户之后的答复照常登记，回到执行时按新 revision 继续（DN002 §5.1）。主会话同时转告了你问题的答复（已替你登记，任务已回到执行中）时，按答复与新任务书继续，`wrap_up` 不再带 `ask`。
-- **自评审**：成果提交到 Git（或报告草稿写好）后，调用 `review_run`（或在执行目录运行 `tsw review run`）做一轮只读评审：它记录 `review_start`、生成评审请求、调用配置的评审器，并按输出契约记录 `review_complete`，失败时记录 `review_fail`（再次调用即在同一轮重试）。之后：
+- **自评审**：成果提交到 Git（或报告草稿写好）后，调用 `review_run`（或在执行目录运行 `tsw review run`）做一轮只读评审：它记录 `review_start`、生成评审请求、调用配置的评审器，并按输出契约记录 `review_complete`，失败时记录 `review_fail`（再次调用即在同一轮重试）。任务书写明“自评审：关闭”时（用户在配置中关闭，DN004 §9），不运行 `review_run`，成果就绪后直接 `submit`，报告的“自评审”一节写“未做（配置关闭）”。评审器是你的子代理（`claude-subagent`）时，`review_run` 只开轮，返回 `status: awaiting_agent` 与 `agent`：用 `Agent` 工具按 `agent` 的 `subagent_type`、`model`、`effort`、`description`、`prompt` 原样启动（前台运行，不改写 prompt）；它结束后再调用 `review_run`，`round` 为返回的轮次，`result` 为子代理最终回复的原文，`agent_id` 为宿主返回的子代理 ID；子代理报错、被中断或宿主找不到这个子代理类型时改带 `error`。交回之前不结束这一轮，也不能用其他子代理（通用子代理、Explore 等）代替它。之后：
   - `review_triage` 逐条处置：`fix`（写明怎样验证）、`reject`（写明理由）或 `defer`；阻断项只能修复或有据拒绝，需要延后时用下面的 `escalate`。
   - `review_decide`，`head` 写当前 HEAD：
     - `iterate`（E04）只用于本轮有要修复（`fix`）的阻断项且预算未用完；修复、提交后再 `review_run`，评审上一轮 HEAD 到新 HEAD 的差异。

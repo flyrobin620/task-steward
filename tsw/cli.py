@@ -814,8 +814,20 @@ def _cmd_review_run(args: argparse.Namespace) -> dict[str, Any]:
         raise TswError(
             ErrorCode.REJECTED, "需要在绑定任务的 worker 会话中运行", reason="role_denied"
         )
+    result = args.result
+    if args.result_file:
+        result = Path(args.result_file).read_text(encoding="utf-8")
     return run_round(
-        _home(args), os.environ, Path.cwd(), head=args.head, base=args.base, notes=notes
+        _home(args),
+        os.environ,
+        Path.cwd(),
+        head=args.head,
+        base=args.base,
+        notes=notes,
+        round_no=args.round,
+        result=result,
+        error=args.error,
+        agent_id=args.agent_id,
     )
 
 
@@ -1069,6 +1081,11 @@ def build_parser() -> argparse.ArgumentParser:
     review_run.add_argument("--base", help="评审范围的起点（base..HEAD）")
     review_run.add_argument("--notes", help="已执行的验证与结果摘要")
     review_run.add_argument("--notes-file", help="从文件读取说明")
+    review_run.add_argument("--round", type=int, help="交回子代理结果时的轮次")
+    review_run.add_argument("--result", help="交回子代理最终回复的原文")
+    review_run.add_argument("--result-file", help="从文件读取子代理最终回复")
+    review_run.add_argument("--error", help="子代理没有交回结果时的原因")
+    review_run.add_argument("--agent-id", help="宿主返回的子代理 ID")
 
     importing = sub.add_parser("import", help="导入其他任务系统的历史（DN005）").add_subparsers(
         dest="import_command", required=True, metavar="<import source>"

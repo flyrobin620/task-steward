@@ -45,7 +45,7 @@ def test_answers_get_defaults_and_are_checked() -> None:
     answers, problems = q.normalize({"home": home, "dashboard": "否", "user_settings": "yes"}, qs())
     assert problems == []
     assert answers["language"] == "zh-CN"
-    assert answers["reviewer"] == "codex-app-server"  # the one implemented reviewer
+    assert answers["reviewer"] == "codex-app-server"  # the default reviewer
     assert answers["dashboard"] is False and answers["user_settings"] is True
     assert answers["dashboard_port"] == 47800 and answers["host"] == "claude-code"
     assert answers["checkout"] == str(CHECKOUT)
@@ -83,7 +83,7 @@ def test_the_initial_configuration_follows_the_answers(home: Home) -> None:
     base: dict[str, Any] = {
         "home": "C:/data",
         "language": "en-US",
-        "reviewer": "claude-headless",
+        "reviewer": "claude-subagent",
         "human_channels": "teams-chat",
         "host": "claude-code",
         "dashboard": True,
@@ -92,13 +92,33 @@ def test_the_initial_configuration_follows_the_answers(home: Home) -> None:
     }
     layer = q.config_layer(base)
     assert layer["plugins"]["human_channels"] == ["in-session", "teams-chat"]
-    assert layer["plugins"]["sessions"] == ["claude-app", "claude-headless"]
-    assert layer["roles"]["reviewer"]["model"] != DEFAULTS["roles"]["worker"]["model"]
+    assert "sessions" not in layer["plugins"]  # the default list loads every reviewer
+    assert layer["roles"]["reviewer"] == {
+        "session": "claude-subagent",
+        "fallback_session": None,
+        "model": "sonnet",
+        "effort": "high",
+    }
     assert "repositories" not in layer and "accounts" not in layer
-    assert load_config(home, main_layer=layer).valid
+    config = load_config(home, main_layer=layer)
+    assert config.valid and not any("独立性" in w for w in config.warnings)
     codex = q.config_layer({**base, "reviewer": "codex-app-server"})
     assert "roles" not in codex and "sessions" not in codex["plugins"]
     assert load_config(home, main_layer=codex).valid
+    copilot = q.config_layer({**base, "reviewer": "copilot-cli"})
+    assert copilot["roles"]["reviewer"]["session"] == "copilot-cli"
+    assert load_config(home, main_layer=copilot).valid
+    # none: no self-review (DN004 §9), the reviewer stays the default.
+    none = q.config_layer({**base, "reviewer": "none"})
+    assert none["review"] == {"self_review": "off"} and "roles" not in none
+    config = load_config(home, main_layer=none)
+    assert config.valid and config.get("review.self_review") == "off"
+    same = q.config_differences(config.values, {**base, "reviewer": "none"})
+    assert not any(d.startswith(("review.self_review", "roles.reviewer")) for d in same)
+    assert any(
+        d.startswith("review.self_review：配置为 off")
+        for d in q.config_differences(config.values, {**base, "reviewer": "codex-app-server"})
+    )
 
 
 @pytest.mark.use_case(UC)
@@ -301,7 +321,12 @@ def test_the_workdeck_question_is_asked_only_where_workdeck_is_found(tmp_path: P
 @pytest.mark.use_case(UC)
 def test_only_implemented_reviewers_are_offered_and_a_missing_codex_is_a_warning() -> None:
     reviewer = next(x for x in qs() if x.id == "reviewer")
-    assert reviewer.choices == ("codex-app-server",) and reviewer.default == "codex-app-server"
+    assert reviewer.choices == ("codex-app-server", "claude-subagent", "copilot-cli", "none")
+    assert reviewer.default == "codex-app-server"
     _, problems = q.normalize({"home": str(Path.cwd() / "d"), "reviewer": "claude-headless"}, qs())
     assert any(p.startswith("reviewer：") for p in problems)
-    assert q.reviewer_warning({"PATH": ""}) is not None  # install goes on, tasks cannot review
+    # The install goes on; tasks cannot review until the chosen reviewer's command is there.
+    assert "codex" in str(q.reviewer_warning({"PATH": ""}))
+    assert "copilot" in str(q.reviewer_warning({"PATH": ""}, "copilot-cli"))
+    assert q.reviewer_warning({"PATH": ""}, "claude-subagent") is None
+    assert q.reviewer_warning({"PATH": ""}, "none") is None

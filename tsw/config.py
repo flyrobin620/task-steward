@@ -28,6 +28,10 @@ VERSION = 1
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 PERMISSION_ORDER = ("ask", "edits", "auto", "full")
 SEVERITIES = ("critical", "high", "medium", "low", "info")
+SELF_REVIEW = ("required", "off")  # review.self_review (DN004 §9)
+# The model names the host's subagent tool accepts: the reviewer model of ``claude-subagent``
+# (CC004 §4). Each stands for the host's current model of that family.
+SUBAGENT_MODELS = ("sonnet", "opus", "haiku", "fable")
 MODEL_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 REPOSITORY_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # Fields a machine-local override may set (DN003 §5); ``*`` matches one map key.
@@ -38,7 +42,8 @@ LOCAL_WHITELIST = (
     "accounts.*.auth.config_dir",
     "import.sources.*.root",
 )
-# Fields that would make review optional; review is an invariant, not a setting (DN003 §3.1).
+# Old names for turning review off: refused. Only the user turns self-review off, with
+# ``review.self_review`` (DN003 §3.1, DN004 §9).
 FORBIDDEN = ("review.required", "review.require_final_head_reviewed", "review.on_unavailable")
 REMOVED_WITH_WARNING = ("roles.comparison",)
 # Default fields that a configuration may delete with ``null`` (DN003 §5a); every other default
@@ -60,7 +65,14 @@ DEFAULTS: dict[str, Any] = {
     },
     "plugins": {
         "host_integration": "claude-code",
-        "sessions": ["claude-app", "claude-headless", "codex-app-server", "codex-exec"],
+        "sessions": [
+            "claude-app",
+            "claude-headless",
+            "claude-subagent",
+            "codex-app-server",
+            "codex-exec",
+            "copilot-cli",
+        ],
         "human_channels": ["in-session"],
         "storage": {"use": "fs"},
     },
@@ -123,6 +135,8 @@ DEFAULTS: dict[str, Any] = {
         "retry_limit": 2,
         "block_on": ["critical", "high"],
         "incremental": "resume_thread",
+        # ``off``: no self-review (DN004 §9); ``repositories.<id>.self_review`` overrides it.
+        "self_review": "required",
     },
     "ledger": {"segment_max_mb": 16, "checkpoint_every": 64},
     "context": {
@@ -270,6 +284,7 @@ SCHEMA: dict[str, Any] = _obj(
         retry_limit=_int(0),
         block_on={"type": "list", "item": _choice(*SEVERITIES)},
         incremental=_choice("resume_thread", "fresh"),
+        self_review=_choice(*SELF_REVIEW),
         prompt_templates=_obj(code=S, design=S, research=S),
         output_schema=S,
     ),
@@ -319,6 +334,7 @@ SCHEMA: dict[str, Any] = _obj(
             worktree_files={"type": "list", "item": _obj(source=S, destination=S)},
             validation={"type": "list", "item": {"type": "any"}},
             delivery=_obj(push=B, create_pr=B, merge=B),
+            self_review=_choice(*SELF_REVIEW),
         ),
     },
     accounts={
@@ -456,6 +472,18 @@ def normalize_model_id(model: str) -> str:
     return re.sub(r"\[[^\]]*\]$", "", model.strip())
 
 
+def same_model(a: str, b: str) -> bool:
+    """Whether two model names may be the same model: equal IDs, or a subagent alias such as
+    ``opus`` and an ID of that family such as ``claude-opus-5-5``."""
+    a, b = normalize_model_id(a), normalize_model_id(b)
+    if a == b:
+        return True
+    for alias, full in ((a, b), (b, a)):
+        if alias in SUBAGENT_MODELS and full.startswith(f"claude-{alias}"):
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------- load
 
 
@@ -540,7 +568,7 @@ def _validate(config: EffectiveConfig, home: Home) -> None:
     values, problems = config.values, config.problems
     for dotted in FORBIDDEN:
         if get(values, dotted) is not None:
-            problems.append(f"{dotted}: 评审是必经环节，不能配置")
+            problems.append(f"{dotted}: 不能配置；不做自评审用 review.self_review（DN004 §9）")
             parent, _, leaf = dotted.rpartition(".")
             container = get(values, parent)
             if isinstance(container, dict):
@@ -667,28 +695,41 @@ def _validate_plugins(values: dict[str, Any], problems: list[str], warnings: lis
             and SESSIONS[orchestrator].host != caps.host
         ):
             problems.append(f"roles.routine.session: delegated 的 {routine} 必须与主会话在同一宿主")
+    reviewer_model = get(values, "roles.reviewer.model")
     for role_path in ("roles.reviewer.session", "roles.reviewer.fallback_session"):
         reviewer = session(role_path)
         if reviewer is None:
             continue
         caps = SESSIONS[reviewer]
+        # The worker's own subagent can review: it runs in the worker's turn, never in the
+        # orchestrator's (DN006 §7.4).
+        by_worker = caps.oneshot_via == "worker_agent"
         missing = [
             name
             for name, ok in (
                 ("oneshot", caps.oneshot),
-                ("direct", caps.execution == "direct"),
+                ("direct", caps.execution == "direct" or by_worker),
                 ("read_only_enforced", caps.read_only_enforced),
             )
             if not ok
         ]
         if missing:
             problems.append(f"{role_path}: {reviewer} 不能做评审器（缺少 {', '.join(missing)}）")
-    reviewer_model = get(values, "roles.reviewer.model")
+            continue
+        if by_worker:
+            if worker is not None and SESSIONS[worker].host != caps.host:
+                problems.append(
+                    f"{role_path}: {reviewer} 由 worker 启动，worker 须在同一宿主（{caps.host}）"
+                )
+            if isinstance(reviewer_model, str) and reviewer_model not in SUBAGENT_MODELS:
+                problems.append(
+                    f"roles.reviewer.model: {reviewer} 的模型须为 {'、'.join(SUBAGENT_MODELS)} 之一"
+                )
     worker_model = get(values, "roles.worker.model")
     if (
         isinstance(reviewer_model, str)
         and isinstance(worker_model, str)
-        and normalize_model_id(reviewer_model) == normalize_model_id(worker_model)
+        and same_model(reviewer_model, worker_model)
     ):
         warnings.append("roles.reviewer.model 与 roles.worker.model 相同，评审视角的独立性下降")
 
@@ -783,6 +824,18 @@ def _validate_repositories(values: dict[str, Any], problems: list[str], home: Ho
             if owner is not None and owner != name:
                 problems.append(f"repositories.{name}.aliases: {alias} 已被 {owner} 使用")
             seen[str(alias)] = name
+
+
+def self_review_mode(config: EffectiveConfig, repo: str | None) -> tuple[str, str]:
+    """Whether the task's work gets a self-review (DN004 §9): the mode and the key it came from;
+    a repository's ``self_review`` overrides ``review.self_review``."""
+    name = resolve_repository(config, repo) if repo else None
+    if name is not None:
+        mode = config.get(f"repositories.{name}.self_review")
+        if mode in SELF_REVIEW:
+            return str(mode), f"repositories.{name}.self_review"
+    mode = config.get("review.self_review")
+    return (str(mode) if mode in SELF_REVIEW else "required"), "review.self_review"
 
 
 def resolve_repository(config: EffectiveConfig, name_or_alias: str) -> str | None:

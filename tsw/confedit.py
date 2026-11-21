@@ -60,6 +60,8 @@ PERMISSION_KEYS = (
     "review.block_on",
     "review.max_rounds",
     "review.orchestrator_extension_limit",
+    "review.self_review",
+    "repositories.*.self_review",
 )
 
 

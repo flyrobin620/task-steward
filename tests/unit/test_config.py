@@ -14,6 +14,7 @@ from tsw.config import (
     merge,
     normalize_model_id,
     resolve_repository,
+    self_review_mode,
 )
 from tsw.errors import TswError
 from tsw.home import Home
@@ -78,8 +79,52 @@ def test_unknown_fields_and_wrong_types_are_errors(home: Home) -> None:
 
 def test_review_cannot_be_made_optional(home: Home) -> None:
     problems = _problems(home, {"review": {"required": False, "on_unavailable": "skip"}})
-    assert "review.required: 评审是必经环节，不能配置" in problems
-    assert "review.on_unavailable: 评审是必经环节，不能配置" in problems
+    old = "不能配置；不做自评审用 review.self_review（DN004 §9）"
+    assert f"review.required: {old}" in problems
+    assert f"review.on_unavailable: {old}" in problems
+
+
+@pytest.mark.use_case("UC-REVIEW-003")
+def test_only_the_self_review_setting_turns_review_off(home: Home) -> None:
+    # The user's own setting (DN004 §9): globally, and per repository over the global value.
+    config = load_config(home, main_layer=None)
+    assert self_review_mode(config, None) == ("required", "review.self_review")
+    _write(
+        home,
+        CONFIG_FILE,
+        {
+            "version": 1,
+            "review": {"self_review": "off"},
+            "repositories": {"app": {"aliases": ["a"], "self_review": "required"}},
+        },
+    )
+    config = load_config(home)
+    assert config.valid, config.problems
+    assert self_review_mode(config, "other") == ("off", "review.self_review")
+    assert self_review_mode(config, "a") == ("required", "repositories.app.self_review")
+    problems = _problems(home, {"review": {"self_review": "maybe"}})
+    assert any(p.startswith("review.self_review") for p in problems)
+
+
+def test_reviewer_adapters_and_their_models(home: Home) -> None:
+    subagent = {"roles": {"reviewer": {"session": "claude-subagent", "model": "sonnet"}}}
+    assert _problems(home, subagent) == []
+    full_id = {"roles": {"reviewer": {"session": "claude-subagent", "model": "claude-sonnet-5-5"}}}
+    assert _problems(home, full_id) == [
+        "roles.reviewer.model: claude-subagent 的模型须为 sonnet、opus、haiku、fable 之一"
+    ]
+    copilot = {"roles": {"reviewer": {"session": "copilot-cli", "model": "gpt-6.1-sol"}}}
+    assert _problems(home, copilot) == []
+    # The worker's subagent needs a worker on the same host; the app cannot review at all.
+    app = {"roles": {"reviewer": {"session": "claude-app"}}}
+    assert any("claude-app 不能做评审器" in p for p in _problems(home, app))
+    opus = {"session": "claude-subagent", "model": "opus"}
+    _write(home, CONFIG_FILE, {"version": 1, "roles": {"reviewer": opus}})
+    config = load_config(home)
+    assert config.valid
+    assert (
+        "roles.reviewer.model 与 roles.worker.model 相同，评审视角的独立性下降" in config.warnings
+    )
 
 
 def test_removed_comparison_role_is_only_a_warning(home: Home) -> None:

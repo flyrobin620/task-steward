@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from tsw.commands import Command, CommitContext
-from tsw.config import EffectiveConfig, language_shown, resolve_repository
+from tsw.config import EffectiveConfig, language_shown, resolve_repository, self_review_mode
 from tsw.errors import rejected
 from tsw.events import EventDraft, digest
 from tsw.home import Home, same_dir, workdir_path
@@ -529,6 +529,15 @@ def _language_line(config: EffectiveConfig) -> str:
     )
 
 
+def _self_review_line(config: EffectiveConfig, row: Mapping[str, Any]) -> str:
+    """Whether the worker reviews its work before submitting (DN004 §9)."""
+    mode, source = self_review_mode(config, row["repo"])
+    if mode == "off":
+        return f"- 自评审：关闭（`{source}`）：不运行 `review_run`，成果就绪后直接 `submit`\n"
+    reviewer = config.get("roles.reviewer.session")
+    return f"- 自评审：开启（评审器 `{reviewer}`，`{source}`）\n"
+
+
 def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
     ctx: CommitContext,
     row: Mapping[str, Any],
@@ -558,6 +567,7 @@ def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
         f"- 执行目录：{workdir}\n- 授权读取集合：{', '.join(tasks)}\n"
         + _language_line(config)
         + _delivery_line(config, row)
+        + _self_review_line(config, row)
         # Read from the ledger each time a brief is written, so a preference recorded, replaced
         # or revoked since the goal was written shows here at once (DN007 §6.1).
         + brief_lines(ctx.conn, str(row["repo"]), str(row["goal"]), preferences)
@@ -1500,13 +1510,19 @@ def task_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         )
         current = current_attempt(ctx.conn, task_id)
         assert current is not None
-        recheck = guards.g_submit(
-            ctx.conn,
-            env.config,
-            {**row, "cycle": submission["cycle"]},
-            str(current["attempt"]),
-            str(submission["head"]),
-        )
+        review_mode = (submission.get("review") or {}).get("mode", "required")
+        if review_mode == "off":
+            # Submitted with self-review turned off by the user (DN004 §9): the recorded mode
+            # and its source are the evidence; there is no review to recheck.
+            recheck = {"rounds": list(submission.get("rounds") or [])}
+        else:
+            recheck = guards.g_submit(
+                ctx.conn,
+                env.config,
+                {**row, "cycle": submission["cycle"]},
+                str(current["attempt"]),
+                str(submission["head"]),
+            )
         guards.g_dep(ctx.conn, task_id)
         verified = ctx.conn.execute(
             "SELECT output_id FROM outputs WHERE task_id = ? AND verified_at IS NOT NULL",
@@ -1591,6 +1607,7 @@ def task_accept(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     "head": verified_head,
                     "review_path": review_path,
                     "reviews": recheck["rounds"],
+                    **({"review_mode": "off"} if review_mode == "off" else {}),
                     **({"post_merge": post_merge} if merge else {}),
                 },
             )

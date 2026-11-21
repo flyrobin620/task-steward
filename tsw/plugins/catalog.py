@@ -29,6 +29,9 @@ class SessionCaps:
     # The host tells the session that started another one whenever that one ends a turn, and
     # can undo the link: the orchestrator detaches the routine session (DN006 §8.9.7).
     detach: bool = False
+    # How a one-shot call runs (DN004 §3): ``process`` is started and awaited by tsw;
+    # ``worker_agent`` is a host subagent the worker starts and whose answer it hands back.
+    oneshot_via: Literal["process", "worker_agent"] = "process"
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,22 @@ SESSIONS: dict[str, SessionCaps] = {
         reuse_session=True,
         open_existing_dir=True,
     ),
+    # The read-only reviewer subagent of the tsw plugin, started by the worker (CC004).
+    "claude-subagent": SessionCaps(
+        host="claude-code",
+        execution="delegated",
+        interactive=False,
+        oneshot=True,
+        read_only_enforced=True,  # the subagent's tool allowlist (plugin/agents/reviewer.md)
+        incremental=False,  # a new subagent every round
+        user_direct_chat=False,
+        wake="none",
+        dispatch_window=False,
+        prestart=False,
+        reuse_session=False,
+        open_existing_dir=True,
+        oneshot_via="worker_agent",
+    ),
     "codex-app-server": SessionCaps(
         host="codex",
         execution="direct",
@@ -97,6 +116,21 @@ SESSIONS: dict[str, SessionCaps] = {
         dispatch_window=False,
         prestart=False,
         reuse_session=False,
+        open_existing_dir=True,
+    ),
+    # ``copilot -p`` with only read-only tools available (CP004).
+    "copilot-cli": SessionCaps(
+        host="copilot",
+        execution="direct",
+        interactive=False,
+        oneshot=True,
+        read_only_enforced=True,
+        incremental=True,  # --resume
+        user_direct_chat=False,
+        wake="none",
+        dispatch_window=False,
+        prestart=False,
+        reuse_session=True,
         open_existing_dir=True,
     ),
 }
