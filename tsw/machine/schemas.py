@@ -22,6 +22,10 @@ SOURCE: dict[str, Any] = {
         "text": S,
         "request_id": S,
         "target": {"type": "array", "description": "[任务 ID, revision, 决定类别]"},
+        "via": {
+            "enum": ["workdeck"],
+            "description": "原话经 workdeck 门户发到主会话时为 workdeck（只用于 main-session）",
+        },
     },
     "required": ["channel", "principal", "message_ref", "text", "target"],
 }

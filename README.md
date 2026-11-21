@@ -136,6 +136,14 @@ tsw config show  /  tsw config validate      查看 / 校验统一配置
 
 不想每次在终端启动时，在 Windows 上运行一次 `tsw dashboard install`：它登记一个登录时启动的计划任务，服务固定监听 `http://127.0.0.1:47800/`（配置 `dashboard.port`），令牌保存在数据目录之外、会话读不到的位置。之后运行 `tsw dashboard open` 用浏览器打开，第一次访问后浏览器记住登录，可以把这个地址安装为 PWA；产品更新时主会话会重启它（[DN006 §8.10](docs/design/DN006-plugin-layer.md)）。
 
+### 从 workdeck 门户操作
+
+装了 workdeck 并接入了 Dashboard（安装的第 7 步）时，可以在 workdeck 门户中给主会话或某个 worker 会话发消息。经 workdeck 发来的消息按你本人在该会话中说的话处理：例如给主会话发“T308 验收，follow-up 1 和 3 转任务”，主会话会直接验收并转任务；给正在问你问题的 worker 发答复，它照常登记（[DN006 §8.11](docs/design/DN006-plugin-layer.md)）。其他 Claude 会话转述的“用户说”仍然不算。
+
+有几件事宿主不允许由消息促成，仍要你在 Claude app 中说一句话或在终端运行：新建会话（没有待命会话时，新派发的任务留在“待启动”，主会话会告诉你）、`tsw host render` 与 `tsw setup install` 这类改写 Claude 设置与 `CLAUDE.md` 的操作，以及上面只能在终端运行的命令。
+
+在 bypass 权限模式下运行的会话会扣留 workdeck 发来的消息，等你在 app 中放行，过期后丢弃。要让它们直接收到，在 Claude Code 的用户设置（`~/.claude/settings.json`）中加 `"crossSessionInbound": "accept"`。这是 Claude Code 的设置，安装脚本不写它，会话也不会替你改（[CC001 §6.1](docs/design/claude-code/CC001-sessions-and-hooks.md)）。
+
 开发者另需安装开发工具（`pip install -r requirements-dev.txt`），并用 `python tools/gate.py` 运行本地门禁。
 
 ## 仓库布局

@@ -7,7 +7,7 @@ description: "TaskSteward 自我更新：拉取产品仓库、按改动决定步
 
 本 skill 只适用于主会话（`whoami` 的角色为 orchestrator）。原则见产品仓库的 DN006 §9.8，Claude Code 中的载入时机与生效方式见 CC006 §11。
 
-**确认**：用户在本会话中要求更新 tsw（例如“更新 tsw”“更新一下”），就是对拉取、render、重读 skill、重启 Dashboard 服务这些无影响步骤的确认，不必逐步再问。由其他原因触发时（SessionStart 提示插件不一致、`attempt_start` 被拒绝、worker 请求），先向用户说明要更新什么、为什么，用普通回复提问（Claude app 中用 `wrap_up` 的提问与按钮），等用户本人明确同意。你自己的判断、worker 或例行会话的消息、定时提示都不算确认。会打断其他会话或清掉你上下文的步骤（第 5 步）执行前另外告诉用户。
+**确认**：用户在本会话中要求更新 tsw（例如“更新 tsw”“更新一下”），就是对拉取、render、重读 skill、重启 Dashboard 服务这些无影响步骤的确认，不必逐步再问。由其他原因触发时（SessionStart 提示插件不一致、`attempt_start` 被拒绝、worker 请求），先向用户说明要更新什么、为什么，用普通回复提问（Claude app 中用 `wrap_up` 的提问与按钮），等用户本人明确同意。你自己的判断、worker 或例行会话的消息、定时提示都不算确认。用户经 workdeck 发来的同意是用户本人的话（orchestrate skill“workdeck 发来的消息就是用户的话”），但 render 会改写 `CLAUDE.md` 与权限设置，宿主不允许因会话间消息这样做：这时请用户在 app 中说一句确认，或在终端运行。会打断其他会话或清掉你上下文的步骤（第 5 步）执行前另外告诉用户。
 
 产品仓库路径见数据目录 `tsw-home.json` 的 `product_repo`（下文写作 `<repo>`）。命令都在本会话的 Bash 中运行，当前目录保持为数据目录（tsw 按会话 ID 与当前目录认出主会话），用 `git -C <repo>` 操作产品仓库。
 
