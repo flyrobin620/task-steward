@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="1d75c6455b9b46ecfa6ade88697ba8eea0bf9ef51b4985852efeb69be8c3afac">
+<meta name="tsw-source-sha256" content="1537215467f059b8b6739fe04290f0678677175805ab578d1a60b4e4c0faf1cf">
 <title>DN009 分发与安装</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -282,7 +282,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <table><thead><tr><th>段</th><th>显示</th><th>操作</th></tr></thead><tbody><tr><td>环境</td><td>产品检出、Python、宿主命令行各一行，满足的标 <code>√</code>（绿），缺少的标 <code>×</code>（红）；警告（如找不到评审器命令行）标 <code>!</code>（黄）</td><td>无</td></tr><tr><td>问题</td><td>标题带进度（<code>问题 3/8</code>）；问题文字为粗体，说明（<code>note</code>）为暗色，在问题下方</td><td>见下表</td></tr><tr><td>计划</td><td>每一步一行：要做 <code>►</code>（青）、已满足 <code>√</code>（暗色）、不做 <code>–</code>（暗色）、手工 <code>!</code>（黄）、受阻 <code>×</code>（红）；动作与用户设置的差异缩进为暗色；问题为红色，注意为黄色</td><td>方向键选择：<strong>按计划安装</strong> / <strong>修改某个答案</strong> / <strong>取消</strong></td></tr><tr><td>安装</td><td>每一步开始时显示 <code>► 正在…</code>，结束后在原处改为 <code>√</code> / <code>–</code> / <code>!</code> 与结果</td><td>无（一步失败时显示红色的原因，停止）</td></tr><tr><td>结果</td><td>核对逐项 <code>√</code> / <code>×</code>；“下一步”（§15.2 的三件事）单独成段、加粗，<code>/orchestrate</code> 高亮</td><td>无</td></tr></tbody></table>
 <p>各类问题的操作：</p>
 <table><thead><tr><th>类型</th><th>显示与操作</th></tr></thead><tbody><tr><td>选择（<code>choice</code>）</td><td>竖排列出选项，每项是说明加选项值（例如 <code>只在会话中  in-session</code>），默认值后标“（默认）”；光标 <code>►</code> 起始于上次的答案或默认值。<code>↑</code> / <code>↓</code> 移动（首尾循环），数字键直接跳到第 n 项，回车确认</td></tr><tr><td>是否（<code>bool</code>）</td><td>同上，两项“是 / 否”；另外 <code>y</code> / <code>n</code> 直接选中，<code>←</code> / <code>→</code> 也可移动</td></tr><tr><td>文字（<code>path</code>、<code>text</code>、<code>int</code>）</td><td>一行输入，暗色提示“回车采用 &lt;默认值&gt;”；必填项没有默认值时提示“必须由你给出”；校验失败时在下方显示红色原因并重新输入同一问</td></tr><tr><td>入口已决定的（<code>asked_by: entry</code>）</td><td>只显示一行，不提问</td></tr></tbody></table>
-<ul><li><strong>回答后收起</strong>：一个问题答完后，它占的几行清除，改为一行 <code>√ 评审器：codex-app-server</code>（勾为绿色，答案为粗体），屏幕上留下已回答的清单。</li><li><strong>修改与回退</strong>：在选择题中按 <code>Esc</code> 回到上一问；计划段的“修改某个答案”先用方向键选出要改的问题，重新回答后再生成一次计划。答案在显示计划前保存（与现在相同），修改后再次保存。</li><li><strong>取消</strong>：任何时候按 Ctrl+C 结束，显示“已取消”，不执行任何步骤；已经保存的答案留着，下次作为默认值。计划段选“取消”同样不执行、答案保留。</li><li><strong>选项的说明</strong>：问题清单为选择题增加选项说明（<code>labels</code>，选项值到中文说明的映射；没有说明的选项只显示值）。<code>tsw setup check --questions</code> 的输出同样带上它（只增字段），会话入口可以用来展示。</li><li><strong>输出不混入机器格式</strong>：交互界面下最后不再打印结果的键值列表（只有 <code>--json</code> 时输出 JSON）；纯文本回退时与现在相同。</li></ul>
+<ul><li><strong>回答后收起</strong>：一个问题答完后，它占的几行清除，改为一行 <code>√ 评审器：codex-app-server</code>（勾为绿色，答案为粗体），屏幕上留下已回答的清单。</li><li><strong>修改与回退</strong>：在选择题中按 <code>Esc</code> 回到上一问；计划段的“修改某个答案”先用方向键选出要改的问题，重新回答后再生成一次计划。答案在显示计划前保存（与现在相同），修改后再次保存。</li><li><strong>取消</strong>：提问时按 Ctrl+C 结束，显示“已取消”，不执行任何步骤（安装步骤开始之后按 Ctrl+C 则说明可能已经执行了部分步骤，重跑从没有完成的步骤继续，§5）；已经保存的答案留着，下次作为默认值。计划段选“取消”同样不执行、答案保留。</li><li><strong>选项的说明</strong>：问题清单为选择题增加选项说明（<code>labels</code>，选项值到中文说明的映射；没有说明的选项只显示值）。<code>tsw setup check --questions</code> 的输出同样带上它（只增字段），会话入口可以用来展示。</li><li><strong>输出不混入机器格式</strong>：交互界面下最后不再打印结果的键值列表（只有 <code>--json</code> 时输出 JSON）；纯文本回退时与现在相同。</li></ul>
 <p>示意（选择题，光标在第二项）：</p>
 <pre><code class="lang-text"> TaskSteward 安装                                             问题 5/8
  √ 数据目录：D:\tsw-home

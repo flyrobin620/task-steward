@@ -651,13 +651,17 @@ def _cmd_host_install_hint(args: argparse.Namespace) -> dict[str, Any]:
     return {"hint": install_hint(_home(args))}
 
 
-def _setup_context(args: argparse.Namespace, *, require: bool) -> setup_steps.Context:
+def _git_on_path(args: argparse.Namespace) -> None:
     git = getattr(args, "git", None)
     if git:
         # The probe found git outside PATH (newly installed): tsw and its children run it by
         # name (T308 review r1 F5).
         folder = str(Path(git).parent)
         os.environ["PATH"] = os.pathsep.join([folder, os.environ.get("PATH", "")])
+
+
+def _setup_context(args: argparse.Namespace, *, require: bool) -> setup_steps.Context:
+    _git_on_path(args)
     return setup_steps.context(
         os.environ,
         answers_file=getattr(args, "answers", None),
@@ -694,6 +698,7 @@ def _cmd_setup_install(args: argparse.Namespace) -> dict[str, Any]:
 
 def _setup_interactive(args: argparse.Namespace) -> dict[str, Any]:
     """The terminal entry's flow (DN009 §4.1, §16): check, ask, show the plan, confirm, install."""
+    _git_on_path(args)
     return setup_interactive.run(args)
 
 

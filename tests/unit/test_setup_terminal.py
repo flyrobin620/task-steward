@@ -4,6 +4,8 @@ console."""
 
 from __future__ import annotations
 
+import argparse
+import os
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -173,3 +175,30 @@ def test_choice_labels_join_the_question_list_without_changing_the_choices() -> 
     assert channels["labels"] == {"in-session": "只在会话中", "teams-chat": "另加 Teams 自聊"}
     assert "labels" not in found["language"].to_dict()
     assert found["dashboard_port"].short == "Dashboard 端口"
+
+
+@pytest.mark.use_case(UC)
+def test_a_wide_character_that_does_not_fit_moves_whole_to_the_next_row() -> None:
+    line = "a" * 59 + "中" + "b" * 59
+    assert t.rows(line, 60) == 3
+    assert len(Screen(60).feed(line + "\n").text().splitlines()) == 3
+    assert t.rows("a" * 58 + "中", 60) == 1
+
+
+@pytest.mark.use_case(UC)
+def test_the_interactive_entry_puts_the_probed_git_on_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tsw import cli  # noqa: PLC0415
+
+    seen: list[str] = []
+
+    def run(_args: argparse.Namespace) -> dict[str, object]:
+        seen.append(os.environ["PATH"])
+        return {}
+
+    monkeypatch.setattr(cli.setup_interactive, "run", run)
+    monkeypatch.setenv("PATH", r"C:\Windows")
+    git = Path("C:/Program Files/Git/cmd/git.exe")
+    cli._setup_interactive(argparse.Namespace(git=str(git)))
+    assert seen == [os.pathsep.join([str(git.parent), r"C:\Windows"])]

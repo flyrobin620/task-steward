@@ -45,8 +45,10 @@ function Write-TswMark([string]$Kind, [string]$Text) {
 }
 
 function Select-TswYesNo([string]$Question) {
-    # Yes or no with the arrow keys (DN009 §16.3); Read-Host when there is no console.
-    if (-not $script:Keys) {
+    # Yes or no with the arrow keys (DN009 §16.3); Read-Host when there is no console. The
+    # redraw moves up a fixed number of rows: on a console narrower than 80 columns a line
+    # could wrap, so that gets Read-Host as well.
+    if (-not $script:Keys -or [Console]::WindowWidth -lt 80) {
         $reply = Read-Host "$Question [是 / 否]"
         return ($reply -match '^(y|yes|是|好)$')
     }

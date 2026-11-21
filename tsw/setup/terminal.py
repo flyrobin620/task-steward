@@ -144,21 +144,30 @@ class Style:
         return paint(self.glyph[kind])
 
 
+def _cells(char: str) -> int:
+    if unicodedata.combining(char):
+        return 0
+    return 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+
+
 def display_width(text: str) -> int:
     """Columns the text takes on the terminal: escape sequences take none, wide (CJK)
     characters two, combining marks none."""
-    width = 0
-    for char in _ANSI.sub("", text):
-        if unicodedata.combining(char):
-            continue
-        width += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
-    return width
+    return sum(_cells(char) for char in _ANSI.sub("", text))
 
 
 def rows(text: str, columns: int) -> int:
-    """Terminal rows one line of text takes once it wraps."""
-    width = display_width(text)
-    return max(1, -(-width // max(columns, 1)))
+    """Terminal rows one line of text takes once it wraps, character by character: a wide
+    character that does not fit in the last column moves whole to the next row."""
+    columns = max(columns, 2)
+    used, col = 1, 0
+    for char in _ANSI.sub("", text):
+        width = _cells(char)
+        if col + width > columns:
+            used += 1
+            col = 0
+        col += width
+    return used
 
 
 class Block:

@@ -23,10 +23,18 @@ class ScriptedConsole:
     """Keys are the interface's key names (``up``, ``enter``, ``esc``, ``interrupt``, or a
     character); a line is ``("line", text)``."""
 
-    def __init__(self, script: Iterable[str | tuple[str, str]], columns: int = 400) -> None:
+    def __init__(
+        self,
+        script: Iterable[str | tuple[str, str]],
+        columns: int = 400,
+        interrupt_on: str | None = None,
+    ) -> None:
         self.script = list(script)
         self.written: list[str] = []
         self.width = columns
+        # Ctrl+C outside a prompt: the first write containing this text raises it, as the
+        # console does when the user presses Ctrl+C while the install runs.
+        self.interrupt_on = interrupt_on
 
     def _next(self) -> str | tuple[str, str]:
         if not self.script:
@@ -46,6 +54,9 @@ class ScriptedConsole:
 
     def write(self, text: str) -> None:
         self.written.append(text)
+        if self.interrupt_on and self.interrupt_on in text:
+            self.interrupt_on = None
+            raise KeyboardInterrupt
 
     def columns(self) -> int:
         return self.width

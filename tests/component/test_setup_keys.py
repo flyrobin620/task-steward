@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from tests.setup_harness import fake_claude, make_product, record, setup_env
+from tests.setup_harness import fake_claude, make_product, record, setup_env, write_answers
 
 UC = "UC-SETUP-005"
 DRIVER = Path(__file__).resolve().parents[1] / "fixtures" / "drive_setup_keys.py"
@@ -162,3 +162,32 @@ def test_lines_that_wrap_on_a_narrow_console_are_erased_whole(tmp_path: Path) ->
     assert screen.count("√ 交流语言：") == 1 and "√ 交流语言：en-US" in screen
     assert screen.count("√ 评审器：") == 1 and "↑↓" not in screen and "问题 " not in screen
     assert saved_answers(out["env"])["language"] == "en-US"
+
+
+FULL_ANSWERS: list[Any] = ["enter", "enter", "n", ["line", ""], "enter"]  # after the language
+
+
+@pytest.mark.use_case(UC)
+def test_ctrl_c_while_the_steps_run_says_some_may_be_done(tmp_path: Path) -> None:
+    home = tmp_path / "data"
+    keys: list[Any] = [["line", str(home)], ["line", ""], *FULL_ANSWERS, "enter"]
+    out = drive(tmp_path, {"keys": keys, "interrupt_on": "正在执行"})
+    assert out["code"] == 1 and out["left"] == []
+    assert out["error"]["details"]["reason"] == "interrupted"
+    assert "已中断：可能已经执行了部分步骤" in out["screen"]
+    assert "已取消，没有执行任何安装步骤" not in out["screen"]
+    # The first step had started: a rerun continues from the record (DN009 §5).
+    assert record(out["env"])["status"] == "installing"
+
+
+@pytest.mark.use_case(UC)
+def test_an_answers_file_given_with_interactive_supplies_the_defaults(tmp_path: Path) -> None:
+    home = tmp_path / "from-file"
+    answers = write_answers(tmp_path, home, language="en-US", dashboard_port=47803)
+    keys: list[Any] = [["line", ""], ["line", ""], "enter", "enter", "enter", ["line", ""]]
+    keys += ["enter", "up", "enter"]  # user settings, then “取消” at the plan
+    out = drive(tmp_path, keys, "--answers", str(answers))
+    assert out["code"] == 0 and out["left"] == [], out["screen"]
+    saved = saved_answers(out["env"])
+    assert saved["home"] == str(home) and saved["language"] == "en-US"
+    assert saved["dashboard"] is False and saved["dashboard_port"] == 47803

@@ -65,16 +65,35 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     style = Style(mode)
     try:
         if console is None:
-            return run_lines(args, style)
+            try:
+                return run_lines(args, style)
+            except KeyboardInterrupt:
+                raise _interrupted() from None
         return run_keys(args, console, style)
     finally:
         restore()
 
 
+def _interrupted() -> TswError:
+    """Ctrl+C outside a prompt: steps may have run; a rerun continues from the first step that
+    did not finish (DN009 §5)."""
+    return TswError(
+        ErrorCode.REJECTED,
+        "已中断：可能已经执行了部分步骤；重新运行安装会从没有完成的步骤继续",
+        reason="interrupted",
+    )
+
+
 def _context(args: argparse.Namespace, answers: dict[str, Any] | None) -> setup_steps.Context:
     if answers is None:
+        # The earlier answers, offered as defaults: --answers <file> when given, else the saved
+        # ones (DN009 §3).
         return setup_steps.context(
-            os.environ, python=args.python, claude=args.claude, require_answers=False
+            os.environ,
+            answers_file=getattr(args, "answers", None),
+            python=args.python,
+            claude=args.claude,
+            require_answers=False,
         )
     return setup_steps.context(
         os.environ, answers=answers, python=args.python, claude=args.claude, require_answers=True
@@ -189,6 +208,7 @@ class _Screen:
     def __init__(self, console: Console, style: Style) -> None:
         self.console = console
         self.style = style
+        self.installing = False
 
     def say(self, text: str = "") -> None:
         self.console.write(text + "\n")
@@ -203,8 +223,12 @@ def run_keys(args: argparse.Namespace, console: Console, style: Style) -> dict[s
     screen = _Screen(console, style)
     try:
         return _run_keys(args, screen)
-    except Cancelled:
+    except (Cancelled, KeyboardInterrupt):
         screen.say()
+        if screen.installing:
+            # Ctrl+C while the steps run: some may be done (DN009 §5).
+            screen.say(f" {style.mark('bad')} {style.bad(_interrupted().message)}")
+            raise _interrupted() from None
         screen.say(f" {style.mark('warn')} {style.warn('已取消，没有执行任何安装步骤')}")
         return _quiet(args, {"installed": False, "note": "已取消，没有安装"})
 
@@ -453,6 +477,7 @@ def _install(screen: _Screen, ctx: setup_steps.Context, *, open_browser: bool) -
             note = f"  {result['note']}" if result.get("note") else ""
             current.console.write(f" {style.mark('skip')} {style.dim(title + '  不做' + note)}\n")
 
+    screen.installing = True
     try:
         return setup_steps.install(ctx, open_browser=open_browser, progress=progress)
     except TswError as exc:

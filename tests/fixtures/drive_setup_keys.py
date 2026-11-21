@@ -4,9 +4,10 @@
 
 The runtime is the product checkout's (``tsw setup`` writes into the checkout it runs from); the
 console is the scripted stand-in from ``tests/terminal_harness.py``, in colour. The script is a
-JSON list of key names and ``["line", text]`` pairs, or ``{"columns": n, "keys": [...]}`` for a
-console ``n`` columns wide (400 otherwise). Writes ``{"code", "result", "error",
-"output", "screen"}`` to ``out.json``.
+JSON list of key names and ``["line", text]`` pairs, or
+``{"keys": [...], "columns": n, "interrupt_on": text}`` for a console ``n`` columns wide (400
+otherwise) on which Ctrl+C is pressed when ``text`` is written. Writes
+``{"code", "result", "error", "output", "screen", "left"}`` to ``out.json``.
 """
 
 from __future__ import annotations
@@ -28,8 +29,12 @@ from tsw.setup.terminal import Mode, Style  # noqa: E402
 
 loaded: Any = json.loads(Path(script_file).read_text(encoding="utf-8"))
 raw: list[Any] = loaded["keys"] if isinstance(loaded, dict) else loaded
-columns = int(loaded.get("columns", 400)) if isinstance(loaded, dict) else 400
-console = ScriptedConsole((tuple(i) if isinstance(i, list) else i for i in raw), columns)
+options: dict[str, Any] = loaded if isinstance(loaded, dict) else {}
+console = ScriptedConsole(
+    (tuple(i) if isinstance(i, list) else i for i in raw),
+    int(options.get("columns", 400)),
+    options.get("interrupt_on"),
+)
 args = build_parser().parse_args(["setup", "install", "--interactive", *rest])
 out: dict[str, Any] = {"code": 0, "result": None, "error": None}
 try:
