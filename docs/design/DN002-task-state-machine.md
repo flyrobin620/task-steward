@@ -1,6 +1,6 @@
 # DN002 任务状态机
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T251 §5.6 开始时为仓库任务创建 worktree；T262 §5.1a worker 登记会话中的需求变更；T270 §5.7 follow-up；T276 §5.7 follow-up 的定义与边界；T272 §5.8 worker 会话的标题与验收后归档；T292 §5.1 等待用户时的需求变更不作废待答问题；T302 §5.8 待命标题改为前缀、任务归档后归档会话）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T251 §5.6 开始时为仓库任务创建 worktree；T262 §5.1a worker 登记会话中的需求变更；T270 §5.7 follow-up；T276 §5.7 follow-up 的定义与边界；T272 §5.8 worker 会话的标题与验收后归档；T292 §5.1 等待用户时的需求变更不作废待答问题；T302 §5.8 待命标题改为前缀、任务归档后归档会话；T332 G-USER、G-CHANGE 经 workdeck 发到会话的消息）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN006 插件层](DN006-plugin-layer.md)
 
@@ -176,8 +176,8 @@
 | G-PAUSE | 记录了 owner、next_action、resume_condition 和类别 |
 | G-SUBMIT | 以下均针对当前 revision 与当前提交周期：报告的 md 与 html 都存在；本周期至少完成一轮由 `roles.reviewer.session` 指定的只读评审器（默认 Codex `gpt-6-astra` / `medium`）给出的评审；最后一轮评审的 HEAD 等于提交 HEAD；最后的评审决定为 `finalize`；仓库授权 worker 合并的任务（§3.5，不看任务类型）已合并 PR，合并的 head 等于提交 HEAD，合并记录附主分支上合并提交的 CI 结果（运行的提交等于合并提交，结论为 `success`，带运行链接；未完成或失败时拒绝，并写明“等它完成”或“在本任务内修复或 revert”）与 live 说明（结果，或不需要、不能运行的原因），或以 `merge_skipped` 写明由他人合并的原因；未授权时不能带合并记录；每个阻断项都已处置：`fix`（已验证：worker 记录了验证说明，或本周期之后又完成了一轮增量评审）、有据 `reject`、主会话认定不成立（`review.finding_overruled`），或经主会话 / 用户批准延后（`review.defer_approved`，且列入报告“已知问题”）；工作树干净或差异已说明。评审默认为必经环节，主会话不能关闭；只有用户以配置关闭自评审（`review.self_review` 或该仓库的 `self_review` 为 `off`，DN004 §9）时，本条中关于评审的条件（评审轮次、最后评审 HEAD、`finalize`、阻断项处置）不检查，`worker.submitted` 记录评审模式与来源键 |
 | G-ACCEPT | 当前 revision；验收要求逐项为“已完成 / 用户明确替代”，并附证据；评审证据通过 G-SUBMIT 复核；G-DEP 复核通过；PR 与产出已登记；Git 状态与提交 SHA 已核对；需要集成的仓库已完成集成与组合验证；worker 已合并时，该 PR 已由主会话核验登记，并写明对 worker 所附证据（合并提交、CI 链接、live）的核对（§3.5）；无待答输入 |
-| G-CHANGE | worker 登记需求变更的来源（§5.1a）：调用者是任务当前 attempt 绑定的 live 会话；引用的每条消息都是宿主记录的 `input.session_message`，属于本任务、来自调用者自己的会话、记录于任务当前 revision；tsw 用记录的原文构造 `VerifiedSource`（渠道 `in-session`，决定对象 `[任务, revision, change]`）。宿主注入的消息不被记录，主会话的转述、worker 的推断都不满足 |
-| G-USER | 来源是统一的 `VerifiedSource`（DN006 §8.5）：渠道、已核实的用户身份、消息引用、用户原话、所答请求（可空）、决定对象（任务、revision、决定类别）。主会话消息、子会话消息、Teams 回复、Portal 提交都可以满足，只要身份核实为用户本人且决定对象与当前 revision 一致；用户在会话外的直接操作（终端的 `tsw task accept` / `reject` / `cancel` 与 Dashboard 应用的按钮，渠道 `user-cli` / `status-app`，DN006 §8.10）也满足，这两个渠道只能由会话外的 tsw 命令记录；主会话代答、worker 回执、主控自评与超时都不满足 |
+| G-CHANGE | worker 登记需求变更的来源（§5.1a）：调用者是任务当前 attempt 绑定的 live 会话；引用的每条消息都是宿主记录的 `input.session_message`，属于本任务、来自调用者自己的会话、记录于任务当前 revision；tsw 用记录的原文构造 `VerifiedSource`（渠道 `in-session`，决定对象 `[任务, revision, change]`）。用户经 workdeck 发到该会话的消息与在会话中输入的相同，同样被记录（DN006 §8.11）；宿主注入的其他消息不被记录，主会话的转述、worker 的推断都不满足 |
+| G-USER | 来源是统一的 `VerifiedSource`（DN006 §8.5）：渠道、已核实的用户身份、消息引用、用户原话、所答请求（可空）、决定对象（任务、revision、决定类别）。主会话消息、子会话消息、Teams 回复、Portal 提交都可以满足，只要身份核实为用户本人且决定对象与当前 revision 一致；用户在会话外的直接操作（终端的 `tsw task accept` / `reject` / `cancel` 与 Dashboard 应用的按钮，渠道 `user-cli` / `status-app`，DN006 §8.10）也满足，这两个渠道只能由会话外的 tsw 命令记录；用户经 workdeck 门户发到会话的消息与用户在该会话中输入的话相同（DN006 §8.11、DN008 §9 第 7 条）：主会话中记渠道 `main-session` 并注 `via: workdeck`，worker 会话中由宿主照常记录；主会话代答、worker 回执、主控自评、超时，以及其他会话转述的“用户说”都不满足 |
 
 ## 5. 跨状态规则
 
@@ -218,7 +218,7 @@ T292 之前的账本里，主会话在 `waiting_user` 登记的变更把待答�
 
 | 项目 | 规则 |
 | --- | --- |
-| 来源（G-CHANGE） | 只接受宿主记录的、用户在该 worker 会话中输入的消息（`input.session_message`，DN006 §8.1a 第 3 步；Claude Code 为 `UserPromptSubmit` hook，CC001 §6）。宿主不限于有待答问题时记录，任务处于 `accepted` / `cancelled` / `archived` 时不记。worker 引用一个或多个消息编号；每条都须属于本任务、来自调用者自己的会话（任务当前 attempt 绑定的 live 会话），并记录于任务当前 revision。tsw 用记录的原文构造 `VerifiedSource`（渠道 `in-session`，决定对象 `[任务, revision, change]`）；worker 对变更的概括另记为 `summary`，不作为来源 |
+| 来源（G-CHANGE） | 只接受宿主记录的、用户在该 worker 会话中输入（或经 workdeck 发到该会话，DN006 §8.11）的消息（`input.session_message`，DN006 §8.1a 第 3 步；Claude Code 为 `UserPromptSubmit` hook，CC001 §6）。宿主不限于有待答问题时记录，任务处于 `accepted` / `cancelled` / `archived` 时不记。worker 引用一个或多个消息编号；每条都须属于本任务、来自调用者自己的会话（任务当前 attempt 绑定的 live 会话），并记录于任务当前 revision。tsw 用记录的原文构造 `VerifiedSource`（渠道 `in-session`，决定对象 `[任务, revision, change]`）；worker 对变更的概括另记为 `summary`，不作为来源 |
 | 不是来源 | 宿主注入的消息（其他会话与主会话发来的消息、app 事件、定时任务）不被记录，因此无法引用；主会话的转述、worker 自己的推断、其他会话或更早 revision 下记录的消息都被拒绝。一条消息至多推动一次变更：变更后 revision+1，之前的消息不再属于当前 revision |
 | `in_progress` | 状态不变，经 E07 回到 `executing`，开启新周期 |
 | `verifying` | 撤回提交，经 T17 回到 `in_progress`，开启新周期 |
