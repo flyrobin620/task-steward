@@ -192,6 +192,10 @@ def test_the_recorded_claude_output_is_read_as_the_cli_wrote_it() -> None:
     assert lost.status == "failed" and "result" in str(lost.error)
     stranger = claude.read_output(lines, session="0", model="sonnet")
     assert stranger.status == "failed" and "会话 ID" in str(stranger.error)
+    # Only the result: nothing says which model answered, so the round is not accepted.
+    unknown = claude.read_output(lines[-1:], session=session, model="sonnet")
+    assert unknown.status == "failed" and "没有实际模型" in str(unknown.error)
+    assert unknown.model is None
 
 
 def test_the_reviewer_environment_drops_the_hosts_variables() -> None:

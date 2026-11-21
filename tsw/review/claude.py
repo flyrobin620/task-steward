@@ -134,7 +134,7 @@ def run_review(
             thread_id=session,
             status="timedOut",
             final_message=None,
-            model=model,
+            model=None,
             error=f"claude 在 {timeout_seconds} 秒内没有结束",
         )
     finally:
@@ -212,7 +212,10 @@ def read_output(
             result = event
     problems: list[str] = []
     others = sorted({m for m in used if not matches(model, m)})
-    if others:
+    if not used:
+        # Nothing says which model answered: it cannot be checked, so it is not accepted.
+        problems.append("claude 输出中没有实际模型（init 或回复的 model），无法核实")
+    elif others:
         problems.append(f"Claude 使用的模型（{'、'.join(others)}）与配置的 {model} 不一致")
     if result is None:
         problems.append(
@@ -234,7 +237,7 @@ def read_output(
         thread_id=session,
         status="failed" if problems else "completed",
         final_message=answer,
-        model=distinct[0] if len(distinct) == 1 else (", ".join(distinct) or model),
+        model=distinct[0] if len(distinct) == 1 else (", ".join(distinct) or None),
         error="；".join(problems) or None,
     )
 

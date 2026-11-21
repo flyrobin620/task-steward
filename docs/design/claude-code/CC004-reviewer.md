@@ -52,11 +52,11 @@ claude -p <提示> --output-format stream-json --verbose
 本轮失败（`review_fail`，保存原始输出）的情形：
 
 - 进程启动失败、超时、退出码不为 0，输出中没有 `result` 事件，或 `result.is_error` 为 true；
-- **模型不一致**：`init.model` 或任何 `assistant` 事件的 `message.model`（`<synthetic>` 除外）与 `roles.reviewer.model` 不一致：**不回退**（DN004 §3.1），错误信息写明实际模型。比较前规范化：去掉 `[1m]` 之类的后缀、小写、`.` 换成 `-`（宿主在不同事件中写 `claude-sonnet-5.5` 与 `claude-sonnet-5-5`）。配置为完整模型 ID（如 `claude-sonnet-5-5`）时须相同；配置为别名（`sonnet`、`opus`、`haiku`、`fable`）时须是该家族的模型（`claude-sonnet-*`），别名对应哪个版本由命令行决定。`modelUsage` 只记入 `rK-run.json`，不参与比较（宿主可能为辅助用途调用其他模型）；
+- **模型无法核实或不一致**：输出中没有 `init.model`，也没有任何 `assistant` 事件的 `message.model`（`<synthetic>` 除外）；或其中任何一个与 `roles.reviewer.model` 不一致：**不回退**（DN004 §3.1），错误信息写明实际模型。比较前规范化：去掉 `[1m]` 之类的后缀、小写、`.` 换成 `-`（宿主在不同事件中写 `claude-sonnet-5.5` 与 `claude-sonnet-5-5`）。配置为完整模型 ID（如 `claude-sonnet-5-5`）时须相同；配置为别名（`sonnet`、`opus`、`haiku`、`fable`）时须是该家族的模型（`claude-sonnet-*`），别名对应哪个版本由命令行决定。`result.modelUsage` 不参与比较（宿主可能为辅助用途调用其他模型）；
 - 最终回复（`result.result`，没有时取最后一条 `assistant` 事件的文字）不是 JSON 或不满足契约；
 - `result.session_id` 与请求的会话 ID 不同。
 
-`rK-run.json` 记录实际模型（`model_used`）、会话 ID 与是否续用。
+`rK-run.json` 记录实际模型（`model_used`，规范化后的 `init.model` 与回复的 `model`）、会话 ID 与是否续用。
 
 ## 5. 能力声明
 
