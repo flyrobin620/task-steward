@@ -386,7 +386,11 @@ def test_a_fresh_thread_still_gets_the_last_triage(
     # PR #74 review: review.incremental "fresh" keeps round 1's findings and triage.
     from tests.component.test_review_run import FakeReviewer  # noqa: PLC0415
 
-    h = Harness(home, {"review": {"incremental": "fresh"}})
+    # Any existing program will do: the reviewer itself is injected (no codex on CI runners).
+    h = Harness(
+        home,
+        {"review": {"incremental": "fresh"}, "roles": {"reviewer": {"executable": sys.executable}}},
+    )
     workdir = live_worker(h, tmp_path)
     fake = FakeReviewer(
         result("draft-1", HIGH, verdict="changes_requested"), result("draft-2", verdict="pass")
