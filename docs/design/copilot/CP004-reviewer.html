@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="tsw-source-sha256" content="aa59ec8728ec98ee098897085322c346a61a3a771ffc3a1aa9045a3cd44bebc7">
+<title>CP004 Copilot CLI 评审器</title>
+<style>
+:root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.7 "Segoe UI","Microsoft YaHei",sans-serif;color:var(--fg);background:#fff}
+.layout{display:grid;grid-template-columns:260px minmax(0,1fr);max-width:1400px;margin:0 auto}
+nav.toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow:auto;padding:28px 18px;border-right:1px solid var(--line);font-size:13px}
+nav.toc h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
+nav.toc a{display:block;color:var(--fg);text-decoration:none;padding:2px 0}
+nav.toc a.l3{padding-left:14px;color:var(--muted)}
+nav.toc a:hover{color:var(--accent)}
+main{padding:32px 48px 64px;min-width:0}
+h1{font-size:28px;margin:0 0 16px;border-bottom:3px solid var(--accent);padding-bottom:10px}
+h2{font-size:21px;margin:36px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:17px;margin:26px 0 10px}
+h4{font-size:15px;margin:20px 0 8px}
+a{color:var(--accent)}
+code{font-family:Consolas,"Cascadia Mono",monospace;font-size:13px;background:var(--code);padding:1px 5px;border-radius:4px}
+pre{background:#1e2230;color:#e8eaf2;padding:14px 16px;border-radius:8px;overflow:auto;line-height:1.5}
+pre code{background:none;padding:0;color:inherit}
+table{border-collapse:collapse;width:100%;margin:12px 0 18px;font-size:13.5px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:var(--bg-soft);white-space:nowrap}
+tr:nth-child(even) td{background:#fbfcfe}
+blockquote{margin:12px 0;padding:8px 16px;border-left:4px solid var(--accent);background:var(--bg-soft)}
+figure{margin:18px 0 8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#fff}
+figure svg{display:block;width:100%;height:auto;max-height:none}
+figcaption{font-size:13px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between;gap:12px}
+.meta{color:var(--muted);font-size:13px}
+footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:10px}
+@media (max-width:900px){.layout{grid-template-columns:1fr}nav.toc{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line)}main{padding:20px}}
+@media print{nav.toc{display:none}.layout{display:block}main{padding:0}a{color:inherit;text-decoration:none}
+ pre{white-space:pre-wrap;background:#f3f4f8;color:#111}figure,table,pre{break-inside:avoid}h2,h3{break-after:avoid}
+ body{font-size:11pt}@page{margin:16mm 14mm}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc"><h2>目录</h2><a class="l2" href="#1-范围">1. 范围</a><a class="l2" href="#2-实测t325copilot-cli-10112windows">2. 实测（T325，Copilot CLI 1.0.112，Windows）</a><a class="l2" href="#3-调用约定">3. 调用约定</a><a class="l2" href="#4-结果判定">4. 结果判定</a><a class="l2" href="#5-能力声明">5. 能力声明</a><a class="l2" href="#6-已知限制">6. 已知限制</a><a class="l2" href="#7-验证">7. 验证</a></nav>
+<main>
+<h1>CP004 Copilot CLI 评审器</h1>
+<ul><li>状态：设计草案（T325，待用户确认）</li><li>日期：2026-11-21</li><li>实现：<a href="../DN004-worker-self-review.html">DN004 worker 自评审</a> · 能力声明：<a href="../DN006-plugin-layer.html">DN006 §7.3</a></li></ul>
+<h2 id="1-范围">1. 范围</h2>
+<p>本文是 DN004 评审器在 GitHub Copilot CLI 上的实现：会话适配器 <code>copilot-cli</code>，同步方式（DN004 §3），tsw 启动 <code>copilot -p</code> 非交互进程、等它结束、从 JSONL 输出中读回最终消息。它只做评审，不承载 worker（Copilot app 的宿主集成见 T277 的研究，另行设计）。评审包、输出契约、处置规则与轮次计数见 DN004。</p>
+<h2 id="2-实测t325copilot-cli-10112windows">2. 实测（T325，Copilot CLI 1.0.112，Windows）</h2>
+<p>在执行目录下的临时 git 仓库中实测 3 次（共 2 次 premium request，模型调用之外的启动失败不计费）：</p>
+<table><thead><tr><th>项</th><th>结果</th></tr></thead><tbody><tr><td>非交互与输出</td><td><code>-p &lt;提示&gt; --output-format json</code> 输出 JSONL，每行一个事件。<code>session.start</code> 带会话 ID 与 git HEAD；每条 <code>assistant.message</code> 带 <code>model</code> 与 <code>content</code>，最终回复的 <code>phase</code> 为 <code>final_answer</code>；最后一行 <code>result</code> 带 <code>sessionId</code> 与 <code>exitCode</code></td></tr><tr><td>会话 ID</td><td><code>--session-id &lt;UUID&gt;</code> 为新会话指定 ID，<code>result.sessionId</code> 与之一致，tsw 不需要从输出中找 ID</td></tr><tr><td>续用</td><td><code>--resume &lt;UUID&gt;</code> 续用同一会话：<code>session.resume</code> 事件出现，模型记得上一轮的结论</td></tr><tr><td>只读</td><td><code>--available-tools view grep glob</code> 只把这三个工具交给模型；另加 <code>--deny-tool write</code>、<code>shell</code>、<code>memory</code>（拒绝规则优先于任何允许规则）。要求它“用任何可用工具创建文件”时，它回答只有只读工具、没有创建，目录中也没有新文件</td></tr><tr><td>MCP</td><td>用户级 MCP server 照常启动，但 <code>--available-tools</code> 之外的工具都被禁用（<code>session.info</code> 列出 “Disabled tools”）；<code>--disable-builtin-mcps</code> 去掉内置的 GitHub MCP</td></tr><tr><td>模型</td><td>本机的管理策略把模型固定为某一个（<code>session.model_change</code> 的 <code>source</code> 为 <code>managed_settings</code>，<code>session.info</code> 的 <code>infoType</code> 为 <code>managed_model_override</code>），<code>--model</code> 不起作用；不存在的模型在调用前以 <code>session.error</code>（“Model … is not available”）失败，<code>exitCode</code> 为 1，不计费</td></tr><tr><td>文件范围</td><td>文件工具只能访问工作目录与系统临时目录，<code>--add-dir</code> 增加目录</td></tr></tbody></table>
+<h2 id="3-调用约定">3. 调用约定</h2>
+<pre><code class="lang-text">copilot -p &lt;提示&gt; --output-format json --session-id &lt;UUID&gt;   # 增量轮次改为 --resume &lt;上一轮的 UUID&gt;
+        --model &lt;roles.reviewer.model&gt; --reasoning-effort &lt;roles.reviewer.effort&gt;
+        --available-tools view grep glob
+        --deny-tool write --deny-tool shell --deny-tool memory --deny-tool url
+        --add-dir &lt;runs/Txxx/aN/review&gt; --add-dir &lt;执行目录&gt;
+        --no-ask-user --disable-builtin-mcps --no-auto-update --disallow-temp-dir</code></pre>
+<ul><li><strong>工作目录</strong>：任务的 worktree（与其他评审器相同的执行目录）。<code>--add-dir</code> 加入评审包目录与执行目录（报告草稿在 worktree 之外）。</li><li><strong>提示</strong>：只指向评审请求文件（<code>rK-request.md</code>），不把请求正文放在命令行上，避免 Windows 命令行长度限制；diff 在 <code>rK-diff.patch</code>（DN004 §3.1）。</li><li><strong>会话 ID</strong>：首轮由 tsw 生成 UUID，记入 <code>rK-run.json</code> 的 <code>thread_id</code>；<code>review.incremental</code> 为 <code>resume_thread</code> 时下一轮 <code>--resume</code> 同一 ID，只审增量。</li><li><strong>可执行文件</strong>：<code>roles.reviewer.executable</code>（本机覆盖，DN003 §5），缺省在 <code>PATH</code> 中找 <code>copilot</code>。</li><li><strong>进程</strong>：与 Codex 相同，用 <code>tsw/review/process.py</code> 的进程树启动，<code>timeout_seconds</code> 到期时结束整个进程树并判为本轮失败。stdin 关闭，不交互。</li></ul>
+<h2 id="4-结果判定">4. 结果判定</h2>
+<p>本轮失败（<code>review_fail</code>，保存原始输出）的情形：</p>
+<ul><li>进程启动失败、超时，或 <code>result.exitCode</code> 不为 0，或输出中有 <code>session.error</code>；</li><li>任何 <code>assistant.message</code> 的 <code>model</code> 与 <code>roles.reviewer.model</code>（规范化后）不同，或 <code>session.model_change</code> 显示被管理策略换成了其他模型：<strong>不回退</strong>（DN004 §3.1），错误信息写明实际模型，用户可把 <code>roles.reviewer.model</code> 改为策略允许的模型；</li><li>最终回复（最后一条 <code>phase</code> 为 <code>final_answer</code> 的 <code>assistant.message</code>，没有时取最后一条不带工具请求的 <code>assistant.message</code>）不是 JSON 或不满足契约；</li><li><code>result.sessionId</code> 与请求的会话 ID 不同。</li></ul>
+<h2 id="5-能力声明">5. 能力声明</h2>
+<table><thead><tr><th>能力</th><th>值</th><th>说明</th></tr></thead><tbody><tr><td><code>execution</code></td><td><code>direct</code></td><td>tsw 直接启动进程</td></tr><tr><td><code>oneshot</code> / <code>oneshot_via</code></td><td>是 / <code>process</code></td><td>—</td></tr><tr><td><code>read_only_enforced</code></td><td>是</td><td><code>--available-tools</code> 与 <code>--deny-tool</code></td></tr><tr><td><code>incremental</code></td><td>是</td><td><code>--resume</code></td></tr><tr><td>其他</td><td>不承载 worker，用户不能直接对话，无唤醒</td><td>—</td></tr></tbody></table>
+<h2 id="6-已知限制">6. 已知限制</h2>
+<ul><li>会话记录写在用户的 Copilot 目录（<code>~/.copilot/session-state/</code>），与 Codex 线程留在 Codex 目录相同；tsw 不清理。</li><li>评审器不能运行命令：不跑测试，不运行 <code>git</code>，靠 <code>rK-diff.patch</code> 与读文件评审（DN004 §3.1）。</li><li>管理策略固定的模型只能照用：<code>roles.reviewer.model</code> 必须写成策略允许的那一个，否则每轮都失败。</li><li>用户级 MCP server 仍会启动（只是工具被禁用），首次启动可能要十几秒。</li></ul>
+<h2 id="7-验证">7. 验证</h2>
+<ul><li>conformance / surface：以录制的 JSONL（来自 §2 的实测，去掉正文与本机路径）回放，覆盖完成、续用、模型被替换、<code>session.error</code>、非 JSON、超时。</li><li>live（<code>python tools/live.py reviewer --reviewer copilot-cli</code>）：真实 Copilot CLI 在固定样例上做一次全量与一次增量评审，核对只读与输出契约。</li></ul>
+<footer>本页由同目录的 <a href="CP004-reviewer.md">CP004-reviewer.md</a> 生成，内容与 Markdown 版本一致。</footer>
+</main>
+</div>
+</body>
+</html>

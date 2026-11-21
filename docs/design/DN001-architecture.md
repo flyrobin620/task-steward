@@ -340,7 +340,8 @@ runs/Txxx/aN/
 | 文档 | 内容 |
 | --- | --- |
 | [CC001 Claude Code 上的会话与 hooks](claude-code/CC001-sessions-and-hooks.md) | 主会话指令、`start_session` 参数、平台约束、角色解析依赖的宿主机制、hooks、平台 PoC |
-| [CC004 Claude Code 评审器](claude-code/CC004-reviewer.md) | `claude-headless` 一次性只读评审的调用约定 |
-| [CC006 Claude Code 插件](claude-code/CC006-plugins.md) | 宿主集成 `claude-code`、会话适配器 `claude-app` / `claude-headless`、`in-session` 渠道的记录方式 |
+| [CC004 Claude Code 评审器](claude-code/CC004-reviewer.md) | `claude-subagent`：worker 会话中的只读评审子代理 |
+| [CC006 Claude Code 插件](claude-code/CC006-plugins.md) | 宿主集成 `claude-code`、会话适配器 `claude-app` / `claude-subagent`、`in-session` 渠道的记录方式 |
 | [CC008 Claude Code 上的护栏](claude-code/CC008-guardrails.md) | 分工、block list 规则与 escape、现有校验逐项归类、允许规则 |
 | [CX004 Codex 评审器](codex/CX004-reviewer.md) | `codex-app-server` 一次性线程与 `codex-exec` 回退 |
+| [CP004 Copilot CLI 评审器](copilot/CP004-reviewer.md) | `copilot-cli`：`copilot -p` 一次性只读评审 |

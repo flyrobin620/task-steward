@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="ae8f84fd911381524a955a8ffafff73b50b57c50c1e28fd88ad71b6a2c54c58f">
+<meta name="tsw-source-sha256" content="b827639e1489a5b4dd66aaa053ef87db761c325e74597828adb93495d36b1a54">
 <title>CC004 Claude Code 评审器</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -42,14 +42,36 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 </head>
 <body>
 <div class="layout">
-<nav class="toc"><h2>目录</h2><a class="l2" href="#1-范围">1. 范围</a><a class="l2" href="#2-调用约定">2. 调用约定</a></nav>
+<nav class="toc"><h2>目录</h2><a class="l2" href="#1-范围">1. 范围</a><a class="l2" href="#2-子代理定义">2. 子代理定义</a><a class="l2" href="#3-一轮评审的步骤">3. 一轮评审的步骤</a><a class="l2" href="#4-模型effort-与独立性">4. 模型、effort 与独立性</a><a class="l2" href="#5-能力声明">5. 能力声明</a><a class="l2" href="#6-验证">6. 验证</a><a class="l2" href="#附录-aclaude-headless-调用约定存档未实现">附录 A：claude-headless 调用约定（存档，未实现）</a></nav>
 <main>
 <h1>CC004 Claude Code 评审器</h1>
-<ul><li>状态：设计草案（T242 r2 自 DN004 拆出，待用户确认）</li><li>日期：2026-11-08</li><li>实现：<a href="../DN004-worker-self-review.html">DN004 worker 自评审</a></li></ul>
+<ul><li>状态：设计草案（T242 r2 自 DN004 拆出；T325 改为子代理评审器，待用户确认）</li><li>日期：2026-11-21</li><li>实现：<a href="../DN004-worker-self-review.html">DN004 worker 自评审</a></li></ul>
 <h2 id="1-范围">1. 范围</h2>
-<p>本文是 DN004 评审器在 Claude Code 上的实现：没有 Codex 时使用的 <code>claude-headless</code>。评审包、输出契约、处置规则与轮次计数见 DN004。</p>
-<h2 id="2-调用约定">2. 调用约定</h2>
-<p>用 Claude Code 命令行一次性评审（PoC 2026-11-05 实测的调用约定）：</p>
+<p>本文是 DN004 评审器在 Claude Code 上的实现：会话适配器 <code>claude-subagent</code>，用 worker 会话中的只读子代理评审（DN004 §3 的 worker 子代理方式）。评审包、输出契约、处置规则与轮次计数见 DN004。用户的选择：“claude 自己的reviewer用subagent做就可以了，不用专门用claude headless或者cli”（T308 会话，M-T308-10）。此前的 <code>claude -p</code> 方案存档于附录 A。</p>
+<h2 id="2-子代理定义">2. 子代理定义</h2>
+<p>tsw 插件提供子代理 <code>agents/reviewer.md</code>，宿主中的名称为 <code>task-steward:reviewer</code>：</p>
+<pre><code class="lang-markdown">---
+name: reviewer
+description: TaskSteward 自评审的只读评审子代理。只在 review_run 给出启动指示时使用。
+tools: Read, Grep, Glob
+disallowedTools: Bash, PowerShell, Edit, Write, NotebookEdit, Agent, Skill, Workflow
+---
+（正文：只读评审者的守则：读取提示中给出的评审请求并照做；只读查阅执行目录与评审包；
+最后一条回复只输出满足 DN004 §4 的 JSON。）</code></pre>
+<ul><li><strong>只读由工具白名单强制</strong>：<code>tools</code> 给出时子代理只有列出的工具，不继承 MCP 工具；<code>disallowedTools</code> 先于 <code>tools</code> 生效，再排除命令、编辑、子代理与工作流工具，避免宿主以后新增的默认工具间接写入。插件子代理不支持 <code>hooks</code>、<code>mcpServers</code>、<code>permissionMode</code>（宿主出于安全原因忽略），本定义不使用它们。</li><li>**不写 <code>model</code>**：模型由每次启动时的参数决定（§3），定义中不固定。</li><li>正文只写守则，不写评审要点：要点与输出契约在每轮的评审请求里，随产品更新立即生效；子代理定义随插件更新，需要宿主重新加载插件后才生效（CC006）。</li></ul>
+<h2 id="3-一轮评审的步骤">3. 一轮评审的步骤</h2>
+<ol><li>worker 调用 <code>review_run</code>。tsw 开轮、写 <code>review/rK-request.md</code> 与 <code>rK-diff.patch</code>，返回： ``<code>json {&quot;ok&quot;: true, &quot;round&quot;: 2, &quot;status&quot;: &quot;awaiting_agent&quot;, &quot;agent&quot;: {&quot;subagent_type&quot;: &quot;task-steward:reviewer&quot;, &quot;model&quot;: &quot;sonnet&quot;, &quot;effort&quot;: &quot;high&quot;, &quot;description&quot;: &quot;自评审第 2 轮&quot;, &quot;prompt&quot;: &quot;你是 TaskSteward 任务 T001 的只读评审子代理。完整读取评审请求 &lt;数据目录&gt;/runs/T001/a1/review/r2-request.md 并照做……最后只输出 JSON。&quot;}} </code><code></code></li></ol>
+<ol><li>worker 用 <code>Agent</code> 工具启动子代理：<code>subagent_type</code>、<code>model</code>、<code>effort</code>、<code>description</code>、<code>prompt</code> 原样使用，前台运行（不设后台），不改写提示。提示只指向请求文件，请求正文不经过 worker 的上下文，worker 也无从删改。</li><li>子代理结束后，worker 调用 <code>review_run</code>：<code>round</code> 为第 1 步的轮次，<code>result</code> 为子代理最终回复的原文（含 JSON 的整段文字，tsw 自己提取 JSON），<code>agent_id</code> 为宿主返回的子代理 ID。子代理报错、被中断、宿主找不到 <code>task-steward:reviewer</code>（插件未更新）时，改带 <code>error</code> 写明原因。</li><li>tsw 解析、校验、核对 <code>reviewed_head</code>，写 <code>rK.json</code>、<code>rK-run.json</code>（记 <code>agent_id</code> 与请求的模型），记录 <code>review_complete</code>；不满足契约时写 <code>rK-raw.txt</code> 并记录 <code>review_fail</code>（E02，之后不带 <code>result</code> 再调用 <code>review_run</code> 即重试）。</li></ol>
+<p>worker 的流程说明（<code>plugin/roles/worker.md</code>）写明这几步；<code>review_run</code> 的返回结果也带同样的简短说明，worker 不必记住格式。</p>
+<h2 id="4-模型effort-与独立性">4. 模型、effort 与独立性</h2>
+<ul><li><strong>模型</strong>：<code>roles.reviewer.model</code> 取 <code>Agent</code> 工具接受的别名之一：<code>sonnet</code>、<code>opus</code>、<code>haiku</code>、<code>fable</code>（配置校验拒绝其他值）。别名由宿主解析为当前版本，tsw 拿不到子代理实际使用的模型，<code>rK-run.json</code> 只记录请求的别名。宿主的强制设置（例如强制所有子代理用同一模型的环境变量）可能覆盖它，这一点 tsw 无法发现，写在已知限制中。</li><li><strong>effort</strong>：<code>roles.reviewer.effort</code> 原样作为 <code>Agent</code> 工具的 <code>effort</code> 参数（<code>low</code>…<code>max</code>）；这是 tsw 流程说明明确要求的取值，worker 不自行改动。</li><li><strong>默认</strong>：安装时选择 <code>claude-subagent</code> 写入 <code>model: &quot;sonnet&quot;</code>、<code>effort: &quot;high&quot;</code>，与 worker 默认的 <code>claude-opus-5-5</code> 不同。配置校验在评审器与 worker 属于同一模型家族（别名 <code>opus</code> 对 <code>claude-opus-*</code>）时警告。</li><li><strong>独立性</strong>：子代理有自己的上下文，只读评审请求与它自己读到的文件，不继承 worker 的对话；它与 worker 在同一宿主、同一账号，独立程度低于 Codex 或 Copilot CLI。</li><li><strong>信任边界</strong>：结果经 worker 转交（DN004 §3.3）。</li></ul>
+<h2 id="5-能力声明">5. 能力声明</h2>
+<table><thead><tr><th>能力</th><th>值</th><th>说明</th></tr></thead><tbody><tr><td><code>execution</code></td><td><code>delegated</code></td><td>由 worker 的模型启动，tsw 不能直接调用</td></tr><tr><td><code>oneshot</code> / <code>oneshot_via</code></td><td>是 / <code>worker_agent</code></td><td>一轮一次子代理，结果经 worker 交回（DN006 §7.1）</td></tr><tr><td><code>read_only_enforced</code></td><td>是</td><td>子代理定义的工具白名单</td></tr><tr><td><code>incremental</code></td><td>否</td><td>每轮新子代理：全量范围，附上一轮意见、处置与增量 diff。宿主虽能按子代理 ID 续用，但跨 worker 上下文压缩与会话重启是否可靠未验证，不采用</td></tr><tr><td>其他</td><td>不承载 worker，用户不能直接对话，无唤醒</td><td>—</td></tr></tbody></table>
+<p>配置校验：<code>claude-subagent</code> 要求 worker 的会话适配器在同一宿主（<code>roles.worker.session</code> 为 <code>claude-app</code>）。评审请求在数据目录的 <code>runs/</code> 下、执行目录之外：子代理继承 worker 的权限模式（tsw 建的 worker 为 <code>auto</code>），读取它不需要逐次批准。</p>
+<h2 id="6-验证">6. 验证</h2>
+<ul><li>surface：MCP <code>review_run</code> 两次调用的完整往返（启动指示、带 <code>result</code> 的完成、带 <code>error</code> 的失败、不合契约时的失败与重试），插件包含 <code>agents/reviewer.md</code> 且工具白名单如上。</li><li>live（<code>python tools/live.py reviewer --reviewer claude-subagent</code>）：在临时数据目录与临时仓库中，以 <code>claude -p --plugin-dir &lt;检出&gt;/plugin</code> 充当 worker，按 <code>review_run</code> 的指示启动真实子代理，完成一次全量评审与一次后续轮次，核对只读（执行目录与 <code>.git</code> 不变）与输出契约。这里的 <code>claude -p</code> 只是 live 场景里代替桌面 app worker 的宿主，评审本身由子代理完成。</li></ul>
+<h2 id="附录-aclaude-headless-调用约定存档未实现">附录 A：<code>claude-headless</code> 调用约定（存档，未实现）</h2>
+<p>PoC 2026-11-05 实测的 <code>claude -p</code> 一次性评审约定，T325 起不采用（DN004 附录 A）：</p>
 <ul><li><strong>清除继承的宿主环境变量</strong>：tsw 在桌面 app 的会话里运行，进程继承了 <code>CLAUDE_*</code> / <code>ANTHROPIC_*</code> 等宿主变量，命令行会因此以为认证由宿主提供而报“未登录”。启动评审进程前删除这些变量，让命令行读取用户设置中的认证或网关配置。</li><li><strong>严格只读</strong>：<code>--allowedTools Read,Grep,Glob</code>，<code>--disallowedTools Write,Edit,Bash,NotebookEdit,ExitPlanMode,Agent,Workflow,Skill</code>（子代理与工作流工具可能间接写入，也要禁用），<code>--permission-mode dontAsk</code>。不使用 plan 模式：它不写目标文件，但会把计划文件写入用户目录。</li><li><strong>设置来源</strong>：<code>--setting-sources user</code>，以便读取用户的认证或网关配置；这也会加载用户级 hooks，评审结果只以 JSON 输出为准，hooks 的报错不影响评审。</li><li><strong>显式模型</strong>：总是传 <code>--model roles.reviewer.model</code>，不依赖用户的默认模型。</li><li><strong>输出与续用</strong>：<code>--output-format json</code>，从 <code>result</code> 字段解析评审 JSON；增量评审用 <code>--resume &lt;session_id&gt;</code> 续用同一会话。</li></ul>
 <footer>本页由同目录的 <a href="CC004-reviewer.md">CC004-reviewer.md</a> 生成，内容与 Markdown 版本一致。</footer>
 </main>

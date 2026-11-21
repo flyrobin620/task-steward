@@ -28,7 +28,7 @@
   },
   "plugins": {
     "host_integration": "claude-code",
-    "sessions": ["claude-app", "codex-app-server", "codex-exec"],
+    "sessions": ["claude-app", "claude-subagent", "codex-app-server", "codex-exec", "copilot-cli"],
     "human_channels": ["in-session", "teams-chat"],
     "storage": {"use": "fs"}
   },
@@ -84,6 +84,7 @@
     "orchestrator_extension_limit": 3,
     "retry_limit": 2,
     "block_on": ["critical", "high"],
+    "self_review": "required",
     "incremental": "resume_thread",
     "prompt_templates": {
       "code": "config/prompts/review-code.md",
@@ -135,7 +136,8 @@
       "instructions": ["AGENTS.md", ".github/copilot-instructions.md"],
       "worktree_files": [{"source": "dev-settings.json", "destination": ".local/dev-settings.json"}],
       "validation": [],
-      "delivery": {"push": true, "create_pr": true, "merge": false}
+      "delivery": {"push": true, "create_pr": true, "merge": false},
+      "self_review": "required"
     }
   },
   "accounts": {
@@ -180,14 +182,14 @@
 | `worker.context` | `fresh` | 固定 fresh；`fork` 会把主会话长上下文带入，不允许 |
 | `worker.prompt_template` | 路径 | worker 启动指令模板，可用变量：`{task_id}` `{attempt}` `{brief_path}` `{writable_roots}` `{report_paths}` |
 | `worker.allow_in_task_subagents` | 布尔 | worker 能否在自己任务内使用 Agent 子代理 |
-| `reviewer.session` / `fallback_session` | 会话适配器名 | 评审所用会话适配器，可与主会话、worker 不同；须具备 `oneshot`、`direct`、`read_only_enforced`（DN006 §7.4） |
-| `reviewer.model` / `effort` / `timeout_seconds` | — | 默认 `gpt-6-astra` / `medium`；只读由所选适配器强制，不另设字段 |
+| `reviewer.session` / `fallback_session` | 会话适配器名 | 评审所用会话适配器，可与主会话、worker 不同；须具备 `oneshot`、`read_only_enforced`，并且是 `direct`，或与 worker 同宿主的 `worker_agent`（DN006 §7.4）。本版本实现了 `codex-app-server`、`claude-subagent`、`copilot-cli`（DN004 §3.1） |
+| `reviewer.model` / `effort` / `timeout_seconds` | — | 默认 `gpt-6-astra` / `medium`；只读由所选适配器强制，不另设字段。`claude-subagent` 的模型取 `sonnet`、`opus`、`haiku`、`fable` 之一（CC004 §4），`timeout_seconds` 对它不起作用（子代理在 worker 的 turn 内运行）；`copilot-cli` 的模型须是 Copilot 允许的模型（CP004 §4） |
 | `routine.session` | 会话适配器名 | 承载例行会话（DN006 §8.9）的会话适配器，须具备 `interactive` 与 `timer`；delegated 适配器必须与主会话同一宿主 |
 | `routine.model` / `effort` / `permission_mode` | 同上 | 默认 `claude-sonnet-5-5` / `low` / `auto`：例行会话只执行 tsw 算好的动作，不需要强模型；权限模式不能高于主会话：没有显式设置时取默认值与主会话模式中较低的一个，显式设置得更高时校验失败 |
 
 已删除字段：`roles.comparison`（Astra 对照版）。导入历史配置时如出现该字段，记录为已忽略，不报错。
 
-**不可配置的评审规则**：评审是必经环节，任何人（包括主会话）都不能跳过；提交 HEAD 必须等于最后评审 HEAD。这两条是 DN002 的不变量（G-SUBMIT），配置中没有开关；配置中出现 `review.required`、`review.require_final_head_reviewed`、`review.on_unavailable` 时报错。评审器不可用、预算用完等情形由 worker 在自己的会话中问用户，超时转交主会话判断（DN006 §8.1）。
+**评审规则**：自评审默认是必经环节，只有用户能用 `review.self_review` 或 `repositories.<id>.self_review` 关闭（§3.2，DN004 §9），主会话与 worker 都不能为某个任务跳过。自评审开启时，提交 HEAD 必须等于最后评审 HEAD（DN002 G-SUBMIT），这一条没有开关。配置中出现 `review.required`、`review.require_final_head_reviewed`、`review.on_unavailable` 时报错（关闭自评审用 `review.self_review`）。评审器不可用、预算用完等情形由 worker 在自己的会话中问用户，超时转交主会话判断（DN006 §8.1）。
 
 ### 3.1a `plugins` 与 `input`
 
@@ -196,7 +198,7 @@
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
 | `plugins.host_integration` | `claude-code` | 宿主集成（DN006 §6）：生成流程说明、工具注册与规则执行配置 |
-| `plugins.sessions` | `claude-app`、`codex-app-server`、`codex-exec` | 加载的会话适配器；`roles.*.session` 只能引用其中的实现 |
+| `plugins.sessions` | `claude-app`、`claude-subagent`、`codex-app-server`、`codex-exec`、`copilot-cli` | 加载的会话适配器；`roles.*.session` 只能引用其中的实现 |
 | `plugins.human_channels` | `in-session`、`teams-chat` | 主会话把转交来、应由用户决定的问题交给用户的方式（DN006 §8.6）：`in-session` 在主会话中直接问，`teams-chat` 经 Teams 渠道插件；worker 在自己会话中的提问不受它控制 |
 | `plugins.storage.use` | `fs` | `fs` 或 `fs+git`（数据目录作为用户私有 Git 仓库） |
 | `input.triage` | `orchestrator_judgment` | `orchestrator_judgment`：主会话在授权边界内综合判断（DN006 §8.2）；`human_direct`：主会话不判断，一律交给人类 |
@@ -230,6 +232,7 @@
 | `orchestrator_extension_limit` | 3 | 同一提交周期内主会话累计最多追加的轮次；再需要追加只能交给人类决定 |
 | `retry_limit` | 2 | 单轮调用失败的重试次数 |
 | `block_on` | `critical`, `high` | 必须处置（修复或有据拒绝）的严重级别 |
+| `self_review` | `required` | `off` 表示不做自评审（DN004 §9）：`review_run` 被拒绝，G-SUBMIT 不检查评审条件。`repositories.<id>.self_review` 对该仓库的任务覆盖它。权限类键（§7.2） |
 | `incremental` | `resume_thread` | 后续轮次复用同一 reviewer 线程，只审增量；`fresh` 表示每轮新线程全量审 |
 | `prompt_templates` | 三类任务各一个 | 评审提示模板 |
 | `output_schema` | JSON Schema 路径 | 评审器输出必须满足的结构（DN004 §4） |
@@ -268,7 +271,7 @@
 
 ### 3.4 `repositories` 与 `accounts`
 
-结构沿用 orchestrator-agent 的 `config/repositories.json` 与 `config/accounts.json`，合并为两个小节（账号只记录名称与认证目录引用，凭据本身不进数据目录），并新增 `aliases`（原 `repositories.md` 中的缩写表）。导入时自动转换（DN005 §4.4）。`delivery.push` / `create_pr` / `merge` 是该仓库的默认交付授权，具体任务仍以用户当次指令为准。`merge`（默认关闭）为 `true` 时，该仓库的任务（不看任务类型）由 worker 在门禁、评审与意见都解决后自行合并 PR，等主分支上合并提交的 CI 通过后再提交（DN002 §3.5）；此时必须写明 `repository`（`owner/name`），hooks 据此只放行合并本仓库的 PR。三者都是权限类键（§7.2）。
+结构沿用 orchestrator-agent 的 `config/repositories.json` 与 `config/accounts.json`，合并为两个小节（账号只记录名称与认证目录引用，凭据本身不进数据目录），并新增 `aliases`（原 `repositories.md` 中的缩写表）。导入时自动转换（DN005 §4.4）。`delivery.push` / `create_pr` / `merge` 是该仓库的默认交付授权，具体任务仍以用户当次指令为准。`merge`（默认关闭）为 `true` 时，该仓库的任务（不看任务类型）由 worker 在门禁、评审与意见都解决后自行合并 PR，等主分支上合并提交的 CI 通过后再提交（DN002 §3.5）；此时必须写明 `repository`（`owner/name`），hooks 据此只放行合并本仓库的 PR。三者都是权限类键（§7.2）。`self_review`（`required` / `off`，可选）对该仓库的任务覆盖 `review.self_review`（DN004 §9），同样是权限类键。
 
 `path`（本机 git 检出）、`remote`、`base_ref`、`instructions` 决定仓库任务的 worktree 与任务书中的仓库说明（[CC006 §8](claude-code/CC006-plugins.md)）：`attempt_start` 在执行目录下创建 `<执行目录>/<仓库 id>` 的 worktree（分支按 `worktrees.branch_pattern`，基线为 `base_ref`，未配置时取远端默认分支），worker 会话以它为会话目录；没有可用检出时不建 worktree。`instructions` 是相对仓库根的指令文件列表（如 `AGENTS.md`、`CLAUDE.md`、`.github/copilot-instructions.md`），该仓库的每份任务书都要求 worker 完整阅读并遵守；未配置时默认这三个文件，存在哪个读哪个。`worktrees.root` 在 `claude-code` 宿主中不使用（worktree 在执行目录下，字段保留）；`worktree_files` 尚未实现。
 
@@ -384,7 +387,7 @@ tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命�
 | `roles.*.permission_mode`、`roles.*.session`、`roles.reviewer`（全部）、`roles.worker.allow_in_task_subagents`、`routine.enabled` | 角色权限模式、会话宿主、评审器；是否运行例行会话 |
 | `plugins` | 加载的会话适配器、人类渠道与存储决定能力边界 |
 | `input.triage`、`input.channels` | 主会话能否自行判断、问题投到哪里 |
-| `review.block_on`、`review.max_rounds`、`review.orchestrator_extension_limit` | 评审门槛与主会话可自行追加的上限 |
+| `review.block_on`、`review.max_rounds`、`review.orchestrator_extension_limit`、`review.self_review`、`repositories.*.self_review` | 评审门槛、主会话可自行追加的上限、是否做自评审 |
 
 替换整个上级对象（例如 `roles`）同样算改动其下的权限类键。收窄也要原话：逐键判断扩大还是收窄容易出错，一律要求原话更简单。
 

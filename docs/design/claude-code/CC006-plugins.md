@@ -50,7 +50,8 @@ worker 的说明不是 skill，也不在插件里加载（Claude Code 不加载�
 | 适配器 | 用途 | 做法 |
 | --- | --- | --- |
 | `claude-app` | 主会话与 worker（interactive、delegated） | 创建、投递、停止、观察、对账分别用 app 的 `start_session`、`SendMessage`、`stop_session`、`get_session`、`list_sessions {linked:true}`；创建参数与平台约束见 [CC001 §3–§4](CC001-sessions-and-hooks.md)；中性权限映射 ask→default、edits→acceptEdits、auto→auto、full→bypassPermissions |
-| `claude-headless` | 无 Codex 时的评审器（oneshot、direct） | `claude -p` 严格只读，调用约定见 [CC004](CC004-reviewer.md) |
+| `claude-subagent` | 评审器（oneshot，由 worker 启动的只读子代理） | 插件的 `agents/reviewer.md`（`task-steward:reviewer`），做法见 [CC004](CC004-reviewer.md) |
+| `claude-headless` | 未实现（T325 起不采用） | `claude -p` 的调用约定存档于 [CC004 附录 A](CC004-reviewer.md) |
 
 `claude-app` 的 interactive 动作：
 
