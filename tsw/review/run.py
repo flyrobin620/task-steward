@@ -1,9 +1,8 @@
 """One self-review round for the calling worker (DN004 §2–§4): ``tsw review run`` / ``review_run``.
 
-A reviewer either runs as a process tsw starts and waits for (``codex-app-server``,
-``copilot-cli``), or is the worker's own read-only subagent (``claude-subagent``, CC004): then the
-first call opens the round and returns how to start the subagent, and a second call with
-``round`` and ``result`` (or ``error``) hands its answer back to be checked and recorded.
+Every reviewer is a process tsw starts and waits for (``codex-app-server``, ``claude-headless``,
+``copilot-cli``): tsw reads its answer back and records it, the answer never passes through the
+worker (DN004 §3).
 
 The round is recorded before the reviewer is called (``review_start``), the request and the
 result are written by tsw into ``runs/<task>/<attempt>/review/`` (workers never write ``runs/``),
@@ -42,27 +41,33 @@ from tsw.machine.model import loads, row_dict
 from tsw.machine.runner import run_tool
 from tsw.machine.worker import CATEGORIES, VERDICTS, validate_result
 from tsw.plugins.catalog import SESSIONS
-from tsw.review import copilot
+from tsw.review import claude, copilot
 from tsw.review.codex import ReviewRun, extract_json, resolve_executable, run_review
 from tsw.storage.fs import FsStorage
 from tsw.workspace import plan
 
 Reviewer = Callable[..., ReviewRun]
 # Reviewers tsw starts and waits for (DN004 §3.1), implemented in this version.
-REVIEWERS: dict[str, Reviewer] = {"codex-app-server": run_review, "copilot-cli": copilot.run_review}
-# Reviewers that are the worker's subagent: the host's name of the subagent (CC004 §2).
-AGENT_REVIEWERS: dict[str, str] = {"claude-subagent": "task-steward:reviewer"}
+REVIEWERS: dict[str, Reviewer] = {
+    "codex-app-server": run_review,
+    "claude-headless": claude.run_review,
+    "copilot-cli": copilot.run_review,
+}
 # Reviewers that cannot run commands: tsw writes the round's diff for them (DN004 §3.1).
-NO_SHELL = frozenset({"copilot-cli", "claude-subagent"})
+NO_SHELL = frozenset({"claude-headless", "copilot-cli"})
 EXECUTABLES: dict[str, Callable[[str | None], str]] = {
     "codex-app-server": resolve_executable,
+    "claude-headless": claude.resolve,
     "copilot-cli": copilot.resolve,
 }
+# Reviewers an earlier version had and this one removed: a round one of them opened is retried
+# with the configured reviewer (DN004 §3.2).
+REMOVED = frozenset({"claude-subagent"})
 
 
 def implemented() -> tuple[str, ...]:
     """Every reviewer ``review_run`` can use in this version."""
-    return (*REVIEWERS, *AGENT_REVIEWERS)
+    return tuple(REVIEWERS)
 
 
 # Where a task's work usually starts, when the worker does not name a base.
@@ -106,7 +111,7 @@ class Context:
     ledger: Ledger
     who: Identity
     caller: Caller
-    reviewer: Reviewer | None  # None: the worker's subagent (AGENT_REVIEWERS)
+    reviewer: Reviewer
     executable: str | None
     session: str
     model: str
@@ -121,12 +126,8 @@ def run_round(
     base: str | None = None,
     notes: str | None = None,
     machine: str | None = None,
-    round_no: int | None = None,
-    result: str | None = None,
-    error: str | None = None,
-    agent_id: str | None = None,
 ) -> dict[str, Any]:
-    """One round; ``round_no`` with ``result`` or ``error`` hands a subagent's answer back."""
+    """One round: a new one, or the open one again (E02)."""
     config = load_config(home).require_valid()
     machine = machine or lease.this_machine()
     ledger = ledger_for(home, config, machine)
@@ -158,7 +159,11 @@ def run_round(
         # it, even when the configuration has changed since.
         recorded = loads(opened["reviewer"], {})
         session = str(recorded.get("session") or configured)
-        model = str(recorded.get("model") or model)
+        if session in REMOVED:
+            # The reviewer that opened it no longer exists: the configured one retries it.
+            session = configured
+        else:
+            model = str(recorded.get("model") or model)
         if session != configured:
             # The configured command line now belongs to another reviewer: the round keeps the
             # one it was first called with, else the reviewer's own default command.
@@ -172,23 +177,14 @@ def run_round(
         # A new round: the user's choice not to self-review comes before any reviewer check.
         guards.require_self_review(config, row)
     reviewer = REVIEWERS.get(session)
-    if reviewer is None and session not in AGENT_REVIEWERS:
+    if reviewer is None:
         raise TswError(
             ErrorCode.UNSUPPORTED,
             f"本版本尚未实现评审会话适配器 {session}",
             reason="reviewer_not_implemented",
         )
-    handing_back = result is not None or error is not None
-    if handing_back and session not in AGENT_REVIEWERS:
-        raise rejected(
-            f"评审器 {session} 由 tsw 直接调用，不接受交回的结果", reason="not_agent_reviewer"
-        )
-    if handing_back and round_no is None:
-        raise rejected("交回评审结果时要写明 round", reason="round_missing")
-    executable = None
-    if reviewer is not None:
-        resolver = EXECUTABLES.get(session, resolve_executable)
-        executable = resolver(executable_setting)
+    resolver = EXECUTABLES.get(session, resolve_executable)
+    executable = resolver(executable_setting)
     ctx = Context(
         home=home,
         config=config,
@@ -208,9 +204,6 @@ def run_round(
             "本 attempt 已有一轮评审在进行，等它结束后再调用", reason="review_in_progress"
         ) from exc
     try:
-        if handing_back:
-            assert round_no is not None
-            return _hand_back(ctx, round_no, result=result, error=error, agent_id=agent_id)
         return _run_locked(ctx, head=head, base=base, notes=notes)
     finally:
         lock.release()
@@ -440,16 +433,13 @@ def _review(
         "model": ctx.model,
         "effort": ctx.config.get("roles.reviewer.effort"),
         "thread_id": None,
+        "model_used": None,
         "executable": ctx.executable,
         "resumed": resume,
         "retry": retry,
         "status": None,
         "error": None,
     }
-    if ctx.reviewer is None:  # the worker starts the subagent and hands its answer back
-        meta["status"] = "awaiting_agent"
-        _write(ctx.home, review_dir / f"r{round_no}-run.json", _dumps(meta))
-        return _agent_instructions(ctx, round_no, request)
     run, error, result = _call(
         ctx,
         prompt if ctx.session not in NO_SHELL else _pointer(ctx, round_no, request),
@@ -458,6 +448,7 @@ def _review(
         add_dirs=[review_dir, ctx.home.root / "work" / task_id / attempt_id],
     )
     meta["thread_id"] = run.thread_id if run else None
+    meta["model_used"] = run.model if run else None
     meta["status"] = run.status if run else None
     return _finish(
         ctx,
@@ -528,102 +519,6 @@ def _pointer(ctx: Context, round_no: int, request: Path) -> str:
         f"完整读取评审请求文件 {request}（较长时分段读完），请求中列出的 diff 文件也要读，"
         "然后按请求评审。只读：不修改、不创建任何文件。"
         "最后一条回复只输出请求规定的 JSON 对象，不要输出其他文字。"
-    )
-
-
-def _agent_instructions(ctx: Context, round_no: int, request: Path) -> dict[str, Any]:
-    task_id, attempt_id = str(ctx.who.task_id), str(ctx.who.attempt)
-    return {
-        "ok": True,
-        "round": round_no,
-        "status": "awaiting_agent",
-        "request_path": f"runs/{task_id}/{attempt_id}/review/r{round_no}-request.md",
-        "agent": {
-            "subagent_type": AGENT_REVIEWERS[ctx.session],
-            "model": ctx.model,
-            "effort": ctx.config.get("roles.reviewer.effort"),
-            "description": f"自评审第 {round_no} 轮",
-            "prompt": _pointer(ctx, round_no, request),
-        },
-        "next": (
-            "用 Agent 工具原样按 agent 的各字段启动这个子代理（前台运行，不改写 prompt）。"
-            f"它结束后再调用 review_run：round={round_no}，result=子代理最终回复的原文，"
-            "agent_id=宿主返回的子代理 ID；子代理报错、被中断或找不到这个子代理类型时，"
-            "改带 error 写明原因。交回之前不要结束这一轮对话。"
-        ),
-    }
-
-
-def _hand_back(
-    ctx: Context, round_no: int, *, result: str | None, error: str | None, agent_id: str | None
-) -> dict[str, Any]:
-    """The answer of the reviewer subagent of an open round (DN004 §3.2)."""
-    task_id, attempt_id = str(ctx.who.task_id), str(ctx.who.attempt)
-    with ctx.ledger.view() as conn:
-        row = row_dict(conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone())
-        attempt = row_dict(
-            conn.execute(
-                "SELECT * FROM attempts WHERE task_id = ? AND attempt = ?", (task_id, attempt_id)
-            ).fetchone()
-        )
-        open_round = row_dict(
-            conn.execute(
-                "SELECT round, head, reviewer FROM review_rounds WHERE task_id = ? AND attempt = ? "
-                "AND verdict IS NULL ORDER BY round DESC LIMIT 1",
-                (task_id, attempt_id),
-            ).fetchone()
-        )
-    assert row is not None and attempt is not None
-    if row["substate"] != "reviewing" or open_round is None or open_round["round"] != round_no:
-        raise rejected(
-            "只能交回正在进行的这一轮的结果",
-            reason="stale_round",
-            round=round_no,
-            open_round=None if open_round is None else open_round["round"],
-        )
-    opened_by = loads(open_round["reviewer"], {}).get("session")
-    if opened_by != ctx.session:
-        raise rejected(
-            f"这一轮由 {opened_by} 开启，不接受 {ctx.session} 的结果",
-            reason="reviewer_not_configured",
-        )
-    workdir = _workdir(ctx, row, attempt)
-    is_git = git(workdir, "rev-parse", "--is-inside-work-tree") == "true"
-    review_dir = ctx.home.root / "runs" / task_id / attempt_id / "review"
-    meta = _read_meta(review_dir, round_no) or {
-        "round": round_no,
-        "head": open_round["head"],
-        "base": _started_base(ctx.ledger, task_id, attempt_id, round_no),
-        "session": ctx.session,
-        "model": ctx.model,
-        "effort": ctx.config.get("roles.reviewer.effort"),
-        "resumed": None,
-        "retry": False,
-    }
-    meta.update(
-        head=open_round["head"], thread_id=agent_id, status="failed" if error else "completed"
-    )
-    if error is not None:
-        return _finish(
-            ctx,
-            round_no,
-            meta,
-            raw=result,
-            error=f"评审子代理没有交回结果：{error}",
-            result=None,
-            workdir=workdir,
-            is_git=is_git,
-        )
-    parsed, problem = _parse(result)
-    return _finish(
-        ctx,
-        round_no,
-        meta,
-        raw=result,
-        error=problem,
-        result=parsed,
-        workdir=workdir,
-        is_git=is_git,
     )
 
 
@@ -728,7 +623,6 @@ def _call(
     ctx: Context, prompt: str, *, workdir: Path, resume: str | None, add_dirs: list[Path]
 ) -> tuple[ReviewRun | None, str | None, dict[str, Any] | None]:
     """Run the reviewer; returns (run, error, result) with exactly one of error / result set."""
-    assert ctx.reviewer is not None
     try:
         run = ctx.reviewer(
             prompt,

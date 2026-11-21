@@ -505,9 +505,9 @@ def reviewer_scenario(args: argparse.Namespace) -> int:
 def review_with(
     run: Run, reviewer: str, budget: int, notes: list[str], *, model: str | None = None
 ) -> list[dict[str, Any]]:
-    from tsw.review.run import AGENT_REVIEWERS, implemented  # noqa: PLC0415 - only here
+    from tsw.review.run import implemented  # noqa: PLC0415 - only here
 
-    prefix = {"codex-app-server": "X", "copilot-cli": "P", "claude-subagent": "S"}.get(
+    prefix = {"codex-app-server": "X", "copilot-cli": "P", "claude-headless": "C"}.get(
         reviewer, "?"
     )
     if reviewer not in implemented():
@@ -516,18 +516,13 @@ def review_with(
         return [
             {**check(f"{prefix}0", f"{reviewer} 可运行", False, reason), "status": NOT_VERIFIED}
         ]
-    by_agent = reviewer in AGENT_REVIEWERS
-    if by_agent:
-        # The subagent's host session starts in the worktree, inside the run's data directory:
-        # the installed plugin's hooks and MCP server must turn to it, never to the real one.
-        installed_runtime_claims()
     if (run.home / "tsw-home.json").is_file():  # an earlier reviewer of this run: keep its files
         done = run.dir / f"done-{secrets.token_hex(3)}"
         done.mkdir()
         for folder in (run.home, run.repo, run.origin):
             if folder.exists():
                 folder.rename(done / folder.name)
-    tsw(run, "init", *(["--claim-sessions"] if by_agent else []))
+    tsw(run, "init")
     base = init_repo(run, REPO_FILES)
     write_config(
         run,
@@ -617,26 +612,16 @@ def review_with(
             notes.append(f"{reviewer}：模型调用达到上限 {budget}，停止")
             break
         before = tree_digest(workdir)
-        kind = {"codex-app-server": "codex-thread", "copilot-cli": "copilot-session"}.get(
-            reviewer, "subagent"
-        )
+        kind = {
+            "codex-app-server": "codex-thread",
+            "copilot-cli": "copilot-session",
+            "claude-headless": "claude-session",
+        }.get(reviewer, "reviewer-session")
         run.record(kind, f"T001-a1-r{round_no}", reviewer=reviewer)
         calls += 1
         out = tsw(
             run, "review", "run", "--notes", f"live reviewer round {round_no}", env=env, cwd=workdir
         )
-        if by_agent and isinstance(out, dict) and out.get("status") == "awaiting_agent":
-            answer, agent_id, error = start_subagent(run, workdir, out["agent"])
-            answer_file = run.dir / f"subagent-r{round_no}.txt"
-            answer_file.write_text(answer or "", encoding="utf-8")
-            handed = ["--round", str(out["round"])]
-            if error:
-                handed += ["--error", error]
-            else:
-                handed += ["--result-file", str(answer_file)]
-            if agent_id:
-                handed += ["--agent-id", agent_id]
-            out = tsw(run, "review", "run", *handed, env=env, cwd=workdir)
         after = tree_digest(workdir)
         review_dir = run.home / "runs" / "T001" / "a1" / "review"
         meta = read_json(review_dir / f"r{round_no}-run.json")
@@ -672,9 +657,7 @@ def review_with(
         json.dumps(rounds, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     results.append(round_check(prefix, 1, reviewer, rounds, base, incremental=False))
-    results.append(
-        round_check(prefix, 2, reviewer, rounds, base, incremental=True, fresh=by_agent, run=run)
-    )
+    results.append(round_check(prefix, 2, reviewer, rounds, base, incremental=True))
     results.append(
         check(
             f"{prefix}3",
@@ -699,8 +682,6 @@ def round_check(
     base: str,
     *,
     incremental: bool,
-    fresh: bool = False,
-    run: Run | None = None,
 ) -> dict[str, Any]:
     title = f"{reviewer} 第 {round_no} 轮{'增量' if incremental else '全量'}评审完成且满足输出契约"
     if len(rounds) < round_no:
@@ -715,17 +696,7 @@ def round_check(
         problems.append(f"error={meta.get('error')}")
     if meta.get("head") and result.get("reviewed_head") not in (None, meta.get("head")):
         problems.append("reviewed_head 与评审 HEAD 不一致")
-    if incremental and fresh:
-        # A new subagent every round (CC004 §5): the full scope with round 1's triage.
-        request = (
-            (run.home / "runs" / "T001" / "a1" / "review" / f"r{round_no}-request.md")
-            if run is not None
-            else None
-        )
-        text = request.read_text(encoding="utf-8") if request and request.is_file() else ""
-        if "没有上一轮的上下文" not in text or meta.get("base") != base:
-            problems.append("第 2 轮不是附带第 1 轮处置的全量评审")
-    elif incremental:
+    if incremental:
         first = rounds[0]["meta"].get("thread_id")
         if not meta.get("resumed") or meta.get("resumed") != first:
             problems.append(
@@ -735,74 +706,10 @@ def round_check(
         problems.append(f"范围起点不是任务开始前的提交（base={meta.get('base')}）")
     evidence = (
         f"verdict={result.get('verdict')}, findings={len(result.get('findings') or [])}, "
-        f"thread={meta.get('thread_id')}, resumed={meta.get('resumed')}"
+        f"thread={meta.get('thread_id')}, resumed={meta.get('resumed')}, "
+        f"model={meta.get('model')}, model_used={meta.get('model_used')}"
     )
     return check(f"{prefix}{round_no}", title, not problems, "; ".join([evidence, *problems]))
-
-
-def start_subagent(
-    run: Run, workdir: Path, agent: Mapping[str, Any]
-) -> tuple[str | None, str | None, str | None]:
-    """Start the reviewer subagent as a worker would: ``claude -p`` stands in for the worker's
-    session in the app and only launches the subagent (CC004 §6). Returns (answer, agent ID,
-    error)."""
-    exe = shutil.which("claude")
-    if exe is None:
-        return None, None, "找不到 claude 命令行"
-    spec = {k: agent[k] for k in ("subagent_type", "model", "effort", "description", "prompt")}
-    prompt = (
-        "用 Agent 工具启动一个子代理，参数严格如下（JSON，原样使用，前台运行）："
-        + json.dumps(spec, ensure_ascii=False)
-        + "。不要做别的事，也不要自己评审。子代理结束后，第一行输出 `AGENT_ID: <宿主返回的"
-        "子代理 ID>`，然后原样输出子代理最终回复的全文，不加其他文字。子代理不能启动或报错时，"
-        "只输出一行 `ERROR: <原因>`。"
-    )
-    run.record("subagent-host", f"claude-p-{agent.get('description')}", cwd=str(workdir))
-    proc = subprocess.run(
-        [
-            exe,
-            "-p",
-            prompt,
-            "--output-format",
-            "json",
-            "--model",
-            "sonnet",
-            "--plugin-dir",
-            str(ROOT / "plugin"),
-            "--add-dir",
-            str(run.home),
-            "--allowedTools",
-            "Agent",
-            "Read",
-            "Grep",
-            "Glob",
-            "--permission-mode",
-            "dontAsk",
-        ],
-        cwd=workdir,
-        env=clean_env(run),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=1800,
-        check=False,
-    )
-    (run.dir / f"subagent-host-{secrets.token_hex(3)}.json").write_text(
-        proc.stdout + "\n--- stderr ---\n" + proc.stderr, encoding="utf-8"
-    )
-    try:
-        text = str(json.loads(proc.stdout).get("result") or "")
-    except ValueError:
-        return None, None, f"claude -p 没有输出 JSON（退出码 {proc.returncode}）"
-    lines = text.strip().splitlines()
-    if not lines or lines[0].startswith("ERROR:"):
-        return None, None, (lines[0] if lines else "claude -p 没有输出")
-    agent_id = None
-    if lines[0].startswith("AGENT_ID:"):
-        agent_id = lines[0].split(":", 1)[1].strip().strip("`") or None
-        lines = lines[1:]
-    return "\n".join(lines), agent_id, None
 
 
 def cleanup_threads(run: Run) -> dict[str, Any]:

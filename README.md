@@ -27,7 +27,7 @@
 | DN008 校验原则 | [md](docs/design/DN008-guardrails.md) | [html](docs/design/DN008-guardrails.html) | 安全边界与信任假设；护栏只防诚实 agent 出错：确定性死规则、易用性优先、block list、escape |
 | DN009 分发与安装 | [md](docs/design/DN009-distribution-and-install.md) | [html](docs/design/DN009-distribution-and-install.html) | 两条各自在一处完成的安装路径（终端、宿主会话）、共用的安装脚本 `tsw setup`、安装后单一来源、用户设置与会话例外 |
 | CC001 Claude Code 上的会话与 hooks | [md](docs/design/claude-code/CC001-sessions-and-hooks.md) | [html](docs/design/claude-code/CC001-sessions-and-hooks.html) | DN001 在 Claude Code 上的实现：主会话指令、会话创建参数与平台约束、hooks、平台 PoC |
-| CC004 Claude Code 评审器 | [md](docs/design/claude-code/CC004-reviewer.md) | [html](docs/design/claude-code/CC004-reviewer.html) | `claude-subagent`：worker 会话中的只读评审子代理 |
+| CC004 Claude Code 评审器 | [md](docs/design/claude-code/CC004-reviewer.md) | [html](docs/design/claude-code/CC004-reviewer.html) | `claude-headless`：tsw 启动的 `claude -p` 一次性只读评审 |
 | CC006 Claude Code 插件 | [md](docs/design/claude-code/CC006-plugins.md) | [html](docs/design/claude-code/CC006-plugins.html) | 宿主集成、会话适配器与 in-session 渠道在 Claude Code 上的做法 |
 | CC007 Claude Code 中的任务上下文 | [md](docs/design/claude-code/CC007-context.md) | [html](docs/design/claude-code/CC007-context.html) | 任务结束时由子代理搜集偏好候选：启动方式、说明来源、worker 与主会话的步骤、用户确认 |
 | CC008 Claude Code 上的护栏 | [md](docs/design/claude-code/CC008-guardrails.md) | [html](docs/design/claude-code/CC008-guardrails.html) | block list 规则与 escape、现有校验逐项归类、允许规则 |

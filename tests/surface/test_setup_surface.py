@@ -438,13 +438,13 @@ def test_saved_answers_with_an_unimplemented_reviewer_still_rerun(tmp_path: Path
     product, claude = make_product(tmp_path), fake_claude(tmp_path)
     env = setup_env(tmp_path)
     home = tmp_path / "data"
-    # An earlier version saved claude-headless when no codex was found.
+    # An earlier version (T325) saved claude-subagent, which T331 removed.
     state = Path(env["TSW_STATE_DIR"])
     state.mkdir(parents=True, exist_ok=True)
     saved = {
         "home": str(home),
         "language": "zh-CN",
-        "reviewer": "claude-headless",
+        "reviewer": "claude-subagent",
         "human_channels": "in-session",
         "host": "claude-code",
         "dashboard": False,
@@ -452,12 +452,15 @@ def test_saved_answers_with_an_unimplemented_reviewer_still_rerun(tmp_path: Path
         "user_settings": True,
     }
     (state / "setup-answers.json").write_text(json.dumps(saved), encoding="utf-8")
-    # The bare rerun (update-plan's reinstall) takes the implemented reviewer and says so.
+    # The bare rerun (update-plan's reinstall) takes its replacement and says so.
     code, out, text = run_setup(
         product, "install", "--claude", str(claude), "--no-browser", env=env
     )
     assert code == 0, text
-    assert any(w.startswith("reviewer：答案中的评审器 claude-headless") for w in out["warnings"])
+    assert any(
+        w.startswith("reviewer：答案中的评审器 claude-subagent 本版本没有了，改用 claude-headless")
+        for w in out["warnings"]
+    )
     # The interactive entry asks again instead of stopping before the questions.
     (state / "setup-answers.json").write_text(json.dumps(saved), encoding="utf-8")
     replies = ["", "", "", "", "否", "", "", "是"]
@@ -473,7 +476,7 @@ def test_saved_answers_with_an_unimplemented_reviewer_still_rerun(tmp_path: Path
     )
     assert code == 0, text
     again = json.loads((state / "setup-answers.json").read_text("utf-8"))
-    assert again["reviewer"] == "codex-app-server" and again["home"] == str(home)
+    assert again["reviewer"] == "claude-headless" and again["home"] == str(home)
     # An answers file given explicitly is checked as it is: the reviewer is refused.
     explicit = tmp_path / "explicit.json"
     explicit.write_text(json.dumps(saved), encoding="utf-8")

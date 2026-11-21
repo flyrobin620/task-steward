@@ -87,8 +87,10 @@ RESTART = (
     "并提议一个示例任务，看 TaskSteward 怎样执行一个任务（可以跳过，之后随时说“开始示例任务”）。"
     "需要时在主会话或新的终端中运行 tsw setup verify --after-reload 核对重新加载之后的结果"
 )
-# Reviewers an earlier version saved as an answer although this one does not implement them.
-LEGACY_REVIEWERS = ("claude-headless",)
+# Reviewers an earlier version saved as an answer although this one does not offer them, and
+# what a rerun takes instead (the default when that is not offered either). T331 removed
+# claude-subagent.
+LEGACY_REVIEWERS: dict[str, str] = {"claude-subagent": "claude-headless"}
 DEMO_PROMPT = "开始示例任务"
 # How the user starts every main session (DN009 §15.2, M-T308-8): the orchestrate skill.
 START_COMMAND = "/orchestrate"
@@ -165,15 +167,18 @@ def context(
         and raw.get("reviewer") in LEGACY_REVIEWERS
         and raw.get("reviewer") not in reviewer.choices
     ):
-        # Saved by an earlier version that offered a reviewer this version does not implement
-        # (review r10 F2): the rerun takes the implemented one; an existing data directory's
-        # configuration is not changed by the install (§5 step 3).
+        # Saved by an earlier version that offered a reviewer this version does not have
+        # (review r10 F2): the rerun takes its replacement, else the default; an existing data
+        # directory's configuration is not changed by the install (§5 step 3).
+        instead = LEGACY_REVIEWERS[raw["reviewer"]]
+        if instead not in reviewer.choices:
+            instead = reviewer.default
         warnings.append(
-            f"reviewer：答案中的评审器 {raw['reviewer']} 本版本没有实现，改用 {reviewer.default}；"
+            f"reviewer：答案中的评审器 {raw['reviewer']} 本版本没有了，改用 {instead}；"
             "已有数据目录的配置不改，需要时在主会话中让它把 roles.reviewer 改为 "
-            f"{reviewer.default}（要你的原话）"
+            f"{instead}（要你的原话）"
         )
-        raw["reviewer"] = reviewer.default
+        raw["reviewer"] = instead
     normalized, problems = normalize(raw, qs) if (raw or require_answers) else ({}, [])
     if not raw and not require_answers:
         problems = []

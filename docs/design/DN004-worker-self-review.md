@@ -1,6 +1,6 @@
 # DN004 worker 自评审：评审与迭代决策
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T325 修订评审器实现与可关闭的自评审，待用户确认）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T325 修订评审器实现与可关闭的自评审；T331 Claude 评审器改为由 tsw 启动的 `claude-headless`，删除子代理方式，待用户确认）
 - 日期：2026-11-05
 - 相关：[DN002 任务状态机 §3.3](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · 实现：[CX004 Codex 评审器](codex/CX004-reviewer.md) · [CC004 Claude Code 评审器](claude-code/CC004-reviewer.md) · [CP004 Copilot CLI 评审器](copilot/CP004-reviewer.md)
 
@@ -32,7 +32,7 @@ worker 完成任务成果后，**由 worker 自己**启动配置的只读评审�
    - 输出 schema 与严重级别定义；
    - 增量轮次另含上轮意见、worker 的处置，以及上轮 HEAD..新 HEAD 的 diff；
    - 评审器不能运行命令时（§3.1），本轮范围的完整 diff 写入 `review/rK-diff.patch`，请求中给出路径。
-3. **调用评审器**（§3）：同步方式由 tsw 启动一次性只读线程，等待完成并读回最终消息；子代理方式由 worker 按 `review_run` 返回的指示启动只读评审子代理，再把子代理的最终消息交回 `review_run`。
+3. **调用评审器**（§3）：tsw 启动一次性只读评审进程或线程，等待完成并读回最终消息。
 4. **结构化结果**：解析为 `review/rK.json`；不满足 schema 时视为该轮失败（E02 重试）。
 5. **逐条处置**（`review_triage`）：阻断项（`review.block_on` 中的级别）只能标为 `fix` 或 `reject`；非阻断项还可以标为 `defer`。`reject` 和 `defer` 必须写理由。阻断项确需延后时，worker 不能自行 defer，而是提交 `review.defer_requested` 交主会话判断。
 6. **决定**（`review_decide`）：
@@ -44,12 +44,9 @@ worker 完成任务成果后，**由 worker 自己**启动配置的只读评审�
 
 ## 3. 评审器调用
 
-评审器不是单独的插件类型，而是由 `roles.reviewer.session` 选用一个能做评审的会话适配器（`oneshot`、`read_only_enforced`，调用方式见下，DN006 §7.4），可以与主会话、worker 使用的适配器不同。评审包渲染、输出 schema 校验、轮次计数与增量范围属于 tsw 核心。评审器有两种调用方式：
+评审器不是单独的插件类型，而是由 `roles.reviewer.session` 选用一个能做评审的会话适配器（`oneshot`、`direct`、`read_only_enforced`，DN006 §7.4），可以与主会话、worker 使用的适配器不同。评审包渲染、输出 schema 校验、轮次计数与增量范围属于 tsw 核心。
 
-- **同步（`direct`）**：`review_run` 启动评审进程，等它结束并读回最终消息，一次调用完成一轮。
-- **worker 子代理（`worker_agent`）**：评审器是 worker 所在宿主的只读子代理，只有 worker 的模型能启动它。`review_run` 开轮（`review_start`）、写好评审请求后立即返回启动指示（子代理类型、模型、effort、描述与提示）；worker 用宿主的子代理工具原样启动，子代理结束后，worker 带上 `round` 与 `result`（子代理最终消息的原文）再调用一次 `review_run`，tsw 按与同步方式相同的规则解析、校验并记录 `review_complete` 或 `review_fail`。
-
-两种方式的输出契约（§4）、处置规则（§5）、失败与重试（E02）相同。
+**评审器由 tsw 启动，结果由 tsw 读回并记账，不经过 worker**：`review_run` 启动评审进程，等它结束并读回最终消息，一次调用完成一轮；worker 只看到 tsw 记下的结果。用户（T331，2026-11-21）：“评审器由 tsw 自己启动并读回结果，然后记账，结果不经过 worker 的手。>> 核心点在这里。reviewer是由tsw启动的。”因此不提供由 worker 启动评审器、再把结果交回的方式（T325 的 `claude-subagent` 已删除，附录 A）。worker 仍能影响评审的输入（范围起点、`notes`、代码中的注释），评审器从请求与它自己读到的文件判断。
 
 ### 3.1 评审器实现
 
@@ -57,31 +54,31 @@ worker 完成任务成果后，**由 worker 自己**启动配置的只读评审�
 | --- | --- | --- | --- | --- |
 | `codex-app-server`（默认） | 同步：Codex App Server 一次性线程 | `sandbox=read-only` | 续用线程，只审增量 | [CX004 §2](codex/CX004-reviewer.md) |
 | `codex-exec`（回退，尚未实现） | 同步：`codex exec` | `--sandbox read-only` | 每轮全量并附上轮意见 | [CX004 §3](codex/CX004-reviewer.md) |
-| `claude-subagent` | worker 子代理：插件提供的子代理 `task-steward:reviewer` | 子代理定义只开放 `Read`、`Grep`、`Glob` | 每轮新子代理：全量范围，附上轮意见、处置与增量 diff | [CC004](claude-code/CC004-reviewer.md) |
+| `claude-headless` | 同步：`claude -p` 非交互 | 只开放 `Read`、`Grep`、`Glob`，`dontAsk`，不加载插件、hooks 与 MCP | 续用会话（`--resume`），只审增量 | [CC004](claude-code/CC004-reviewer.md) |
 | `copilot-cli` | 同步：`copilot -p` 非交互 | 只开放 `view`、`grep`、`glob`，拒绝 `write`、`shell`、`memory`、`url` | 续用会话（`--resume`），只审增量 | [CP004](copilot/CP004-reviewer.md) |
 
 所有实现共同的规则：
 
-- 使用配置指定的模型与 effort。同步方式下模型不可用、effort 不支持，或评审器实际使用的模型与请求不一致（包括宿主或管理策略换了模型）时判为本轮失败，**不回退到其他模型**。子代理方式由宿主按请求选择模型，tsw 拿不到子代理实际使用的模型，只记录请求的模型（CC004 §4）。
-- 默认评审器与回退都失败时记录 `review.unavailable` 交主会话判断（可稍后重试或交给人类），**不能跳过评审**（自评审关闭的情形见 §9），**也不能改用配置以外的评审器**：worker 自己启动的其他子代理（通用子代理、Explore 等）不是 `claude-subagent`，不能代替配置的评审器。
-- 不能运行命令的评审器（`claude-subagent`、`copilot-cli`）由 tsw 把本轮范围的完整 diff 写入 `review/rK-diff.patch`（续用线程的增量轮次只写增量；不能续用的评审器在后续轮次另有上一轮 HEAD 以来的 `rK-diff-since.patch`），请求中给出路径。评审器只读查阅执行目录、报告草稿与评审包，不运行测试；测试与验证结果以 worker 在 `notes` 中写明的为准，评审器把无法核实的事项列入 `unverified`。
+- 使用配置指定的模型与 effort。模型不可用、effort 不支持，或评审器实际使用的模型与请求不一致（包括宿主或管理策略换了模型）时判为本轮失败，**不回退到其他模型**。
+- 默认评审器与回退都失败时记录 `review.unavailable` 交主会话判断（可稍后重试或交给人类），**不能跳过评审**（自评审关闭的情形见 §9），**也不能改用配置以外的评审器**：worker 自己启动的子代理不是评审器，它的结论不能代替一轮评审。
+- 不能运行命令的评审器（`claude-headless`、`copilot-cli`）由 tsw 把本轮范围的完整 diff 写入 `review/rK-diff.patch`（续用线程的增量轮次只写增量；不续用时在后续轮次另有上一轮 HEAD 以来的 `rK-diff-since.patch`），请求中给出路径。评审器只读查阅执行目录、报告草稿与评审包，不运行测试；测试与验证结果以 worker 在 `notes` 中写明的为准，评审器把无法核实的事项列入 `unverified`。
 
 ### 3.2 v1 实现范围
 
 - `review_run`（MCP，worker）与 `tsw review run`（命令行）是同一实现。开轮之前先检查能检查的：调用者是 live 且目录一致的 worker；自评审未关闭（§9）；同步评审器的命令存在；Git 执行目录中 `head`、`base` 必须是真实提交（只把解析出的提交 ID 交给 git，选项形式的输入直接拒绝）；没有给 `base` 时取 `repositories.<repo>.base_ref`、`origin/HEAD`、`main` 等与 HEAD 的分叉点，取不到就要求显式指定。同一 attempt 同时只运行一轮（`locks/` 中的文件锁）。
-- 开轮（`review_start`）后渲染 `runs/Txxx/aN/review/rK-request.md`（需要时连同 `rK-diff.patch`），调用评审器，结果写入 `rK.json`、调用信息写入 `rK-run.json`（范围、线程或子代理 ID、模型、effort、是否续用），然后记录 `review_complete`。评审器报错、启动失败、超时、输出不是 JSON、不满足契约，或 `reviewed_head` 与本轮 HEAD 不一致（Git 缩写须解析为同一提交，非 Git 成果标识须完全相同）时，保存原始输出 `rK-raw.txt` 并记录 `review_fail`；开轮后的任何异常都以失败收尾。任务处于 `reviewing`（E02）时再次调用即在同一轮、按落账的 `head` 与 `base` 重试；落账的范围同样要是执行目录中的完整提交（轮次可能是直接用 `review_start` 开的），否则不调用评审器、记录失败。
-- 子代理方式：第一次调用开轮并返回启动指示（结果中 `status` 为 `awaiting_agent`），这时任务停在 `reviewing`。第二次调用带 `round`（必须是本周期正在进行的一轮）与 `result`；子代理没有交回结果（报错、被中断、宿主找不到子代理类型）时改带 `error`，记录 `review_fail`。在 `reviewing` 中不带 `result` 与 `error` 再调用，即 E02 重试：按落账的范围重写请求，再次给出启动指示。子代理在 worker 的 turn 内运行，worker 在交回结果或失败之前不结束 turn（Stop hook 提示，§8）。
+- 开轮（`review_start`）后渲染 `runs/Txxx/aN/review/rK-request.md`（需要时连同 `rK-diff.patch`），调用评审器，结果写入 `rK.json`、调用信息写入 `rK-run.json`（范围、线程或会话 ID、请求与实际的模型、effort、是否续用），然后记录 `review_complete`。评审器报错、启动失败、超时、输出不是 JSON、不满足契约，或 `reviewed_head` 与本轮 HEAD 不一致（Git 缩写须解析为同一提交，非 Git 成果标识须完全相同）时，保存原始输出 `rK-raw.txt` 并记录 `review_fail`；开轮后的任何异常都以失败收尾。任务处于 `reviewing`（E02）时再次调用即在同一轮、按落账的 `head` 与 `base` 重试；落账的范围同样要是执行目录中的完整提交（轮次可能是直接用 `review_start` 开的），否则不调用评审器、记录失败。
 - 每轮请求都带当前 revision 的目标与验收原文；需求变更（E07）开启新周期后不续用旧线程，按新需求完整评审。
-- 正在进行的一轮（`reviewing`）由开轮时的评审器完成：重试与交回结果都沿用开轮时记录的评审会话适配器与模型，即使配置已经改了；新的一轮才用新的配置。新一轮开始前先检查自评审是否关闭（§9），关闭时不再检查评审器。
-- 默认评审器 `codex-app-server` 的进程与线程管理见 [CX004 §4](codex/CX004-reviewer.md)，`copilot-cli` 见 [CP004](copilot/CP004-reviewer.md)。
-- `codex-exec` 与 `claude-headless`（附录 A）尚未实现：配置为评审会话时 `review_run` 返回 `UNSUPPORTED`，不落账新的一轮。
+- 正在进行的一轮（`reviewing`）由开轮时的评审器完成：重试沿用开轮时记录的评审会话适配器与模型，即使配置已经改了；新的一轮才用新的配置。例外：开轮时的评审器在本版本已删除（T325 版本开启、仍在等子代理结果的 `claude-subagent` 轮次）时，重试改用当前配置的评审器与模型，`rK-run.json` 记下实际使用的评审器。新一轮开始前先检查自评审是否关闭（§9），关闭时不再检查评审器。
+- 默认评审器 `codex-app-server` 的进程与线程管理见 [CX004 §4](codex/CX004-reviewer.md)，`claude-headless` 见 [CC004](claude-code/CC004-reviewer.md)，`copilot-cli` 见 [CP004](copilot/CP004-reviewer.md)。
+- `codex-exec` 尚未实现：配置为评审会话时 `review_run` 返回 `UNSUPPORTED`，不落账新的一轮。
+- `claude-subagent` 已删除（T331）：配置中出现它时配置校验失败，错误信息给出改法（`roles.reviewer.session` 与 `plugins.sessions` 中改为 `claude-headless`，模型可沿用别名）；`review_run` 不再接受交回的结果（`round`、`result`、`error`、`agent_id` 参数与对应的命令行选项删除，[决定 0004](../decisions/0004-remove-claude-subagent-reviewer.md)）。
 
 ### 3.3 只读与隔离
 
 - reviewer 只读，不能修改 worktree，不能 push，不能访问凭据目录。只读由会话适配器用宿主机制强制（沙箱、工具白名单），不靠提示。
 - 评审包和结果由 tsw 写入该 attempt 的 `runs/Txxx/aN/review/`（worker 不直接写 `runs/`，见 DN006 §9.4）。
-- 一次性线程与评审子代理不进入调度、不绑定任务、不占用 `max_workers` 名额。每个 attempt 的 reviewer 线程只服务于该 attempt，不跨任务复用。
-- 子代理方式的独立性：子代理有自己的上下文，只看到评审请求与它自己读到的文件，不继承 worker 的对话；但它与 worker 在同一宿主，配置应选与 worker 不同的模型（相同时配置校验警告）。结果经 worker 转交给 `review_run`，与 worker 直接调用 `review_complete` 的信任边界相同：tsw 校验结构与 HEAD，不能证明结果出自子代理；`rK-run.json` 记录 worker 报告的子代理 ID，供主会话在 G-ACCEPT 复核时对照宿主的子代理记录。
+- 一次性线程与评审进程不进入调度、不绑定任务、不占用 `max_workers` 名额。每个 attempt 的 reviewer 线程只服务于该 attempt，不跨任务复用。
+- 独立性：评审器有自己的上下文，只看到评审请求与它自己读到的文件，不继承 worker 的对话。与 worker 同一宿主的评审器（`claude-headless`）应选与 worker 不同的模型（相同时配置校验警告）。
 
 ## 4. 输出契约
 
@@ -216,6 +213,6 @@ worker 的 `result.md` / `result.html` 增加“自评审”一节：
 
 | 事项 | 采用 | 备选与不采用的原因 |
 | --- | --- | --- |
-| 没有 Codex 时的 Claude 评审器（§3.1，T325） | `claude-subagent`：worker 用 Agent 工具启动插件提供的只读子代理 | `claude-headless`：tsw 以 `claude -p` 启动独立进程（PoC 2026-11-05 可行，调用约定存档于 [CC004 附录 A](claude-code/CC004-reviewer.md)）。要清除继承的宿主环境变量、另行认证，并加载用户级 hooks；用户在 T308 会话中选择用子代理（M-T308-10：“claude 自己的reviewer用subagent做就可以了，不用专门用claude headless或者cli”）。`claude-headless` 仍保留在适配器目录中，未实现 |
-| 子代理结果的取回（§3.2，T325） | worker 把子代理最终消息原文交回 `review_run` | 插件的 SubagentStop hook 从子代理记录中直接取结果：不经 worker 转交，但宿主可能以交接工具送回报告（这时 hook 的 `last_assistant_message` 只有收尾文字），要解析宿主内部的子代理记录格式；而 worker 本来就能直接调用 `review_complete`，hook 不提高信任边界 |
+| 没有 Codex 时的 Claude 评审器（§3.1，T331） | `claude-headless`：tsw 以 `claude -p` 启动只读进程，读回结果并记账（[CC004](claude-code/CC004-reviewer.md)） | `claude-subagent`（T325 实现，T331 删除，存档于 [CC004 附录 A](claude-code/CC004-reviewer.md)）：worker 用 Agent 工具启动插件提供的只读子代理，再把子代理的最终消息交回 `review_run`。当时用户在 T308 会话中选择子代理（M-T308-10：“claude 自己的reviewer用subagent做就可以了，不用专门用claude headless或者cli”）。删除的原因：结果经 worker 转交，worker 可以改写或伪造；tsw 也拿不到子代理实际使用的模型。用户 2026-11-21：“评审器由 tsw 自己启动并读回结果，然后记账，结果不经过 worker 的手。>> 核心点在这里。reviewer是由tsw启动的。所以codex和copilot-cli就都是对的。所以正确的改法其实是换回claude-headless， 由tsw启动，就行了？”“F-T325-3 转任务，删掉 claude-subagent” |
+| 子代理结果的取回（T325，随 `claude-subagent` 删除） | worker 把子代理最终消息原文交回 `review_run` | 插件的 SubagentStop hook 从子代理记录中直接取结果：要解析宿主内部的子代理记录格式。两者都随子代理方式一起不再适用 |
 | 关闭自评审的粒度（§9，T325） | 全局与按仓库的配置，权限类键 | 按任务（主会话受理时指定）：主会话能自行关闭评审，越过用户的授权；“可选评审”（不要求评审，但做了的轮次仍约束提交）：规则更复杂，用户只要求了不做自评审的选项 |

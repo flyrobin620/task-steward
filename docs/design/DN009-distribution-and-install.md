@@ -91,7 +91,7 @@ tsw 的工具服务在会话启动时载入（DN006 §9.8），用户级 PATH �
 | 数据目录位置 | **必填，没有默认值**：终端入口与会话入口都要求用户给出一个路径，空回答时再问；`install --answers` 的答案文件中缺少时拒绝运行，`check` 报告缺少这一项。用户给出已有的数据目录时复用它（§5 第 3 步） | `tsw init`、宿主用户设置中的数据目录位置 |
 | 产品检出位置；已有检出时是否复用 | 用户级程序目录下的固定位置（Windows：`%LOCALAPPDATA%\TaskSteward\task-steward`） | `install.json`、`product_repo` |
 | 交流语言 | `zh-CN` | `control.language` |
-| 评审器 | 只提供本版本已实现的评审器（目前只有 Codex，`codex-app-server`）；找不到它的命令行时 `check` 给出警告（安装照常完成，但任务完成不了自评审，请用户安装并登录）。用户 2026-11-20 决定（T308，M-T308-9）；宿主自己的只读形态（DN006 §10.2）、Copilot CLI 评审与不做自评审的选项见 follow-up F-T308-1 | `roles.reviewer` |
+| 评审器 | 只提供本版本已实现的评审器与不做自评审：`codex-app-server`（默认）、`claude-headless`（tsw 启动的 `claude -p`，DN006 §10.2）、`copilot-cli`（DN006 §10.2a）、`none`（`review.self_review` 为 `off`，DN004 §9）；所选评审器的命令行找不到时 `check` 给出警告（安装照常完成，但任务完成不了自评审，请用户安装并登录）。用户 2026-11-20 决定只提供已实现的评审器（T308，M-T308-9）；T325 加入 Copilot CLI 与不做自评审，T331 把 Claude 评审器从子代理改为 `claude-headless`。早先版本保存的答案 `claude-subagent` 重跑时改为 `claude-headless` 并给出警告 | `roles.reviewer` |
 | 人类渠道：只在会话中，或另加外部渠道 | 只在会话中 | `plugins.human_channels`、`input.channels` |
 | 宿主（session provider） | 列出已实现宿主集成的宿主，只有一个时直接选定 | `plugins.host_integration`、`plugins.sessions` |
 | 是否把 Dashboard 装成登录时启动的服务；端口 | 操作系统支持时是，`47800` | `tsw dashboard install`、`dashboard.port` |

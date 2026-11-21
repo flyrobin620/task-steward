@@ -2,14 +2,14 @@
   "id": "reviewer",
   "title": "评审器：固定样例上的全量评审与增量评审，核对只读与输出 schema",
   "useCases": ["UC-REVIEW-001", "UC-REVIEW-002"],
-  "reviewers": ["codex-app-server", "copilot-cli", "claude-subagent"],
-  "models": {"copilot-cli": "gpt-6.1-sol", "claude-subagent": "sonnet"},
+  "reviewers": ["codex-app-server", "copilot-cli", "claude-headless"],
+  "models": {"copilot-cli": "gpt-6.1-sol", "claude-headless": "claude-sonnet-5-5"},
   "modelCalls": {"perReviewer": 2, "max": 6},
   "operator": "无人值守：python tools/live.py reviewer",
   "checks": [
     "R1 每种评审器：第 1 轮全量评审（base..HEAD）完成，结果满足输出契约（verdict、summary、reviewed_head、findings）",
-    "R2 每种评审器：iterate 后的第 2 轮完成：能续用的评审器续用第 1 轮线程、只审上一轮 HEAD..新 HEAD；不能续用的（claude-subagent）是新子代理，全量范围并附第 1 轮的处置与增量 diff",
+    "R2 每种评审器：iterate 后的第 2 轮完成：续用第 1 轮的线程或会话、只审上一轮 HEAD..新 HEAD",
     "R3 只读：每轮评审前后，执行目录（含 .git）的文件清单与内容摘要不变",
-    "R4 清理：本次创建的 Codex 评审线程全部已归档并读回确认（Copilot CLI 的会话记录留在用户的 Copilot 目录，CP004 §6；子代理随宿主会话结束）"
+    "R4 清理：本次创建的 Codex 评审线程全部已归档并读回确认（Copilot CLI 与 claude -p 的会话记录留在用户的 Copilot / Claude Code 目录，CP004 §6、CC004 §6）"
   ]
 }
