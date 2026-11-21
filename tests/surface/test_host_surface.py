@@ -204,6 +204,35 @@ def test_the_users_turn_is_reminded_to_prestart(home: Path) -> None:
     assert cwd.is_dir() and cwd.parts[-3:] == ("work", "T001", "a1")
 
 
+@pytest.mark.use_case("UC-WORKDECK-001")
+def test_workdeck_words_and_host_notices_through_the_hook_process(home: Path) -> None:
+    """DN006 §8.11, CC001 §6.1 (T332): the published source schema names ``via``; a host notice
+    does not begin the user's turn; a turn begun by plain words (the user's, or the user's through
+    workdeck) is reminded to prestart and told that a workdeck turn cannot create sessions."""
+    replies = mcp(
+        home,
+        home,
+        "orch-9",
+        INIT,
+        NOTE,
+        LIST,
+        call(2, "lease_acquire"),
+        call(3, "task_register", title="t", repo="demo", kind="code", goal="g", acceptance=["a"]),
+        call(4, "task_plan", task_id="T001", dependencies=[], resources=[], reason="r"),
+    )
+    by_id = {r["id"]: r for r in replies}
+    tools = {t["name"]: t for t in by_id[1]["result"]["tools"]}
+    via = tools["user_accept"]["inputSchema"]["properties"]["user_source"]["properties"]["via"]
+    assert via["enum"] == ["workdeck"]
+    notice = '[Cross-session idle notice] "t001-a1-g1" which you asked to be notified about'
+    assert hook(home, "orch-9", "UserPromptSubmit", prompt=notice) is None
+    assert hook(home, "orch-9", "Stop") is None
+    assert hook(home, "orch-9", "UserPromptSubmit", prompt="开始 T001") is None
+    stop = hook(home, "orch-9", "Stop")
+    assert stop is not None and stop["decision"] == "block"
+    assert "T001" in stop["reason"] and "workdeck" in stop["reason"]
+
+
 @pytest.mark.use_case("UC-HOST-001")
 @pytest.mark.use_case("UC-HOST-002")
 @pytest.mark.use_case("UC-LEASE-001")

@@ -1,6 +1,6 @@
 # DN006 插件层：宿主集成、会话、人类渠道与数据存储
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/；T272 §8.9.4a 默认例行项 session-scan；T279 §6.3 claude-code 生成的 skill 清单，§8.1a 每一轮结束都 `wrap_up`；T282 §9.7 主会话自我更新：主会话可以运行 `host render`；T283 §9.8 按改动决定步骤的自我更新、§9.9 运行版本的记录、§8.10 Dashboard 常驻服务；T293 §8.9.5 读过正文、判定不转出的消息记在缓存中，之后不再读正文；T305 分发与安装移到 DN009：§6.2 宿主集成增加安装操作、§8.10 与 §9.7 安装脚本的会话例外、§9.1 安装脚本管理的检出、§9.8 `install` 与 `host_rules` 改为重跑安装；T309 §8.10 workdeck 插件 manifest 与会话链接的 `data-workdeck-session`）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/；T272 §8.9.4a 默认例行项 session-scan；T279 §6.3 claude-code 生成的 skill 清单，§8.1a 每一轮结束都 `wrap_up`；T282 §9.7 主会话自我更新：主会话可以运行 `host render`；T283 §9.8 按改动决定步骤的自我更新、§9.9 运行版本的记录、§8.10 Dashboard 常驻服务；T293 §8.9.5 读过正文、判定不转出的消息记在缓存中，之后不再读正文；T305 分发与安装移到 DN009：§6.2 宿主集成增加安装操作、§8.10 与 §9.7 安装脚本的会话例外、§9.1 安装脚本管理的检出、§9.8 `install` 与 `host_rules` 改为重跑安装；T309 §8.10 workdeck 插件 manifest 与会话链接的 `data-workdeck-session`；T332 §8.11 经 workdeck 发到会话的消息按用户本人的话处理，§8.5 `VerifiedSource.via`，§9.7 自我更新的确认）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN008 校验原则](DN008-guardrails.md) · [DN009 分发与安装](DN009-distribution-and-install.md) · 实现：[CC006 Claude Code 插件](claude-code/CC006-plugins.md)
 
@@ -392,6 +392,7 @@ class VerifiedSource:              # DN002 G-USER 的统一证据
     text: str                      # 用户原话
     request_id: str | None         # 回答的 InputRequest（验收 / 退回等主动决定可为空）
     target: tuple[str, int, str]   # (任务 ID, revision, 决定类别：answer / accept / reject / approve / change)
+    via: str | None = None         # 可选：原话经由的入口；目前只有 workdeck，只用于 main-session（§8.11）
 ```
 
 `InputRequest` 含请求 ID（如 `Q-T241-3`）、触发场合、问题正文、可选项、主会话已作的分析（`DecisionRecord` 摘要）、过期时间、worker 会话的直达链接（如果宿主支持用户直接对话），以及**上下文绑定**：任务 ID、revision、attempt、创建代次、提交周期。
@@ -726,6 +727,21 @@ Dashboard 应用：
 
 主会话不参与这些操作，下次运行时从账本看到结果。退回的任务按 T23 回到 `intake`（revision+1），由主会话按新 revision 重新规划。
 
+### 8.11 经 workdeck 发到会话的消息（T332）
+
+用户 2026-11-21 认定（T327 M-T327-5，原话见 DN008 §2 第 4 条）：workdeck 在安全边界之内，它代用户发来的消息应“尽可能和用户自己发的message同等待遇。不能建会话这种实在做不到的另说”。T327 的研究与实测（`runs/T327/a1/result.md` 第 2–4、6 节）给出了做法，本节是它的设计。
+
+1. **识别**：依据宿主写下的消息来源，不看消息内容。宿主能把“workdeck 投递的消息”与“其他会话经工具发的消息”区分开时才适用；Claude Code 的依据与做法见 [CC001 §6.1](claude-code/CC001-sessions-and-hooks.md)。正文自称“用户说”“经 workdeck”的其他会话消息不是用户的话（DN008 §9 第 7 条）。
+2. **在 worker 会话中**：与用户在该会话中输入的话相同。宿主集成照常记为 `input.session_message`（§8.1a），worker 用 `user_answer` 登记答复、用 `requirement_change` 登记需求变更（G-CHANGE）。宿主集成不能区分时不注明经由 workdeck：两者本来就同等对待。
+3. **在主会话中**：按用户在主会话中说的话处理，包括受理与规划、验收与退回、取消、follow-up 转任务与驳回、派发、暂停与恢复、需求变更、答复转交来的问题、长期偏好与偏好候选、配置的授权与 §9.7 的维护。来源按主会话的规则由 agent 引用原话（DN008 §9 第 3 条）：渠道 `main-session`，另加 `via: "workdeck"`；`message_ref` 写 `workdeck:<主会话 ID>:<收到时的 UTC 时间>`。tsw 只核对 `via` 的取值（目前只有 `workdeck`）且只与 `main-session` 同用，不核对消息本身（§8.5、DN008 §9）。
+4. **宿主做不到的事**（“实在做不到的另说”）：
+   - **新建会话**：宿主只允许在用户于宿主界面中输入的一轮里新建会话（Claude Code：CC001 §4 第 1 条）。由 workdeck 消息开始的一轮中派发时，有待命会话就投递（`attempt_deliver`）；没有时不新建，任务留在就绪（STATUS 页显示“待启动”），回复中告诉用户：要新建会话，需要在宿主界面中说一句话，下一个这样的一轮按预启动处理。已经尝试而被宿主拒绝时，按 `attempt_reconcile`（`outcome: not_created`）对账，同样处理。tsw 不能可靠判断这一轮由谁开始（宿主集成看到的只有正文，CC001 §6.1），所以 `attempt_start` 的 `user_turn` 由主会话按宿主的规则如实填写，宿主的拒绝结果为准。
+   - **修改宿主的设置与说明**：宿主不允许因会话间消息修改权限设置、宿主说明文件（Claude Code 的 `CLAUDE.md`）或宿主配置。重写这些文件的操作（§9.7 的 `host render`、DN009 的 `tsw setup install` / `uninstall`）在 tsw 层面接受经 workdeck 的确认，但仍请用户在宿主界面中确认或在终端运行。
+   - 本来就只能由用户在终端运行的命令（§9.7 末段、§8.10）照旧。
+5. **宿主设置**：宿主对会话间消息有自己的放行设置时（Claude Code 的 `crossSessionInbound`，CC001 §6.1），由用户自己设置，主会话与 worker 不代为修改；安装与使用说明（README、CC009）写明。
+6. **记账范围**：tsw 不另记“这条消息经由 workdeck”的事件。主会话登记的来源带 `via`；worker 会话中的消息与用户输入同样记录。需要在 worker 会话中也注明经由时，再由宿主集成从宿主记录中读取来源（未实现）。
+7. **未覆盖**：worker 正在运行时 workdeck 把消息注入当前一轮（门户的 steer 投递）时，宿主集成是否记录它还未验证（T327 第 2.2 节）；未记录的消息不能用来登记答复或需求变更，worker 在本轮结束后请用户重发，或由主会话登记。
+
 ## 9. P4 存储后端与数据目录
 
 存储后端只负责数据目录的读写、锁与备份；账本、投影与检索索引的分层及读取方式见 [DN007](DN007-ledger-and-context.md)。
@@ -823,7 +839,7 @@ class StorageBackend(Protocol):
 **主会话可以自我更新**（用户 2026-11-15 决定，T282；此前 `host render` 与上面两项一样不开放）：用户明确确认时，主会话可以在会话中运行 `tsw host render`，重新生成数据目录的说明与设置并更新插件副本（§6.2）。规则：
 
 - 只有主会话（在数据目录打开、角色为 orchestrator）可以运行；worker、例行会话、已撤销与待绑定的会话，以及其他目录中的会话仍被拒绝，由主会话或用户运行。例外：安装脚本 `tsw setup install` / `uninstall` 中的 render 在没有绑定数据目录的会话中也允许（第一次安装时还没有主会话，DN009 §8）。用户本人的操作（`task accept` / `reject` / `cancel`、Dashboard、不带 `--user-source` 的 `lease takeover`，§8.10）在任何会话中仍被拒绝。
-- “明确确认”是用户在主会话中、针对这一次 render 说的话；主会话自己的判断、worker 与例行会话的消息、定时提示都不算。主会话按 skill 先向用户说明并请用户确认，再运行；tsw 只按会话角色放行，不核对确认（用户 2026-11-15 决定：引用原话的参数不能证明那是确认）。各宿主怎样判断会话角色见实现文档（Claude Code：CC008 §5.7）。
+- “明确确认”是用户在主会话中、针对这一次 render 说的话（经 workdeck 发到主会话的也算，§8.11；但宿主不允许因会话间消息重写说明与权限设置，这时仍请用户在宿主界面中确认或在终端运行）；主会话自己的判断、worker 与例行会话的消息、定时提示都不算。主会话按 skill 先向用户说明并请用户确认，再运行；tsw 只按会话角色放行，不核对确认（用户 2026-11-15 决定：引用原话的参数不能证明那是确认）。各宿主怎样判断会话角色见实现文档（Claude Code：CC008 §5.7）。
 - render 只改可重建的文件，不记账本事件。已在运行的会话要重新加载后才用上新的说明、插件与运行时；会话不能重启自己。render 是自我更新（§9.8）中的一步：之后怎样让各会话生效，按 §9.8 与配置 `update`（DN003 §3.6）决定。
 
 由用户在终端运行的命令（安装与定位见 §9.1；README 给出示例）：`init`（`--remember`）、`home`、`host render` / `install-hint` / `update-plan`、`dashboard install` / `uninstall` / `open` / `restart` / `status`（§8.10）、`lease show` / `takeover` / `release`、`backup` / `restore`、`quiesce` / `resume-writes`、`ledger audit` / `rebuild`、`context rebuild`、`config show` / `validate`，以及用户直接操作 `task accept` / `reject` / `cancel` 与 `status serve`（§8.10）。tsw 在会话中请用户运行命令时（租约被占等）给出的就是这些简短形式；插件副本过期、需要 `host render` 时，主会话先请用户确认，确认后自己运行（上文），用户也可以在终端运行。用户自己运行 `lease takeover` 时，运行命令本身就是确认原主会话已停止的来源：`--user-source` 可省略，tsw 记为渠道 `user-cli`（§8.10）。

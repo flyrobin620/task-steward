@@ -58,6 +58,13 @@ SCHEDULERS = ("CronCreate", "ScheduleWakeup")
 SCHEDULED_TAG = "<scheduled-task"
 # Under the data directory's cache/: whether each orchestrator session's current turn is the user's.
 TURNS_DIR = "turns"
+# The hook cannot tell a turn begun by a message the user sent through workdeck (plain text, no
+# marker) from one the user typed in the app; only the latter may create sessions (CC001 §6.1).
+WORKDECK_TURN = (
+    "这一轮若由 workdeck 发来的消息开始（没有 <cross-session-message> 包装的会话间消息），"
+    "宿主不允许创建会话：不要调用 start_session，说明原因后直接结束，"
+    "等用户下一次在 app 中说话时再做。"
+)
 TSW_OWNED = (
     "ledger",
     "runs",
@@ -955,6 +962,8 @@ class Guard:
                     "（purpose: prestart，user_turn: true）→ start_session → attempt_reconcile。"
                     "确实不该现在预启动时（例如用户要求先不开始），说明原因后直接结束。"
                 )
+            if prestart or (state == "missing" and user_turn):
+                reasons.append(WORKDECK_TURN)
             return {"decision": "block", "reason": "".join(reasons)} if reasons else None
         if who.role == "routine":
             # Nothing to check; the end of the turn is kept as live evidence (T250).

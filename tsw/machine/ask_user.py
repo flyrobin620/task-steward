@@ -64,7 +64,14 @@ AUTOMATED_PREFIXES = (
     "<ci-monitor-event",
     "<scheduled-task",
     "<system-reminder",
+    # The host's own notices about messages between sessions (F-T327-9): an idle session the
+    # sender subscribed to, or a message that was held, dropped or refused on the way.
+    "[Cross-session idle notice]",
+    "[Cross-session delivery notice]",
 )
+# A message the user sends through the workdeck portal reaches the session as plain text, with no
+# marker: it is the user's own words (DN006 §8.11) and is recorded like what the user types. Never
+# add a workdeck marker here.
 
 
 def _cmd(env: ToolEnv, op: str, inp: Mapping[str, Any], build: Any) -> Command:
