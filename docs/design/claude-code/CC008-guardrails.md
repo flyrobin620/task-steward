@@ -62,7 +62,7 @@
 | CC-S3 | UserPromptSubmit（worker） | 检测 `[report]` 并提示回传 | 保留 |
 | CC-S4 | Stop（主会话） | 本会话可以持有租约（没有被另一个主会话的有效租约排除、没有让出过租约）时：有未处理的回传、到期未转交的问题、失效的例行会话（`attention` 的 `routine` 为 `stale`，提示给它发消息重新设定）或待处置的 worker 会话标题与归档（`attention` 的 `sessions`，DN002 §5.8，提示按 orchestrate skill 处理；T272）时阻止结束一次；这一轮是用户的 turn（CC-S6）且 `attention` 的 `needs_prestart` 非空或例行会话需要启动（`missing`）时也阻止一次，提示为列出的任务预启动（DN002 §5.6）、启动例行会话（DN006 §8.9.2）。几条原因合在一条提示里，`stop_hook_active` 时不再阻止 | 保留；预启动提醒为 T244 新增，例行会话提醒为 T243 新增 |
 | CC-S5 | Stop（worker） | 评审进行中时阻止结束一次；记录 `worker.turn_ended` | 保留 |
-| CC-S6 | UserPromptSubmit（主会话） | 记下这一轮是不是用户本人的 turn：按 CC-S2 的同一规则判断（去掉前置 `<system-reminder>` 后为空或以注入标记开头的不是），写入数据目录 `cache/turns/<会话>.json`；Stop 读取后即删除，hook 没有看到开头的一轮（没有 `UserPromptSubmit`）因此不算用户的 turn。workdeck 消息开始的一轮也被记为用户的 turn，但宿主不允许在这一轮创建会话：CC-S4 的提醒写明这一点，主会话说明后结束（CC001 §6.1） | T244 新增；T332 workdeck 一轮的说明 |
+| CC-S6 | UserPromptSubmit（主会话） | 记下这一轮是不是用户本人的 turn：按 CC-S2 的同一规则判断（去掉前置 `<system-reminder>` 后为空或以注入标记开头的不是），写入数据目录 `cache/turns/<会话>.json`；Stop 读取后即删除，hook 没有看到开头的一轮（没有 `UserPromptSubmit`）因此不算用户的 turn。同时记下 `prompt_id`：Stop 时从 transcript 读出这一轮由 workdeck 消息开始的（CC001 §6.1），不算用户的 turn，CC-S4 不提醒预启动与启动例行会话；读不出时仍算用户的 turn，CC-S4 的提醒写明宿主不允许在 workdeck 开始的一轮创建会话，主会话说明后结束 | T244 新增；T332 workdeck 一轮的说明；T338 Stop 时读出来源 |
 | CC-S7 | SessionStart（例行会话） | 注入例行会话指令（CC006 §6） | T243 新增 |
 
 **CC-S4 预启动提醒的背景与 escape**：只有用户本人的 turn 能创建会话（CC001 §4）。2026-11-07 主会话登记了等待依赖的任务后，没有在之后的用户 turn 里为它预启动，用户提醒后才补上；之后要等用户再发消息才能创建，依赖链因此停住。Stop hook 本身不知道这一轮由谁触发，所以由 CC-S6 在一轮开始时记下。提醒只在用户的 turn、本会话没有被另一个主会话的有效租约排除（另一个会话持有租约时本会话不能预启动）、列表非空时出现，每轮最多一次。escape：用户要求先不开始、或预启动确实不合适时，主会话说明原因后直接结束（第二次 Stop 带 `stop_hook_active`，不再阻止）；用户也可以关闭预启动（`scheduling.prestart.enabled`）。标记只是缓存：写入失败时这一轮不提醒，不影响其他行为（DN008 §8 第 2 条）。

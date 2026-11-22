@@ -630,8 +630,10 @@ def _follow_ups(conn: sqlite3.Connection, task_id: str) -> tuple[str, int, int]:
     return origin + table, len(found), pending
 
 
-def _answer(resolution: str | None) -> str:
-    """The answer and where it came from: a verified source, or the system it was imported from."""
+def _answer(resolution: str | None, vias: Mapping[str, str] | None = None) -> str:
+    """The answer and where it came from: a verified source, or the system it was imported from.
+    Words that reached a session through workdeck say so (DN006 §8.11): the source's own ``via``
+    (main session) or the host's note on the cited message (``vias``, worker session)."""
     found = _mapping(loads(resolution, None))
     if not found:
         return "—"
@@ -642,6 +644,10 @@ def _answer(resolution: str | None) -> str:
         words = verified.get("text")
         if words:
             channel = escape(verified.get("channel") or "")
+            refs = [r for r in str(verified.get("message_ref") or "").split(",") if r]
+            via = verified.get("via") or next((vias[r] for r in refs if vias and r in vias), None)
+            if via:
+                channel += f"（经 {escape(via)}）"
             parts.append(f"<small>{channel} · 原话：{escape(words)}</small>")
     elif source:
         parts.append(f"<small>来自 {escape(source)}</small>")
@@ -664,6 +670,14 @@ def _session_state(r: Mapping[str, Any]) -> str:
 def _questions(conn: sqlite3.Connection, task_id: str) -> tuple[str, int, int]:
     rows: list[list[str]] = []
     pending = 0
+    vias = {
+        str(r["message_id"]): str(r["via"])
+        for r in conn.execute(
+            "SELECT v.message_id, v.via FROM session_message_via v "
+            "JOIN session_messages m ON m.message_id = v.message_id WHERE m.task_id = ?",
+            (task_id,),
+        )
+    }
     for r in conn.execute(
         "SELECT r.request_id, r.kind, r.status, r.question, r.resolution, s.session_ref, "
         "s.asked_at, s.handoff_after, s.handed_off_at, s.relayed_to, s.responded_at "
@@ -678,7 +692,7 @@ def _questions(conn: sqlite3.Connection, task_id: str) -> tuple[str, int, int]:
                 escape(r["kind"]),
                 escape(REQUEST_STATUS.get(str(r["status"]), r["status"])),
                 f'<span class="clip">{escape(r["question"])}</span>',
-                _answer(r["resolution"]),
+                _answer(r["resolution"], vias),
                 _session_state(r),
             ]
         )

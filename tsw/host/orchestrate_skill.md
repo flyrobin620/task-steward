@@ -27,7 +27,7 @@ description: "TaskSteward 主会话流程：受理（细则见 task-intake）、
   - 新建会话：这一轮不调用 `start_session`，`attempt_start` 与 `routine_start` 的 `user_turn` 填 `false`；见“预启动与派发”第 4 步。
   - 改写宿主的设置与说明：`tsw host render`（`tsw-update` skill）、`tsw setup install` / `uninstall` 会改写 `CLAUDE.md` 与权限设置，用户经 workdeck 确认后，仍请用户在 app 中说一句确认或在终端运行。
   - 只能在终端运行的命令照旧。
-- Stop hook 分不出这一轮由谁开始，可能照常提醒预启动或启动例行会话：说明这一轮由 workdeck 消息开始、不能创建会话，然后直接结束。
+- Stop hook 在一轮结束时从宿主的记录读出这一轮由 workdeck 消息开始的，不会提醒预启动或启动例行会话；读不出时仍可能照常提醒：说明这一轮由 workdeck 消息开始、不能创建会话，然后直接结束。
 
 ## 受理与规划
 

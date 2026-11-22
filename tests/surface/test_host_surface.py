@@ -207,7 +207,9 @@ def test_the_users_turn_is_reminded_to_prestart(home: Path) -> None:
 
 
 @pytest.mark.use_case("UC-WORKDECK-001")
-def test_workdeck_words_and_host_notices_through_the_hook_process(home: Path) -> None:
+def test_workdeck_words_and_host_notices_through_the_hook_process(
+    home: Path, tmp_path: Path
+) -> None:
     """DN006 §8.11, CC001 §6.1 (T332): the published source schema names ``via``; a host notice
     does not begin the user's turn; a turn begun by plain words (the user's, or the user's through
     workdeck) is reminded to prestart and told that a workdeck turn cannot create sessions."""
@@ -233,6 +235,16 @@ def test_workdeck_words_and_host_notices_through_the_hook_process(home: Path) ->
     stop = hook(home, "orch-9", "Stop")
     assert stop is not None and stop["decision"] == "block"
     assert "T001" in stop["reason"] and "workdeck" in stop["reason"]
+    # At Stop the host's transcript says the turn began with a workdeck message (T338): the host
+    # lets no session be created in it, so there is no reminder.
+    transcript = tmp_path / "session.jsonl"
+    fields = {"prompt_id": "p-1", "transcript_path": str(transcript)}
+    assert hook(home, "orch-9", "UserPromptSubmit", prompt="开始 T001", **fields) is None
+    message = {"content": "开始 T001"}
+    origin = {"kind": "peer", "from": "workdeck", "verifiedLocal": True}
+    line = {"type": "user", "promptId": "p-1", "origin": origin, "message": message}
+    transcript.write_text(json.dumps(line, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert hook(home, "orch-9", "Stop", **fields) is None
 
 
 @pytest.mark.use_case("UC-HOST-001")

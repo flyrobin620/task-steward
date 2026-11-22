@@ -187,6 +187,13 @@ CREATE TABLE IF NOT EXISTS session_messages(
     text TEXT NOT NULL,
     sequence INTEGER NOT NULL
 );
+-- How a message in a worker's session reached it, when the host said so (DN006 §8.11, T338).
+-- Only input.session_message_via writes it, so a projection made before it stays valid.
+CREATE TABLE IF NOT EXISTS session_message_via(
+    message_id TEXT PRIMARY KEY,
+    via TEXT NOT NULL,
+    sequence INTEGER NOT NULL
+);
 -- The routine session and its routine board (DN006 §8.9). Only routine.* and channel.* events
 -- write these tables, so a projection made before them stays valid.
 CREATE TABLE IF NOT EXISTS routine_sessions(

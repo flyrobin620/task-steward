@@ -146,9 +146,12 @@ def _messages(conn: sqlite3.Connection, task_id: str) -> dict[str, Mapping[str, 
     recorded before the hook knew a marker (a subagent's ``<agent-message``) are never material
     but still stand for the words an answer cites (PR #54 review)."""
     return {
-        str(m["message_id"]): m
+        str(m["message_id"]): dict(m)
         for m in conn.execute(
-            "SELECT * FROM session_messages WHERE task_id = ? ORDER BY sequence", (task_id,)
+            "SELECT m.*, v.via FROM session_messages m "
+            "LEFT JOIN session_message_via v ON v.message_id = m.message_id "
+            "WHERE m.task_id = ? ORDER BY m.sequence",
+            (task_id,),
         )
     }
 
@@ -202,6 +205,8 @@ def _message_words(messages: Mapping[str, Mapping[str, Any]]) -> list[dict[str, 
             "sequence": int(message["sequence"]),
             "time": None,
             "text": str(message["text"]),
+            # The host said the words came through workdeck: still the user's (DN006 §8.11).
+            **({"via": str(message["via"])} if message.get("via") else {}),
         }
         for message_id, message in messages.items()
         if not is_automated(str(message["text"]))

@@ -318,6 +318,16 @@ def input_session_message(conn: sqlite3.Connection, event: Event) -> None:
     _touch(conn, event, business=False)
 
 
+def input_session_message_via(conn: sqlite3.Connection, event: Event) -> None:
+    """The host said how a recorded message reached the worker's session: through workdeck
+    (DN006 §8.11, T338). The message itself and what it can be cited for do not change."""
+    conn.execute(
+        "INSERT OR IGNORE INTO session_message_via(message_id, via, sequence) VALUES(?, ?, ?)",
+        (event.data["message_id"], event.data["via"], event.sequence),
+    )
+    _touch(conn, event, business=False)
+
+
 def input_handed_off(conn: sqlite3.Connection, event: Event) -> None:
     conn.execute(
         "UPDATE in_session_requests SET handed_off_at = ? WHERE request_id = ?",
@@ -1081,6 +1091,7 @@ REDUCERS: dict[str, Reducer] = {
     "input.resolved": input_resolved,
     "input.late_response": input_late_response,
     "input.session_message": input_session_message,
+    "input.session_message_via": input_session_message_via,
     "input.handed_off": input_handed_off,
     "input.relayed": input_relayed,
     "dependency.satisfied": dependency_satisfied,

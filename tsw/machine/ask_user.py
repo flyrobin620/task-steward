@@ -154,7 +154,12 @@ CLOSED = ("accepted", "cancelled", "archived")
 
 
 def session_message(
-    conn: sqlite3.Connection, task_id: str, session_ref: str, prompt: str
+    conn: sqlite3.Connection,
+    task_id: str,
+    session_ref: str,
+    prompt: str,
+    *,
+    prompt_id: str | None = None,
 ) -> EventDraft | None:
     """What the ``UserPromptSubmit`` hook records: every message the user types in the worker's
     session while the task is still open (not accepted, cancelled or archived). Injected messages
@@ -165,6 +170,9 @@ def session_message(
     already answered: the user's own reply there is a late answer that prevails (DN006 §8.1c).
     Any other message is recorded without a question: the worker may cite it as the source of a
     requirement change (``requirement_change``, DN002 §5.1a).
+
+    ``prompt_id`` is the host's id of the turn the message started (Claude Code's hook payload):
+    with it the end of the turn finds the message's source (``session_message_via``, T338).
     """
     row = task(conn, task_id)
     if row["status"] in CLOSED or is_automated(prompt):
@@ -200,17 +208,45 @@ def session_message(
         )
     )
     message_id = next_item_id(conn, "session_messages", "message_id", "M", task_id)
-    return EventDraft(
-        type="input.session_message",
-        task_id=task_id,
-        revision=revision,
-        data={
-            "message_id": message_id,
-            "request_id": request["request_id"] if answers and request else None,
-            "session_ref": session_ref,
-            "text": user_words(prompt),
-        },
-    )
+    data: dict[str, Any] = {
+        "message_id": message_id,
+        "request_id": request["request_id"] if answers and request else None,
+        "session_ref": session_ref,
+        "text": user_words(prompt),
+    }
+    if prompt_id:
+        data["prompt_id"] = prompt_id
+    return EventDraft(type="input.session_message", task_id=task_id, revision=revision, data=data)
+
+
+# The entries the host can name for a message's way into the session (DN006 §8.11).
+MESSAGE_VIA = ("workdeck",)
+
+
+def session_message_via(
+    conn: sqlite3.Connection,
+    task_id: str,
+    message_id: str,
+    via: str,
+    prompt_id: str | None = None,
+) -> EventDraft | None:
+    """What the worker's ``Stop`` hook records when the host's transcript says the message that
+    started the turn came through workdeck (DN006 §8.11, CC001 §6.1): an observation that only
+    says so. None when the message is not the task's or already has its source."""
+    if via not in MESSAGE_VIA:
+        raise ValueError(f"unknown message source: {via}")
+    known = conn.execute(
+        "SELECT m.message_id, v.via FROM session_messages m "
+        "LEFT JOIN session_message_via v ON v.message_id = m.message_id "
+        "WHERE m.message_id = ? AND m.task_id = ?",
+        (message_id, task_id),
+    ).fetchone()
+    if known is None or known["via"] is not None:
+        return None
+    data: dict[str, Any] = {"message_id": message_id, "via": via}
+    if prompt_id:
+        data["prompt_id"] = prompt_id
+    return EventDraft(type="input.session_message_via", task_id=task_id, data=data)
 
 
 def handoff_due(conn: sqlite3.Connection, now: str) -> list[dict[str, Any]]:
