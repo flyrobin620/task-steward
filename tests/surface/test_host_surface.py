@@ -12,7 +12,9 @@ from typing import Any
 import pytest
 
 from tests.support import REPO_ROOT, child_env, run_json, run_tsw
+from tsw.host.mcp import HOST_TOOLS
 from tsw.preferences import cited
+from tsw.review.models import COMMANDS as REVIEWER_COMMANDS
 
 PLUGIN = REPO_ROOT / "plugin"
 
@@ -379,9 +381,23 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     # An existing entry of that name is reused only when it points at no folder and allows no
     # delivery; otherwise the demo stops (review r8 F1).
     assert "不覆盖、不登记、不派发" in example and "`aliases`" in example
-    # PR #69 review: no hook message IDs in the main session; the reviewer must be implemented;
-    # cleanup keeps the entry by default; a later main session needs the handoff.
-    assert '"principal": "session-owner"' in example and "reviewer_not_implemented" in example
+    # PR #69 review: no hook message IDs in the main session; cleanup keeps the entry by
+    # default; a later main session needs the handoff.
+    assert '"principal": "session-owner"' in example
+    # The precheck follows the configured reviewer (T336, F-T330-1): skipped when self-review
+    # is off, otherwise the reviewer's own command line is found through reviewer_models; when
+    # it is not usable the demo does not start and points at changing the reviewer.
+    assert "review.self_review" in example and "roles.reviewer.session" in example
+    assert "`reviewer_models`" in example and "`available`" in example
+    assert (
+        "tsw reviewer set" in example and "任务书写明“自评审：关闭”时不运行 review_run" in example
+    )
+    # Every reviewer the tool lists is named with the command line it is found by.
+    assert "orchestrator" in HOST_TOOLS["reviewer_models"][0]
+    for reviewer, command in REVIEWER_COMMANDS.items():
+        assert f"`{reviewer}` 用 `{command}`" in example
+    assert "只实现了 `codex-app-server`" not in example
+    assert "reviewer_not_implemented" not in example
     assert "默认都保留" in example and "交接主会话" in example
     # With the hosted Dashboard the main session gives clickable links (M-T308-10).
     assert "tsw dashboard status --json" in example and "<url>tasks/<任务>" in example
@@ -744,3 +760,23 @@ def test_the_data_directory_claude_md_replies_in_the_configured_language(home: P
     text = (home / "CLAUDE.md").read_text(encoding="utf-8")
     assert "- 回复用户使用English（`en-US`）（配置 `control.language`）。" in text
     assert "回复用户使用中文" not in text
+
+
+def test_no_product_text_says_only_codex_is_implemented() -> None:
+    """Three reviewers are implemented (DN004 §3.1, T325, T331): no skill, role text or design
+    note the product ships still says Codex is the only one (T336, F-T330-1)."""
+    stale = (
+        "只实现了 `codex-app-server`",
+        "目前只有 `codex-app-server`",
+        "reviewer_not_implemented",
+    )
+    texts = [*(REPO_ROOT / "tsw" / "host").glob("*.md"), *PLUGIN.rglob("*.md")]
+    texts += [*(REPO_ROOT / "docs" / "design").rglob("*.md"), REPO_ROOT / "README.md"]
+    assert texts
+    found = [
+        f"{path.relative_to(REPO_ROOT)}: {words}"
+        for path in texts
+        for words in stale
+        if words in path.read_text(encoding="utf-8")
+    ]
+    assert found == []
