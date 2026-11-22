@@ -816,7 +816,9 @@ class Guard:
         reread = self._instructions_notice(who)
         if reread:
             notes.append(reread)
-        if "[report]" in prompt:
+        # Only the user asks for a report: an injected message (another session, the worker's own
+        # first prompt, which quotes the instructions about ``[report]``) never does.
+        if "[report]" in prompt and not is_automated(prompt):
             notes.append(
                 "用户要求回传（[report]）：先用 progress_note 记录用户决定、已做动作与影响范围，"
                 "再用 mcp__ccd_session_mgmt__send_message 通知主会话："

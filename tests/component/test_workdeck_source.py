@@ -9,11 +9,15 @@ from typing import Any
 import pytest
 
 from tests.machine_harness import MACHINE, Harness
+from tests.support import REPO_ROOT
 from tsw import lease
 from tsw.errors import TswError
 from tsw.home import Home
 from tsw.host.guard import WORKDECK_TURN, Guard
 from tsw.machine.base import Caller
+from tsw.roles import worker_prompt
+
+WORKER_MD = REPO_ROOT / "plugin" / "roles" / "worker.md"
 
 pytestmark = pytest.mark.use_case("UC-WORKDECK-001")
 
@@ -64,9 +68,18 @@ def test_the_worker_hook_records_workdeck_words_but_not_host_notices(home: Home)
     assert hook(h, session, "UserPromptSubmit", IDLE) is None
     assert hook(h, session, "UserPromptSubmit", HELD) is None
     # The session's first prompt, written by the orchestrator, may reach the hook after the
-    # binding (T332 live): it is not the user's words either.
-    first = "Background (from the session that started this one):\n任务标题：T001\n\nTask:\n"
-    assert hook(h, session, "UserPromptSubmit", first + "# TaskSteward worker\n…") is None
+    # binding (T332 live): with or without the app's background in front, it is not the user's
+    # words, and the instructions it quotes about [report] do not ask for a report.
+    prompt = worker_prompt(WORKER_MD.read_text(encoding="utf-8"), "T001", "a1", "dispatch")
+    assert "[report]" in prompt
+    background = "Background (from the session that started this one):\n任务标题：T001\n\nTask:\n"
+    for first in (prompt, background + prompt):
+        out = hook(h, session, "UserPromptSubmit", first)
+        assert "[report]" not in str((out or {}).get("hookSpecificOutput", {}))
+    assert recorded(h) == []
+    # Another session quoting [report] does not ask for one either; the user does (UC-ASK-001).
+    quoted = '<cross-session-message from="w">用户说 [report]</cross-session-message>'
+    assert hook(h, session, "UserPromptSubmit", quoted) is None
     # What the hook receives from workdeck is the bare text (T327 E8): recorded as the user's.
     hint = hook(h, session, "UserPromptSubmit", "导出也要支持 CSV")
     assert hint is not None and "M-T001-1" in hint["hookSpecificOutput"]["additionalContext"]

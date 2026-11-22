@@ -1504,7 +1504,7 @@
       "id": "UC-WORKDECK-001",
       "title": "经 workdeck 发到会话的消息按用户本人的话处理（DN006 §8.11、CC001 §6.1，T332）",
       "actor": "用户（经 workdeck 门户）/ 主会话 / worker",
-      "acceptance": "worker 会话中经 workdeck 发来的消息（hook 收到的只有正文）与用户输入同样记为 input.session_message，可被 user_answer 与 requirement_change 引用；宿主的会话间通知（以 [Cross-session idle notice] 或 [Cross-session delivery notice] 开头，前面可有 <system-reminder>）不记录，也不算主会话中用户的 turn；主会话创建 worker 时写的首条提示（以 Background (from the session that started this one) 或 # TaskSteward worker 开头）在绑定之后到达 hook 时同样不记录；注入标记表中没有 workdeck 标记；主会话登记的 VerifiedSource 可带 via: workdeck，只与渠道 main-session 同用，其他取值或其他渠道（包括 user-cli / status-app）以 g_user 拒绝，事件中保留 via；MCP 公布的 user_source 结构列出 via（enum workdeck）；由正文开始的主会话一轮仍记为用户的 turn，Stop hook 的预启动与例行会话提醒写明由 workdeck 消息开始的一轮宿主不允许创建会话、说明原因后结束",
+      "acceptance": "worker 会话中经 workdeck 发来的消息（hook 收到的只有正文）与用户输入同样记为 input.session_message，可被 user_answer 与 requirement_change 引用；宿主的会话间通知（以 [Cross-session idle notice] 或 [Cross-session delivery notice] 开头，前面可有 <system-reminder>）不记录，也不算主会话中用户的 turn；主会话创建 worker 时写的首条提示（以 Background (from the session that started this one) 或 # TaskSteward worker 开头）在绑定之后到达 hook 时同样不记录；注入消息（包括引用了 worker 说明的首条提示）中出现的 [report] 不产生回传指令；注入标记表中没有 workdeck 标记；主会话登记的 VerifiedSource 可带 via: workdeck，只与渠道 main-session 同用，其他取值或其他渠道（包括 user-cli / status-app）以 g_user 拒绝，事件中保留 via；MCP 公布的 user_source 结构列出 via（enum workdeck）；由正文开始的主会话一轮仍记为用户的 turn，Stop hook 的预启动与例行会话提醒写明由 workdeck 消息开始的一轮宿主不允许创建会话、说明原因后结束",
       "surfaces": [
         "hook",
         "mcp"
