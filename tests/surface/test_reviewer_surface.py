@@ -109,6 +109,8 @@ def test_the_main_session_lists_and_writes_with_the_users_words(home: Path) -> N
     assert "reviewer_models" in {t["name"] for t in first[1]["result"]["tools"]}
     offered = payload(first[3])
     assert offered["available"] and offered["reviewer"] == "copilot-cli"
+    # The demo's precheck reads whether the command line was found (T336).
+    assert offered["command_found"] is True
     assert offered["example_ops"][0] == {
         "op": "set",
         "path": "roles.reviewer.session",

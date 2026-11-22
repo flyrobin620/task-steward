@@ -25,9 +25,10 @@ description: "TaskSteward 新手导览与示例任务：主会话发现账本中
 - 主会话会在配置中加入一个示例仓库条目 `tsw-demo`（不指向任何本机目录，不推送、不开 PR、不合并），登记一个示例任务并派发给 worker 会话；worker 写一份报告，内容就是这个任务自己的执行过程。
 - 需要模型调用：一个 worker 会话若干轮，自评审开启时还有配置的评审器若干轮。先用 `config_show` 看自评审是否开启：`review.self_review`（复用已有的 `tsw-demo` 条目且它带 `self_review` 时以条目的为准，DN004 §9）。
   - 自评审关闭（`off`）时不核对评审器，告诉用户示例任务不做自评审，报告“与评审器的互动”一节只会写明未做（配置关闭）。
-  - 自评审开启时核对配置的评审器 `roles.reviewer.session`：调用 `reviewer_models`（不给 `reviewer`，即当前配置的评审器）。它在本机找该评审器的命令行（`codex-app-server` 用 `codex`，`claude-headless` 用 `claude`，`copilot-cli` 用 `copilot`；配置了 `roles.reviewer.executable` 时用它）并列出可用模型，不调用模型。`available` 为 true 时可以开始；配置的模型不在 `models` 中（没有 `current` 为 true 的条目）时告诉用户评审可能因模型不可用而失败，问用户照常开始还是先换模型。
-  - `available` 为 false（结果的 `error` 写明原因，例如找不到命令行），或 `reviewer_models` 拒绝了配置的评审器（不是它能列出的评审器，例如尚未实现的 `codex-exec`）时，worker 的自评审会失败，示例任务完成不了。此时不开始，把原因告诉用户，并说明两种处理：安装并登录该评审器的命令行后再说“开始示例任务”；或改用本机可用的评审器与模型：按 `orchestrate` skill 更换评审器的做法，先用 `reviewer_models`（可给 `reviewer`）列出选项给用户选，再以用户选择时的原话 `config_change`，也可以请用户在会话外的终端运行 `tsw reviewer set`。
-  - 列出模型不能证明命令行已登录：未登录时第一轮自评审会失败，worker 会在它的会话中问用户怎样处理。
+  - 自评审开启时核对配置的评审器 `roles.reviewer.session`：调用 `reviewer_models`（不给 `reviewer`，即当前配置的评审器）。它在本机找该评审器的命令行（`codex-app-server` 用 `codex`，`claude-headless` 用 `claude`，`copilot-cli` 用 `copilot`；配置了 `roles.reviewer.executable` 时用它），找到时（`command_found` 为 true）再列出可用模型，不调用模型。
+  - 不开始的情形：`command_found` 为 false（找不到命令行），或 `reviewer_models` 拒绝了配置的评审器（不是它能列出的评审器，例如尚未实现的 `codex-exec`）。这时 worker 的自评审会失败，示例任务完成不了：把原因告诉用户，并说明两种处理：安装并登录该评审器的命令行后再说“开始示例任务”；或改用本机可用的评审器与模型：按 `orchestrate` skill 更换评审器的做法，先用 `reviewer_models`（可给 `reviewer`）列出选项给用户选，再以用户选择时的原话 `config_change`，也可以请用户在会话外的终端运行 `tsw reviewer set`。
+  - 找到了命令行而模型列表取不到（`available` 为 false，`error` 写明原因，例如超时、协议错误或空列表）时，评审器仍可能能用，只是没有核实：把 `error` 告诉用户，问用户重试核对、先换评审器或模型，还是照常开始。`available` 为 true 而配置的模型不在 `models` 中（没有 `current` 为 true 的条目）时同样告诉用户评审可能因模型不可用而失败，问用户照常开始还是先换模型。
+  - 以上核对都不调用模型，不能证明命令行已登录、模型能用：失败时第一轮自评审记为失败，worker 会在它的会话中问用户怎样处理。
 - 过程中 worker 会在它自己的会话里问用户一个问题；用户可以回答，也可以故意不答，看超时后的处理。
 - 请用户打开 Dashboard（第 1 节第 4 条）：装了常驻服务时直接给出链接。
 

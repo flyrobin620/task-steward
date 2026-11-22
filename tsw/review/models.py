@@ -474,8 +474,8 @@ def current(values: Mapping[str, Any]) -> dict[str, Any]:
 
 def offer(values: Mapping[str, Any], reviewer: str | None = None) -> dict[str, Any]:
     """What ``tsw reviewer models`` and the ``reviewer_models`` tool show (DN004 §3.4): the
-    models of ``reviewer`` (default: the configured one), the configuration, and the answer
-    offered first."""
+    models of ``reviewer`` (default: the configured one), whether its command line was found,
+    the configuration, and the answer offered first."""
     now = current(values)
     target = reviewer or str(now["reviewer"] or "")
     if target not in LISTERS:
@@ -486,10 +486,15 @@ def offer(values: Mapping[str, Any], reviewer: str | None = None) -> dict[str, A
             reviewer=target,
         )
     same = target == now["reviewer"]
-    found = list_models(target, resolve(target, now["executable"] if same else None))
+    executable = resolve(target, now["executable"] if same else None)
+    found = list_models(target, executable)
     model = preselect_model(found, now["model"] if same else None)
     effort = preselect_effort(found, model, now["effort"] if same else None)
     out = found.to_dict()
+    # Whether the reviewer's command line was found, apart from whether it listed its models: a
+    # list that cannot be had (timeout, protocol error) does not mean the reviewer cannot review
+    # (T336 review r1 F1).
+    out["command_found"] = executable is not None
     configured = found.find(now["model"]) if same else None
     for entry in out["models"]:
         entry["current"] = configured is not None and configured.id == entry["id"]

@@ -257,6 +257,23 @@ def test_offer_marks_the_configured_model(home: Home) -> None:
     other = models.offer(values(home), "copilot-cli")
     assert not any(m["current"] for m in other["models"])
     assert other["preselected"] == {"model": "gpt-6.1-sol", "effort": "medium"}
+    assert offered["command_found"] and other["command_found"]
+
+
+def test_offer_tells_a_missing_command_from_a_list_that_failed(
+    home: Home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The demo's precheck stops only when the command line is missing (T336 review r1 F1): a
+    list that cannot be had leaves ``command_found`` true."""
+    Harness(home, {"roles": {"reviewer": {"model": "gpt-5.5", "effort": "high"}}})
+    monkeypatch.setenv("FAKE_MODELS_MODE", "error")
+    failed = models.offer(values(home))
+    assert not failed["available"] and failed["error"] and failed["command_found"]
+    monkeypatch.delenv("FAKE_MODELS_MODE")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    missing = models.offer(values(home))
+    assert not missing["available"] and not missing["command_found"]
+    assert missing["error"] == "找不到 codex 命令行"
 
 
 def test_a_change_made_while_choosing_is_not_overwritten(home: Home) -> None:
