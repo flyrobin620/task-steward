@@ -231,6 +231,12 @@ def test_the_worker_notes_a_message_that_came_through_workdeck(home: Home, tmp_p
     with h.ledger.view() as conn:
         words = {w["ref"]: w for w in candidates.materials(conn, events, "T001")}
     assert words["M-T001-1"]["via"] == "workdeck"
+    # What the preference scan gets (preference_sources): the note survives, in the prompt too.
+    with h.ledger.view() as conn:
+        shown = candidates.sources(conn, events, "T001")
+    by_ref = {m["ref"]: m for m in shown["materials"]}
+    assert by_ref["M-T001-1"]["via"] == "workdeck"
+    assert '"via": "workdeck"' in shown["prompt"]
     # Typed in the app, from another session, or nothing to read: no note.
     turn(h, session, transcript, "p-2", "再加 CSV", origin=HUMAN)
     turn(h, session, transcript, "p-3", "还有 JSON", origin=None)
@@ -241,6 +247,9 @@ def test_the_worker_notes_a_message_that_came_through_workdeck(home: Home, tmp_p
     with h.ledger.view() as conn:
         later = {w["ref"]: w for w in candidates.materials(conn, [], "T001")}
     assert "via" not in later["M-T001-2"]
+    with h.ledger.view() as conn:
+        shown = candidates.sources(conn, list(h.ledger.storage.read(since=0)), "T001")
+    assert "via" not in {m["ref"]: m for m in shown["materials"]}["M-T001-2"]
 
 
 def test_a_turn_the_transcript_shows_began_by_workdeck_is_not_reminded(

@@ -409,8 +409,10 @@ def sources(
         "repo": repo,
         "revision": int(row["revision"]),
         "report_path": report_path,
+        # ``via`` only where the host said the words came through workdeck (DN006 §8.11).
         "materials": [
-            {k: m[k] for k in ("ref", "kind", "channel", "verified", "text")} for m in shown
+            {k: m[k] for k in ("ref", "kind", "channel", "verified", "via", "text") if k in m}
+            for m in shown
         ],
         "materials_truncated": truncated,
         "preferences_in_force": standing,
