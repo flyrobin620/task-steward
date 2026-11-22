@@ -1,6 +1,6 @@
 # DN006 插件层：宿主集成、会话、人类渠道与数据存储
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/；T272 §8.9.4a 默认例行项 session-scan；T279 §6.3 claude-code 生成的 skill 清单，§8.1a 每一轮结束都 `wrap_up`；T282 §9.7 主会话自我更新：主会话可以运行 `host render`；T283 §9.8 按改动决定步骤的自我更新、§9.9 运行版本的记录、§8.10 Dashboard 常驻服务；T293 §8.9.5 读过正文、判定不转出的消息记在缓存中，之后不再读正文；T305 分发与安装移到 DN009：§6.2 宿主集成增加安装操作、§8.10 与 §9.7 安装脚本的会话例外、§9.1 安装脚本管理的检出、§9.8 `install` 与 `host_rules` 改为重跑安装；T309 §8.10 workdeck 插件 manifest 与会话链接的 `data-workdeck-session`；T332 §8.11 经 workdeck 发到会话的消息按用户本人的话处理，§8.5 `VerifiedSource.via`，§9.7 自我更新的确认）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/；T272 §8.9.4a 默认例行项 session-scan；T279 §6.3 claude-code 生成的 skill 清单，§8.1a 每一轮结束都 `wrap_up`；T282 §9.7 主会话自我更新：主会话可以运行 `host render`；T283 §9.8 按改动决定步骤的自我更新、§9.9 运行版本的记录、§8.10 Dashboard 常驻服务；T293 §8.9.5 读过正文、判定不转出的消息记在缓存中，之后不再读正文；T305 分发与安装移到 DN009：§6.2 宿主集成增加安装操作、§8.10 与 §9.7 安装脚本的会话例外、§9.1 安装脚本管理的检出、§9.8 `install` 与 `host_rules` 改为重跑安装；T309 §8.10 workdeck 插件 manifest 与会话链接的 `data-workdeck-session`；T332 §8.11 经 workdeck 发到会话的消息按用户本人的话处理，§8.5 `VerifiedSource.via`，§9.7 自我更新的确认；T334 §8.11 第 7 条运行中注入已在 Claude Code 上实测）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN008 校验原则](DN008-guardrails.md) · [DN009 分发与安装](DN009-distribution-and-install.md) · 实现：[CC006 Claude Code 插件](claude-code/CC006-plugins.md)
 
@@ -741,7 +741,7 @@ Dashboard 应用：
    - 本来就只能由用户在终端运行的命令（§9.7 末段、§8.10）照旧。
 5. **宿主设置**：宿主对会话间消息有自己的放行设置时（Claude Code 的 `crossSessionInbound`，CC001 §6.1），由用户自己设置，主会话与 worker 不代为修改；安装与使用说明（README、CC009）写明。
 6. **记账范围**：tsw 不另记“这条消息经由 workdeck”的事件。主会话登记的来源带 `via`；worker 会话中的消息与用户输入同样记录。需要在 worker 会话中也注明经由时，再由宿主集成从宿主记录中读取来源（未实现）。
-7. **未覆盖**：worker 正在运行时 workdeck 把消息注入当前一轮（门户的 steer 投递）时，宿主集成是否记录它还未验证（T327 第 2.2 节）；未记录的消息不能用来登记答复或需求变更，worker 在本轮结束后请用户重发，或由主会话登记。
+7. **运行中注入**：worker 正在运行时 workdeck 把消息注入当前一轮（门户的 steer 投递）。Claude Code 上宿主集成同样记录它，worker 在同一轮内拿到消息编号（T334 实测，[CC001 §6.1](claude-code/CC001-sessions-and-hooks.md)）；其他宿主未验证。没有被记录的消息不能用来登记答复或需求变更，worker 在本轮结束后请用户重发，或由主会话登记。
 
 ## 9. P4 存储后端与数据目录
 
