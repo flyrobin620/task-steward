@@ -1105,6 +1105,10 @@ class Guard:
         upto = kept.get("upto")
         if kept.get("turn") != turn_id and isinstance(upto, int) and upto > 0:
             seen = seen[upto:]  # an earlier turn's, already read at its Stop
+        # The prompt that began this turn carries its prompt_id; any before it are left by a turn
+        # that never reached Stop and are not this turn's (review r5 F5).
+        while seen and seen[0].get("prompt_id") != turn_id:
+            seen = seen[1:]
         self._mark_turn(who, {"turn": turn_id, "upto": len(seen), "prompts": seen})
         if not seen:
             return

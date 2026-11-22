@@ -304,6 +304,14 @@ def test_the_worker_notes_a_message_that_came_through_workdeck(home: Home, tmp_p
     # The next turn drops what the last one read: its own words are paired afresh.
     turn(h, session, transcript, "p-8", "也检查 B", origin=WORKDECK_ORIGIN)
     assert [v["message_id"] for v in vias(h)][-1] == "M-T001-11"
+    # A turn that never reached Stop (the session stopped) leaves its prompts behind; the next
+    # turn, begun by the same words through workdeck, notes only its own (review r5 F5).
+    hook(h, session, "UserPromptSubmit", "继续", prompt_id="p-9", transcript_path=str(transcript))
+    with transcript.open("a", encoding="utf-8") as out:
+        out.write(entry("p-9", HUMAN, "继续"))
+    turn(h, session, transcript, "p-10", "继续", origin=WORKDECK_ORIGIN)
+    assert recorded(h)[-2:] == ["继续", "继续"]
+    assert [v["message_id"] for v in vias(h)][-2:] == ["M-T001-11", "M-T001-13"]
     with h.ledger.view() as conn:
         later = {w["ref"]: w for w in candidates.materials(conn, [], "T001")}
     assert "via" not in later["M-T001-2"]
