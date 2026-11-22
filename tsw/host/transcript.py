@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, cast
+
+from tsw.machine.ask_user import user_words
 
 WORKDECK = "workdeck"
 # A turn's own entries are near the end; a turn with a lot of tool output pushes them back.
@@ -40,35 +42,62 @@ def prompt_origin(path: Any, prompt_id: Any, *, limit: int = TAIL_LIMIT) -> dict
     return _search(path, match, limit)
 
 
-def message_origin(
-    path: Any, prompt_id: Any, text: Any, *, limit: int = TAIL_LIMIT
-) -> dict[str, Any] | None:
-    """The ``origin`` of a message the hook recorded with ``text`` in the turn ``prompt_id``: a
-    ``queued_command`` attachment holding the text (injected while the turn ran), or the ``user``
-    entry that started the turn if its content holds the text; the latest one found."""
-    if not isinstance(text, str) or not text.strip():
-        return None
-    words = text.strip()
-    needle = json.dumps(prompt_id).encode("utf-8") if isinstance(prompt_id, str) else None
+def turn_origins(
+    path: Any, prompt_id: Any, prompts: Sequence[str], *, limit: int = TAIL_LIMIT
+) -> list[dict[str, Any] | None]:
+    """The ``origin`` of each prompt the hook saw in the turn ``prompt_id``, in the order seen
+    (``user_words`` of each; None where not known).
 
-    def match(line: bytes) -> dict[str, Any] | None:
-        if QUEUED not in line and (needle is None or needle not in line):
-            return None
-        entry = _entry(line)
-        if entry is None:
-            return None
-        attachment = _dict(entry.get("attachment"))
-        if entry.get("type") == "attachment" and attachment is not None:
-            queued = attachment.get("type") == "queued_command"
-            if queued and str(attachment.get("prompt") or "").strip() == words:
-                return _dict(attachment.get("origin"))
-            return None
-        if entry.get("type") != "user" or needle is None or entry.get("promptId") != prompt_id:
-            return None
-        message = _dict(entry.get("message")) or {}
-        return _dict(entry.get("origin")) if words in _text(message.get("content")) else None
-
-    return _search(path, match, limit)
+    Only the turn's own entries count: the ``user`` entry that started it (``promptId``, with an
+    origin) and the ``queued_command`` attachments after it. The first prompt is the one that
+    started the turn when that entry holds its words; each later one takes the first attachment
+    not yet taken whose words are the same, so equal words sent twice are told apart by order.
+    Without the turn's start entry (not written, or beyond ``limit``) nothing is known.
+    """
+    unknown: list[dict[str, Any] | None] = [None] * len(prompts)
+    if not prompts or not isinstance(prompt_id, str) or not prompt_id:
+        return unknown
+    needle = json.dumps(prompt_id).encode("utf-8")
+    start: dict[str, Any] | None = None
+    queued: list[tuple[str, dict[str, Any] | None]] = []  # the turn's attachments, last first
+    if not isinstance(path, str) or not path:
+        return unknown
+    try:
+        for line in _lines_backwards(Path(path), limit):
+            if QUEUED not in line and needle not in line:
+                continue
+            entry = _entry(line)
+            if entry is None:
+                continue
+            attachment = _dict(entry.get("attachment"))
+            if entry.get("type") == "attachment" and attachment is not None:
+                if attachment.get("type") == "queued_command":
+                    words = user_words(str(attachment.get("prompt") or ""))
+                    queued.append((words, _dict(attachment.get("origin"))))
+                continue
+            origin = _dict(entry.get("origin"))
+            if entry.get("type") == "user" and entry.get("promptId") == prompt_id and origin:
+                start = entry
+                break
+    except OSError:
+        return unknown
+    if start is None:
+        return unknown
+    out = list(unknown)
+    message = _dict(start.get("message")) or {}
+    first = user_words(prompts[0])
+    if first and first in _text(message.get("content")):
+        out[0] = _dict(start.get("origin"))
+    taken = [False] * len(queued)
+    order = list(range(len(queued) - 1, -1, -1))  # oldest first
+    for n, prompt in enumerate(prompts[1:], start=1):
+        words = user_words(prompt)
+        for i in order:
+            if not taken[i] and words and queued[i][0] == words:
+                taken[i] = True
+                out[n] = queued[i][1]
+                break
+    return out
 
 
 def via(origin: dict[str, Any] | None) -> str | None:

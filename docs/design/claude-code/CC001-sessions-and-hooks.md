@@ -113,13 +113,13 @@ workdeck 消息没有任何标记，所以 `UserPromptSubmit` hook 把它与用�
 
 hook 在一轮开始时照旧只看正文（上表），到 `Stop` 时再读来源：
 
-1. `UserPromptSubmit` 把这一轮的判断记进 `cache/turns/<会话>.json`。主会话：是不是用户的 turn。worker：本轮记下的每条消息（编号、`prompt_id`、记录的原文），运行中注入的消息追加在后面。
+1. `UserPromptSubmit` 把这一轮的判断记进 `cache/turns/<会话>.json`。主会话：是不是用户的 turn。worker：本轮 hook 看到的每条提示，按到达顺序（去掉前置 `<system-reminder>` 后的原文、`prompt_id`、记录成的消息编号；没有记录的注入消息编号为空），运行中注入的追加在后面。
 2. `Stop` 取出这条记录（读后即删除），从 transcript 末尾向前读（至多读末尾 8 MiB）：
    - 主会话：按 `Stop` 自己 payload 中的 `prompt_id`（这一轮的 ID）找 `promptId` 相同、带 `origin` 的 `user` 条目，即开始这一轮的消息。
-   - worker：对每条记下的消息，先找 `prompt` 包含其原文的 `queued_command` 附件（运行中注入的），再找 `promptId` 与记下的相同、正文包含其原文的 `user` 条目（开始这一轮的）；取最近的一个。
-   - `origin.kind` 为 `peer` 且 `origin.from` 为 `workdeck` 时，这条消息经由 workdeck。
+   - worker：这一轮是第一条提示的 `prompt_id`（`Stop` 的 `prompt_id` 与它不同时，记录属于一轮没有走到 `Stop` 的旧轮次，不读）。只看这一轮自己的条目：开始这一轮的 `user` 条目（`promptId` 相同、带 `origin`），以及它之后的 `queued_command` 附件。第一条提示对应开始条目，条件是条目正文（字符串或 text 块）包含它的原文；之后的每条提示按顺序取第一个还没被取走、原文（同样去掉前置 `<system-reminder>`）相同的附件，所以同样的话发两次也能按顺序分开。找不到开始条目（还没写入、超出末尾 8 MiB）时都不知道。
+   - 对应条目的 `origin.kind` 为 `peer` 且 `origin.from` 为 `workdeck` 时，这条消息经由 workdeck。
 3. 主会话：由 workdeck 开始的一轮不提醒预启动与启动例行会话（CC008 CC-S4）；一轮中途注入的消息不改变这一轮由谁开始。worker：经由 workdeck 的消息追加 `input.session_message_via`（`message_id`、`via: "workdeck"`、`prompt_id`；DN006 §8.11 第 2、6 条），每条消息至多一次。
-4. 读不到（没有 `prompt_id`、transcript 不存在或读失败、找不到条目、`origin` 不是 workdeck）时按现行做法：主会话照常提醒，worker 不追加。来源只是注明，读失败不影响这一轮的其他行为。
+4. 读不到（这一轮没有 `prompt_id`、transcript 不存在或读失败、找不到开始条目或对应的附件、`origin` 不是 workdeck）时按现行做法：主会话照常提醒，worker 不追加。来源只是注明，读失败不影响这一轮的其他行为。
 
 **宿主设置 `crossSessionInbound`**：Claude Code 对会话间消息的放行设置，取值 `accept`、`hold`、`refuse`。在 bypass 权限模式下运行的会话，会扣留没有声明权限模式的 peer 消息（workdeck 不声明）等用户在 app 中放行，过期后丢弃（workdeck DN004 §7）。要从 workdeck 给 bypass 模式的会话发消息，用户在 Claude Code 用户设置（`~/.claude/settings.json`）中设 `"crossSessionInbound": "accept"`；仓库或组织的托管设置为 `hold` 时个人设置不能覆盖。这是宿主设置：tsw 的安装脚本不写它，会话不代为修改（宿主也不允许因会话间消息修改设置），由用户自己设置（README“从 workdeck 门户操作”）。
 

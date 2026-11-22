@@ -194,29 +194,47 @@ def _queued(text: str, origin: dict[str, Any]) -> bytes:
     return (json.dumps({"type": "attachment", "attachment": attachment}) + "\n").encode("utf-8")
 
 
-def test_a_recorded_message_is_found_by_its_words(tmp_path: Path) -> None:
-    """The turn's first message is the user entry with its promptId and words; one injected while
-    the turn ran is a queued_command attachment with its words and no promptId (T334)."""
+def test_the_turns_prompts_are_paired_with_its_entries_in_order(tmp_path: Path) -> None:
+    """The turn's first prompt is its user entry; later ones (injected while it ran, T334) are
+    queued_command attachments after it, one each, in order (review r3 F2)."""
     path = tmp_path / "t.jsonl"
     typed = [
         {"type": "text", "text": "<system-reminder>\nLinked sessions now\n</system-reminder>"},
-        {"type": "text", "text": "先做 A"},
+        {"type": "text", "text": "继续"},
     ]
     path.write_bytes(
-        _line("p-1", {"kind": "human"}, typed)
-        + _queued("也要 B", WORKDECK_ORIGIN)
-        + _queued("ok, done", PEER)
+        _queued("继续", WORKDECK_ORIGIN)  # an earlier turn's: never this one's
+        + _line("p-0", WORKDECK_ORIGIN, "Another Claude session sent a message:\n继续\n\nThis")
+        + _line("p-1", {"kind": "human"}, typed)
+        + _queued('<cross-session-message from="local_1">done</cross-session-message>', PEER)
+        + _queued("继续", WORKDECK_ORIGIN)
         + _line("p-1", None, [{"type": "tool_result"}])
-        + _line("p-2", WORKDECK_ORIGIN, "Another Claude session sent a message:\n用 A\n\nThis came")
+        + _queued("也要 B", WORKDECK_ORIGIN)
     )
-    assert transcript.message_origin(str(path), "p-1", "先做 A") == {"kind": "human"}
-    assert transcript.message_origin(str(path), "p-1", "也要 B") == WORKDECK_ORIGIN
-    # An injected message is found by its words whatever the turn's id.
-    assert transcript.message_origin(str(path), None, "也要 B") == WORKDECK_ORIGIN
-    assert transcript.message_origin(str(path), "p-2", "用 A") == WORKDECK_ORIGIN
-    # Words alone do not pick another turn's entry, nor part of an injected message.
-    assert transcript.message_origin(str(path), "p-1", "用 A") is None
-    assert transcript.message_origin(str(path), "p-1", "ok") is None
-    for words in ("", "  ", None):
-        assert transcript.message_origin(str(path), "p-1", words) is None
-    assert transcript.message_origin(str(tmp_path / "missing.jsonl"), "p-1", "先做 A") is None
+    human = {"kind": "human"}
+    injected = '<cross-session-message from="local_1">done</cross-session-message>'
+    prompts = ["<system-reminder>\nx\n</system-reminder>\n继续", injected, "继续", "也要 B"]
+    assert transcript.turn_origins(str(path), "p-1", prompts) == [
+        human,
+        PEER,
+        WORKDECK_ORIGIN,
+        WORKDECK_ORIGIN,
+    ]
+    # The same words twice in one turn take one attachment each; a third has none left.
+    assert transcript.turn_origins(str(path), "p-1", ["继续", "继续", "继续"]) == [
+        human,
+        WORKDECK_ORIGIN,
+        None,
+    ]
+    # The first prompt must be the start entry's words; others need an attachment of their own.
+    assert transcript.turn_origins(str(path), "p-1", ["别的话", "也要 C"]) == [None, None]
+    assert transcript.turn_origins(str(path), "p-0", ["继续"]) == [WORKDECK_ORIGIN]
+    # Without the turn's start entry nothing is known.
+    for turn_id in ("p-9", None, ""):
+        assert transcript.turn_origins(str(path), turn_id, ["继续", "也要 B"]) == [None, None]
+    assert transcript.turn_origins(str(tmp_path / "none.jsonl"), "p-1", ["继续"]) == [None]
+    assert transcript.turn_origins(str(path), "p-1", []) == []
+    size = path.stat().st_size
+    tail = len(_queued("也要 B", WORKDECK_ORIGIN)) + 10
+    assert transcript.turn_origins(str(path), "p-1", ["继续"], limit=tail) == [None]
+    assert transcript.turn_origins(str(path), "p-1", ["继续"], limit=size) == [human]

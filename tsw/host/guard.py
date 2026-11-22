@@ -36,7 +36,7 @@ from tsw.host.identity import (
     within,
 )
 from tsw.host.plugin_copy import session_hint
-from tsw.host.transcript import message_origin, prompt_origin
+from tsw.host.transcript import prompt_origin, turn_origins
 from tsw.host.transcript import via as origin_via
 from tsw.ledger import Ledger
 from tsw.machine import routine as routine_mod
@@ -46,6 +46,7 @@ from tsw.machine.ask_user import (
     is_automated,
     session_message,
     session_message_via,
+    user_words,
 )
 from tsw.machine.guards import merge_authorized
 from tsw.machine.model import row_dict
@@ -810,10 +811,10 @@ class Guard:
             return None
         notes: list[str] = []
         recorded = self._record_answer(who, prompt) if self.config.valid else None
-        if recorded is not None:
-            # Where the message came from can be read only at Stop (CC001 §6.1); a message
-            # injected while the turn runs (T334) joins the turn's earlier ones.
-            self._note_message(who, recorded)
+        # Where the message came from can be read only at Stop (CC001 §6.1). Every prompt of
+        # the turn is noted, recorded or not, so Stop can pair them with the turn's entries in
+        # order; a message injected while the turn runs (T334) joins the earlier ones.
+        self._note_prompt(who, prompt, recorded)
         if recorded is not None and recorded.get("request_id"):
             notes.append(
                 f"这条用户消息已记录为 {recorded['message_id']}（问题 {recorded['request_id']}）。"
@@ -1037,17 +1038,22 @@ class Guard:
         except OSError as exc:  # a missed mark only skips a reminder or a note
             print(f"tsw guard: turn not recorded: {exc}", file=sys.stderr)
 
-    def _note_message(self, who: Identity, recorded: Mapping[str, Any]) -> None:
-        """Add a message the worker's hook recorded to the turn's mark, for Stop to look up."""
+    def _note_prompt(self, who: Identity, prompt: str, recorded: Mapping[str, Any] | None) -> None:
+        """Add a prompt the worker's hook saw to the turn's mark, with the message it recorded
+        (None for an injected one it did not record), for Stop to look up in order."""
         path = self._turn_file(who)
         try:
             mark: Any = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             mark = None
-        earlier: Any = mark.get("messages") if isinstance(mark, dict) else None
-        messages = cast("list[Any]", earlier) if isinstance(earlier, list) else []
-        note = {"message_id": recorded["message_id"], "text": recorded.get("text")}
-        self._mark_turn(who, {"messages": [*messages, {**note, "prompt_id": self._prompt_id()}]})
+        earlier: Any = mark.get("prompts") if isinstance(mark, dict) else None
+        seen = cast("list[Any]", earlier) if isinstance(earlier, list) else []
+        note = {
+            "prompt": user_words(prompt),
+            "message_id": recorded["message_id"] if recorded else None,
+            "prompt_id": self._prompt_id(),
+        }
+        self._mark_turn(who, {"prompts": [*seen, note]})
 
     def _take_turn(self, who: Identity) -> dict[str, Any]:
         """What was marked for the turn that is ending (empty when nothing was); the mark is used
@@ -1075,26 +1081,30 @@ class Guard:
     def _record_via(self, who: Identity, turn: Mapping[str, Any]) -> None:
         """Messages recorded in this turn that came through workdeck: say so
         (``input.session_message_via``, DN006 §8.11)."""
-        listed: Any = turn.get("messages")
-        if not isinstance(listed, list) or not who.task_id:
+        listed: Any = turn.get("prompts")
+        if not isinstance(listed, list) or not listed or not who.task_id:
             return
         task_id = who.task_id
+        seen = [cast("dict[str, Any]", n) for n in cast("list[Any]", listed) if isinstance(n, dict)]
+        if len(seen) != len(cast("list[Any]", listed)):
+            return
+        # The turn ending now; a mark left by a turn that never reached Stop is not this one's.
+        turn_id = seen[0].get("prompt_id")
+        if self._prompt_id() not in (None, turn_id):
+            return
+        try:
+            origins = turn_origins(
+                self.payload.get("transcript_path"),
+                turn_id,
+                [str(n.get("prompt") or "") for n in seen],
+            )
+        except Exception:  # a note only; never block the end of the turn
+            return
         notes: list[tuple[str, str, str | None]] = []
-        for item in cast("list[Any]", listed):
-            if not isinstance(item, dict):
-                continue
-            note = cast("dict[str, Any]", item)
-            message_id, prompt_id = note.get("message_id"), note.get("prompt_id")
-            if not isinstance(message_id, str) or not message_id:
-                continue
-            try:
-                origin = message_origin(
-                    self.payload.get("transcript_path"), prompt_id, note.get("text")
-                )
-            except Exception:  # a note only; never block the end of the turn
-                origin = None
-            channel = origin_via(origin)
-            if channel is not None:
+        for note, origin in zip(seen, origins, strict=True):
+            message_id, channel = note.get("message_id"), origin_via(origin)
+            if isinstance(message_id, str) and message_id and channel is not None:
+                prompt_id = note.get("prompt_id")
                 notes.append(
                     (message_id, channel, prompt_id if isinstance(prompt_id, str) else None)
                 )

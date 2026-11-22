@@ -277,6 +277,16 @@ def test_the_worker_notes_a_message_that_came_through_workdeck(home: Home, tmp_p
         {"message_id": "M-T001-1", "via": "workdeck"},
         {"message_id": "M-T001-6", "via": "workdeck"},
     ]
+    # The same words typed in the app and then sent through workdeck: only the second is noted.
+    fields = {"prompt_id": "p-6", "transcript_path": str(transcript)}
+    hook(h, session, "UserPromptSubmit", "继续", **fields)
+    with transcript.open("a", encoding="utf-8") as out:
+        out.write(entry("p-6", HUMAN, "继续"))
+    hook(h, session, "UserPromptSubmit", "继续", **fields)
+    injected(transcript, "继续", WORKDECK_ORIGIN)
+    hook(h, session, "Stop", None, **fields)
+    assert recorded(h)[-2:] == ["继续", "继续"]
+    assert [v["message_id"] for v in vias(h)] == ["M-T001-1", "M-T001-6", "M-T001-8"]
     with h.ledger.view() as conn:
         later = {w["ref"]: w for w in candidates.materials(conn, [], "T001")}
     assert "via" not in later["M-T001-2"]
