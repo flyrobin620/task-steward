@@ -572,6 +572,7 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | --- | --- | --- |
 | `tsw task accept <任务> [--note <原话>]`、`tsw task reject <任务> --reason <理由>`、`tsw task cancel <任务>` | `user-cli` | `principal`：本机用户名与机器名；`message_ref`：`cli:<时间>:<进程号>`；`text`：`--note` / `--reason`，没有时为命令行本身；`target`：任务、命令读到的 revision（`--revision` 可指定）、决定类别 |
 | `tsw preference record --scope <范围> --topic <主题> --text <原文> [--supersedes <P-n>]`、`tsw preference revoke <P-n> --reason <理由>`（长期偏好的管理，DN007 §6.2）；`tsw preference record --candidate <PC-n>`、`tsw preference dismiss <PC-n> --reason <理由>`（确认或拒绝偏好候选，DN007 §6.3） | `user-cli` | `principal`、`message_ref` 同上；`text`：偏好原文、撤销或拒绝的理由；`target`：`["preference", <范围>, "standing"]`、`["preference", <编号>, "revoke"]` 或 `["preference", <候选编号>, "dismiss"]` |
+| `tsw reviewer set [--reviewer <评审器>] [--model <模型>] [--effort <强度>]`（更换评审器、评审模型与推理强度，DN004 §3.4，T330） | `user-cli` | `principal`、`message_ref` 同上；`text`：命令行本身（含选择的值）；`target`：`["config", <修改前文件的 sha256>, "authorize"]`（DN003 §7.2） |
 | Dashboard 应用中卡片的「验收」「退回」「取消」按钮 | `status-app` | `principal` 同上；`message_ref`：`status-app:<服务实例>:<序号>`；`text`：页面、按钮与任务，退回时附用户填写的理由；`target` 的 revision 取自页面上显示的 revision，任务在此期间已变化时 G-USER 拒绝 |
 | Dashboard 应用「长期偏好」页的「记录」、条目的「替代」「撤销」（长期偏好的管理，DN007 §6.2，T290） | `status-app` | `principal`、`message_ref` 同上；`text`：用户在页面上填写的偏好原文或撤销理由；`target`：`["preference", <范围>, "standing"]` 或 `["preference", <编号>, "revoke"]` |
 

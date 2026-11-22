@@ -1,6 +1,6 @@
 # CP004 Copilot CLI 评审器
 
-- 状态：设计草案（T325，待用户确认）
+- 状态：设计草案（T325；T330 §8 列出可用模型，待用户确认）
 - 日期：2026-11-21
 - 实现：[DN004 worker 自评审](../DN004-worker-self-review.md) · 能力声明：[DN006 §7.3](../DN006-plugin-layer.md)
 
@@ -62,10 +62,35 @@ copilot -p <提示> --output-format json --session-id <UUID>   # 增量轮次改
 
 - 会话记录写在用户的 Copilot 目录（`~/.copilot/session-state/`），与 Codex 线程留在 Codex 目录相同；tsw 不清理。
 - 评审器不能运行命令：不跑测试，不运行 `git`，靠 `rK-diff.patch` 与读文件评审（DN004 §3.1）。
-- 管理策略固定的模型只能照用：`roles.reviewer.model` 必须写成策略允许的那一个，否则每轮都失败。
+- 管理策略固定的模型只能照用：`roles.reviewer.model` 必须写成策略允许的那一个，否则每轮都失败。T330 实测时本机已没有这项策略（§8）。
 - 用户级 MCP server 仍会启动（只是工具被禁用），首次启动可能要十几秒。
 
 ## 7. 验证
 
 - conformance / surface：以录制的 JSONL（来自 §2 的实测，去掉正文与本机路径）回放，覆盖完成、续用、模型被替换、`session.error`、非 JSON、超时。
 - live（`python tools/live.py reviewer --reviewer copilot-cli`）：真实 Copilot CLI 在固定样例上做一次全量与一次增量评审，核对只读与输出契约。
+
+## 8. 列出可用模型（T330）
+
+DN004 §3.4 的模型列表在 Copilot CLI 上用它的 ACP 服务（Agent Client Protocol，`copilot --acp`，stdio JSON-RPC）：
+
+1. 启动 `copilot --acp --no-auto-update --disable-builtin-mcps`，工作目录为一个空的临时目录。
+2. `initialize`（`protocolVersion: 1`，客户端不提供文件与终端能力），再 `session/new`（`cwd` 为同一临时目录，`mcpServers` 为空）。
+3. 结果的 `models.availableModels` 是可用模型（`modelId`、`name`、`description`，`_meta.copilotEnablement` 为 `enabled`），`models.currentModelId` 是 Copilot 自己的当前默认；`configOptions` 中 `id` 为 `reasoning_effort` 的选项是可选的推理强度。
+4. `session/close`，关闭输入，结束进程树。
+
+列表处理：`modelId` 去重；去掉 `auto`（每次由 Copilot 挑模型，DN004 §3.4）；推理强度对所有模型相同（ACP 只给会话级的选项）。
+
+实测（T330，Copilot CLI 1.0.114，Windows，已登录）：
+
+| 项 | 结果 |
+| --- | --- |
+| 列表 | `session/new` 返回 17 项（含两个 `auto`），`currentModelId` 为 `gpt-6.2-sol`；`reasoning_effort` 的选项为 `low` 到 `max` 五档。不调用模型 |
+| 与实际调用一致 | 用列表中的 `gpt-6.2-sol` 运行 `copilot -p`，`assistant.message` 的 `model` 就是 `gpt-6.2-sol`，没有 `session.model_change`（`managed_settings`）：T325 时把模型固定为 `gpt-6.1-sol` 的管理策略在本机已不存在，这正是 F-T325-2 的情形（写死的模型会过时） |
+| 不存在的模型 | `copilot -p --model <不存在>` 以 `session.error`“Model … is not available” 失败，不列出可用模型，所以不能用它取列表 |
+| `copilot help config` | 列出 CLI 内置的模型清单，与本机账号可用的模型不同（含本机不可用的 Claude 模型），不采用 |
+| 留下的记录 | `session/new` 在 `~/.copilot/session-state/` 留下一个空会话目录，`session/close` 后仍在；与评审会话记录相同，tsw 不清理（§6） |
+
+未能验证：管理策略固定模型时 `availableModels` 是否只剩策略允许的模型（本机已无此策略）。所以列表可能比实际可用的多；选了被策略替换的模型时，评审按 §4 判失败，错误写明实际模型，用户再改。
+
+取不到列表的情形：找不到 `copilot`、未登录（`session/new` 报认证错误）、60 秒内没有结果。按 DN004 §3.4 的退路处理。

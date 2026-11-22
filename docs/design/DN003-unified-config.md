@@ -183,7 +183,7 @@
 | `worker.prompt_template` | 路径 | worker 启动指令模板，可用变量：`{task_id}` `{attempt}` `{brief_path}` `{writable_roots}` `{report_paths}` |
 | `worker.allow_in_task_subagents` | 布尔 | worker 能否在自己任务内使用 Agent 子代理 |
 | `reviewer.session` / `fallback_session` | 会话适配器名 | 评审所用会话适配器，可与主会话、worker 不同；须具备 `oneshot`、`direct`、`read_only_enforced`（DN006 §7.4）。本版本实现了 `codex-app-server`、`claude-headless`、`copilot-cli`（DN004 §3.1）；`claude-subagent` 已删除（T331），配置中出现时校验失败并给出改法 |
-| `reviewer.model` / `effort` / `timeout_seconds` | — | 默认 `gpt-6-astra` / `medium`；只读由所选适配器强制，不另设字段。`claude-headless` 的模型可以是完整 ID（如 `claude-sonnet-5-5`，须与实际模型一致）或别名 `sonnet`、`opus`、`haiku`、`fable`（实际模型须属于该家族，CC004 §4）；`copilot-cli` 的模型须是 Copilot 允许的模型（CP004 §4） |
+| `reviewer.model` / `effort` / `timeout_seconds` | — | 默认 `gpt-6-astra` / `medium`；只读由所选适配器强制，不另设字段。`claude-headless` 的模型可以是完整 ID（如 `claude-sonnet-5-5`，须与实际模型一致）或别名 `sonnet`、`opus`、`haiku`、`fable`（实际模型须属于该家族，CC004 §4）；`copilot-cli` 的模型须是 Copilot 允许的模型（CP004 §4）。对所有评审器通用：安装与更换时从所选评审器在本机实际可用的模型与其支持的推理强度中选（DN004 §3.4），默认值只在列表中有它时预选 |
 | `routine.session` | 会话适配器名 | 承载例行会话（DN006 §8.9）的会话适配器，须具备 `interactive` 与 `timer`；delegated 适配器必须与主会话同一宿主 |
 | `routine.model` / `effort` / `permission_mode` | 同上 | 默认 `claude-sonnet-5-5` / `low` / `auto`：例行会话只执行 tsw 算好的动作，不需要强模型；权限模式不能高于主会话：没有显式设置时取默认值与主会话模式中较低的一个，显式设置得更高时校验失败 |
 
@@ -394,6 +394,8 @@ tsw 在加载时完整校验，任何错误都拒绝所有写命令（只读命�
 用户原话以 `VerifiedSource`（DN006 §8.5）提交，渠道为主会话、Teams 或 Portal（worker 会话中的原话不能授权主会话改配置），决定对象为 `["config", <修改前文件的 sha256>, "authorize"]`：它绑定到这一次修改所基于的文件。一条用户消息（渠道 + 消息引用）只能授权一次修改：即使回退后文件回到原来的内容，同一条原话也不能再次授权（`source_reused`）；同一命令的重试用相同的 `command_id`，按幂等返回原结果。修改前文件的摘要由 `config_show` 给出；文件不存在时为 `"none"`。
 
 权限判定按键的路径段进行，不按拼接后的文本：仓库 ID 含点号（如 `repositories["my.repo"]`）时，同样能识别其下的 `delivery` 等键。
+
+`roles.reviewer` 的 `session`、`model`、`effort` 也可以由用户本人在会话外的终端用 `tsw reviewer set` 修改（DN004 §3.4）：同一实现、同样的校验与 `config.changed` 事件，来源由 tsw 记为渠道 `user-cli`（DN006 §8.10），不需要调度租约；在任何宿主会话中运行都拒绝。
 
 其余键主会话可以直接修改，事件中记录理由。
 

@@ -92,6 +92,7 @@ tsw 的工具服务在会话启动时载入（DN006 §9.8），用户级 PATH �
 | 产品检出位置；已有检出时是否复用 | 用户级程序目录下的固定位置（Windows：`%LOCALAPPDATA%\TaskSteward\task-steward`） | `install.json`、`product_repo` |
 | 交流语言 | `zh-CN` | `control.language` |
 | 评审器 | 只提供本版本已实现的评审器与不做自评审：`codex-app-server`（默认）、`claude-headless`（tsw 启动的 `claude -p`，DN006 §10.2）、`copilot-cli`（DN006 §10.2a）、`none`（`review.self_review` 为 `off`，DN004 §9）；所选评审器的命令行找不到时 `check` 给出警告（安装照常完成，但任务完成不了自评审，请用户安装并登录）。用户 2026-11-20 决定只提供已实现的评审器（T308，M-T308-9）；T325 加入 Copilot CLI 与不做自评审，T331 把 Claude 评审器从子代理改为 `claude-headless`。早先版本保存的答案 `claude-subagent` 重跑时改为 `claude-headless` 并给出警告 | `roles.reviewer` |
+| 评审模型；推理强度（T330） | 选了评审器（不是 `none`）时问：从该评审器在本机实际可用的模型中选，再从所选模型支持的推理强度中选；预选现有配置或代码默认值（在列表中时），否则宿主自己的默认模型（DN004 §3.4）。取不到列表时说明原因，用户可以输入模型 ID（未核实）。会话入口用 `tsw setup models --reviewer <评审器> --json` 取列表。答案中没有这两项时按预选规则取值 | `roles.reviewer.model`、`roles.reviewer.effort` |
 | 人类渠道：只在会话中，或另加外部渠道 | 只在会话中 | `plugins.human_channels`、`input.channels` |
 | 宿主（session provider） | 列出已实现宿主集成的宿主，只有一个时直接选定 | `plugins.host_integration`、`plugins.sessions` |
 | 是否把 Dashboard 装成登录时启动的服务；端口 | 操作系统支持时是，`47800` | `tsw dashboard install`、`dashboard.port` |

@@ -27,3 +27,16 @@ App Server 无法启动时，用 `codex exec` 非交互执行同一评审包（�
 ## 4. v1 实现细节
 
 - `codex-app-server` 通过 stdio 与 `codex app-server` 通信（不另开端口）。线程在同一周期的各轮之间保留，下一轮按 `review.incremental = resume_thread` 续用上一轮的线程；归档留给 attempt 结束后的清理。评审器进程在 Windows 上挂起启动、放入关闭即终止成员的 Job Object 后再恢复（其他平台为独立进程组），无法放入 Job Object 时在它运行之前结束并报告评审器不可用；结束时关闭输入、等待片刻，然后无论直接子进程是否已退出都结束整个进程树，输出管道只由读取线程关闭。
+
+## 5. 列出可用模型（T330）
+
+DN004 §3.4 的模型列表在 Codex 上用 App Server 的 `model/list`：
+
+1. 启动 `codex app-server`（stdio，与评审相同的进程树），`initialize` 后发 `initialized`。
+2. `model/list`（参数为空对象），结果的 `data` 是模型数组，`nextCursor` 不为 `null` 时带 `cursor` 继续取。
+3. 每个模型取 `id`（即 `thread/start` 的 `model`）、`displayName`、`description`、`supportedReasoningEfforts[].reasoningEffort`、`defaultReasoningEffort`、`isDefault`；`hidden` 为 true 的不列出（`includeHidden` 才会返回它们，是内部或预览模型）。
+4. 关闭输入，结束进程树。
+
+实测（T330，codex-cli 0.163.0，Windows，已登录）：一次调用返回 8 个可见模型，`nextCursor` 为 `null`；`isDefault` 为 `gpt-6.1-sol`；`gpt-6-astra` 在列表中，支持 `low` 到 `max` 五档；有的模型多一档 `ultra`，有的少 `max`，所以推理强度要按模型给出。`includeHidden: true` 另外返回 3 个 `hidden` 模型。整个过程不调用模型。
+
+取不到列表的情形：找不到 `codex`、未登录（`model/list` 报错）、60 秒内没有结果。按 DN004 §3.4 的退路处理。

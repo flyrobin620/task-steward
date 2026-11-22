@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="0059d59f24d28b42944df61da6f166d242bf333eda45e5a2a1cf73fa8f6c12b7">
+<meta name="tsw-source-sha256" content="4a85757adeaac9b350e203b44a2facb5708193b76026225afa6a849a4b3613e0">
 <title>CC004 Claude Code 评审器</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -42,10 +42,10 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 </head>
 <body>
 <div class="layout">
-<nav class="toc"><h2>目录</h2><a class="l2" href="#1-范围">1. 范围</a><a class="l2" href="#2-实测t331claude-code-21302windows">2. 实测（T331，Claude Code 2.1.302，Windows）</a><a class="l2" href="#3-调用约定">3. 调用约定</a><a class="l2" href="#4-结果判定">4. 结果判定</a><a class="l2" href="#5-能力声明">5. 能力声明</a><a class="l2" href="#6-已知限制">6. 已知限制</a><a class="l2" href="#7-验证">7. 验证</a><a class="l2" href="#附录-aclaude-subagent-存档t325-实现t331-删除">附录 A：claude-subagent 存档（T325 实现，T331 删除）</a></nav>
+<nav class="toc"><h2>目录</h2><a class="l2" href="#1-范围">1. 范围</a><a class="l2" href="#2-实测t331claude-code-21302windows">2. 实测（T331，Claude Code 2.1.302，Windows）</a><a class="l2" href="#3-调用约定">3. 调用约定</a><a class="l2" href="#4-结果判定">4. 结果判定</a><a class="l2" href="#5-能力声明">5. 能力声明</a><a class="l2" href="#6-已知限制">6. 已知限制</a><a class="l2" href="#7-验证">7. 验证</a><a class="l2" href="#8-列出可用模型t330">8. 列出可用模型（T330）</a><a class="l2" href="#附录-aclaude-subagent-存档t325-实现t331-删除">附录 A：claude-subagent 存档（T325 实现，T331 删除）</a></nav>
 <main>
 <h1>CC004 Claude Code 评审器</h1>
-<ul><li>状态：设计草案（T242 r2 自 DN004 拆出；T325 改为子代理评审器；T331 改回由 tsw 启动的 <code>claude -p</code>，删除子代理评审器，待用户确认）</li><li>日期：2026-11-21</li><li>实现：<a href="../DN004-worker-self-review.html">DN004 worker 自评审</a> · 能力声明：<a href="../DN006-plugin-layer.html">DN006 §7.3</a></li></ul>
+<ul><li>状态：设计草案（T242 r2 自 DN004 拆出；T325 改为子代理评审器；T331 改回由 tsw 启动的 <code>claude -p</code>，删除子代理评审器；T330 §8 列出可用模型，待用户确认）</li><li>日期：2026-11-21</li><li>实现：<a href="../DN004-worker-self-review.html">DN004 worker 自评审</a> · 能力声明：<a href="../DN006-plugin-layer.html">DN006 §7.3</a></li></ul>
 <h2 id="1-范围">1. 范围</h2>
 <p>本文是 DN004 评审器在 Claude Code 上的实现：会话适配器 <code>claude-headless</code>，同步方式（DN004 §3），tsw 启动 <code>claude -p</code> 非交互进程、等它结束、从 stream-json 输出中读回最终消息并记账。评审包、输出契约、处置规则与轮次计数见 DN004。</p>
 <p>用户的选择（T331，2026-11-21，主会话）：“评审器由 tsw 自己启动并读回结果，然后记账，结果不经过 worker 的手。&gt;&gt; 核心点在这里。reviewer是由tsw启动的。所以codex和copilot-cli就都是对的。所以正确的改法其实是换回claude-headless， 由tsw启动，就行了？”，随后“F-T325-3 转任务，删掉 claude-subagent”。T325 的子代理评审器（<code>claude-subagent</code>）因此删除，存档于附录 A。</p>
@@ -72,6 +72,14 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <ul><li>会话记录写在用户的 Claude Code 目录（<code>~/.claude/projects/</code> 下按工作目录命名的子目录），与 Codex 线程、Copilot 会话记录相同，tsw 不清理。</li><li>评审器不能运行命令：不跑测试，不运行 <code>git</code>，靠 <code>rK-diff.patch</code> 与读文件评审（DN004 §3.1）。</li><li>认证只来自用户自己的 Claude Code 登录或用户设置：只在宿主（桌面 app）里登录、命令行从未登录的机器上每轮失败，错误信息提示在终端运行一次 <code>claude</code> 登录。用户在系统环境中设置的 <code>ANTHROPIC_*</code>、<code>CLAUDE_*</code> 变量同样被清除，要写进用户设置的 <code>env</code>。</li><li>管理策略（managed settings）仍然生效：它固定了别的模型时，每轮按模型不一致失败，用户把 <code>roles.reviewer.model</code> 改为策略允许的模型。</li></ul>
 <h2 id="7-验证">7. 验证</h2>
 <ul><li>conformance / surface：以录制的 stream-json（来自 §2 的实测，去掉正文与本机路径）回放，覆盖完成、续用、模型不一致（含别名与家族）、<code>is_error</code>、非 JSON、会话 ID 不一致、超时，以及命令行参数（只读工具、隔离选项、清除的环境变量）。</li><li>live（<code>python tools/live.py reviewer --reviewer claude-headless</code>）：真实 <code>claude -p</code> 在固定样例上做一次全量与一次增量评审，核对只读（执行目录与 <code>.git</code> 不变）、续用与输出契约。</li></ul>
+<h2 id="8-列出可用模型t330">8. 列出可用模型（T330）</h2>
+<p>DN004 §3.4 的模型列表在 Claude Code 上用 <code>claude -p</code> 的控制协议：Agent SDK 的 <code>supportedModels()</code> 就是向命令行发控制请求 <code>initialize</code>，从回应中取 <code>models</code>。</p>
+<pre><code class="lang-text">claude -p --input-format stream-json --output-format stream-json --verbose
+       --tools Read --permission-mode dontAsk --strict-mcp-config --safe-mode --setting-sources user</code></pre>
+<ol><li>环境变量与工作目录按 §3 清理与选择（<code>CLAUDE*</code>、<code>ANTHROPIC*</code>、<code>TSW*</code> 删除，用户设置中的认证与网关照常），所以列表就是评审进程能用的模型。</li><li>向 stdin 写一行 <code>{&quot;type&quot;: &quot;control_request&quot;, &quot;request_id&quot;: &lt;ID&gt;, &quot;request&quot;: {&quot;subtype&quot;: &quot;initialize&quot;}}</code>，等 <code>type</code> 为 <code>control_response</code>、<code>request_id</code> 相同的一行。</li><li><code>response.response.models</code> 是模型数组：<code>value</code>（<code>--model</code> 接受的值，即写进配置的 ID）、<code>resolvedModel</code>、<code>displayName</code>、<code>description</code>、<code>supportedEffortLevels</code>。</li><li>不发送任何用户消息，关闭输入，结束进程树。</li></ol>
+<p>列表处理：去掉 <code>value</code> 为 <code>default</code> 的项（随用户的默认模型变化，§3 总是显式传模型）；别名（<code>sonnet</code>、<code>opus</code>、<code>haiku</code>、<code>fable</code>）照列表原样给出，名称旁附 <code>resolvedModel</code>，选别名时写别名，结果判定按 §4 的家族规则。</p>
+<p>实测（T330，Claude Code 2.1.302，Windows，用户设置中配置了网关）：回应在启动后几秒内到达，<code>models</code> 有 8 项：<code>default</code>、四个别名（<code>resolvedModel</code> 分别为 <code>claude-opus-5-5[1m]</code>、<code>claude-fable-5-1</code>、<code>claude-sonnet-5-5[1m]</code>、<code>claude-haiku-5-5[1m]</code>）与三个网关提供的完整 ID；每项都有 <code>supportedEffortLevels</code>（<code>low</code> 到 <code>max</code>）。没有发送消息，不调用模型，也没有在用户的 Claude Code 目录留下会话记录。回应中还有账号信息（<code>account</code>），tsw 不读取、不记录。</p>
+<p>取不到列表的情形：找不到 <code>claude</code>、60 秒内没有回应、回应中没有 <code>models</code>。未登录的命令行是否仍返回列表未验证；即使返回，评审时也会按 §6 失败。按 DN004 §3.4 的退路处理。</p>
 <h2 id="附录-aclaude-subagent-存档t325-实现t331-删除">附录 A：<code>claude-subagent</code> 存档（T325 实现，T331 删除）</h2>
 <p>T325 把 Claude 评审器做成 worker 会话中的只读子代理（用户 T308 会话 M-T308-10：“claude 自己的reviewer用subagent做就可以了，不用专门用claude headless或者cli”）。做法：</p>
 <ul><li>插件提供子代理 <code>agents/reviewer.md</code>（宿主中的名称为 <code>task-steward:reviewer</code>），<code>tools: Read, Grep, Glob</code>，<code>disallowedTools</code> 排除命令、编辑、子代理与工作流工具；不写 <code>model</code>。</li><li><code>review_run</code> 开轮、写好请求后立即返回启动指示（<code>status: awaiting_agent</code>，<code>agent</code> 中有子代理类型、模型别名、effort、描述与只指向请求文件的提示）；worker 用 <code>Agent</code> 工具原样启动，子代理结束后再带 <code>round</code> 与 <code>result</code>（子代理最终回复原文）或 <code>error</code>、<code>agent_id</code> 调用 <code>review_run</code>，tsw 按同样的规则解析、校验并记账。</li><li>模型只能是 <code>Agent</code> 工具接受的别名，tsw 拿不到子代理实际使用的模型；每轮新子代理，全量范围并附上一轮处置与增量 diff。</li></ul>

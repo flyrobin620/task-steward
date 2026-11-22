@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="aa59ec8728ec98ee098897085322c346a61a3a771ffc3a1aa9045a3cd44bebc7">
+<meta name="tsw-source-sha256" content="d27ce1013b16236524e00d1f17e3db2b44d4576162c789fe457a7fbe69475ae3">
 <title>CP004 Copilot CLI 评审器</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -42,10 +42,10 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 </head>
 <body>
 <div class="layout">
-<nav class="toc"><h2>目录</h2><a class="l2" href="#1-范围">1. 范围</a><a class="l2" href="#2-实测t325copilot-cli-10112windows">2. 实测（T325，Copilot CLI 1.0.112，Windows）</a><a class="l2" href="#3-调用约定">3. 调用约定</a><a class="l2" href="#4-结果判定">4. 结果判定</a><a class="l2" href="#5-能力声明">5. 能力声明</a><a class="l2" href="#6-已知限制">6. 已知限制</a><a class="l2" href="#7-验证">7. 验证</a></nav>
+<nav class="toc"><h2>目录</h2><a class="l2" href="#1-范围">1. 范围</a><a class="l2" href="#2-实测t325copilot-cli-10112windows">2. 实测（T325，Copilot CLI 1.0.112，Windows）</a><a class="l2" href="#3-调用约定">3. 调用约定</a><a class="l2" href="#4-结果判定">4. 结果判定</a><a class="l2" href="#5-能力声明">5. 能力声明</a><a class="l2" href="#6-已知限制">6. 已知限制</a><a class="l2" href="#7-验证">7. 验证</a><a class="l2" href="#8-列出可用模型t330">8. 列出可用模型（T330）</a></nav>
 <main>
 <h1>CP004 Copilot CLI 评审器</h1>
-<ul><li>状态：设计草案（T325，待用户确认）</li><li>日期：2026-11-21</li><li>实现：<a href="../DN004-worker-self-review.html">DN004 worker 自评审</a> · 能力声明：<a href="../DN006-plugin-layer.html">DN006 §7.3</a></li></ul>
+<ul><li>状态：设计草案（T325；T330 §8 列出可用模型，待用户确认）</li><li>日期：2026-11-21</li><li>实现：<a href="../DN004-worker-self-review.html">DN004 worker 自评审</a> · 能力声明：<a href="../DN006-plugin-layer.html">DN006 §7.3</a></li></ul>
 <h2 id="1-范围">1. 范围</h2>
 <p>本文是 DN004 评审器在 GitHub Copilot CLI 上的实现：会话适配器 <code>copilot-cli</code>，同步方式（DN004 §3），tsw 启动 <code>copilot -p</code> 非交互进程、等它结束、从 JSONL 输出中读回最终消息。它只做评审，不承载 worker（Copilot app 的宿主集成见 T277 的研究，另行设计）。评审包、输出契约、处置规则与轮次计数见 DN004。</p>
 <h2 id="2-实测t325copilot-cli-10112windows">2. 实测（T325，Copilot CLI 1.0.112，Windows）</h2>
@@ -65,9 +65,17 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <h2 id="5-能力声明">5. 能力声明</h2>
 <table><thead><tr><th>能力</th><th>值</th><th>说明</th></tr></thead><tbody><tr><td><code>execution</code></td><td><code>direct</code></td><td>tsw 直接启动进程</td></tr><tr><td><code>oneshot</code> / <code>oneshot_via</code></td><td>是 / <code>process</code></td><td>—</td></tr><tr><td><code>read_only_enforced</code></td><td>是</td><td><code>--available-tools</code> 与 <code>--deny-tool</code></td></tr><tr><td><code>incremental</code></td><td>是</td><td><code>--resume</code></td></tr><tr><td>其他</td><td>不承载 worker，用户不能直接对话，无唤醒</td><td>—</td></tr></tbody></table>
 <h2 id="6-已知限制">6. 已知限制</h2>
-<ul><li>会话记录写在用户的 Copilot 目录（<code>~/.copilot/session-state/</code>），与 Codex 线程留在 Codex 目录相同；tsw 不清理。</li><li>评审器不能运行命令：不跑测试，不运行 <code>git</code>，靠 <code>rK-diff.patch</code> 与读文件评审（DN004 §3.1）。</li><li>管理策略固定的模型只能照用：<code>roles.reviewer.model</code> 必须写成策略允许的那一个，否则每轮都失败。</li><li>用户级 MCP server 仍会启动（只是工具被禁用），首次启动可能要十几秒。</li></ul>
+<ul><li>会话记录写在用户的 Copilot 目录（<code>~/.copilot/session-state/</code>），与 Codex 线程留在 Codex 目录相同；tsw 不清理。</li><li>评审器不能运行命令：不跑测试，不运行 <code>git</code>，靠 <code>rK-diff.patch</code> 与读文件评审（DN004 §3.1）。</li><li>管理策略固定的模型只能照用：<code>roles.reviewer.model</code> 必须写成策略允许的那一个，否则每轮都失败。T330 实测时本机已没有这项策略（§8）。</li><li>用户级 MCP server 仍会启动（只是工具被禁用），首次启动可能要十几秒。</li></ul>
 <h2 id="7-验证">7. 验证</h2>
 <ul><li>conformance / surface：以录制的 JSONL（来自 §2 的实测，去掉正文与本机路径）回放，覆盖完成、续用、模型被替换、<code>session.error</code>、非 JSON、超时。</li><li>live（<code>python tools/live.py reviewer --reviewer copilot-cli</code>）：真实 Copilot CLI 在固定样例上做一次全量与一次增量评审，核对只读与输出契约。</li></ul>
+<h2 id="8-列出可用模型t330">8. 列出可用模型（T330）</h2>
+<p>DN004 §3.4 的模型列表在 Copilot CLI 上用它的 ACP 服务（Agent Client Protocol，<code>copilot --acp</code>，stdio JSON-RPC）：</p>
+<ol><li>启动 <code>copilot --acp --no-auto-update --disable-builtin-mcps</code>，工作目录为一个空的临时目录。</li><li><code>initialize</code>（<code>protocolVersion: 1</code>，客户端不提供文件与终端能力），再 <code>session/new</code>（<code>cwd</code> 为同一临时目录，<code>mcpServers</code> 为空）。</li><li>结果的 <code>models.availableModels</code> 是可用模型（<code>modelId</code>、<code>name</code>、<code>description</code>，<code>_meta.copilotEnablement</code> 为 <code>enabled</code>），<code>models.currentModelId</code> 是 Copilot 自己的当前默认；<code>configOptions</code> 中 <code>id</code> 为 <code>reasoning_effort</code> 的选项是可选的推理强度。</li><li><code>session/close</code>，关闭输入，结束进程树。</li></ol>
+<p>列表处理：<code>modelId</code> 去重；去掉 <code>auto</code>（每次由 Copilot 挑模型，DN004 §3.4）；推理强度对所有模型相同（ACP 只给会话级的选项）。</p>
+<p>实测（T330，Copilot CLI 1.0.114，Windows，已登录）：</p>
+<table><thead><tr><th>项</th><th>结果</th></tr></thead><tbody><tr><td>列表</td><td><code>session/new</code> 返回 17 项（含两个 <code>auto</code>），<code>currentModelId</code> 为 <code>gpt-6.2-sol</code>；<code>reasoning_effort</code> 的选项为 <code>low</code> 到 <code>max</code> 五档。不调用模型</td></tr><tr><td>与实际调用一致</td><td>用列表中的 <code>gpt-6.2-sol</code> 运行 <code>copilot -p</code>，<code>assistant.message</code> 的 <code>model</code> 就是 <code>gpt-6.2-sol</code>，没有 <code>session.model_change</code>（<code>managed_settings</code>）：T325 时把模型固定为 <code>gpt-6.1-sol</code> 的管理策略在本机已不存在，这正是 F-T325-2 的情形（写死的模型会过时）</td></tr><tr><td>不存在的模型</td><td><code>copilot -p --model &lt;不存在&gt;</code> 以 <code>session.error</code>“Model … is not available” 失败，不列出可用模型，所以不能用它取列表</td></tr><tr><td><code>copilot help config</code></td><td>列出 CLI 内置的模型清单，与本机账号可用的模型不同（含本机不可用的 Claude 模型），不采用</td></tr><tr><td>留下的记录</td><td><code>session/new</code> 在 <code>~/.copilot/session-state/</code> 留下一个空会话目录，<code>session/close</code> 后仍在；与评审会话记录相同，tsw 不清理（§6）</td></tr></tbody></table>
+<p>未能验证：管理策略固定模型时 <code>availableModels</code> 是否只剩策略允许的模型（本机已无此策略）。所以列表可能比实际可用的多；选了被策略替换的模型时，评审按 §4 判失败，错误写明实际模型，用户再改。</p>
+<p>取不到列表的情形：找不到 <code>copilot</code>、未登录（<code>session/new</code> 报认证错误）、60 秒内没有结果。按 DN004 §3.4 的退路处理。</p>
 <footer>本页由同目录的 <a href="CP004-reviewer.md">CP004-reviewer.md</a> 生成，内容与 Markdown 版本一致。</footer>
 </main>
 </div>

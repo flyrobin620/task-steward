@@ -1,6 +1,6 @@
 # DN004 worker 自评审：评审与迭代决策
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T325 修订评审器实现与可关闭的自评审；T331 Claude 评审器改为由 tsw 启动的 `claude-headless`，删除子代理方式，待用户确认）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T325 修订评审器实现与可关闭的自评审；T331 Claude 评审器改为由 tsw 启动的 `claude-headless`，删除子代理方式；T330 §3.4 评审模型的列表与选择，待用户确认）
 - 日期：2026-11-05
 - 相关：[DN002 任务状态机 §3.3](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · 实现：[CX004 Codex 评审器](codex/CX004-reviewer.md) · [CC004 Claude Code 评审器](claude-code/CC004-reviewer.md) · [CP004 Copilot CLI 评审器](copilot/CP004-reviewer.md)
 
@@ -79,6 +79,45 @@ worker 完成任务成果后，**由 worker 自己**启动配置的只读评审�
 - 评审包和结果由 tsw 写入该 attempt 的 `runs/Txxx/aN/review/`（worker 不直接写 `runs/`，见 DN006 §9.4）。
 - 一次性线程与评审进程不进入调度、不绑定任务、不占用 `max_workers` 名额。每个 attempt 的 reviewer 线程只服务于该 attempt，不跨任务复用。
 - 独立性：评审器有自己的上下文，只看到评审请求与它自己读到的文件，不继承 worker 的对话。与 worker 同一宿主的评审器（`claude-headless`）应选与 worker 不同的模型（相同时配置校验警告）。
+
+### 3.4 评审模型的选择（T330）
+
+用户 2026-11-21（主会话，针对 F-T325-2）：“评审模型应该是一个config（不止针对copilot-cli reviewer），安装时用户可以选择（更新安装体验）。更换时用户也可以选择（cli + chat）。应当使用合理的model list方法给一个list让用户选择。”
+
+**配置**：`roles.reviewer.model` 与 `roles.reviewer.effort`（DN003 §3.1）对所有评审器通用，是本节唯一的配置，不新增键。tsw 不再为某个评审器写死模型：安装与更换时都从所选评审器在本机实际可用的模型中选。代码中的默认值（`codex-app-server` 为 `gpt-6-astra` / `medium`，`claude-headless` 为 `claude-sonnet-5-5` / `high`，`copilot-cli` 为 `gpt-6.1-sol` / `medium`）只在两处起作用：列表中有它时作为预选项，以及取不到列表时的建议值。
+
+**取得模型列表**：tsw 对一种评审器启动它的命令行（可执行文件按 `roles.reviewer.executable`，进程树与评审相同，超时 60 秒），用宿主公开的列模型方法读回列表。只做握手与查询，**不调用模型、不计费**。每种评审器的方法与实测见实现文档：
+
+| 评审器 | 方法 | 推理强度从哪里来 | 不列出的项 | 实现文档 |
+| --- | --- | --- | --- | --- |
+| `codex-app-server` | `codex app-server` 的 JSON-RPC `model/list`（按 `nextCursor` 分页） | 每个模型的 `supportedReasoningEfforts` 与 `defaultReasoningEffort` | `hidden` 的模型 | [CX004 §5](codex/CX004-reviewer.md) |
+| `copilot-cli` | `copilot --acp`（Agent Client Protocol）的 `initialize` 与 `session/new`，读 `models.availableModels` | `configOptions` 中 `reasoning_effort` 的选项（会话级，不按模型区分） | `auto`：每次由 Copilot 挑模型，与“实际模型须与配置一致”（§3.1）矛盾 | [CP004 §8](copilot/CP004-reviewer.md) |
+| `claude-headless` | `claude -p --input-format stream-json` 的控制请求 `initialize`（Agent SDK 的 `supportedModels()` 用的同一请求），读 `models`；隔离选项与环境变量与评审相同，所以用户设置中的网关决定列表 | 每个模型的 `supportedEffortLevels` | `default`：随用户的默认模型变化，评审总是显式传模型（CC004 §3） | [CC004 §8](claude-code/CC004-reviewer.md) |
+
+统一的结果：每个模型的 `id`（写进 `roles.reviewer.model` 的值，就是命令行 `--model` 接受的值）、名称、说明、支持的推理强度与默认推理强度，以及宿主自己的默认模型。
+
+**取不到列表时**（命令行不存在、未登录、超时、输出不是预期的协议）：不阻断安装与更换，给出原因。用户可以自己输入模型 ID（安装时建议值为现有配置或代码默认值），它标为“未核实”：第一轮评审按 §3.1 核实，模型不可用即判本轮失败，不回退。取到了列表而用户给的模型不在其中时拒绝（拼错，或宿主的策略不允许），除非用户明确要求写入列表外的模型（命令行 `--unlisted`）：宿主的列表可能不全（例如 Copilot 的管理策略只在调用时生效，CP004 §8）。
+
+**推理强度**：只能选所选模型支持的强度。预选顺序：现有配置（模型支持时）、代码默认值（模型支持时）、模型自己的默认强度。
+
+**安装**（DN009 §6）：评审器之后再问两项，选 `none`（不做自评审）时不问：
+
+1. 评审模型：从所选评审器的列表中选；预选现有配置或代码默认值（在列表中时），否则宿主自己的默认模型。
+2. 推理强度：从所选模型支持的强度中选。
+
+终端入口用方向键选择（DN009 §16）；会话入口由 setup skill 在用户回答评审器之后运行 `tsw setup models --reviewer <评审器> --json` 取列表，再在对话中问。答案 `reviewer_model`、`reviewer_effort` 写到 `roles.reviewer.model` / `effort`（`codex-app-server` 也写入，显式记下用户的选择）。答案文件中没有这两项（早先版本保存的答案、非交互的 `install --answers`）时按上面的预选规则取值，取不到列表时用代码默认值并给出警告。已有数据目录时安装不改配置（DN009 §5 第 3 步），只报告差异；改用下面的更换方式。
+
+**更换：命令行**（用户本人在会话外的终端，DN006 §8.10）：
+
+- `tsw reviewer models [--reviewer <评审器>] [--json]`：只读，列出模型与支持的推理强度，标出当前配置；缺省为当前配置的评审器。
+- `tsw reviewer set [--reviewer <评审器>] [--model <模型>] [--effort <强度>] [--unlisted] [--yes]`：没有给出的项在终端中用方向键选择（非交互运行时必须给全）；显示改动前后的值，确认后写入 `roles.reviewer.session` / `model` / `effort`（换评审器时 `fallback_session` 置为 `null`）。写入与 `config_change` 是同一实现：完整校验、`config.changed` 事件、原子替换文件（DN003 §7.1）。`roles.reviewer` 是权限类键：用户本人在终端运行这条命令就是授权，来源由 tsw 记为渠道 `user-cli`（`text` 为命令行本身），与 `tsw task accept` 相同；在任何宿主会话中运行都拒绝。不需要调度租约。
+
+**更换：主会话 chat**：
+
+- 只读 MCP 工具 `reviewer_models`（主会话）：输入可选的 `reviewer`，返回同样的列表、当前配置、配置文件摘要，以及写入用的 `ops` 模板。
+- 用户在主会话中要求更换评审器、模型或推理强度时，主会话调用它，把选项交给用户选（Claude app 中用 `wrap_up` 的按钮，选项多时列出编号），不替用户选；再以用户选择时的原话为 `user_source` 调用 `config_change`（权限类键，DN003 §7.2）。orchestrate skill 写明这一做法。
+
+**生效**：与其他配置相同，只影响之后开始的评审轮次；正在进行的一轮沿用开轮时的评审器与模型（§3.2）。
 
 ## 4. 输出契约
 
@@ -215,4 +254,6 @@ worker 的 `result.md` / `result.html` 增加“自评审”一节：
 | --- | --- | --- |
 | 没有 Codex 时的 Claude 评审器（§3.1，T331） | `claude-headless`：tsw 以 `claude -p` 启动只读进程，读回结果并记账（[CC004](claude-code/CC004-reviewer.md)） | `claude-subagent`（T325 实现，T331 删除，存档于 [CC004 附录 A](claude-code/CC004-reviewer.md)）：worker 用 Agent 工具启动插件提供的只读子代理，再把子代理的最终消息交回 `review_run`。当时用户在 T308 会话中选择子代理（M-T308-10：“claude 自己的reviewer用subagent做就可以了，不用专门用claude headless或者cli”）。删除的原因：结果经 worker 转交，worker 可以改写或伪造；tsw 也拿不到子代理实际使用的模型。用户 2026-11-21：“评审器由 tsw 自己启动并读回结果，然后记账，结果不经过 worker 的手。>> 核心点在这里。reviewer是由tsw启动的。所以codex和copilot-cli就都是对的。所以正确的改法其实是换回claude-headless， 由tsw启动，就行了？”“F-T325-3 转任务，删掉 claude-subagent” |
 | 子代理结果的取回（T325，随 `claude-subagent` 删除） | worker 把子代理最终消息原文交回 `review_run` | 插件的 SubagentStop hook 从子代理记录中直接取结果：要解析宿主内部的子代理记录格式。两者都随子代理方式一起不再适用 |
+| 评审模型列表的来源（§3.4，T330） | 各宿主公开的列模型方法：Codex `model/list`、Copilot ACP `session/new`、Claude 控制请求 `initialize`；都不调用模型 | 代码中的固定清单：宿主更新与组织策略会让它过时（F-T325-2 的起因）；`copilot help config` 列出的模型：是 CLI 内置的清单，不反映本机账号可用的模型；Copilot 不存在模型时的报错：只说“不可用”，不列出可用模型（T330 实测）；Anthropic `GET /v1/models`：需要 API 密钥，不走用户设置中的网关，与 `claude -p` 实际可用的模型不一致；每次加载配置或每轮评审前核对列表：要启动宿主命令行，太慢，模型不可用时评审本来就会失败 |
+| 命令行更换评审模型的授权（§3.4，T330） | `tsw reviewer set` 记为 `user-cli` 渠道的用户本人操作（与 `tsw task accept` 相同） | 只在主会话中更换：用户要求“cli + chat”都能换；`tsw tool run config_change --role orchestrator` 加手写的 `user_source`：要持有调度租约，并要用户手写来源 JSON |
 | 关闭自评审的粒度（§9，T325） | 全局与按仓库的配置，权限类键 | 按任务（主会话受理时指定）：主会话能自行关闭评审，越过用户的授权；“可选评审”（不要求评审，但做了的轮次仍约束提交）：规则更复杂，用户只要求了不做自评审的选项 |

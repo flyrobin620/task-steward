@@ -1,6 +1,6 @@
 # CC004 Claude Code 评审器
 
-- 状态：设计草案（T242 r2 自 DN004 拆出；T325 改为子代理评审器；T331 改回由 tsw 启动的 `claude -p`，删除子代理评审器，待用户确认）
+- 状态：设计草案（T242 r2 自 DN004 拆出；T325 改为子代理评审器；T331 改回由 tsw 启动的 `claude -p`，删除子代理评审器；T330 §8 列出可用模型，待用户确认）
 - 日期：2026-11-21
 - 实现：[DN004 worker 自评审](../DN004-worker-self-review.md) · 能力声明：[DN006 §7.3](../DN006-plugin-layer.md)
 
@@ -82,6 +82,26 @@ claude -p <提示> --output-format stream-json --verbose
 
 - conformance / surface：以录制的 stream-json（来自 §2 的实测，去掉正文与本机路径）回放，覆盖完成、续用、模型不一致（含别名与家族）、`is_error`、非 JSON、会话 ID 不一致、超时，以及命令行参数（只读工具、隔离选项、清除的环境变量）。
 - live（`python tools/live.py reviewer --reviewer claude-headless`）：真实 `claude -p` 在固定样例上做一次全量与一次增量评审，核对只读（执行目录与 `.git` 不变）、续用与输出契约。
+
+## 8. 列出可用模型（T330）
+
+DN004 §3.4 的模型列表在 Claude Code 上用 `claude -p` 的控制协议：Agent SDK 的 `supportedModels()` 就是向命令行发控制请求 `initialize`，从回应中取 `models`。
+
+```text
+claude -p --input-format stream-json --output-format stream-json --verbose
+       --tools Read --permission-mode dontAsk --strict-mcp-config --safe-mode --setting-sources user
+```
+
+1. 环境变量与工作目录按 §3 清理与选择（`CLAUDE*`、`ANTHROPIC*`、`TSW*` 删除，用户设置中的认证与网关照常），所以列表就是评审进程能用的模型。
+2. 向 stdin 写一行 `{"type": "control_request", "request_id": <ID>, "request": {"subtype": "initialize"}}`，等 `type` 为 `control_response`、`request_id` 相同的一行。
+3. `response.response.models` 是模型数组：`value`（`--model` 接受的值，即写进配置的 ID）、`resolvedModel`、`displayName`、`description`、`supportedEffortLevels`。
+4. 不发送任何用户消息，关闭输入，结束进程树。
+
+列表处理：去掉 `value` 为 `default` 的项（随用户的默认模型变化，§3 总是显式传模型）；别名（`sonnet`、`opus`、`haiku`、`fable`）照列表原样给出，名称旁附 `resolvedModel`，选别名时写别名，结果判定按 §4 的家族规则。
+
+实测（T330，Claude Code 2.1.302，Windows，用户设置中配置了网关）：回应在启动后几秒内到达，`models` 有 8 项：`default`、四个别名（`resolvedModel` 分别为 `claude-opus-5-5[1m]`、`claude-fable-5-1`、`claude-sonnet-5-5[1m]`、`claude-haiku-5-5[1m]`）与三个网关提供的完整 ID；每项都有 `supportedEffortLevels`（`low` 到 `max`）。没有发送消息，不调用模型，也没有在用户的 Claude Code 目录留下会话记录。回应中还有账号信息（`account`），tsw 不读取、不记录。
+
+取不到列表的情形：找不到 `claude`、60 秒内没有回应、回应中没有 `models`。未登录的命令行是否仍返回列表未验证；即使返回，评审时也会按 §6 失败。按 DN004 §3.4 的退路处理。
 
 ## 附录 A：`claude-subagent` 存档（T325 实现，T331 删除）
 
