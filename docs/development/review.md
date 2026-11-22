@@ -10,8 +10,9 @@
   编排器派发的任务用 `review_run`（`tsw review run`）。默认是 `codex-app-server`（Codex `gpt-6-astra`，
   推理强度 medium，只读沙箱）。作者本身是 Codex 时，把 `roles.reviewer.session` 改为 `claude-headless`
   （`claude -p`，[CC004](../design/claude-code/CC004-reviewer.md)）或 `copilot-cli`（`copilot -p`，
-  [CP004](../design/copilot/CP004-reviewer.md)）。不在 tsw 任务中的作者，按对应文档 §3 的调用约定直接
-  运行同样的只读命令。
+  [CP004](../design/copilot/CP004-reviewer.md)），同时把 `roles.reviewer.model` 改为该评审器支持、与作者
+  不同的模型（默认的 `gpt-6-astra` 不能用于这两种评审器，模型约定见对应文档 §4）。不在 tsw 任务中的
+  作者，按对应文档 §3 的调用约定直接运行同样的只读命令。
 - 评审请求写明意图、必须保持的不变量、刻意的取舍，以及评审的提交 SHA，避免取舍被当作问题反复提出。
 - 评审意见是假设。核对：
   - 能否经受支持的入口触发，包括它需要的并发、失败或恢复序列；
