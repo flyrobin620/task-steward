@@ -63,6 +63,10 @@ def test_the_worker_hook_records_workdeck_words_but_not_host_notices(home: Home)
     session = str(worker.session_id)
     assert hook(h, session, "UserPromptSubmit", IDLE) is None
     assert hook(h, session, "UserPromptSubmit", HELD) is None
+    # The session's first prompt, written by the orchestrator, may reach the hook after the
+    # binding (T332 live): it is not the user's words either.
+    first = "Background (from the session that started this one):\n任务标题：T001\n\nTask:\n"
+    assert hook(h, session, "UserPromptSubmit", first + "# TaskSteward worker\n…") is None
     # What the hook receives from workdeck is the bare text (T327 E8): recorded as the user's.
     hint = hook(h, session, "UserPromptSubmit", "导出也要支持 CSV")
     assert hint is not None and "M-T001-1" in hint["hookSpecificOutput"]["additionalContext"]

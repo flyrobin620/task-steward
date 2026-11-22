@@ -68,6 +68,12 @@ AUTOMATED_PREFIXES = (
     # sender subscribed to, or a message that was held, dropped or refused on the way.
     "[Cross-session idle notice]",
     "[Cross-session delivery notice]",
+    # The first prompt of a session the orchestrator started: the app puts the start_session
+    # background in front of it, and the prompt itself opens with the worker instructions
+    # (plugin/roles/worker.md). The orchestrator wrote it, not the user; it may reach the hook
+    # after the attempt is bound (T332 live: recorded as M-T001-1 before this marker).
+    "Background (from the session that started this one)",
+    "# TaskSteward worker",
 )
 # A message the user sends through the workdeck portal reaches the session as plain text, with no
 # marker: it is the user's own words (DN006 §8.11) and is recorded like what the user types. Never

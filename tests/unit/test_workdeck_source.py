@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from tests.support import REPO_ROOT
 from tsw.errors import TswError
 from tsw.machine import guards
 from tsw.machine.ask_user import AUTOMATED_PREFIXES, is_automated
@@ -77,6 +78,28 @@ def test_the_direct_channels_take_no_via() -> None:
 )
 def test_the_hosts_cross_session_notices_are_not_the_users_words(prompt: str) -> None:
     assert is_automated(prompt)
+
+
+FIRST = "Background (from the session that started this one):\n任务标题：T001\n\nTask:\n"
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        FIRST + "# TaskSteward worker\n\n你是 TaskSteward 任务的 worker 子会话。",
+        "# TaskSteward worker\n\n你是 TaskSteward 任务的 worker 子会话。",
+        REMINDER + FIRST,
+    ],
+)
+def test_the_first_prompt_the_orchestrator_wrote_is_not_the_users_words(prompt: str) -> None:
+    """T332 live: the first prompt of a worker the orchestrator started reached the hook after
+    the binding and was recorded as the user's message."""
+    assert is_automated(prompt)
+
+
+def test_the_worker_instructions_open_with_the_marker() -> None:
+    worker = (REPO_ROOT / "plugin" / "roles" / "worker.md").read_text(encoding="utf-8")
+    assert is_automated(worker)
 
 
 @pytest.mark.parametrize(

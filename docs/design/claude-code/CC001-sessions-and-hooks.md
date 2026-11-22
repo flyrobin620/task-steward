@@ -91,6 +91,8 @@ hooks 是防错护栏，不是安全边界（DN008）；skill 和 CLAUDE.md 只�
 | `<system-reminder` | 去掉完整块后仍以它开头（未闭合的 reminder） | T240 |
 | `[Cross-session idle notice]` | 宿主告诉会话：它订阅的另一会话已空闲，或订阅已过期 | T332（F-T327-9；之前被记成了用户消息，M-T327-1） |
 | `[Cross-session delivery notice]` | 宿主告诉会话：它发出的消息被对方扣留、丢弃或拒收 | T332（F-T327-9） |
+| `Background (from the session that started this one)` | 主会话用 `start_session` 创建的会话的首条提示：app 把 `background` 放在 prompt 前面 | T332（live 中 worker 的首条提示在绑定之后才到达 hook，被记成了用户消息 M-T001-1） |
+| `# TaskSteward worker` | 同上、没有 `background` 时：prompt 以 worker 说明（`plugin/roles/worker.md`）开头 | T332 |
 
 workdeck 消息没有任何标记，所以 hook 把它与用户输入同样对待：worker 会话中记为 `input.session_message`，主会话中这一轮记为用户的 turn。这正是 DN006 §8.11 要的结果；不要为 workdeck 消息加标记或前缀。
 
