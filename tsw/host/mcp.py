@@ -40,6 +40,7 @@ from tsw.machine.config_tools import CONFIG_TOOLS
 from tsw.machine.model import loads, row_dict, task
 from tsw.machine.runner import run_tool
 from tsw.machine.schemas import SCHEMAS, SOURCE
+from tsw.review import models as reviewer_models
 from tsw.review.run import run_round
 from tsw.storage.fs import FsStorage, atomic_write
 from tsw.tasks import task_row
@@ -109,6 +110,21 @@ HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
         "有效配置、每个值的来源、校验问题，以及配置文件的 sha256"
         "（config_change 的 user_source 要用）",
         EMPTY,
+    ),
+    "reviewer_models": (
+        ("orchestrator",),
+        "只读：评审器在本机可用的模型与推理强度、当前配置与 config_change 的写法（DN004 §3.4）；"
+        "用户要更换评审器、评审模型或推理强度时先调用，把选项交给用户选",
+        {
+            "type": "object",
+            "properties": {
+                "reviewer": {
+                    "type": "string",
+                    "enum": ["codex-app-server", "claude-headless", "copilot-cli"],
+                    "description": "评审器；缺省为当前配置的",
+                }
+            },
+        },
     ),
     "config_history": (
         ("orchestrator",),
@@ -765,6 +781,23 @@ class Server:
                 "problems": config.problems,
                 "warnings": config.warnings,
                 "file_sha256": confedit.text_sha(current),
+            }
+        if name == "reviewer_models":
+            reviewer = _opt_str(args, "reviewer")
+            offered = reviewer_models.offer(config.values, reviewer)
+            target = offered["reviewer"]
+            picked = offered["preselected"]
+            return {
+                **offered,
+                "file_sha256": confedit.text_sha(confedit.read_text(self.home)),
+                "how": "把 models 交给用户选（Claude app 中用 wrap_up 的按钮，多时列出编号），"
+                "不替用户选；推理强度只能是所选模型的 efforts 之一。再调用 config_change："
+                "ops 用 example_ops 的形式换成用户选的值，roles.reviewer 是权限类键，"
+                "user_source 为用户选择时的原话，target 为 "
+                '["config", file_sha256, "authorize"]（DN003 §7.2）',
+                "example_ops": reviewer_models.ops(
+                    config.values, target, str(picked["model"] or ""), str(picked["effort"] or "")
+                ),
             }
         if name == "config_history":
             change_id = _opt_str(args, "change_id")

@@ -22,6 +22,9 @@ CONFIG_TOOLS = ("config_change", "config_revert")
 # The user authorizes a configuration change in the orchestrator's session or a human channel;
 # a worker session (``in-session``) cannot authorize the orchestrator's configuration.
 CONFIG_CHANNELS = ("main-session", "teams-chat", "hub-portal")
+# The user's own command in a terminal outside any session (``tsw reviewer set``, DN004 §3.4):
+# its source is recorded by tsw itself, never taken from a tool's input (DN006 §8.10).
+USER_CLI = "user-cli"
 
 
 def _cmd(env: ToolEnv, op: str, inp: Mapping[str, Any], build: Any) -> Command:
@@ -67,6 +70,7 @@ def _change_event(
     after_text: str | None,
     after: Mapping[str, Any],
     extra: Mapping[str, Any],
+    channels: tuple[str, ...] = CONFIG_CHANNELS,
 ) -> EventDraft:
     candidate = load_config(ctx.home, main_layer=dict(after))
     if not candidate.valid:
@@ -83,7 +87,7 @@ def _change_event(
         source = verified_source(
             mapping(inp, "user_source", required=False),
             ["config", before_sha, "authorize"],
-            channels=CONFIG_CHANNELS,
+            channels=channels,
             mismatch="用户来源应授权这一次修改："
             'target 为 ["config", 修改前文件的摘要, "authorize"]',
         )
@@ -184,3 +188,54 @@ def config_revert(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         ]
 
     return _cmd(env, "config_revert", inp, build)
+
+
+def user_change(
+    ops: list[dict[str, Any]],
+    reason: str,
+    *,
+    actor: Mapping[str, Any],
+    principal: str,
+    message_ref: str,
+    words: str,
+) -> Command:
+    """A change the user makes with their own command outside any session (``tsw reviewer
+    set``, DN004 §3.4): the same validation, event and file write as ``config_change``; the
+    source is the command itself on the ``user-cli`` channel, bound to the file it starts from.
+    The caller makes sure it does not run inside a host session (DN006 §8.10)."""
+
+    def build(ctx: CommitContext) -> list[EventDraft]:
+        before_text = confedit.read_text(ctx.home)
+        before = confedit.parse(before_text)
+        if before is None and before_text is not None:
+            raise rejected(
+                "当前配置文件不是 JSON 对象：先在主会话中用 config_change 修复",
+                reason="config_unreadable",
+            )
+        after = confedit.apply_ops(before or {}, ops)
+        source = {
+            "channel": USER_CLI,
+            "principal": principal,
+            "message_ref": message_ref,
+            "text": words,
+            "target": ["config", confedit.text_sha(before_text), "authorize"],
+        }
+        return [
+            _change_event(
+                ctx,
+                {"reason": reason, "user_source": source},
+                kind="change",
+                before_text=before_text,
+                before=before or {},
+                after_text=confedit.render(after),
+                after=after,
+                extra={"ops": list(ops)},
+                channels=(USER_CLI,),
+            )
+        ]
+
+    return Command(
+        actor=dict(actor),
+        input={"op": "config_change", "ops": list(ops), "reason": reason},
+        build=build,
+    )

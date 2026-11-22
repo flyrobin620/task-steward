@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="18f7f6fc3d02de45dec04d3cdd20992a4c986d834bbc09cccf2b88437bc6ed33">
+<meta name="tsw-source-sha256" content="3d7878cc4f345127ba85ee8ebf5a9c54920f1aabbc8aa9a81887ca38383e8edd">
 <title>CC008 Claude Code 上的护栏</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -89,7 +89,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <h3 id="58-安装脚本-tsw-setupt305">5.8 安装脚本 <code>tsw setup</code>（T305）</h3>
 <p>用户 2026-11-19 决定（DN009 §8）：安装要能全在会话中完成。<code>tsw setup install</code> / <code>uninstall</code>（其中运行 <code>dashboard install</code> / <code>open</code> / <code>uninstall</code> 与 <code>host render</code>）按下表放行；直接运行这些命令的规则（§5.7）不变。实现见 <a href="CC009-install.html">CC009 §6</a>。</p>
 <table><thead><tr><th>调用者</th><th><code>tsw setup install</code> / <code>uninstall</code></th></tr></thead><tbody><tr><td>会话外的终端</td><td>运行</td></tr><tr><td>角色为 none 的会话（第一次安装时还没有数据目录，或会话不在任何数据目录中）</td><td>运行</td></tr><tr><td>主会话</td><td>运行（升级、修复、卸载）</td></tr><tr><td>worker、例行会话、已撤销、待绑定</td><td>拒绝（<code>host_session_cli</code>）；PreToolUse 对已登记会话的 Bash 命令同样识别并拦下 <code>tsw setup</code>（与 §5.7 识别 <code>host render</code> 的做法相同）</td></tr></tbody></table>
-<p>只读的 <code>tsw setup check</code> / <code>plan</code> / <code>verify</code> 任何会话都可以运行。令牌仍不出现在任何输出中（CC006 §12），会话拿不到能登录 Dashboard 的东西。写用户设置与登记计划任务时由宿主请用户批准，tsw 不为 <code>tsw setup</code> 生成允许规则。</p>
+<p>只读的 <code>tsw setup check</code> / <code>plan</code> / <code>verify</code> / <code>models</code> 与 <code>tsw reviewer models</code>（评审模型列表，DN004 §3.4）任何会话都可以运行；<code>tsw reviewer set</code> 是用户本人的操作，任何会话中都拒绝（DN006 §8.10）。令牌仍不出现在任何输出中（CC006 §12），会话拿不到能登录 Dashboard 的东西。写用户设置与登记计划任务时由宿主请用户批准，tsw 不为 <code>tsw setup</code> 生成允许规则。</p>
 <h2 id="6-允许规则与-auto-模式规则">6. 允许规则与 auto 模式规则</h2>
 <p>用户 2026-11-07 决定：Claude app 的 auto 权限模式由分类器判断每次工具调用是否出自用户意图。它只认对话中用户本人的话，不认 tsw 的配置、账本与任务书，所以把派发 worker（<code>start_session</code>）、主会话代为决定、worker 按 <code>delivery.merge</code> 合并等 tsw 已经把关的动作当作未经授权而拒绝（live <code>host-e2e</code> 中出现）。对 tsw 自己把关的动作，<code>claude-code</code> 生成 Claude Code 的显式允许规则（<code>permissions.allow</code>），由 hooks 守卫与 MCP 工具的授权检查作为这些动作的门禁；其他一切仍由宿主的权限模式与分类器把关。</p>
 <table><thead><tr><th>会话</th><th>设置文件</th><th>允许的动作</th><th>仍然生效的检查</th></tr></thead><tbody><tr><td>主会话</td><td>数据目录的 <code>.claude/settings.json</code>（<code>render_instructions</code> 一并生成）</td><td>tsw MCP 工具；<code>start_session</code>、<code>send_message</code> / <code>SendMessage</code>、<code>stop_session</code>、<code>get_session</code>、<code>list_sessions</code>、<code>archive_session</code>、<code>set_session_title</code>（T272，CC006 §9）</td><td>CC-B9；tsw 工具按角色、守卫与用户来源校验</td></tr><tr><td>worker</td><td>无（T245 起不生成）。执行目录带自己的设置文件时，即使在已信任的数据目录之下，app 也会为它再次要求信任确认（Claude Code 文档 permissions.md“project allow rules and workspace trust”说的是允许规则；桌面 app 实测对只有 <code>env</code> 与 <code>hooks</code> 的 <code>settings.local.json</code> 同样要求，确认框写明 “Execution allowed by: .claude/settings.local.json”；数据目录中 T241、T245 的执行目录各有一条单独的信任记录，没有规则文件的 T242–T244 没有），每个新任务因此多一次确认。<code>attempt_start</code> 删除早先 tsw 写下、只含 tsw 规则的 <code>settings.local.json</code>；含其他内容（如用户在该会话中放行的规则）的文件不动</td><td>worker 的 tsw 工具、<code>send_message</code> / <code>SendMessage</code> 由 auto 分类器判断（T242–T244 的 worker 没有允许规则，调用都没有被拦）；合并由用户设置中的“TaskSteward Worker Merge”放行</td><td>CC-B6、CC-B7；hook 的拒绝优先于一切放行</td></tr></tbody></table>

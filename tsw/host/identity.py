@@ -46,6 +46,10 @@ HOST_CLI_COMMANDS = frozenset(
         "setup check",
         "setup plan",
         "setup verify",
+        # The model lists (DN004 §3.4): read-only; the session entry asks the install's model
+        # questions with ``setup models``. ``reviewer set`` is the user's own (DN006 §8.10).
+        "setup models",
+        "reviewer models",
     }
 )
 # The main session updates itself (T282, CC008 §5.7): inside a session only the orchestrator role

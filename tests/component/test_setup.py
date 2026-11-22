@@ -77,7 +77,12 @@ def test_a_terminal_install_from_nothing_reaches_a_verified_install(tmp_path: Pa
     assert marker["rendered"]["commit"] == git(product, "rev-parse", "HEAD")
     assert (product / ".local" / "tsw-home").read_text(encoding="utf-8").strip() == str(home)
     config = json.loads((home / "config" / "task-steward.json").read_text(encoding="utf-8"))
-    assert "roles" not in config  # the default reviewer, Codex
+    # The default reviewer, Codex; the answers name no model: the default one (DN004 §3.4).
+    assert config["roles"]["reviewer"] == {
+        "session": "codex-app-server",
+        "model": "gpt-6-astra",
+        "effort": "medium",
+    }
     assert config["dashboard"]["port"] == 47801
     assert "repositories" not in config and "accounts" not in config
     assert (home / "CLAUDE.md").is_file() and (home / "roles" / "worker.md").is_file()

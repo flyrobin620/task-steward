@@ -23,6 +23,13 @@ from pathlib import Path
 
 PLUGIN_ID = "task-steward@task-steward"
 args = sys.argv[1:]
+if "--input-format" in args:
+    # The install lists the claude-headless reviewer's models with the claude it found
+    # (DN004 §3.4): the model-list stand-in answers.
+    import runpy
+
+    runpy.run_path(str(Path(__file__).with_name("fake_model_lists.py")), run_name="__main__")
+    sys.exit(0)
 with Path(os.environ["FAKE_CLAUDE_LOG"]).open("a", encoding="utf-8") as log:
     log.write(" ".join(args) + "\n")
 root = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "plugins"

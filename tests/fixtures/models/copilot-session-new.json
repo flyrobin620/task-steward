@@ -1,0 +1,387 @@
+{
+ "_source": "copilot --acp session/new result (Copilot CLI 1.0.114, T330); modes and other options dropped",
+ "result": {
+  "models": {
+   "availableModels": [
+    {
+     "modelId": "auto",
+     "name": "Auto",
+     "description": "Let Copilot pick the best model"
+    },
+    {
+     "modelId": "auto",
+     "name": "Auto",
+     "description": "Auto",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled"
+     }
+    },
+    {
+     "modelId": "gpt-6.2-sol",
+     "name": "GPT-6.2 Sol",
+     "description": "Powerful · Medium cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "medium"
+     }
+    },
+    {
+     "modelId": "gpt-6.2-astra",
+     "name": "GPT-6.2 Astra",
+     "description": "Powerful · Very high cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "very_high"
+     }
+    },
+    {
+     "modelId": "gpt-6.1-sol",
+     "name": "GPT-6.1 Sol",
+     "description": "Powerful · Medium cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "medium"
+     }
+    },
+    {
+     "modelId": "gpt-6.1-terra",
+     "name": "GPT-6.1 Terra",
+     "description": "Versatile · Low cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "low"
+     }
+    },
+    {
+     "modelId": "gpt-6-sol",
+     "name": "GPT-6 Sol",
+     "description": "Powerful · Medium cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "medium"
+     }
+    },
+    {
+     "modelId": "gpt-6-luna",
+     "name": "GPT-6 Luna",
+     "description": "Lightweight · Low cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "low"
+     }
+    },
+    {
+     "modelId": "gpt-6-astra",
+     "name": "GPT-6 Astra",
+     "description": "Powerful · Very high cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "very_high"
+     }
+    },
+    {
+     "modelId": "gpt-5.6-sol",
+     "name": "GPT-5.6 Sol",
+     "description": "Powerful · High cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "high"
+     }
+    },
+    {
+     "modelId": "gpt-5.6-luna",
+     "name": "GPT-5.6 Luna",
+     "description": "Lightweight · Low cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "low"
+     }
+    },
+    {
+     "modelId": "gpt-5.3-codex",
+     "name": "GPT-5.3-Codex",
+     "description": "Powerful · Medium cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "medium"
+     }
+    },
+    {
+     "modelId": "mai-code-1.1-flash",
+     "name": "MAI-Code-1.1-Flash",
+     "description": "Lightweight · Low cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "low"
+     }
+    },
+    {
+     "modelId": "grok-4.7",
+     "name": "Grok 4.7",
+     "description": "Versatile · Medium cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "medium"
+     }
+    },
+    {
+     "modelId": "grok-4.6",
+     "name": "Grok 4.6",
+     "description": "Versatile · Medium cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "medium"
+     }
+    },
+    {
+     "modelId": "mai-code-2-flash",
+     "name": "MAI Code 2 Flash",
+     "description": "Lightweight · Low cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "low"
+     }
+    },
+    {
+     "modelId": "mai-code-2",
+     "name": "MAI Code 2",
+     "description": "Powerful · Low cost",
+     "_meta": {
+      "copilotUsage": "1x",
+      "copilotEnablement": "enabled",
+      "copilotPriceCategory": "low"
+     }
+    }
+   ],
+   "currentModelId": "gpt-6.2-sol"
+  },
+  "configOptions": [
+   {
+    "type": "select",
+    "id": "model",
+    "name": "Model",
+    "category": "model",
+    "description": "The AI model Copilot uses to generate responses.",
+    "currentValue": "gpt-6.2-sol",
+    "options": [
+     {
+      "value": "auto",
+      "name": "Auto",
+      "description": "Let Copilot pick the best model",
+      "_meta": null
+     },
+     {
+      "value": "auto",
+      "name": "Auto",
+      "description": "Auto",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled"
+      }
+     },
+     {
+      "value": "gpt-6.2-sol",
+      "name": "GPT-6.2 Sol",
+      "description": "Powerful · Medium cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "medium"
+      }
+     },
+     {
+      "value": "gpt-6.2-astra",
+      "name": "GPT-6.2 Astra",
+      "description": "Powerful · Very high cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "very_high"
+      }
+     },
+     {
+      "value": "gpt-6.1-sol",
+      "name": "GPT-6.1 Sol",
+      "description": "Powerful · Medium cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "medium"
+      }
+     },
+     {
+      "value": "gpt-6.1-terra",
+      "name": "GPT-6.1 Terra",
+      "description": "Versatile · Low cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "low"
+      }
+     },
+     {
+      "value": "gpt-6-sol",
+      "name": "GPT-6 Sol",
+      "description": "Powerful · Medium cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "medium"
+      }
+     },
+     {
+      "value": "gpt-6-luna",
+      "name": "GPT-6 Luna",
+      "description": "Lightweight · Low cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "low"
+      }
+     },
+     {
+      "value": "gpt-6-astra",
+      "name": "GPT-6 Astra",
+      "description": "Powerful · Very high cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "very_high"
+      }
+     },
+     {
+      "value": "gpt-5.6-sol",
+      "name": "GPT-5.6 Sol",
+      "description": "Powerful · High cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "high"
+      }
+     },
+     {
+      "value": "gpt-5.6-luna",
+      "name": "GPT-5.6 Luna",
+      "description": "Lightweight · Low cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "low"
+      }
+     },
+     {
+      "value": "gpt-5.3-codex",
+      "name": "GPT-5.3-Codex",
+      "description": "Powerful · Medium cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "medium"
+      }
+     },
+     {
+      "value": "mai-code-1.1-flash",
+      "name": "MAI-Code-1.1-Flash",
+      "description": "Lightweight · Low cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "low"
+      }
+     },
+     {
+      "value": "grok-4.7",
+      "name": "Grok 4.7",
+      "description": "Versatile · Medium cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "medium"
+      }
+     },
+     {
+      "value": "grok-4.6",
+      "name": "Grok 4.6",
+      "description": "Versatile · Medium cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "medium"
+      }
+     },
+     {
+      "value": "mai-code-2-flash",
+      "name": "MAI Code 2 Flash",
+      "description": "Lightweight · Low cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "low"
+      }
+     },
+     {
+      "value": "mai-code-2",
+      "name": "MAI Code 2",
+      "description": "Powerful · Low cost",
+      "_meta": {
+       "copilotUsage": "1x",
+       "copilotEnablement": "enabled",
+       "copilotPriceCategory": "low"
+      }
+     }
+    ]
+   },
+   {
+    "type": "select",
+    "id": "reasoning_effort",
+    "name": "Reasoning Effort",
+    "category": "thought_level",
+    "description": "How much reasoning the model performs before responding. Higher effort can improve quality at the cost of speed.",
+    "currentValue": "medium",
+    "options": [
+     {
+      "value": "low",
+      "name": "low",
+      "description": "Minimal reasoning before responding."
+     },
+     {
+      "value": "medium",
+      "name": "medium",
+      "description": "Balanced reasoning and speed."
+     },
+     {
+      "value": "high",
+      "name": "high",
+      "description": "More thorough reasoning; slower responses."
+     },
+     {
+      "value": "xhigh",
+      "name": "xhigh",
+      "description": "Extensive reasoning for the hardest problems."
+     },
+     {
+      "value": "max",
+      "name": "max",
+      "description": "Maximum reasoning; slowest but most thorough."
+     }
+    ]
+   }
+  ],
+  "sessionId": "00000000-0000-4000-8000-000000000001"
+ }
+}

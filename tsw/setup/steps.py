@@ -44,6 +44,7 @@ from tsw.host import claude_install, dashboard_service, workdeck
 from tsw.host.claude_code import AUTO_MODE_RULES, render_instructions
 from tsw.host.plugin_copy import update as update_plugin
 from tsw.host.version import REPO_ROOT, head, render_record
+from tsw.review import models as reviewer_models
 from tsw.setup import winenv
 from tsw.setup.questions import (
     Question,
@@ -288,6 +289,7 @@ def check(ctx: Context, *, with_questions: bool = False) -> dict[str, Any]:
         "warnings": [
             *ctx.warnings,
             *[w for w in (reviewer_warning(ctx.env, ctx.answers.get("reviewer")),) if w],
+            *_model_warning(ctx.answers),
         ],
         # Not "ok": check only reports, so a problem is not a failure of the command.
         "ready": not problems,
@@ -295,6 +297,21 @@ def check(ctx: Context, *, with_questions: bool = False) -> dict[str, Any]:
     if with_questions:
         result["questions"] = [q.to_dict() for q in ctx.questions]
     return result
+
+
+def _model_warning(answers: Mapping[str, Any]) -> list[str]:
+    """Answers that name a reviewer but no model (an earlier version's, or an answers file
+    written without the model questions): a new data directory gets the code's default model,
+    not one checked against this machine's list (DN004 §3.4)."""
+    reviewer = answers.get("reviewer")
+    if reviewer not in reviewer_models.BUILTIN or answers.get("reviewer_model"):
+        return []
+    model, effort = reviewer_models.BUILTIN[str(reviewer)]
+    return [
+        f"reviewer_model：答案中没有评审模型，新数据目录将用默认的 {model}（{effort}），"
+        "它没有对照本机可用的模型核实；安装后可以运行 tsw reviewer models 查看、"
+        "tsw reviewer set 更换，或在主会话中让它更换"
+    ]
 
 
 def _inside(path: Path, root: Path) -> bool:

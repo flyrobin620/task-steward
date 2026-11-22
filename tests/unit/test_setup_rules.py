@@ -65,6 +65,8 @@ def test_repositories_and_accounts_are_never_asked() -> None:
         "checkout",
         "language",
         "reviewer",
+        "reviewer_model",
+        "reviewer_effort",
         "human_channels",
         "host",
         "dashboard",
@@ -103,8 +105,32 @@ def test_the_initial_configuration_follows_the_answers(home: Home) -> None:
     config = load_config(home, main_layer=layer)
     assert config.valid and not any("独立性" in w for w in config.warnings)
     codex = q.config_layer({**base, "reviewer": "codex-app-server"})
-    assert "roles" not in codex and "sessions" not in codex["plugins"]
-    assert load_config(home, main_layer=codex).valid
+    # Codex: the default model written out, the default fallback kept (DN004 §3.4).
+    assert codex["roles"]["reviewer"] == {
+        "session": "codex-app-server",
+        "model": "gpt-6-astra",
+        "effort": "medium",
+    }
+    assert "sessions" not in codex["plugins"]
+    assert load_config(home, main_layer=codex).get("roles.reviewer.fallback_session") == (
+        "codex-exec"
+    )
+    # The model and effort the user picked from the reviewer's list are written.
+    picked = q.config_layer(
+        {
+            **base,
+            "reviewer": "copilot-cli",
+            "reviewer_model": "gpt-6.2-sol",
+            "reviewer_effort": "high",
+        }
+    )
+    assert picked["roles"]["reviewer"] == {
+        "session": "copilot-cli",
+        "fallback_session": None,
+        "model": "gpt-6.2-sol",
+        "effort": "high",
+    }
+    assert load_config(home, main_layer=picked).valid
     copilot = q.config_layer({**base, "reviewer": "copilot-cli"})
     assert copilot["roles"]["reviewer"]["session"] == "copilot-cli"
     assert load_config(home, main_layer=copilot).valid
@@ -265,6 +291,7 @@ def test_update_plan_reruns_the_install_for_a_setup_install() -> None:
         ("tsw setup check --questions", True, False, False),
         ("tsw setup plan --answers a.json", True, False, False),
         ("tsw setup verify --after-reload", True, False, False),
+        ("tsw setup models --reviewer copilot-cli --json", True, False, False),
     ],
 )
 def test_the_hook_keeps_workers_from_installing_the_host(

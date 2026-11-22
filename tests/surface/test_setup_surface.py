@@ -68,6 +68,7 @@ def test_check_lists_the_one_question_list(tmp_path: Path) -> None:
 
 
 @pytest.mark.use_case(UC)
+@pytest.mark.use_case("UC-REVIEW-004")
 def test_the_terminal_flow_asks_shows_the_plan_and_installs(tmp_path: Path) -> None:
     product, claude = make_product(tmp_path), fake_claude(tmp_path)
     env = setup_env(tmp_path)
@@ -76,7 +77,9 @@ def test_the_terminal_flow_asks_shows_the_plan_and_installs(tmp_path: Path) -> N
         "",  # the data directory is required: asked again
         str(home),
         "",  # language
-        "",  # reviewer: the one implemented reviewer
+        "",  # reviewer: the default (Codex)
+        "",  # its model: offered first from the reviewer's list (DN004 §3.4)
+        "",  # its effort
         "",  # human channels
         "否",  # no Dashboard service
         "",  # port
@@ -99,6 +102,11 @@ def test_the_terminal_flow_asks_shows_the_plan_and_installs(tmp_path: Path) -> N
     assert out["installed"] is True and out["verify"]["ok"] is True
     saved = json.loads(Path(env["TSW_STATE_DIR"], "setup-answers.json").read_text("utf-8"))
     assert saved["home"] == str(home) and saved["dashboard"] is False
+    # The model was picked from the list the codex stand-in gave (DN004 §3.4).
+    assert "正在取得 codex-app-server 的模型列表" in text and "gpt-5.6-terra" in text
+    assert (saved["reviewer_model"], saved["reviewer_effort"]) == ("gpt-6-astra", "medium")
+    written = json.loads((home / "config" / "task-steward.json").read_text("utf-8"))
+    assert written["roles"]["reviewer"]["model"] == "gpt-6-astra"
     # A rerun reads the saved answers; verify and uninstall need none.
     code, out, _ = run_setup(product, "verify", env=env)
     assert code == 0 and out["phase"] == "install"
@@ -274,7 +282,7 @@ def test_setup_ps1_runs_the_interactive_install(tmp_path: Path) -> None:
         [str(claude.parent), str(Path(sys.executable).parent), env["PATH"]]
     )
     home = tmp_path / "data"
-    replies = [str(home), "", "", "", "否", "", "", "是"]
+    replies = [str(home), "", "", "", "", "", "否", "", "", "是"]  # reviewer, model, effort
     proc = powershell(product / "setup.ps1", "-NoBrowser", env=env, stdin="\n".join(replies) + "\n")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     # Piped input and output: the line questions without colour or cursor movement (DN009 §16.4).
@@ -340,7 +348,7 @@ def test_a_rerun_uses_the_saved_answers_and_manual_settings_are_shown(tmp_path: 
     product, claude = make_product(tmp_path), fake_claude(tmp_path)
     env = setup_env(tmp_path)
     home = tmp_path / "data"
-    replies = [str(home), "", "", "", "否", "", "否", "是"]
+    replies = [str(home), "", "", "", "", "", "否", "", "否", "是"]  # reviewer, model, effort
     launcher = product / "plugin" / "bin" / "tsw_launch.py"
     proc = subprocess.run(
         [
@@ -463,7 +471,7 @@ def test_saved_answers_with_an_unimplemented_reviewer_still_rerun(tmp_path: Path
     )
     # The interactive entry asks again instead of stopping before the questions.
     (state / "setup-answers.json").write_text(json.dumps(saved), encoding="utf-8")
-    replies = ["", "", "", "", "否", "", "", "是"]
+    replies = ["", "", "", "", "", "", "否", "", "", "是"]  # reviewer, model, effort
     code, out, text = run_setup(
         product,
         "install",
@@ -477,6 +485,8 @@ def test_saved_answers_with_an_unimplemented_reviewer_still_rerun(tmp_path: Path
     assert code == 0, text
     again = json.loads((state / "setup-answers.json").read_text("utf-8"))
     assert again["reviewer"] == "claude-headless" and again["home"] == str(home)
+    # The claude the install found listed the models: its alias for the default is offered.
+    assert (again["reviewer_model"], again["reviewer_effort"]) == ("sonnet", "high")
     # An answers file given explicitly is checked as it is: the reviewer is refused.
     explicit = tmp_path / "explicit.json"
     explicit.write_text(json.dumps(saved), encoding="utf-8")

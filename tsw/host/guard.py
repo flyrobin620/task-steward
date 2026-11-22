@@ -115,6 +115,7 @@ _TSW_GROUPS = {
     "tool",
     "host",
     "review",
+    "reviewer",
     "dashboard",
     "setup",
 }

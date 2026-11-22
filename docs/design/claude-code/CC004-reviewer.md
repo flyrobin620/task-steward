@@ -94,7 +94,7 @@ claude -p --input-format stream-json --output-format stream-json --verbose
 
 1. 环境变量与工作目录按 §3 清理与选择（`CLAUDE*`、`ANTHROPIC*`、`TSW*` 删除，用户设置中的认证与网关照常），所以列表就是评审进程能用的模型。
 2. 向 stdin 写一行 `{"type": "control_request", "request_id": <ID>, "request": {"subtype": "initialize"}}`，等 `type` 为 `control_response`、`request_id` 相同的一行。
-3. `response.response.models` 是模型数组：`value`（`--model` 接受的值，即写进配置的 ID）、`resolvedModel`、`displayName`、`description`、`supportedEffortLevels`。
+3. `response.response.models` 是模型数组：`value`（`--model` 接受的值）、`resolvedModel`、`displayName`、`description`、`supportedEffortLevels`。写进配置的 ID 是 `value` 去掉 `[1m]` 之类的上下文后缀（配置中的模型 ID 不带后缀，DN003 §1）。
 4. 不发送任何用户消息，关闭输入，结束进程树。
 
 列表处理：去掉 `value` 为 `default` 的项（随用户的默认模型变化，§3 总是显式传模型）；别名（`sonnet`、`opus`、`haiku`、`fable`）照列表原样给出，名称旁附 `resolvedModel`，选别名时写别名，结果判定按 §4 的家族规则。

@@ -44,6 +44,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/setup
   - `home`（数据目录位置）**必填，没有默认值**：用户没有给出时再问，不要替用户选一个路径。用户给出已有的数据目录时复用它。提问时说明：在数据目录（那个文件夹本身）中打开的会话是主会话，建议之后在数据目录中新建会话工作；本会话即使就在那个文件夹里也可以安装，安装结束时它会记为让出租约，不会自动领取（DN009 §15.1）。
   - `host` 只有一个选项时直接选定，不必问。
   - `workdeck` 的默认值为 false（本机找不到 workdeck 命令）时直接取 false，不必问。
+  - `reviewer_model` 与 `reviewer_effort`（`depends_on`）：用户选的评审器是 `none` 时不问。否则在用户回答评审器之后运行
+
+    ```bash
+    "<python>" -X utf8 "<checkout>/plugin/bin/tsw_launch.py" setup models --reviewer <评审器> --git "<git>" --json
+    ```
+
+    把 `models` 交给用户选（每项写 `id` 与 `name`，多时列出编号；`preselected.model` 是默认），再从所选模型的 `efforts` 中选推理强度（默认：所选模型就是 `preselected.model` 时为 `preselected.effort`，否则该模型的 `default_effort` 或第一个）。只能选列表中的值，不替用户选。`available` 为 false 时把 `error` 转告用户：用户可以给出一个模型 ID（未经核实，第一轮评审时核实）与推理强度，或说“默认”（两项都不写进答案）。
   - 其他项用户说“默认”时取 `default`。
 - 不问、也不记录任何令牌或密码；要管理的仓库不在这里问（安装后在主会话中逐个加入）。
 

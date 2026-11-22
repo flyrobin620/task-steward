@@ -39,9 +39,15 @@ class ReviewRun:
 class AppServer:
     close_wait = 10.0  # seconds the server gets to exit on end of input
 
-    def __init__(self, executable: str) -> None:
+    def __init__(
+        self, executable: str, args: tuple[str, ...] = ("app-server",), cwd: str | None = None
+    ) -> None:
+        """A JSON-RPC peer over stdio: ``codex app-server`` by default; ``copilot --acp`` speaks
+        the same framing (one JSON message per line) and is listed with it (CP004 §8)."""
+        self.name = f"{Path(executable).stem} {args[0]}" if args else Path(executable).stem
         self.tree = ProcessTree(
-            [executable, "app-server"],
+            [executable, *args],
+            cwd=cwd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -88,7 +94,9 @@ class AppServer:
             raise TimeoutError from exc
         if message is None:
             raise TswError(
-                ErrorCode.UNAVAILABLE, "codex app-server 意外退出", reason="reviewer_unavailable"
+                ErrorCode.UNAVAILABLE,
+                f"{self.name} 意外退出",
+                reason="reviewer_unavailable",
             )
         if "method" in message and "id" in message:  # a server request: decline it
             self.send(

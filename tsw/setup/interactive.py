@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 from tsw.errors import ErrorCode, TswError
+from tsw.review import models as reviewer_models
 from tsw.setup import questions as setup_questions
 from tsw.setup import steps as setup_steps
 from tsw.setup.questions import Question
@@ -129,7 +130,10 @@ def run_lines(args: argparse.Namespace, style: Style) -> dict[str, Any]:
     if blocking:
         raise _preconditions(blocking)
     print(style.bold("\n请回答下面的问题（直接回车采用默认值）："))
-    answers = setup_questions.ask(first.questions, first.answers, input, print)
+    find = setup_questions.lister(
+        first.env, first.claude, lambda reviewer: print(f"  正在取得 {reviewer} 的模型列表……")
+    )
+    answers = setup_questions.ask(first.questions, first.answers, input, print, find)
     path = save_answers(first.env, answers)
     ctx = _context(args, answers)
     planned = setup_steps.plan(ctx)
@@ -217,6 +221,16 @@ class _Screen:
         self.say()
         self.say(f" {self.style.bold(self.style.accent(text))}")
 
+    def listing(self, reviewer: str) -> None:
+        """Shown while a reviewer's models are listed; :meth:`unlisting` takes it away."""
+        self.console.write(f" {self.style.dim(f'正在取得 {reviewer} 的模型列表……')}")
+        self.listed = True
+
+    def unlisting(self) -> None:
+        if getattr(self, "listed", False):
+            self.console.write("\r\x1b[J")  # back to the line's start, erase it and below
+            self.listed = False
+
 
 def run_keys(args: argparse.Namespace, console: Console, style: Style) -> dict[str, Any]:
     """The arrow-key interface (DN009 §16.3)."""
@@ -258,7 +272,8 @@ def _run_keys(args: argparse.Namespace, screen: _Screen) -> dict[str, Any]:
         raise _preconditions(blocking)
     screen.title("问题")
     screen.say(f" {style.dim('回车采用默认值；已回答的问题收成一行')}")
-    answers = _ask_all(screen, first.questions, first.answers)
+    find = setup_questions.lister(first.env, first.claude, screen.listing)
+    answers = _ask_all(screen, first.questions, first.answers, find)
     while True:
         path = save_answers(first.env, answers)
         ctx = _context(args, answers)
@@ -275,7 +290,7 @@ def _run_keys(args: argparse.Namespace, screen: _Screen) -> dict[str, Any]:
             screen.say(f" {style.mark('skip')} 没有安装；答案已保存在 {path}")
             note = "没有安装；答案已保存"
             return _quiet(args, {"installed": False, "answers_file": str(path), "note": note})
-        _change_one(screen, first.questions, answers)
+        _change_one(screen, first.questions, answers, find)
     result = _install(screen, ctx, open_browser=not args.no_browser)
     if args.json:
         return result
@@ -283,7 +298,15 @@ def _run_keys(args: argparse.Namespace, screen: _Screen) -> dict[str, Any]:
     return _quiet(args, {"ok": result["verify"]["ok"]})
 
 
-def _asked(q: Question) -> bool:
+def _asked(q: Question, answers: dict[str, Any] | None = None) -> bool:
+    """Whether ``q`` is asked: the model questions only once a reviewer (not ``none``) is
+    chosen (DN004 §3.4)."""
+    if (
+        q.id in setup_questions.MODEL_QUESTIONS
+        and answers is not None
+        and answers.get("reviewer") not in reviewer_models.BUILTIN
+    ):
+        return False
     return q.asked_by == "setup" and setup_questions.preset(q) is None
 
 
@@ -294,16 +317,28 @@ def _shown(q: Question, value: Any) -> str:
     return f"{label}（{value}）" if label else str(value)
 
 
-def _ask_all(screen: _Screen, qs: list[Question], previous: dict[str, Any]) -> dict[str, Any]:
+def _ask_all(
+    screen: _Screen,
+    qs: list[Question],
+    previous: dict[str, Any],
+    find: setup_questions.Lister | None = None,
+) -> dict[str, Any]:
     """Ask each question in turn; an answered one collapses to one line, Esc in a choice goes
-    back to the question before (DN009 §16.3)."""
+    back to the question before (DN009 §16.3). The model questions are asked with the chosen
+    reviewer's list (DN004 §3.4)."""
     style = screen.style
-    total = sum(1 for q in qs if _asked(q))
     answers: dict[str, Any] = {}
     shown: list[tuple[int, int]] = []  # (question index, rows its line takes)
     i = 0
     while i < len(qs):
-        q = qs[i]
+        total = sum(1 for q in qs if _asked(q, answers))
+        bound = setup_questions.bind(qs[i], answers, find)
+        screen.unlisting()
+        if bound is None:
+            answers.pop(qs[i].id, None)
+            i += 1
+            continue
+        q = bound
         if q.asked_by != "setup":
             line = f" {style.mark('ok')} {q.short}：{q.default}  {style.dim('（由安装入口决定）')}"
             shown.append((i, _put(screen, line)))
@@ -316,11 +351,13 @@ def _ask_all(screen: _Screen, qs: list[Question], previous: dict[str, Any]) -> d
             shown.append((i, _put(screen, line)))
             i += 1
             continue
-        position = sum(1 for earlier in qs[:i] if _asked(earlier)) + 1
+        position = sum(1 for earlier in qs[:i] if _asked(earlier, answers)) + 1
         default = answers.get(q.id, setup_questions.starting_default(q, previous))
+        if default not in (None, "") and setup_questions.normalize({q.id: default}, [q])[1]:
+            default = q.default  # an answer for another reviewer or model
         value = _ask_one(screen, q, default, f"{position}/{total}", back=position > 1)
         if value is _BACK:
-            target = max(j for j in range(i) if _asked(qs[j]))
+            target = max(j for j in range(i) if _asked(qs[j], answers))
             erase = sum(used for index, used in shown if index >= target)
             shown = [(index, used) for index, used in shown if index < target]
             if erase:
@@ -389,21 +426,45 @@ def _option(label: str, value: str, is_default: bool) -> Option:
     return Option(label, value + ("（默认）" if is_default else ""))
 
 
-def _change_one(screen: _Screen, qs: list[Question], answers: dict[str, Any]) -> None:
-    """The plan's “修改某个答案”: pick a question, answer it again."""
+def _change_one(
+    screen: _Screen,
+    qs: list[Question],
+    answers: dict[str, Any],
+    find: setup_questions.Lister | None = None,
+) -> None:
+    """The plan's “修改某个答案”: pick a question, answer it again. A new reviewer asks its
+    model and effort again, a new model its effort (DN004 §3.4)."""
     style = screen.style
-    asked = [q for q in qs if _asked(q)]
+    asked = [q for q in qs if _asked(q, answers) and q.id in answers]
     head = ["", f" {style.bold('修改哪一个答案？')}"]
     options = [Option(q.short, _shown(q, answers[q.id])) for q in asked]
     picked = choose(screen.console, style, head, options, 0, back=True)
     if picked is None:
         return
-    q = asked[picked]
-    value = _ask_one(screen, q, answers[q.id], "修改", back=True)
-    if value is _BACK:
-        return
-    answers[q.id] = value
-    screen.say(_answered(style, q, value))
+    order = [q.id for q in qs]
+    first = asked[picked]
+    for q in qs[order.index(first.id) :]:
+        if q.id != first.id and not (
+            q.id in setup_questions.MODEL_QUESTIONS
+            and order.index(q.id) > order.index(first.id)
+            and first.id in ("reviewer", "reviewer_model")
+        ):
+            continue
+        bound = setup_questions.bind(q, answers, find)
+        screen.unlisting()
+        if bound is None:
+            answers.pop(q.id, None)
+            continue
+        current = answers.get(q.id)
+        if current is None or setup_questions.normalize({q.id: current}, [bound])[1]:
+            current = bound.default
+        value = _ask_one(screen, bound, current, "修改", back=True)
+        if value is _BACK:
+            if q.id == first.id:
+                return
+            value = current  # the new reviewer's (or model's) preselected answer
+        answers[q.id] = value
+        screen.say(_answered(style, bound, value))
 
 
 def _step_title(step: dict[str, Any]) -> str:

@@ -1,7 +1,7 @@
 {
   "id": "reviewer",
   "title": "评审器：固定样例上的全量评审与增量评审，核对只读与输出 schema",
-  "useCases": ["UC-REVIEW-001", "UC-REVIEW-002"],
+  "useCases": ["UC-REVIEW-001", "UC-REVIEW-002", "UC-REVIEW-004"],
   "reviewers": ["codex-app-server", "copilot-cli", "claude-headless"],
   "models": {"copilot-cli": "gpt-6.1-sol", "claude-headless": "claude-sonnet-5-5"},
   "modelCalls": {"perReviewer": 2, "max": 6},
@@ -10,6 +10,7 @@
     "R1 每种评审器：第 1 轮全量评审（base..HEAD）完成，结果满足输出契约（verdict、summary、reviewed_head、findings）",
     "R2 每种评审器：iterate 后的第 2 轮完成：续用第 1 轮的线程或会话、只审上一轮 HEAD..新 HEAD",
     "R3 只读：每轮评审前后，执行目录（含 .git）的文件清单与内容摘要不变",
-    "R4 清理：本次创建的 Codex 评审线程全部已归档并读回确认（Copilot CLI 与 claude -p 的会话记录留在用户的 Copilot / Claude Code 目录，CP004 §6、CC004 §6）"
+    "R4 清理：本次创建的 Codex 评审线程全部已归档并读回确认（Copilot CLI 与 claude -p 的会话记录留在用户的 Copilot / Claude Code 目录，CP004 §6、CC004 §6）",
+    "R5 每种评审器：评审之前用 tsw reviewer models 从真实命令行取得模型列表（不调用模型，DN004 §3.4），列表非空且含本场景评审所用的模型"
   ]
 }

@@ -19,6 +19,7 @@ import functools
 import json
 import os
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,7 @@ SCRUBBED_PREFIXES = ("CLAUDE", "ANTHROPIC", "CODEX")
 RESULTS_ENV = "TSW_RESULTS_FILE"
 TIERS = ("unit", "component", "surface", "conformance")
 FAKE_SCHTASKS = Path(__file__).resolve().parent / "fixtures" / "fake_schtasks.py"
+FAKE_MODEL_LISTS = Path(__file__).resolve().parent / "fixtures" / "fake_model_lists.py"
 
 
 @functools.lru_cache(maxsize=8)
@@ -50,8 +52,21 @@ def without_workdeck(path: str) -> str:
     return os.pathsep.join(kept)
 
 
+@pytest.fixture(scope="session")
+def reviewer_bin(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """``codex`` and ``copilot`` stand-ins that answer the model lists (DN004 §3.4,
+    ``tests/fixtures/fake_model_lists.py``): first on every test's ``PATH``, so listing a
+    reviewer's models never starts the real command lines (or reads the user's own login)."""
+    folder = tmp_path_factory.mktemp("reviewer-bin")
+    for name in ("codex", "copilot"):
+        (folder / f"{name}.cmd").write_text(
+            f'@"{sys.executable}" "{FAKE_MODEL_LISTS}" %*\r\n', encoding="utf-8"
+        )
+    return folder
+
+
 @pytest.fixture(autouse=True)
-def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reviewer_bin: Path) -> Path:
     for key in list(os.environ):
         if key.upper().startswith(SCRUBBED_PREFIXES) or key in ("TSW_TEST_FAULTS", "TSW_REPO"):
             monkeypatch.delenv(key, raising=False)
@@ -72,7 +87,8 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         monkeypatch.setenv(key, str(tmp_path / key.lower()))
     # The real workdeck stays out of reach (T309): a test that needs one puts the stand-in
     # tests/fixtures/fake_workdeck.py on PATH itself.
-    monkeypatch.setenv("PATH", without_workdeck(os.environ.get("PATH", "")))
+    path = without_workdeck(os.environ.get("PATH", ""))
+    monkeypatch.setenv("PATH", os.pathsep.join([str(reviewer_bin), path]))
     return data_home
 
 

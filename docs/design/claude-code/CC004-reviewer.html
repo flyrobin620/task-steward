@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="4a85757adeaac9b350e203b44a2facb5708193b76026225afa6a849a4b3613e0">
+<meta name="tsw-source-sha256" content="1cb1df601d372b938610c4957d399f9cbf0c619899413856f57356d8b58a803f">
 <title>CC004 Claude Code 评审器</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -76,7 +76,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p>DN004 §3.4 的模型列表在 Claude Code 上用 <code>claude -p</code> 的控制协议：Agent SDK 的 <code>supportedModels()</code> 就是向命令行发控制请求 <code>initialize</code>，从回应中取 <code>models</code>。</p>
 <pre><code class="lang-text">claude -p --input-format stream-json --output-format stream-json --verbose
        --tools Read --permission-mode dontAsk --strict-mcp-config --safe-mode --setting-sources user</code></pre>
-<ol><li>环境变量与工作目录按 §3 清理与选择（<code>CLAUDE*</code>、<code>ANTHROPIC*</code>、<code>TSW*</code> 删除，用户设置中的认证与网关照常），所以列表就是评审进程能用的模型。</li><li>向 stdin 写一行 <code>{&quot;type&quot;: &quot;control_request&quot;, &quot;request_id&quot;: &lt;ID&gt;, &quot;request&quot;: {&quot;subtype&quot;: &quot;initialize&quot;}}</code>，等 <code>type</code> 为 <code>control_response</code>、<code>request_id</code> 相同的一行。</li><li><code>response.response.models</code> 是模型数组：<code>value</code>（<code>--model</code> 接受的值，即写进配置的 ID）、<code>resolvedModel</code>、<code>displayName</code>、<code>description</code>、<code>supportedEffortLevels</code>。</li><li>不发送任何用户消息，关闭输入，结束进程树。</li></ol>
+<ol><li>环境变量与工作目录按 §3 清理与选择（<code>CLAUDE*</code>、<code>ANTHROPIC*</code>、<code>TSW*</code> 删除，用户设置中的认证与网关照常），所以列表就是评审进程能用的模型。</li><li>向 stdin 写一行 <code>{&quot;type&quot;: &quot;control_request&quot;, &quot;request_id&quot;: &lt;ID&gt;, &quot;request&quot;: {&quot;subtype&quot;: &quot;initialize&quot;}}</code>，等 <code>type</code> 为 <code>control_response</code>、<code>request_id</code> 相同的一行。</li><li><code>response.response.models</code> 是模型数组：<code>value</code>（<code>--model</code> 接受的值）、<code>resolvedModel</code>、<code>displayName</code>、<code>description</code>、<code>supportedEffortLevels</code>。写进配置的 ID 是 <code>value</code> 去掉 <code>[1m]</code> 之类的上下文后缀（配置中的模型 ID 不带后缀，DN003 §1）。</li><li>不发送任何用户消息，关闭输入，结束进程树。</li></ol>
 <p>列表处理：去掉 <code>value</code> 为 <code>default</code> 的项（随用户的默认模型变化，§3 总是显式传模型）；别名（<code>sonnet</code>、<code>opus</code>、<code>haiku</code>、<code>fable</code>）照列表原样给出，名称旁附 <code>resolvedModel</code>，选别名时写别名，结果判定按 §4 的家族规则。</p>
 <p>实测（T330，Claude Code 2.1.302，Windows，用户设置中配置了网关）：回应在启动后几秒内到达，<code>models</code> 有 8 项：<code>default</code>、四个别名（<code>resolvedModel</code> 分别为 <code>claude-opus-5-5[1m]</code>、<code>claude-fable-5-1</code>、<code>claude-sonnet-5-5[1m]</code>、<code>claude-haiku-5-5[1m]</code>）与三个网关提供的完整 ID；每项都有 <code>supportedEffortLevels</code>（<code>low</code> 到 <code>max</code>）。没有发送消息，不调用模型，也没有在用户的 Claude Code 目录留下会话记录。回应中还有账号信息（<code>account</code>），tsw 不读取、不记录。</p>
 <p>取不到列表的情形：找不到 <code>claude</code>、60 秒内没有回应、回应中没有 <code>models</code>。未登录的命令行是否仍返回列表未验证；即使返回，评审时也会按 §6 失败。按 DN004 §3.4 的退路处理。</p>

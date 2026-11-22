@@ -1,0 +1,148 @@
+{
+ "_source": "claude -p control_response to initialize (Claude Code 2.1.302, T330): only models kept, descriptions replaced",
+ "response": {
+  "subtype": "success",
+  "response": {
+   "models": [
+    {
+     "value": "default",
+     "resolvedModel": "gateway-auto[1m]",
+     "displayName": "Default (recommended)",
+     "description": "(description)",
+     "supportsEffort": true,
+     "supportedEffortLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "supportsAdaptiveThinking": true,
+     "supportsAutoMode": true,
+     "supportsThinkingOff": true
+    },
+    {
+     "value": "opus",
+     "resolvedModel": "claude-opus-5-5[1m]",
+     "displayName": "Claude Opus 5.5",
+     "description": "(description)",
+     "supportsEffort": true,
+     "supportedEffortLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "supportsAdaptiveThinking": true,
+     "supportsFastMode": true,
+     "supportsAutoMode": true,
+     "supportsThinkingOff": false
+    },
+    {
+     "value": "fable",
+     "resolvedModel": "claude-fable-5-1",
+     "displayName": "Fable",
+     "description": "(description)",
+     "supportsEffort": true,
+     "supportedEffortLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "supportsAdaptiveThinking": true,
+     "supportsAutoMode": true,
+     "supportsThinkingOff": false
+    },
+    {
+     "value": "sonnet",
+     "resolvedModel": "claude-sonnet-5-5[1m]",
+     "displayName": "Claude Sonnet 5.5",
+     "description": "(description)",
+     "supportsEffort": true,
+     "supportedEffortLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "supportsAdaptiveThinking": true,
+     "supportsAutoMode": true,
+     "supportsThinkingOff": false
+    },
+    {
+     "value": "haiku",
+     "resolvedModel": "claude-haiku-5-5[1m]",
+     "displayName": "Claude Haiku 5.5",
+     "description": "(description)",
+     "supportsEffort": true,
+     "supportedEffortLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "supportsAdaptiveThinking": true,
+     "supportsAutoMode": true,
+     "supportsThinkingOff": false
+    },
+    {
+     "value": "gateway-auto[1m]",
+     "resolvedModel": "gateway-auto[1m]",
+     "displayName": "Gateway Auto",
+     "description": "(description)",
+     "supportsEffort": true,
+     "supportedEffortLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "supportsAdaptiveThinking": true,
+     "supportsAutoMode": true,
+     "supportsThinkingOff": true
+    },
+    {
+     "value": "claude-opus-5[1m]",
+     "resolvedModel": "claude-opus-5[1m]",
+     "displayName": "Claude Opus 5",
+     "description": "(description)",
+     "supportsEffort": true,
+     "supportedEffortLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "supportsAdaptiveThinking": true,
+     "supportsFastMode": true,
+     "supportsAutoMode": true,
+     "supportsThinkingOff": true
+    },
+    {
+     "value": "claude-sonnet-5[1m]",
+     "resolvedModel": "claude-sonnet-5[1m]",
+     "displayName": "Claude Sonnet 5",
+     "description": "(description)",
+     "supportsEffort": true,
+     "supportedEffortLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ],
+     "supportsAdaptiveThinking": true,
+     "supportsAutoMode": true,
+     "supportsThinkingOff": true
+    }
+   ]
+  }
+ }
+}

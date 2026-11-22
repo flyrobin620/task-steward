@@ -62,6 +62,7 @@ def saved_answers(env: dict[str, str]) -> dict[str, Any]:
 
 
 @pytest.mark.use_case(UC)
+@pytest.mark.use_case("UC-REVIEW-004")
 def test_choices_are_made_with_keys_and_answered_questions_collapse(tmp_path: Path) -> None:
     home = tmp_path / "data"
     script: list[Any] = [
@@ -69,9 +70,11 @@ def test_choices_are_made_with_keys_and_answered_questions_collapse(tmp_path: Pa
         ["line", str(home)],
         ["line", ""],  # language: the default
         "enter",  # reviewer: the default
+        "enter",  # its model: offered first from the list (DN004 §3.4)
+        "enter",  # its effort
         "down",  # human channels: move to teams-chat …
-        "esc",  # … then back to the reviewer
-        "enter",  # reviewer again
+        "esc",  # … then back to the effort
+        "enter",  # effort again
         "end",
         "up",
         "enter",  # human channels: in-session
@@ -80,7 +83,7 @@ def test_choices_are_made_with_keys_and_answered_questions_collapse(tmp_path: Pa
         "enter",  # user settings: yes (the default)
         "down",
         "enter",  # the plan: change an answer …
-        "6",
+        "8",
         "enter",  # … the port
         ["line", "47802"],
         "enter",  # the new plan: install
@@ -104,8 +107,11 @@ def test_choices_are_made_with_keys_and_answered_questions_collapse(tmp_path: Pa
     assert "√ 宿主：Claude Code（claude-code）" in screen  # one host: chosen without asking
     assert "须为绝对路径" not in screen
     assert "问题 1/" not in screen and "↑↓ 选择" not in screen
-    # The reviewer was answered once on the screen although it was asked twice.
-    assert screen.count("√ 评审器：") == 1
+    # The effort was answered once on the screen although it was asked twice.
+    assert screen.count("√ 评审器：") == 1 and screen.count("√ 推理强度：") == 1
+    assert "√ 评审模型：GPT-6-Astra（gpt-6-astra）" in screen and "√ 推理强度：medium" in screen
+    assert (answers["reviewer_model"], answers["reviewer_effort"]) == ("gpt-6-astra", "medium")
+    assert "正在取得" not in screen  # the listing line was taken away
     # The plan, each step once installed, the checks and what to do next.
     assert re.search(r"► Claude Code 插件 +要做", screen)
     # Changing an answer showed the plan again below the first one, which stayed whole.
@@ -135,7 +141,8 @@ def test_cancelling_at_the_plan_keeps_the_answers(
     tmp_path: Path, json_flag: tuple[str, ...]
 ) -> None:
     home = tmp_path / "data"
-    keys: list[Any] = [["line", str(home)], ["line", "en-US"], "enter", "enter", "y"]
+    keys: list[Any] = [["line", str(home)], ["line", "en-US"], "enter", "enter", "enter"]
+    keys += ["enter", "y"]
     keys += [["line", ""], "enter", "up", "enter"]  # the plan: “取消”, the last option
     out = drive(tmp_path, keys, *json_flag)
     assert out["code"] == 0 and out["left"] == []
@@ -152,7 +159,8 @@ def test_cancelling_at_the_plan_keeps_the_answers(
 def test_lines_that_wrap_on_a_narrow_console_are_erased_whole(tmp_path: Path) -> None:
     home = tmp_path / "a-data-directory-whose-path-wraps-on-a-console-sixty-columns-wide"
     keys: list[Any] = [["line", str(home)], ["line", ""], "enter", "esc", "esc"]
-    keys += [["line", "en-US"], "enter", "enter", "y", ["line", ""], "enter", "up", "enter"]
+    keys += [["line", "en-US"], "enter", "enter", "enter", "enter", "y", ["line", ""], "enter"]
+    keys += ["up", "enter"]
     out = drive(tmp_path, {"columns": 60, "keys": keys})
     assert out["code"] == 0 and out["left"] == [], out["screen"]
     screen = out["screen"]
@@ -164,7 +172,8 @@ def test_lines_that_wrap_on_a_narrow_console_are_erased_whole(tmp_path: Path) ->
     assert saved_answers(out["env"])["language"] == "en-US"
 
 
-FULL_ANSWERS: list[Any] = ["enter", "enter", "n", ["line", ""], "enter"]  # after the language
+# After the language: reviewer, its model and effort, human channels, Dashboard, port, settings.
+FULL_ANSWERS: list[Any] = ["enter", "enter", "enter", "enter", "n", ["line", ""], "enter"]
 
 
 @pytest.mark.use_case(UC)
@@ -184,7 +193,8 @@ def test_ctrl_c_while_the_steps_run_says_some_may_be_done(tmp_path: Path) -> Non
 def test_an_answers_file_given_with_interactive_supplies_the_defaults(tmp_path: Path) -> None:
     home = tmp_path / "from-file"
     answers = write_answers(tmp_path, home, language="en-US", dashboard_port=47803)
-    keys: list[Any] = [["line", ""], ["line", ""], "enter", "enter", "enter", ["line", ""]]
+    keys: list[Any] = [["line", ""], ["line", ""], "enter", "enter", "enter", "enter", "enter"]
+    keys += [["line", ""]]
     keys += ["enter", "up", "enter"]  # user settings, then “取消” at the plan
     out = drive(tmp_path, keys, "--answers", str(answers))
     assert out["code"] == 0 and out["left"] == [], out["screen"]

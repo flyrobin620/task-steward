@@ -105,7 +105,7 @@ worker 完成任务成果后，**由 worker 自己**启动配置的只读评审�
 1. 评审模型：从所选评审器的列表中选；预选现有配置或代码默认值（在列表中时），否则宿主自己的默认模型。
 2. 推理强度：从所选模型支持的强度中选。
 
-终端入口用方向键选择（DN009 §16）；会话入口由 setup skill 在用户回答评审器之后运行 `tsw setup models --reviewer <评审器> --json` 取列表，再在对话中问。答案 `reviewer_model`、`reviewer_effort` 写到 `roles.reviewer.model` / `effort`（`codex-app-server` 也写入，显式记下用户的选择）。答案文件中没有这两项（早先版本保存的答案、非交互的 `install --answers`）时按上面的预选规则取值，取不到列表时用代码默认值并给出警告。已有数据目录时安装不改配置（DN009 §5 第 3 步），只报告差异；改用下面的更换方式。
+终端入口用方向键选择（DN009 §16）；会话入口由 setup skill 在用户回答评审器之后运行 `tsw setup models --reviewer <评审器> --json` 取列表，再在对话中问。答案 `reviewer_model`、`reviewer_effort` 写到 `roles.reviewer.model` / `effort`（`codex-app-server` 也写入，显式记下用户的选择）。答案文件中没有这两项（早先版本保存的答案、非交互的 `install --answers`）时不取列表，用代码默认值，`check` 与 `plan` 给出警告（模型没有对照本机列表核实，安装后可以用下面的方式更换）。已有数据目录时安装不改配置（DN009 §5 第 3 步），只报告差异；改用下面的更换方式。
 
 **更换：命令行**（用户本人在会话外的终端，DN006 §8.10）：
 

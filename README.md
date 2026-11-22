@@ -63,7 +63,7 @@
 
 ## 开始使用（开发中）
 
-前提：Windows、Python 3.10+、git、Claude Code（桌面 app 与 `claude` 命令行），以及用作 worker 自评审的 Codex 命令行（`codex`，已登录；本版本只实现了 Codex 评审器，没有它安装照常完成，但任务完成不了自评审）。运行时只依赖标准库，不需要 pip。两条安装路径任选其一，各自在一处做完（[DN009](docs/design/DN009-distribution-and-install.md)、[CC009](docs/design/claude-code/CC009-install.md)）。
+前提：Windows、Python 3.10+、git、Claude Code（桌面 app 与 `claude` 命令行），以及用作 worker 自评审的一个评审器命令行（Codex 的 `codex`、GitHub Copilot CLI 的 `copilot` 或 Claude Code 的 `claude`，已登录；没有时安装照常完成，但任务完成不了自评审，也可以选择不做自评审）。安装时从所选评审器在本机实际可用的模型中选评审模型与推理强度，之后可以在会话外的终端用 `tsw reviewer set`、或在主会话中更换（[DN004 §3.4](docs/design/DN004-worker-self-review.md)）。运行时只依赖标准库，不需要 pip。两条安装路径任选其一，各自在一处做完（[DN009](docs/design/DN009-distribution-and-install.md)、[CC009](docs/design/claude-code/CC009-install.md)）。
 
 **在终端安装**（PowerShell）：
 

@@ -13,32 +13,23 @@ from __future__ import annotations
 import shutil
 import sys
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from tsw.config import DEFAULTS, VERSION
+from tsw.config import DEFAULTS, MODEL_ID, VERSION
 from tsw.plugins.catalog import CHANNELS, HOST_INTEGRATIONS
+from tsw.review import models as reviewer_models
+from tsw.review.models import ModelList
 
-# ``claude -p`` started by tsw, with a model other than the worker's (DN006 §10.2, CC004 §4).
-CLAUDE_REVIEWER: dict[str, Any] = {
-    "session": "claude-headless",
-    "fallback_session": None,
-    "model": "claude-sonnet-5-5",
-    "effort": "high",
-}
-# Copilot CLI (DN006 §10.2a, CP004): the model must be one Copilot allows on this machine; the
-# user changes it in the main session when Copilot's policy pins another.
-COPILOT_REVIEWER: dict[str, Any] = {
-    "session": "copilot-cli",
-    "fallback_session": None,
-    "model": "gpt-6.1-sol",
-    "effort": "medium",
-}
-LAYERS: dict[str, dict[str, Any]] = {
-    "claude-headless": CLAUDE_REVIEWER,
-    "copilot-cli": COPILOT_REVIEWER,
-}
+# Reviewers without a fallback (DN006 §10.2, §10.2a): ``claude -p`` and Copilot CLI started by
+# tsw. Codex keeps the configuration's default fallback.
+NO_FALLBACK = frozenset({"claude-headless", "copilot-cli"})
+# The model questions depend on the reviewer answer: their choices are the chosen reviewer's
+# models on this machine (DN004 §3.4).
+MODEL_QUESTIONS = ("reviewer_model", "reviewer_effort")
+# Lists a reviewer's models; the terminal entries pass one, the answers-file paths do not list.
+Lister = Callable[[str], ModelList]
 # No self-review at all (DN004 §9): review.self_review is off.
 NO_REVIEW = "none"
 REVIEWERS = ("codex-app-server", "claude-headless", "copilot-cli", NO_REVIEW)
@@ -60,6 +51,8 @@ SHORT_NAMES: dict[str, str] = {
     "checkout": "产品检出",
     "language": "交流语言",
     "reviewer": "评审器",
+    "reviewer_model": "评审模型",
+    "reviewer_effort": "推理强度",
     "human_channels": "怎样找到你",
     "host": "宿主",
     "dashboard": "Dashboard 常驻服务",
@@ -90,7 +83,12 @@ class Question:
     @property
     def labels(self) -> dict[str, str]:
         """What each choice means (DN009 §16.3); choices without one are left out."""
-        return {c: CHOICE_LABELS[c] for c in self.choices if c in CHOICE_LABELS}
+        own: dict[str, str] = self.extra.get("labels") or {}
+        return {
+            c: own.get(c) or CHOICE_LABELS[c]
+            for c in self.choices
+            if c in own or c in CHOICE_LABELS
+        }
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -108,6 +106,8 @@ class Question:
                 out["labels"] = self.labels
         if self.note:
             out["note"] = self.note
+        if self.extra.get("depends_on"):
+            out["depends_on"] = self.extra["depends_on"]
         return out
 
 
@@ -124,6 +124,82 @@ def detected_reviewer(env: Mapping[str, str]) -> str:
     """The first implemented reviewer (Codex); ``check`` warns when its command line is missing."""
     del env
     return implemented_reviewers()[0]
+
+
+def reviewer_executable(
+    env: Mapping[str, str], reviewer: str, claude: str | None = None
+) -> str | None:
+    """The command line a reviewer is listed with during the install: the ``claude`` the
+    install found, else the reviewer's command on ``PATH``."""
+    if reviewer == "claude-headless" and claude:
+        return claude
+    command = reviewer_models.COMMANDS.get(reviewer)
+    return shutil.which(command, path=env.get("PATH")) if command else None
+
+
+def lister(
+    env: Mapping[str, str],
+    claude: str | None = None,
+    before: Callable[[str], None] | None = None,
+) -> Lister:
+    """A lister for the terminal entries: each reviewer is listed once per run; ``before`` is
+    told which reviewer is about to be listed (it takes a few seconds)."""
+    cache: dict[str, ModelList] = {}
+
+    def find(reviewer: str) -> ModelList:
+        if reviewer not in cache:
+            if before is not None:
+                before(reviewer)
+            executable = reviewer_executable(env, reviewer, claude)
+            cache[reviewer] = reviewer_models.list_models(reviewer, executable)
+        return cache[reviewer]
+
+    return find
+
+
+def model_label(model: reviewer_models.Model) -> str:
+    """A model's line in a choice: its name, and the full ID an alias stands for."""
+    name = model.name if model.name and model.name != model.id else ""
+    also = "、".join(model.also)
+    if name and also:
+        return f"{name}（{also}）"
+    return name or also
+
+
+def bind(q: Question, answers: Mapping[str, Any], find: Lister | None) -> Question | None:
+    """The question as it is asked now (DN004 §3.4): the model questions become a choice among
+    the chosen reviewer's models (or the efforts the chosen model supports), or a typed answer
+    when the list cannot be had; None when they are not asked (no reviewer, or no lister)."""
+    if q.id not in MODEL_QUESTIONS:
+        return q
+    reviewer = answers.get("reviewer")
+    if find is None or reviewer not in reviewer_models.BUILTIN:
+        return None
+    found = find(str(reviewer))
+    if q.id == "reviewer_model":
+        default = reviewer_models.preselect_model(found, None)
+        if found.available:
+            labels = {m.id: model_label(m) for m in found.models}
+            return replace(
+                q,
+                kind="choice",
+                choices=tuple(m.id for m in found.models),
+                default=default,
+                extra={**q.extra, "labels": {k: v for k, v in labels.items() if v}},
+            )
+        return replace(
+            q,
+            kind="text",
+            default=default,
+            note=f"取不到 {reviewer} 的模型列表（{found.error}）：输入模型 ID；"
+            "它未经核实，第一轮评审时核实，不可用即失败",
+        )
+    model = answers.get("reviewer_model")
+    efforts = reviewer_models.efforts_for(found, model)
+    default = reviewer_models.preselect_effort(found, model, None)
+    if efforts:
+        return replace(q, kind="choice", choices=efforts, default=default)
+    return replace(q, kind="text", default=default, note="取不到这个模型支持的推理强度：输入一个")
 
 
 def reviewer_warning(env: Mapping[str, str], reviewer: str | None = None) -> str | None:
@@ -197,6 +273,23 @@ def questions(env: Mapping[str, str], checkout: Path) -> list[Question]:
             "claude-headless：tsw 启动的只读 claude -p（需要已登录的 claude 命令行）；"
             "copilot-cli：GitHub Copilot CLI（需要已登录的 copilot 命令行）；"
             "none：不做自评审（review.self_review 为 off，DN004 §9）",
+        ),
+        Question(
+            "reviewer_model",
+            "评审模型（所选评审器在本机实际可用的模型）",
+            "model",
+            "roles.reviewer.model",
+            note="选了评审器（不是 none）时问；列表用 tsw setup models --reviewer <评审器> "
+            "--json 取得（DN004 §3.4）；没有回答时用代码默认值",
+            extra={"depends_on": "reviewer"},
+        ),
+        Question(
+            "reviewer_effort",
+            "评审的推理强度（所选模型支持的）",
+            "effort",
+            "roles.reviewer.effort",
+            note="选了评审器（不是 none）时问；从 tsw setup models 给出的该模型的 efforts 中选",
+            extra={"depends_on": "reviewer_model"},
         ),
         Question(
             "human_channels",
@@ -279,6 +372,11 @@ def normalize(answers: Mapping[str, Any], qs: list[Question]) -> tuple[dict[str,
                 problems.append(f"{q.id}：必填（{q.prompt}）")
                 continue
             value = q.default
+        if q.id in MODEL_QUESTIONS and value is None:
+            continue  # not answered: the reviewer's default model and effort (DN004 §3.4)
+        if q.id == "reviewer_model" and not MODEL_ID.match(str(value).strip()):
+            problems.append(f"{q.id}：模型 ID 格式不正确（{value}）")
+            continue
         if q.kind == "path":
             path = Path(str(value)).expanduser()
             if not path.is_absolute():
@@ -329,8 +427,14 @@ def config_layer(answers: Mapping[str, Any]) -> dict[str, Any]:
         "dashboard": {"port": answers["dashboard_port"]},
     }
     reviewer = answers.get("reviewer")
-    if reviewer in LAYERS:
-        layer["roles"] = {"reviewer": dict(LAYERS[str(reviewer)])}
+    if reviewer in reviewer_models.BUILTIN:
+        model, effort = reviewer_models.BUILTIN[str(reviewer)]
+        chosen: dict[str, Any] = {"session": reviewer}
+        if reviewer in NO_FALLBACK:
+            chosen["fallback_session"] = None
+        chosen["model"] = answers.get("reviewer_model") or model
+        chosen["effort"] = answers.get("reviewer_effort") or effort
+        layer["roles"] = {"reviewer": chosen}
     elif reviewer == NO_REVIEW:
         layer["review"] = {"self_review": "off"}
     return layer
@@ -363,6 +467,12 @@ def config_differences(values: Mapping[str, Any], answers: Mapping[str, Any]) ->
         found.append(
             f"roles.reviewer.session：配置为 {reviewer!r}，答案为 {answers.get('reviewer')!r}"
         )
+    else:
+        for key in ("model", "effort"):
+            mine = answers.get(f"reviewer_{key}")
+            theirs = get(dict(values), f"roles.reviewer.{key}")
+            if mine and mine != theirs:
+                found.append(f"roles.reviewer.{key}：配置为 {theirs!r}，答案为 {mine!r}")
     return found
 
 
@@ -390,11 +500,16 @@ def ask(
     previous: Mapping[str, Any],
     read: Callable[[str], str],
     say: Callable[[str], None],
+    find: Lister | None = None,
 ) -> dict[str, Any]:
     """Ask in the terminal; an earlier answer is offered as the default. The entry's own
-    questions (``asked_by: entry``) are shown, not asked."""
+    questions (``asked_by: entry``) are shown, not asked; the model questions are asked with
+    the chosen reviewer's list from ``find`` (DN004 §3.4)."""
     answers: dict[str, Any] = {}
-    for q in qs:
+    for unbound in qs:
+        q = bind(unbound, answers, find)
+        if q is None:
+            continue
         if q.asked_by != "setup":
             say(f"{q.prompt}：{q.default}（{q.note}）")
             continue
@@ -415,6 +530,8 @@ def ask(
             suffix = f"（默认 {shown}）" if default not in (None, "") else ""
             if q.note:
                 say(f"  {q.note}")
+            for choice, label in q.labels.items() if q.id in MODEL_QUESTIONS else ():
+                say(f"    {choice}：{label}")
             reply = read(f"{q.prompt}{hint}{suffix}：").strip()
             value: Any = reply or default
             if value in (None, ""):

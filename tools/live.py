@@ -502,6 +502,24 @@ def reviewer_scenario(args: argparse.Namespace) -> int:
     return 0 if write_results(run, "reviewer", checks, notes) else 1
 
 
+def models_check(run: Run, reviewer: str, prefix: str, model: str | None) -> dict[str, Any]:
+    """R5: the reviewer's real command line lists its models without a model call (DN004 §3.4),
+    and the model this scenario reviews with is one of them."""
+    listed = tsw(run, "reviewer", "models", "--reviewer", reviewer)
+    wanted = model or str(listed["current"]["model"])
+    entry = next((m for m in listed["models"] if wanted in (m["id"], *m.get("also", []))), None)
+    evidence = {
+        "available": listed["available"],
+        "error": listed["error"],
+        "models": [m["id"] for m in listed["models"]],
+        "host_default": listed["host_default"],
+        "model": wanted,
+        "efforts": entry["efforts"] if entry else None,
+    }
+    ok = bool(listed["available"]) and entry is not None
+    return check(f"{prefix}M", f"{reviewer} 的模型列表含评审所用的 {wanted}", ok, evidence)
+
+
 def review_with(
     run: Run, reviewer: str, budget: int, notes: list[str], *, model: str | None = None
 ) -> list[dict[str, Any]]:
@@ -531,6 +549,7 @@ def review_with(
             "roles": {"reviewer": {"session": reviewer, **({"model": model} if model else {})}},
         },
     )
+    listing = models_check(run, reviewer, prefix, model)
     tsw(run, "lease", "acquire", "--session", ORCH_SESSION)
     tsw(
         run,
@@ -604,7 +623,7 @@ def review_with(
     )
     git_out(workdir, "commit", "-q", "-am", "add add() and mean()")
     env = clean_env(run, CLAUDE_CODE_HOST_SESSION_ID=WORKER_SESSION)
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = [listing]
     calls = 0
     rounds: list[dict[str, Any]] = []
     for round_no in (1, 2):

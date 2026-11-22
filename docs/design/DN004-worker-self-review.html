@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="1e4d315d5977db3b35c09ede19b7b57eb41e711fa98f4d68fb2ef1f8e525774f">
+<meta name="tsw-source-sha256" content="a32d7b8c68f811af43a79413b97e38828bc6f319c6d9caec7ef3d793bb6d32a9">
 <title>DN004 worker 自评审：评审与迭代决策</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -75,7 +75,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p><strong>推理强度</strong>：只能选所选模型支持的强度。预选顺序：现有配置（模型支持时）、代码默认值（模型支持时）、模型自己的默认强度。</p>
 <p><strong>安装</strong>（DN009 §6）：评审器之后再问两项，选 <code>none</code>（不做自评审）时不问：</p>
 <ol><li>评审模型：从所选评审器的列表中选；预选现有配置或代码默认值（在列表中时），否则宿主自己的默认模型。</li><li>推理强度：从所选模型支持的强度中选。</li></ol>
-<p>终端入口用方向键选择（DN009 §16）；会话入口由 setup skill 在用户回答评审器之后运行 <code>tsw setup models --reviewer &lt;评审器&gt; --json</code> 取列表，再在对话中问。答案 <code>reviewer_model</code>、<code>reviewer_effort</code> 写到 <code>roles.reviewer.model</code> / <code>effort</code>（<code>codex-app-server</code> 也写入，显式记下用户的选择）。答案文件中没有这两项（早先版本保存的答案、非交互的 <code>install --answers</code>）时按上面的预选规则取值，取不到列表时用代码默认值并给出警告。已有数据目录时安装不改配置（DN009 §5 第 3 步），只报告差异；改用下面的更换方式。</p>
+<p>终端入口用方向键选择（DN009 §16）；会话入口由 setup skill 在用户回答评审器之后运行 <code>tsw setup models --reviewer &lt;评审器&gt; --json</code> 取列表，再在对话中问。答案 <code>reviewer_model</code>、<code>reviewer_effort</code> 写到 <code>roles.reviewer.model</code> / <code>effort</code>（<code>codex-app-server</code> 也写入，显式记下用户的选择）。答案文件中没有这两项（早先版本保存的答案、非交互的 <code>install --answers</code>）时不取列表，用代码默认值，<code>check</code> 与 <code>plan</code> 给出警告（模型没有对照本机列表核实，安装后可以用下面的方式更换）。已有数据目录时安装不改配置（DN009 §5 第 3 步），只报告差异；改用下面的更换方式。</p>
 <p><strong>更换：命令行</strong>（用户本人在会话外的终端，DN006 §8.10）：</p>
 <ul><li><code>tsw reviewer models [--reviewer &lt;评审器&gt;] [--json]</code>：只读，列出模型与支持的推理强度，标出当前配置；缺省为当前配置的评审器。</li><li><code>tsw reviewer set [--reviewer &lt;评审器&gt;] [--model &lt;模型&gt;] [--effort &lt;强度&gt;] [--unlisted] [--yes]</code>：没有给出的项在终端中用方向键选择（非交互运行时必须给全）；显示改动前后的值，确认后写入 <code>roles.reviewer.session</code> / <code>model</code> / <code>effort</code>（换评审器时 <code>fallback_session</code> 置为 <code>null</code>）。写入与 <code>config_change</code> 是同一实现：完整校验、<code>config.changed</code> 事件、原子替换文件（DN003 §7.1）。<code>roles.reviewer</code> 是权限类键：用户本人在终端运行这条命令就是授权，来源由 tsw 记为渠道 <code>user-cli</code>（<code>text</code> 为命令行本身），与 <code>tsw task accept</code> 相同；在任何宿主会话中运行都拒绝。不需要调度租约。</li></ul>
 <p><strong>更换：主会话 chat</strong>：</p>

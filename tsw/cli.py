@@ -32,7 +32,7 @@ from tsw.home import (
     remember_home,
     resolve_home,
 )
-from tsw.host import dashboard_service, workdeck
+from tsw.host import claude_install, dashboard_service, workdeck
 from tsw.host.claude_code import install_hint, render_instructions
 from tsw.host.guard import run as run_guard
 from tsw.host.identity import (
@@ -57,9 +57,13 @@ from tsw.machine import candidates as candidates_mod
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.config_tools import CONFIG_TOOLS
 from tsw.machine.runner import run_tool
+from tsw.review import change as reviewer_change
+from tsw.review import models as reviewer_models
 from tsw.review.run import run_round
 from tsw.setup import interactive as setup_interactive
+from tsw.setup import questions as setup_questions
 from tsw.setup import steps as setup_steps
+from tsw.setup import terminal as setup_terminal
 from tsw.setup.record import answers_path, save_answers
 from tsw.storage.fs import FsStorage, restore
 from tsw.tasks import KINDS, TaskSpec, list_tasks, note, register, task_row
@@ -717,6 +721,126 @@ def _cmd_setup_uninstall(args: argparse.Namespace) -> dict[str, Any]:
     return setup_steps.uninstall(ctx)
 
 
+def _cmd_setup_models(args: argparse.Namespace) -> dict[str, Any]:
+    """Read-only: the models of a reviewer for the install's model questions (DN004 §3.4); the
+    session entry asks with them."""
+    _git_on_path(args)
+    claude = claude_install.find_claude(dict(os.environ), args.claude)
+    executable = setup_questions.reviewer_executable(os.environ, args.reviewer, claude)
+    found = reviewer_models.list_models(args.reviewer, executable)
+    model = reviewer_models.preselect_model(found, None)
+    out = found.to_dict()
+    out["preselected"] = {
+        "model": model,
+        "effort": reviewer_models.preselect_effort(found, model, None),
+    }
+    return out
+
+
+def _cmd_reviewer_models(args: argparse.Namespace) -> dict[str, Any]:
+    """Read-only: the models of the configured (or given) reviewer on this machine, with the
+    configuration (DN004 §3.4)."""
+    config = load_config(_home(args))
+    offered = reviewer_models.offer(config.values, args.reviewer)
+    if args.json:
+        return offered
+    _print_offer(offered)
+    return {"_silent": True}
+
+
+def _print_offer(offered: dict[str, Any]) -> None:
+    now = offered["current"]
+    print(f"当前：评审器 {now['reviewer']}，模型 {now['model']}，推理强度 {now['effort']}")
+    if now.get("self_review") == "off":
+        print("（自评审已关闭：review.self_review 为 off）")
+    print(f"{offered['reviewer']} 在本机可用的模型：")
+    if not offered["available"]:
+        print(f"  取不到列表：{offered['error']}")
+        return
+    for model in offered["models"]:
+        mark = "*" if model["current"] else " "
+        name = f"  {model['name']}" if model.get("name") and model["name"] != model["id"] else ""
+        also = f"（{'、'.join(model['also'])}）" if model.get("also") else ""
+        efforts = " / ".join(model["efforts"]) or "?"
+        print(f" {mark} {model['id']}{name}{also}  推理强度：{efforts}")
+    print("更换：tsw reviewer set（在会话外的终端运行）")
+
+
+def _picker() -> tuple[reviewer_change.Pick | None, Callable[[], None]]:
+    """Arrow keys in a console, numbered lines when only stdin is a terminal, nothing when not
+    interactive."""
+    if not sys.stdin.isatty():
+        return None, lambda: None
+    mode, console, restore = setup_terminal.open_terminal(plain=False)
+    style = setup_terminal.Style(mode)
+    if console is not None:
+        keys = console
+
+        def by_keys(title: str, values: Any, labels: Any, default: str | None) -> str:
+            options = [
+                setup_terminal.Option(
+                    str(labels.get(v) or v),
+                    (v if labels.get(v) else "") + ("（当前）" if v == default else ""),
+                )
+                for v in values
+            ]
+            start = list(values).index(default) if default in values else 0
+            head = ["", f" {style.bold(title)}"]
+            picked = setup_terminal.choose(keys, style, head, options, start)
+            if picked is None:
+                raise TswError(ErrorCode.REJECTED, "已取消，没有写入", reason="not_confirmed")
+            keys.write(f" {style.mark('ok')} {title}：{style.bold(values[picked])}\n")
+            return str(values[picked])
+
+        return by_keys, restore
+
+    def by_lines(title: str, values: Any, labels: Any, default: str | None) -> str:
+        print(f"{title}：")
+        for number, value in enumerate(values, 1):
+            label = f"  {labels[value]}" if labels.get(value) else ""
+            print(f"  {number}. {value}{label}" + ("（当前）" if value == default else ""))
+        while True:
+            reply = input(f"选择编号（回车为 {default}）：").strip()
+            if not reply and default in values:
+                return str(default)
+            if reply.isdigit() and 1 <= int(reply) <= len(values):
+                return str(values[int(reply) - 1])
+            if reply in values:
+                return reply
+            print("  请输入列表中的编号。")
+
+    return by_lines, restore
+
+
+def _cmd_reviewer_set(args: argparse.Namespace) -> dict[str, Any]:
+    """The user changes the reviewer, its model and effort in a terminal outside any session
+    (DN004 §3.4, DN006 §8.10)."""
+    direct.require_outside_session(os.environ, "tsw reviewer set ")
+    home = _home(args)
+    ledger, config = _lease_ledger(args)
+    pick, restore = _picker() if not args.yes else (None, lambda: None)
+    try:
+        planned = reviewer_change.plan(
+            config.values,
+            reviewer=args.reviewer,
+            model=args.model,
+            effort=args.effort,
+            unlisted=args.unlisted,
+            pick=pick,
+        )
+    finally:
+        restore()
+    for text in planned["notes"]:
+        print(f"注意：{text}", file=sys.stderr)
+    return reviewer_change.apply(
+        home,
+        ledger,
+        planned,
+        unlisted=args.unlisted,
+        confirm=lambda prompt: _confirm(args, prompt),
+    )
+
+
 def _cmd_review_run(args: argparse.Namespace) -> dict[str, Any]:
     notes = args.notes
     if args.notes_file:
@@ -974,6 +1098,16 @@ def build_parser() -> argparse.ArgumentParser:
         setup, "uninstall", _cmd_setup_uninstall, "卸载安装脚本加入的内容（数据目录保留）"
     )
     setup_uninstall.add_argument("--yes", action="store_true", help="不再询问，直接执行")
+    setup_models = add(
+        setup, "models", _cmd_setup_models, "只读：某个评审器在本机可用的模型（安装的模型问题用）"
+    )
+    setup_models.add_argument(
+        "--reviewer", required=True, choices=list(reviewer_models.LISTERS), help="评审器"
+    )
+    setup_models.add_argument(
+        "--claude", help="claude 命令行的完整路径（默认先查 PATH 再查桌面 app）"
+    )
+    setup_models.add_argument("--git", help="git 的完整路径（不在 PATH 中时）")
     for command in (check, setup_plan, setup_install, setup_verify, setup_uninstall):
         command.add_argument("--answers", help="答案文件（默认用保存的 setup-answers.json）")
         command.add_argument("--python", help="解释器的完整路径（默认为运行本命令的解释器）")
@@ -981,6 +1115,33 @@ def build_parser() -> argparse.ArgumentParser:
             "--claude", help="claude 命令行的完整路径（默认先查 PATH 再查桌面 app）"
         )
         command.add_argument("--git", help="git 的完整路径（不在 PATH 中时）")
+
+    reviewer_cmd = sub.add_parser(
+        "reviewer", help="评审器、评审模型与推理强度（DN004 §3.4）"
+    ).add_subparsers(dest="reviewer_command", required=True, metavar="<reviewer command>")
+    reviewer_list = add(
+        reviewer_cmd, "models", _cmd_reviewer_models, "只读：评审器在本机可用的模型与当前配置"
+    )
+    reviewer_list.add_argument(
+        "--reviewer", choices=list(reviewer_models.LISTERS), help="评审器（默认为当前配置的）"
+    )
+    reviewer_set = add(
+        reviewer_cmd,
+        "set",
+        _cmd_reviewer_set,
+        "更换评审器、评审模型与推理强度（用户本人在会话外的终端运行）",
+    )
+    reviewer_set.add_argument(
+        "--reviewer", choices=list(reviewer_models.LISTERS), help="评审器（默认为当前配置的）"
+    )
+    reviewer_set.add_argument("--model", help="模型 ID（默认在终端中从列表选择）")
+    reviewer_set.add_argument("--effort", help="推理强度（默认在终端中从该模型支持的强度选择）")
+    reviewer_set.add_argument(
+        "--unlisted",
+        action="store_true",
+        help="写入列表中没有的模型或强度，或在取不到列表时写入（未核实，第一轮评审时核实）",
+    )
+    reviewer_set.add_argument("--yes", action="store_true", help="不在终端中选择与确认")
 
     review = sub.add_parser("review", help="worker 自评审").add_subparsers(
         dest="review_command", required=True, metavar="<review command>"

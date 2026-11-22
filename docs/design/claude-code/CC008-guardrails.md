@@ -177,7 +177,7 @@ G-PLAN、G-DEP、G-LEASE、G-SLOT、G-RES、G-WINDOW、G-ONE-ATTEMPT、G-PAUSE�
 | 主会话 | 运行（升级、修复、卸载） |
 | worker、例行会话、已撤销、待绑定 | 拒绝（`host_session_cli`）；PreToolUse 对已登记会话的 Bash 命令同样识别并拦下 `tsw setup`（与 §5.7 识别 `host render` 的做法相同） |
 
-只读的 `tsw setup check` / `plan` / `verify` 任何会话都可以运行。令牌仍不出现在任何输出中（CC006 §12），会话拿不到能登录 Dashboard 的东西。写用户设置与登记计划任务时由宿主请用户批准，tsw 不为 `tsw setup` 生成允许规则。
+只读的 `tsw setup check` / `plan` / `verify` / `models` 与 `tsw reviewer models`（评审模型列表，DN004 §3.4）任何会话都可以运行；`tsw reviewer set` 是用户本人的操作，任何会话中都拒绝（DN006 §8.10）。令牌仍不出现在任何输出中（CC006 §12），会话拿不到能登录 Dashboard 的东西。写用户设置与登记计划任务时由宿主请用户批准，tsw 不为 `tsw setup` 生成允许规则。
 
 ## 6. 允许规则与 auto 模式规则
 
