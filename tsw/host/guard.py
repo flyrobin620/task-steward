@@ -1002,13 +1002,12 @@ class Guard:
                     "SELECT status, substate FROM tasks WHERE task_id = ?", (who.task_id,)
                 ).fetchone()
             )
-        turn = self._take_turn(who)
         if self.config.valid and who.phase == "live":
             try:
                 self.ledger.commit(_turn_ended(who))
             except Exception as exc:  # observation only; never block on it
                 print(f"tsw guard: turn_ended not recorded: {exc}", file=sys.stderr)
-            self._record_via(who, turn)
+            self._record_via(who)
         if row is not None and row["substate"] == "reviewing" and not again:
             return {
                 "decision": "block",
@@ -1046,14 +1045,17 @@ class Guard:
             mark: Any = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             mark = None
-        earlier: Any = mark.get("prompts") if isinstance(mark, dict) else None
+        kept = cast("dict[str, Any]", mark) if isinstance(mark, dict) else {}
+        earlier: Any = kept.get("prompts")
         seen = cast("list[Any]", earlier) if isinstance(earlier, list) else []
         note = {
             "prompt": user_words(prompt),
             "message_id": recorded["message_id"] if recorded else None,
             "prompt_id": self._prompt_id(),
         }
-        self._mark_turn(who, {"prompts": [*seen, note]})
+        # ``turn`` and ``upto``: what the last Stop read (see _record_via).
+        last = {k: kept[k] for k in ("turn", "upto") if k in kept}
+        self._mark_turn(who, {**last, "prompts": [*seen, note]})
 
     def _take_turn(self, who: Identity) -> dict[str, Any]:
         """What was marked for the turn that is ending (empty when nothing was); the mark is used
@@ -1078,20 +1080,35 @@ class Guard:
         except Exception:  # a note only; never block the end of the turn
             return None
 
-    def _record_via(self, who: Identity, turn: Mapping[str, Any]) -> None:
-        """Messages recorded in this turn that came through workdeck: say so
-        (``input.session_message_via``, DN006 §8.11)."""
-        listed: Any = turn.get("prompts")
-        if not isinstance(listed, list) or not listed or not who.task_id:
+    def _record_via(self, who: Identity) -> None:
+        """Messages recorded in the turn ending now that came through workdeck: say so
+        (``input.session_message_via``, DN006 §8.11).
+
+        The turn is Stop's ``prompt_id``. The mark keeps the prompts the hook saw, in order, and
+        stays after Stop: a Stop that is blocked continues the same turn, and messages injected
+        after it still pair with that turn's entries (review r4 F4). The next turn's Stop drops
+        the prompts an earlier turn's Stop already read (``upto`` of ``turn``).
+        """
+        path = self._turn_file(who)
+        try:
+            mark: Any = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        turn_id = self._prompt_id()
+        listed: Any = mark.get("prompts") if isinstance(mark, dict) else None
+        if not isinstance(listed, list) or turn_id is None or not who.task_id:
+            with contextlib.suppress(OSError):
+                path.unlink()
+            return
+        kept = cast("dict[str, Any]", mark)
+        seen = [cast("dict[str, Any]", n) for n in cast("list[Any]", listed) if isinstance(n, dict)]
+        upto = kept.get("upto")
+        if kept.get("turn") != turn_id and isinstance(upto, int) and upto > 0:
+            seen = seen[upto:]  # an earlier turn's, already read at its Stop
+        self._mark_turn(who, {"turn": turn_id, "upto": len(seen), "prompts": seen})
+        if not seen:
             return
         task_id = who.task_id
-        seen = [cast("dict[str, Any]", n) for n in cast("list[Any]", listed) if isinstance(n, dict)]
-        if len(seen) != len(cast("list[Any]", listed)):
-            return
-        # The turn ending now; a mark left by a turn that never reached Stop is not this one's.
-        turn_id = seen[0].get("prompt_id")
-        if self._prompt_id() not in (None, turn_id):
-            return
         try:
             origins = turn_origins(
                 self.payload.get("transcript_path"),

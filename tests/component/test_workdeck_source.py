@@ -287,6 +287,23 @@ def test_the_worker_notes_a_message_that_came_through_workdeck(home: Home, tmp_p
     hook(h, session, "Stop", None, **fields)
     assert recorded(h)[-2:] == ["继续", "继续"]
     assert [v["message_id"] for v in vias(h)] == ["M-T001-1", "M-T001-6", "M-T001-8"]
+    # A Stop that is blocked (review in progress, another hook) continues the same turn: a message
+    # injected after it still pairs with this turn's entries (review r4 F4), and the earlier ones
+    # are not noted twice.
+    fields = {"prompt_id": "p-7", "transcript_path": str(transcript)}
+    hook(h, session, "UserPromptSubmit", "开始评审", **fields)
+    with transcript.open("a", encoding="utf-8") as out:
+        out.write(entry("p-7", HUMAN, "开始评审"))
+    hook(h, session, "Stop", None, **fields)
+    hook(h, session, "UserPromptSubmit", "也检查 B", **fields)
+    injected(transcript, "也检查 B", WORKDECK_ORIGIN)
+    hook(h, session, "Stop", None, stop_hook_active=True, **fields)
+    hook(h, session, "Stop", None, stop_hook_active=True, **fields)
+    assert recorded(h)[-2:] == ["开始评审", "也检查 B"]
+    assert [v["message_id"] for v in vias(h)] == ["M-T001-1", "M-T001-6", "M-T001-8", "M-T001-10"]
+    # The next turn drops what the last one read: its own words are paired afresh.
+    turn(h, session, transcript, "p-8", "也检查 B", origin=WORKDECK_ORIGIN)
+    assert [v["message_id"] for v in vias(h)][-1] == "M-T001-11"
     with h.ledger.view() as conn:
         later = {w["ref"]: w for w in candidates.materials(conn, [], "T001")}
     assert "via" not in later["M-T001-2"]
