@@ -392,6 +392,9 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
     # Only a missing command line (or a reviewer the tool refuses) stops the demo; a list that
     # cannot be had is unverified and the user decides (review r1 F1).
     assert "`command_found` 为 false" in example and "照常开始" in example
+    # The report names the key that turned self-review off, which may be the repository's own
+    # (PR #82 review): the brief's self-review line gives it.
+    assert "引用任务书“自评审”一行给出的生效配置键" in example
     assert (
         "tsw reviewer set" in example and "任务书写明“自评审：关闭”时不运行 review_run" in example
     )
