@@ -198,14 +198,24 @@ def user_change(
     principal: str,
     message_ref: str,
     words: str,
+    expected_sha256: str | None = None,
 ) -> Command:
     """A change the user makes with their own command outside any session (``tsw reviewer
     set``, DN004 §3.4): the same validation, event and file write as ``config_change``; the
     source is the command itself on the ``user-cli`` channel, bound to the file it starts from.
-    The caller makes sure it does not run inside a host session (DN006 §8.10)."""
+    The caller makes sure it does not run inside a host session (DN006 §8.10);
+    ``expected_sha256`` is the file the user's choice was made against: a change made meanwhile
+    is refused, not overwritten."""
 
     def build(ctx: CommitContext) -> list[EventDraft]:
         before_text = confedit.read_text(ctx.home)
+        if expected_sha256 is not None and confedit.text_sha(before_text) != expected_sha256:
+            raise rejected(
+                "配置在你选择期间被修改了，没有写入；重新运行以按当前配置选择",
+                reason="config_conflict",
+                expected=expected_sha256,
+                actual=confedit.text_sha(before_text),
+            )
         before = confedit.parse(before_text)
         if before is None and before_text is not None:
             raise rejected(

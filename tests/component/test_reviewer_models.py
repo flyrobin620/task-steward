@@ -257,3 +257,61 @@ def test_offer_marks_the_configured_model(home: Home) -> None:
     other = models.offer(values(home), "copilot-cli")
     assert not any(m["current"] for m in other["models"])
     assert other["preselected"] == {"model": "gpt-6.1-sol", "effort": "medium"}
+
+
+def test_a_change_made_while_choosing_is_not_overwritten(home: Home) -> None:
+    """The write is bound to the file the choice was made against (review T330 r1 F4)."""
+    h = Harness(home)
+    base = confedit.text_sha(confedit.read_text(home))
+    planned = change.plan(
+        values(home),
+        reviewer=None,
+        model="gpt-5.5",
+        effort="medium",
+        unlisted=False,
+        pick=None,
+        base_sha=base,
+    )
+    assert planned["ops"] == [{"op": "set", "path": "roles.reviewer.model", "value": "gpt-5.5"}]
+    # Meanwhile the main session changes the effort (gpt-5.5 has no "max").
+    path = home.path("config/task-steward.json")
+    changed = json.loads(path.read_text(encoding="utf-8"))
+    changed.setdefault("roles", {}).setdefault("reviewer", {})["effort"] = "max"
+    path.write_text(json.dumps(changed), encoding="utf-8")
+    with pytest.raises(TswError) as refused:
+        change.apply(home, h.ledger, planned, unlisted=False, confirm=lambda _: None)
+    assert refused.value.details["reason"] == "config_conflict"
+    assert confedit.change_events(h.ledger.storage) == []
+    assert values(home)["roles"]["reviewer"]["model"] == "gpt-6-astra"
+    # Planned again against the file as it is: written, and the result read back.
+    again = change.plan(
+        values(home),
+        reviewer=None,
+        model="gpt-5.5",
+        effort="high",
+        unlisted=False,
+        pick=None,
+        base_sha=confedit.text_sha(confedit.read_text(home)),
+    )
+    out = change.apply(home, h.ledger, again, unlisted=False, confirm=lambda _: None)
+    assert out["after"] == {"reviewer": "codex-app-server", "model": "gpt-5.5", "effort": "high"}
+
+
+def test_a_local_command_line_stops_a_reviewer_change(home: Home) -> None:
+    Harness(home)
+    home.path("config/task-steward.local.json").write_text(
+        json.dumps({"roles": {"reviewer": {"executable": "C:/custom/codex.exe"}}}),
+        encoding="utf-8",
+    )
+    config = load_config(home)
+    with pytest.raises(TswError) as refused:
+        change.plan(
+            config.values,
+            reviewer="copilot-cli",
+            model="gpt-6.2-sol",
+            effort="high",
+            unlisted=False,
+            pick=None,
+            sources=config.sources,
+        )
+    assert refused.value.details["reason"] == "local_executable"

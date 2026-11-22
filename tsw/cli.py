@@ -16,7 +16,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from tsw import __version__, direct, lease, preferences
+from tsw import __version__, confedit, direct, lease, preferences
 from tsw.config import DEFAULTS, EffectiveConfig, lease_minutes, load_config
 from tsw.context import ContextService
 from tsw.errors import EXIT_CODES, ErrorCode, TswError
@@ -817,6 +817,8 @@ def _cmd_reviewer_set(args: argparse.Namespace) -> dict[str, Any]:
     (DN004 §3.4, DN006 §8.10)."""
     direct.require_outside_session(os.environ, "tsw reviewer set ")
     home = _home(args)
+    # The file the choice is made against, read first: a change made meanwhile is refused.
+    base_sha = confedit.text_sha(confedit.read_text(home))
     ledger, config = _lease_ledger(args)
     pick, restore = _picker() if not args.yes else (None, lambda: None)
     try:
@@ -827,6 +829,8 @@ def _cmd_reviewer_set(args: argparse.Namespace) -> dict[str, Any]:
             effort=args.effort,
             unlisted=args.unlisted,
             pick=pick,
+            sources=config.sources,
+            base_sha=base_sha,
         )
     finally:
         restore()

@@ -94,7 +94,7 @@ worker 完成任务成果后，**由 worker 自己**启动配置的只读评审�
 | `copilot-cli` | `copilot --acp`（Agent Client Protocol）的 `initialize` 与 `session/new`，读 `models.availableModels` | `configOptions` 中 `reasoning_effort` 的选项（会话级，不按模型区分） | `auto`：每次由 Copilot 挑模型，与“实际模型须与配置一致”（§3.1）矛盾 | [CP004 §8](copilot/CP004-reviewer.md) |
 | `claude-headless` | `claude -p --input-format stream-json` 的控制请求 `initialize`（Agent SDK 的 `supportedModels()` 用的同一请求），读 `models`；隔离选项与环境变量与评审相同，所以用户设置中的网关决定列表 | 每个模型的 `supportedEffortLevels` | `default`：随用户的默认模型变化，评审总是显式传模型（CC004 §3） | [CC004 §8](claude-code/CC004-reviewer.md) |
 
-统一的结果：每个模型的 `id`（写进 `roles.reviewer.model` 的值，就是命令行 `--model` 接受的值）、名称、说明、支持的推理强度与默认推理强度，以及宿主自己的默认模型。
+统一的结果：每个模型的 `id`（写进 `roles.reviewer.model` 的值，就是命令行 `--model` 接受的值）、名称、说明、支持的推理强度与默认推理强度，以及宿主自己的默认模型。列表只给出能写进配置的选项：推理强度只保留配置接受的 `low` 到 `max`（Codex 有的模型多一档 `ultra`，不列出）；`claude-headless` 只列 `claude-…` 模型与别名（网关自己的模型名无法按 CC004 §4 核实）。
 
 **取不到列表时**（命令行不存在、未登录、超时、输出不是预期的协议）：不阻断安装与更换，给出原因。用户可以自己输入模型 ID（安装时建议值为现有配置或代码默认值），它标为“未核实”：第一轮评审按 §3.1 核实，模型不可用即判本轮失败，不回退。取到了列表而用户给的模型不在其中时拒绝（拼错，或宿主的策略不允许），除非用户明确要求写入列表外的模型（命令行 `--unlisted`）：宿主的列表可能不全（例如 Copilot 的管理策略只在调用时生效，CP004 §8）。
 
@@ -110,7 +110,7 @@ worker 完成任务成果后，**由 worker 自己**启动配置的只读评审�
 **更换：命令行**（用户本人在会话外的终端，DN006 §8.10）：
 
 - `tsw reviewer models [--reviewer <评审器>] [--json]`：只读，列出模型与支持的推理强度，标出当前配置；缺省为当前配置的评审器。
-- `tsw reviewer set [--reviewer <评审器>] [--model <模型>] [--effort <强度>] [--unlisted] [--yes]`：没有给出的项在终端中用方向键选择（非交互运行时必须给全）；显示改动前后的值，确认后写入 `roles.reviewer.session` / `model` / `effort`（换评审器时 `fallback_session` 置为 `null`）。写入与 `config_change` 是同一实现：完整校验、`config.changed` 事件、原子替换文件（DN003 §7.1）。`roles.reviewer` 是权限类键：用户本人在终端运行这条命令就是授权，来源由 tsw 记为渠道 `user-cli`（`text` 为命令行本身），与 `tsw task accept` 相同；在任何宿主会话中运行都拒绝。不需要调度租约。
+- `tsw reviewer set [--reviewer <评审器>] [--model <模型>] [--effort <强度>] [--unlisted] [--yes]`：没有给出的项在终端中用方向键选择（非交互运行时必须给全）；显示改动前后的值，确认后写入 `roles.reviewer.session` / `model` / `effort`（换评审器时 `fallback_session` 置为 `null`）。写入与 `config_change` 是同一实现：完整校验、`config.changed` 事件、原子替换文件（DN003 §7.1）。写入绑定到开始选择时读到的配置文件：选择期间配置被改过时拒绝写入，请用户重新运行；结果读回写入后的配置。换评审器时 `roles.reviewer.executable`（旧评审器的命令行）一并删除；它写在本机覆盖中时（tsw 不改本机覆盖，DN003 §5）拒绝更换，请用户先改该文件。`reviewer_models` 给出的 `ops` 示例同样处理。`roles.reviewer` 是权限类键：用户本人在终端运行这条命令就是授权，来源由 tsw 记为渠道 `user-cli`（`text` 为命令行本身），与 `tsw task accept` 相同；在任何宿主会话中运行都拒绝。不需要调度租约。
 
 **更换：主会话 chat**：
 

@@ -42,6 +42,8 @@ def plan(
     unlisted: bool,
     pick: Pick | None,
     lister: Callable[[str, str | None], models.ModelList] = models.list_models,
+    sources: Mapping[str, str] | None = None,
+    base_sha: str | None = None,
 ) -> dict[str, Any]:
     """The change ``tsw reviewer set`` would make: the reviewer, model and effort (picked when
     not given and ``pick`` is there), checked against the list; ``ops`` empty when nothing
@@ -55,6 +57,8 @@ def plan(
             reviewer = pick(
                 "评审器", names, {}, now["reviewer"] if now["reviewer"] in names else None
             )
+    if reviewer != now["reviewer"]:
+        models.ops(values, str(reviewer), "-", "-", sources)  # a local command line: refused now
     if reviewer not in models.LISTERS:
         raise TswError(
             ErrorCode.REJECTED,
@@ -98,9 +102,11 @@ def plan(
     return {
         "before": {k: now[k] for k in ("reviewer", "model", "effort")},
         "after": {"reviewer": reviewer, "model": model, "effort": effort},
-        "ops": models.ops(values, reviewer, model, effort),
+        "ops": models.ops(values, reviewer, model, effort, sources),
         "notes": notes,
         "listed": found.available,
+        # The file the choice was made against: a change made meanwhile is not overwritten.
+        "base_sha": base_sha,
     }
 
 
@@ -144,14 +150,17 @@ def apply(
         principal=_principal(),
         message_ref=f"cli:{utc_now()}:{os.getpid()}",
         words=text,
+        expected_sha256=planned.get("base_sha"),
     )
     event = ledger.commit(command).events[-1]
     config = load_config(home)
+    written = models.current(config.values)
     return {
         "changed": True,
         "change_id": event.data["change_id"],
         "before": before,
-        "after": after,
+        # What the configuration holds now (DN003 §7.1), read back after the write.
+        "after": {key: written[key] for key in ("reviewer", "model", "effort")},
         "notes": planned["notes"],
         "warnings": config.warnings,
     }

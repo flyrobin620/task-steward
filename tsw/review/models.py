@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from tsw.config import DEFAULTS, MODEL_ID
+from tsw.config import CLAUDE_ALIASES, DEFAULTS, EFFORTS, MODEL_ID
 from tsw.errors import ErrorCode, TswError
 from tsw.review import claude
 from tsw.review.codex import AppServer
@@ -122,7 +122,9 @@ def _id(value: Any) -> str | None:
 
 
 def _strings(values: Iterable[Any]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(str(v) for v in values if isinstance(v, str) and v))
+    """Reasoning efforts a reviewer configuration accepts (DN003 §3.1), in the host's order: a
+    host's own extra level (Codex's ``ultra``) cannot be written, so it is not offered."""
+    return tuple(dict.fromkeys(str(v) for v in values if isinstance(v, str) and v in EFFORTS))
 
 
 # ---------------------------------------------------------------------- parsing
@@ -198,14 +200,17 @@ def parse_copilot(session: Mapping[str, Any]) -> ModelList:
 
 
 def parse_claude(response: Mapping[str, Any]) -> ModelList:
-    """The ``initialize`` control response (CC004 §8): ``default`` is left out; an alias keeps
-    the full ID it resolves to as another name."""
+    """The ``initialize`` control response (CC004 §8): ``default`` is left out, and so are the
+    models the reviewer cannot check (not a ``claude-…`` ID or an alias, CC004 §4: a gateway's
+    own names); an alias keeps the full ID it resolves to as another name."""
     out = ModelList("claude-headless")
     for item in response.get("models") or []:
         if not isinstance(item, dict):
             continue
         model = _id(item.get("value"))
         if model is None or out.find(model):
+            continue
+        if model not in CLAUDE_ALIASES and not model.startswith("claude-"):
             continue
         resolved = _id(item.get("resolvedModel"))
         out.models.append(
@@ -543,14 +548,33 @@ def choose(
     return model, effort, notes
 
 
-def ops(values: Mapping[str, Any], reviewer: str, model: str, effort: str) -> list[dict[str, Any]]:
+def ops(
+    values: Mapping[str, Any],
+    reviewer: str,
+    model: str,
+    effort: str,
+    sources: Mapping[str, str] | None = None,
+) -> list[dict[str, Any]]:
     """The ``config_change`` operations that choose ``reviewer``, ``model`` and ``effort``: a
-    new reviewer drops the old one's fallback (DN004 §3.4)."""
+    new reviewer drops the old one's fallback and command line (``roles.reviewer.executable``
+    names the old reviewer's command, DN004 §3.4). The command line set in the machine-local
+    override cannot be changed here (DN003 §5): that is refused, saying what to edit."""
     now = current(values)
     out: list[dict[str, Any]] = []
     if reviewer != now["reviewer"]:
         out.append({"op": "set", "path": "roles.reviewer.session", "value": reviewer})
         out.append({"op": "set", "path": "roles.reviewer.fallback_session", "value": None})
+        if now["executable"]:
+            if (sources or {}).get("roles.reviewer.executable") == "local":
+                raise TswError(
+                    ErrorCode.REJECTED,
+                    "本机覆盖 config/task-steward.local.json 的 roles.reviewer.executable 指向 "
+                    f"{now['executable']}（{now['reviewer']} 的命令行），换成 {reviewer} 后评审"
+                    "仍会启动它：先在该文件中删去这一项或改为新评审器的命令行，再更换",
+                    reason="local_executable",
+                    executable=now["executable"],
+                )
+            out.append({"op": "set", "path": "roles.reviewer.executable", "value": None})
     if model != now["model"]:
         out.append({"op": "set", "path": "roles.reviewer.model", "value": model})
     if effort != now["effort"]:

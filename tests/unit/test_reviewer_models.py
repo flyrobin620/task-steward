@@ -45,9 +45,11 @@ def test_codex_lists_visible_models_with_their_own_efforts() -> None:
     # Hidden models (includeHidden returned them) are left out.
     hidden = [d["id"] for d in sample("codex-model-list.json")["data"] if d.get("hidden")]
     assert hidden and not set(hidden) & set(ids)
-    # Efforts differ per model: one has "ultra", one has no "max".
+    # Efforts differ per model: one has no "max"; Codex's own "ultra" cannot be configured
+    # (DN003 §3.1), so it is not offered (review T330 r1 F1).
     efforts = {m.id: m.efforts for m in found.models}
-    assert "ultra" in efforts["gpt-5.6-terra"] and "max" not in efforts["gpt-5.5"]
+    assert "max" not in efforts["gpt-5.5"]
+    assert "ultra" not in efforts["gpt-5.6-terra"] and "max" in efforts["gpt-5.6-terra"]
     assert found.find("gpt-6-astra") is not None and found.available
 
 
@@ -80,8 +82,10 @@ def test_claude_drops_default_and_keeps_what_an_alias_stands_for() -> None:
     ids = [m.id for m in found.models]
     assert "default" not in ids
     assert ids[:4] == ["opus", "fable", "sonnet", "haiku"]
-    # A context suffix is not part of a configured model ID (DN003 §1).
+    # A context suffix is not part of a configured model ID (DN003 §1); a gateway's own name
+    # cannot be checked against the answer's model (CC004 §4) and is not offered (r1 F3).
     assert "claude-opus-5" in ids and not any("[" in i for i in ids)
+    assert "gateway-auto" not in ids
     sonnet = found.find("sonnet")
     assert sonnet is not None and sonnet.also == ("claude-sonnet-5-5",)
     # The full ID (in any of the host's spellings) finds the alias's entry.
@@ -274,3 +278,56 @@ def test_sessions_may_list_but_not_change_the_reviewer(
     assert (problem is not None) is refused
     if refused:
         assert problem is not None and "不能运行 tsw reviewer set" in problem
+
+
+@pytest.mark.parametrize("found", [codex(), copilot(), claude()], ids=lambda f: f.reviewer)
+def test_every_listed_choice_is_a_valid_configuration(found: ModelList, home: Home) -> None:
+    """Whatever the list offers can be written (review T330 r1 F1, F3)."""
+    from tsw.config import load_config  # noqa: PLC0415
+
+    for model in found.models:
+        for effort in model.efforts:
+            layer = {
+                "version": 1,
+                "roles": {
+                    "reviewer": {
+                        "session": found.reviewer,
+                        "fallback_session": None,
+                        "model": model.id,
+                        "effort": effort,
+                    }
+                },
+            }
+            config = load_config(home, main_layer=layer)
+            assert config.valid, (model.id, effort, config.problems)
+
+
+def test_a_new_reviewer_drops_the_old_command_line() -> None:
+    """``roles.reviewer.executable`` names the old reviewer's command (review T330 r1 F2)."""
+    values: dict[str, Any] = {
+        "roles": {
+            "reviewer": {
+                "session": "codex-app-server",
+                "model": "gpt-6-astra",
+                "effort": "medium",
+                "executable": "C:/custom/codex.exe",
+            }
+        }
+    }
+    moved = models.ops(values, "copilot-cli", "gpt-6.2-sol", "medium", {})
+    assert {"op": "set", "path": "roles.reviewer.executable", "value": None} in moved
+    # The same reviewer keeps it.
+    assert models.ops(values, "codex-app-server", "gpt-6-sol", "medium", {}) == [
+        {"op": "set", "path": "roles.reviewer.model", "value": "gpt-6-sol"}
+    ]
+    # Set in the machine-local override, which tsw does not edit: refused, saying what to do.
+    with pytest.raises(TswError) as refused:
+        models.ops(
+            values,
+            "copilot-cli",
+            "gpt-6.2-sol",
+            "medium",
+            {"roles.reviewer.executable": "local"},
+        )
+    assert refused.value.details["reason"] == "local_executable"
+    assert "task-steward.local.json" in refused.value.message

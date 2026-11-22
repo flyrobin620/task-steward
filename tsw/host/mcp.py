@@ -787,6 +787,16 @@ class Server:
             offered = reviewer_models.offer(config.values, reviewer)
             target = offered["reviewer"]
             picked = offered["preselected"]
+            try:
+                example: Any = reviewer_models.ops(
+                    config.values,
+                    target,
+                    str(picked["model"] or ""),
+                    str(picked["effort"] or ""),
+                    config.sources,
+                )
+            except TswError as exc:  # the old command line is the machine-local override's
+                example = {"problem": exc.message}
             return {
                 **offered,
                 "file_sha256": confedit.text_sha(confedit.read_text(self.home)),
@@ -795,9 +805,7 @@ class Server:
                 "ops 用 example_ops 的形式换成用户选的值，roles.reviewer 是权限类键，"
                 "user_source 为用户选择时的原话，target 为 "
                 '["config", file_sha256, "authorize"]（DN003 §7.2）',
-                "example_ops": reviewer_models.ops(
-                    config.values, target, str(picked["model"] or ""), str(picked["effort"] or "")
-                ),
+                "example_ops": example,
             }
         if name == "config_history":
             change_id = _opt_str(args, "change_id")
