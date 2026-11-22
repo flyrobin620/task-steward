@@ -153,6 +153,53 @@ def test_dispatch_creates_an_attempt_and_binds_the_session(h: Harness) -> None:
 
 
 @mark.use_case("UC-DISPATCH-001")
+@mark.transition("T07")
+def test_dispatch_workdir_defaults_and_refuses_unfilled_placeholders(h: Harness) -> None:
+    """The execution directory is optional: by default ``work/<任务>/<attempt>``; a template
+    the orchestrator forgot to fill in is refused before anything is recorded (T338)."""
+    h.register("T001")
+    h.plan("T001")
+    for bad in ("work/T001/{attempt}", "work/<任务>/a1", "work/T001/<attempt>", "work/{T001}"):
+        assert (
+            reason_of(
+                lambda bad=bad: h.run("task_dispatch", task_id="T001", workdir=bad, user_turn=True)
+            )
+            == "invalid_input"
+        ), bad
+        assert (
+            reason_of(
+                lambda bad=bad: h.run(
+                    "attempt_start", task_id="T001", purpose="prestart", user_turn=True, workdir=bad
+                )
+            )
+            == "invalid_input"
+        ), bad
+    assert h.query("SELECT * FROM attempts") == []
+    assert h.status("T001") == "ready"
+    out = h.run("task_dispatch", task_id="T001", user_turn=True)
+    assert out["events"][0]["data"]["workdir"] == "work/T001/a1"
+    brief = (h.home.root / "runs" / "T001" / "a1" / "brief.md").read_text(encoding="utf-8")
+    assert "- 执行目录：work/T001/a1\n" in brief
+    # A prestarted session keeps its own directory when the dispatch does not name one.
+    h.register("T002")
+    h.plan("T002")
+    elsewhere = str(h.home.root / "elsewhere" / "T002")
+    started = h.run(
+        "attempt_start", task_id="T002", purpose="prestart", user_turn=True, workdir=elsewhere
+    )["events"][0]["data"]
+    h.run(
+        "attempt_reconcile",
+        task_id="T002",
+        attempt="a1",
+        generation=started["generation"],
+        outcome="created",
+        session_ref="w-standby",
+    )
+    dispatched = h.run("task_dispatch", task_id="T002", user_turn=False)
+    assert dispatched["events"][0]["data"]["workdir"] == elsewhere
+
+
+@mark.use_case("UC-DISPATCH-001")
 @mark.transition("G-SLOT")
 @mark.transition("G-RES")
 def test_slots_are_limited(home: Home) -> None:

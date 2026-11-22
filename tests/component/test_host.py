@@ -362,6 +362,25 @@ def test_needs_prestart_respects_the_standby_limit(home: Home) -> None:
 
 
 @mark.use_case("UC-DISPATCH-001")
+def test_dispatch_without_workdir_readies_the_default_directory(h: Harness) -> None:
+    """Through the MCP server: the directory the dispatch recorded is the one made (T338)."""
+    h.register("T001", kind="research")
+    h.plan("T001")
+    orchestrator = Server(h.home, {SESSION_ENV: "orch-1"}, h.home.root)
+    orchestrator.machine = "m1"
+    out = orchestrator.call("task_dispatch", {"task_id": "T001", "user_turn": True})
+    assert out["events"][0]["data"]["workdir"] == "work/T001/a1"
+    assert (h.home.root / "work" / "T001" / "a1").is_dir()
+    with pytest.raises(TswError) as refused:
+        orchestrator.call(
+            "task_dispatch",
+            {"task_id": "T001", "workdir": "work/T001/{attempt}", "user_turn": True},
+        )
+    assert refused.value.details["reason"] == "invalid_input"
+    assert not (h.home.root / "work" / "T001" / "{attempt}").exists()
+
+
+@mark.use_case("UC-DISPATCH-001")
 def test_attempt_start_creates_the_execution_directory_anywhere(h: Harness, tmp_path: Path) -> None:
     h.register("T001")
     h.plan("T001")

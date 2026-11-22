@@ -606,10 +606,30 @@ def _read_set(conn: sqlite3.Connection, task_id: str, extra: Sequence[str] = ())
     return sorted({task_id, *deps, *extra})
 
 
+# Characters of a template the caller forgot to fill in (``work/T002/{attempt}``,
+# ``work/<任务>/<attempt>``): such a directory would be created and the worktree put in it (T338).
+PLACEHOLDER_CHARS = "{}<>"
+
+
+def workdir_input(inp: Mapping[str, Any]) -> str | None:
+    """The execution directory the orchestrator gave, if any; never an unfilled placeholder."""
+    value = opt_text(inp, "workdir")
+    if value is not None and not value.strip():
+        value = None
+    if value is not None and any(c in value for c in PLACEHOLDER_CHARS):
+        raise rejected(
+            "执行目录含未替换的占位符；不给 workdir 时为 work/<任务>/<attempt>",
+            reason="invalid_input",
+            field="workdir",
+            workdir=value,
+        )
+    return value
+
+
 @tool("task_dispatch", "orchestrator", description="派发任务（T07，R-ATTEMPT）")
 def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
-    workdir = text(inp, "workdir")
+    given_workdir = workdir_input(inp)
     branch = opt_text(inp, "branch")
     user_turn = flag(inp, "user_turn")
     extra_reads = strings(items(inp, "read_set", required=False), "read_set")
@@ -639,7 +659,11 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 )
             attempt_id = str(previous["attempt"])
             mode = "standby" if previous["phase"] == "standby" else "continue"
-            if previous["workdir"] and not same_dir(ctx.home, workdir, str(previous["workdir"])):
+            if (
+                given_workdir
+                and previous["workdir"]
+                and not same_dir(ctx.home, given_workdir, str(previous["workdir"]))
+            ):
                 raise rejected(
                     "已有会话在另一个执行目录中，派发要沿用该目录",
                     reason="workdir_mismatch",
@@ -649,6 +673,9 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             raise rejected("未知的 attempt 阶段", reason="invalid_attempt", phase=previous["phase"])
         if mode in ("new", "reuse_planned"):
             guards.g_window(env.config, user_turn)
+        # Not given: the session already made keeps its directory, a new one gets the default.
+        kept_dir = previous["workdir"] if mode in ("standby", "continue") and previous else None
+        workdir = given_workdir or (str(kept_dir) if kept_dir else f"work/{task_id}/{attempt_id}")
         # A session dispatched again keeps the preferences added for it before: only new ones
         # are checked, and the brief checks every one kept, so a revoked one says so (PR #52).
         kept = (
@@ -729,7 +756,7 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
     purpose = text(inp, "purpose")
     user_turn = flag(inp, "user_turn")
-    given_workdir = opt_text(inp, "workdir")  # where the session is created
+    given_workdir = workdir_input(inp)  # where the session is created
     given_title = opt_text(inp, "session_title")  # the main session's short title (DN002 §5.8)
     if purpose not in ("dispatch", "prestart"):
         raise rejected(

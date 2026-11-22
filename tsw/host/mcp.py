@@ -453,7 +453,7 @@ class Server:
             if wake is not None:
                 out["wake"] = wake
         if name == "task_dispatch":
-            self._prepare_workdir(args)
+            self._prepare_workdir(out)
         if name == "attempt_start":
             self._session_dir(out, ledger)
         if name == "routine_start" and out.get("events"):
@@ -673,9 +673,20 @@ class Server:
             pass
         return result
 
-    def _prepare_workdir(self, args: Mapping[str, Any]) -> None:
-        """A research task's execution directory lives under ``work/`` and is created here."""
-        workdir = workdir_path(self.home, str(args.get("workdir") or ""))
+    def _prepare_workdir(self, out: Mapping[str, Any]) -> None:
+        """A research task's execution directory lives under ``work/`` and is created here: the
+        one the dispatch recorded (the default ``work/<任务>/<attempt>`` when none was given)."""
+        recorded = next(
+            (
+                e["data"].get("workdir")
+                for e in out.get("events") or []
+                if e.get("type") == "task.dispatch_started"
+            ),
+            None,
+        )
+        if not recorded:
+            return
+        workdir = workdir_path(self.home, str(recorded))
         if within(workdir, self.home.root / "work"):
             workdir.mkdir(parents=True, exist_ok=True)
 

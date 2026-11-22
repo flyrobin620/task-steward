@@ -29,6 +29,11 @@ SOURCE: dict[str, Any] = {
     },
     "required": ["channel", "principal", "message_ref", "text", "target"],
 }
+WORKDIR: dict[str, Any] = {
+    **S,
+    "description": "执行目录（相对数据目录或绝对路径）。通常不给：缺省为 work/<任务>/<attempt>，"
+    "已有会话时沿用它的目录；给出时必须是实际路径，含 { } < > 的占位符被拒绝",
+}
 FINDINGS: dict[str, Any] = {
     "type": "array",
     "items": {"type": "object", "properties": {"round": INT, "finding": S}},
@@ -97,9 +102,9 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     ),
     "stale_keep": schema(["task_id", "user_source"], task_id=S, user_source=SOURCE),
     "task_dispatch": schema(
-        ["task_id", "workdir", "user_turn"],
+        ["task_id", "user_turn"],
         task_id=S,
-        workdir=S,
+        workdir=WORKDIR,
         branch=S,
         user_turn=B,
         read_set={
@@ -113,7 +118,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         task_id=S,
         purpose={"enum": ["dispatch", "prestart"]},
         user_turn=B,
-        workdir=S,
+        workdir=WORKDIR,
         session_title={
             **S,
             "description": "会话的简短基准标题（不给时为“<任务> <任务标题>”）；结果中的 "
