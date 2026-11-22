@@ -1166,3 +1166,36 @@ def test_the_workdeck_client_reads_the_tree_and_waits_for_the_delivery() -> None
     assert fake.received == [
         {"type": "send", "sessionId": "local_w", "text": "用 add", "priority": "later", "ref": "r1"}
     ]
+
+
+@pytest.mark.parametrize(
+    "name", ["host-e2e", "routine-e2e", "handoff-e2e", "change-e2e", "title-e2e"]
+)
+def test_every_operator_step_says_who_and_every_user_step_why(
+    name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    spec = live.scenario(name)
+    run = live.Run.create(name)
+    tasks = [str(t["task_id"]) for t in spec["tasks"]]
+    code = [str(t["task_id"]) for t in spec["tasks"] if t["kind"] != "research"]
+    values = {"run_id": run.id, "code_tasks": "、".join(code), "prestart_step": ""}
+    plan = live.operator_plan(name, spec, run, values=values, tasks=tasks, code=code)
+    assert all(
+        isinstance(s, dict) and s["who"] in ("user", "session", "script") for s in spec["operator"]
+    )
+    assert all(s.get("why") for s in plan["steps"] if s["who"] == "user")
+    # Every session the user opens is opened by a link the run can open for them.
+    assert plan["links"] and all(
+        url.startswith("claude://code/new?") for url in plan["links"].values()
+    )
+    for step in plan["steps"]:
+        assert step.get("link") is None or step["link"] in plan["links"]
+    for rule in plan["drive"]:
+        assert ("open" in rule) != ("text" in rule)
+        assert rule.get("open") is None or rule["open"] in plan["links"]
+        assert "{" not in str(rule.get("text", "")) and "{code}" not in json.dumps(rule["after"])
+    text = live.operator_markdown(name, spec, run, plan)
+    users = [s for s in plan["steps"] if s["who"] == "user"]
+    assert text.count("为什么不能自动化：") == len(users)

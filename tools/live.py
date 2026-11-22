@@ -10,6 +10,9 @@
     python tools/live.py title-e2e prepare | verify RUN_ID [--observed yes|no]
                                                     worker session titles (DN002 §5.8)
     python tools/live.py setup-e2e run --path terminal|session      both install paths (T308)
+    python tools/live.py <scenario> open RUN_ID LINK                open a session by deep link
+    python tools/live.py <scenario> drive RUN_ID                    send the user's messages
+    python tools/live.py <scenario> sessions RUN_ID                 the run's sessions (workdeck)
     python tools/live.py cleanup RUN_ID [--archived SESSION ...]   finish a run's cleanup
     python tools/live.py list                                       runs and their state
 
@@ -24,10 +27,13 @@ checkout and the reviewers are real. GitHub is not: ``origin.git`` and ``bin/gh`
 for the GitHub CLI, ``tools/live/gh_stub.py``) play it, so nothing leaves the machine; evidence
 about pull requests and merges is simulated and reported as such.
 
-The host-e2e scenario needs the user: only the user can open a session in a new folder of the
-Claude app and speak in it. ``prepare`` writes the steps to ``OPERATOR.md``. Claude sessions
-can only be archived from inside the app; ``cleanup`` records the sessions the operator archived
-and confirmed with ``get_session`` and reports every other manifest entry as not cleaned up.
+The scenarios with an operator need the user only for what the host reserves for them: trusting
+a new folder and sending the first message of a session (a deep link fills it in, ``open``).
+``prepare`` writes who does each step, and why the user's steps cannot be automated, to
+``OPERATOR.md``; ``drive`` sends the scenario's other messages in the user's place through a
+local workdeck daemon (``tools/live_drive.py``), and the session running live.py archives the
+run's sessions (``sessions`` lists them). ``cleanup`` records the sessions archived and confirmed
+with ``get_session`` and reports every other manifest entry as not cleaned up.
 """
 
 # Ledger events, manifests and reviewer JSON are walked generically.
@@ -1090,9 +1096,13 @@ def operator_markdown(name: str, spec: Mapping[str, Any], run: Run, plan: Mappin
         ]
         for rule in plan["drive"]:
             when = "、".join(
-                c["event"] + (f"（{c['task']}）" if c.get("task") else "") for c in rule["after"]
+                c["event"]
+                + (f"（{c['task']}）" if c.get("task") else "")
+                + (f" 第 {c['min']} 次" if c.get("min") else "")
+                for c in rule["after"]
             )
-            target = "主会话" if rule["to"] == "main" else f"{rule['to']} 的 worker 会话"
+            to = str(rule.get("to") or "")
+            target = "主会话" if to == "main" else f"{to} 的 worker 会话"
             what = (
                 f"打开链接 {rule['open']}"
                 if rule.get("open")
@@ -1403,18 +1413,22 @@ def routine_verify(args: argparse.Namespace) -> int:
         teams_round_trip(evs),
         teams_card(run, evs, args.card_multiline),
         routine_wakes(run, evs),
-        check(
-            "O",
-            "操作者观察：例行会话没有信任确认、没有被拦",
-            args.trust_prompted == "no" and args.blocked == "no",
-            {
-                "trust_prompted": args.trust_prompted or "未记录",
-                "blocked": args.blocked or "未记录",
-                # Recorded only: whether the orchestrator was woken is check W, from the hooks
-                # (an operator missed the wakes in the T243 run, T250).
-                "woken_by_ticks": args.woken_by_ticks or "未记录（由检查 W 判定）",
-                "evidence": "操作者在 app 中的观察",
-            },
+        (
+            unwatched("O", "操作者观察：例行会话没有信任确认、没有被拦", None, "no")
+            if args.trust_prompted is None and args.blocked is None
+            else check(
+                "O",
+                "操作者观察：例行会话没有信任确认、没有被拦",
+                args.trust_prompted == "no" and args.blocked == "no",
+                {
+                    "trust_prompted": args.trust_prompted or "未记录",
+                    "blocked": args.blocked or "未记录",
+                    # Recorded only: whether the orchestrator was woken is check W, from the hooks
+                    # (an operator missed the wakes in the T243 run, T250).
+                    "woken_by_ticks": args.woken_by_ticks or "未记录（由检查 W 判定）",
+                    "evidence": "操作者在 app 中的观察",
+                },
+            )
         ),
     ]
     notes = [
@@ -1424,6 +1438,17 @@ def routine_verify(args: argparse.Namespace) -> int:
         "CC006 §6.5 的 R2 未在本次运行中验证",
     ]
     return 0 if write_results(run, "routine-e2e", checks, notes) else 1
+
+
+def unwatched(cid: str, title: str, seen: str | None, good: str) -> dict[str, Any]:
+    """An operator's observation (``--blocked`` and the like): passed or failed as recorded;
+    not verified when nobody watched (an unattended run, T340)."""
+    if seen is None:
+        return {
+            **check(cid, title, False, "无人观察（无人值守运行）"),
+            "status": NOT_VERIFIED,
+        }
+    return check(cid, title, seen == good, {"observed": seen, "evidence": "操作者在 app 中的观察"})
 
 
 def handoff_prepare(args: argparse.Namespace) -> int:
@@ -1453,12 +1478,7 @@ def handoff_verify(args: argparse.Namespace) -> int:
         ),
         handed,
         handoff_wake(run, evs, old, new),
-        check(
-            "O",
-            "操作者观察：worker 与新主会话发消息时没有被拦",
-            args.blocked == "no",
-            {"blocked": args.blocked or "未记录", "evidence": "操作者在 app 中的观察"},
-        ),
+        unwatched("O", "操作者观察：worker 与新主会话发消息时没有被拦", args.blocked, "no"),
     ]
     notes = [
         hook_summary(run),
@@ -1498,11 +1518,8 @@ def change_verify(args: argparse.Namespace) -> int:
     final = last(evs, "worker.submitted", "T001")
     checks.append(merged(run, evs, {"T001": final}))
     checks.append(
-        check(
-            "O",
-            "操作者观察：worker 与主会话发消息、worker 合并时没有被拦",
-            args.blocked == "no",
-            {"blocked": args.blocked or "未记录", "evidence": "操作者在 app 中的观察"},
+        unwatched(
+            "O", "操作者观察：worker 与主会话发消息、worker 合并时没有被拦", args.blocked, "no"
         )
     )
     notes = [

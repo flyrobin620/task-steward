@@ -105,15 +105,19 @@ class Rule:
 
 
 def holds(condition: Mapping[str, Any], events: Iterable[Mapping[str, Any]]) -> bool:
-    """An event of the given type (and task, and data values) is in the ledger."""
+    """At least ``min`` (default 1) events of the given type (and task, and data values) are in
+    the ledger."""
     data = condition.get("data") or {}
+    need, seen = int(condition.get("min", 1)), 0
     for e in events:
         if e.get("type") != condition["event"]:
             continue
         if condition.get("task") and e.get("task_id") != condition["task"]:
             continue
         if all((e.get("data") or {}).get(k) == v for k, v in data.items()):
-            return True
+            seen += 1
+            if seen >= need:
+                return True
     return False
 
 

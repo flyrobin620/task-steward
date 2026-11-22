@@ -70,6 +70,10 @@ def test_conditions_match_data_values() -> None:
     assert not d.holds(cond, [ev("input.escalated", "T001", kind="handoff")])
     assert not d.holds(cond, [ev("input.escalated", "T002", kind="in_session")])
     assert d.holds(cond, [ev("input.escalated", "T001", kind="in_session", request_id="Q1")])
+    # ``min``: the second acceptance (after a requirement change), not the first.
+    twice = {"event": "task.accepted", "task": "T001", "min": 2}
+    once = [ev("task.accepted", "T001")]
+    assert not d.holds(twice, once) and d.holds(twice, once * 2)
 
 
 def test_rules_for_tasks_outside_the_run_are_dropped() -> None:
