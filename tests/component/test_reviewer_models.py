@@ -171,7 +171,8 @@ def test_what_is_not_given_is_picked_from_the_list(home: Home) -> None:
 
     def pick(title: str, choices: Any, labels: Any, default: str | None) -> str:
         picks.append((title, tuple(choices), default))
-        return {"评审器": "codex-app-server", "评审模型": "gpt-5.5"}.get(title, choices[-1])
+        chosen = {"评审器": "codex-app-server", "评审模型": "gpt-5.5"}
+        return chosen[title] if title in chosen else str(choices[-1])
 
     planned = change.plan(
         values(home), reviewer=None, model=None, effort=None, unlisted=False, pick=pick
