@@ -9,8 +9,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import subprocess
 import sys
+import threading
+import time
+import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -18,7 +22,7 @@ from typing import Any, cast
 import pytest
 
 from tests.machine_harness import MACHINE, Harness
-from tools import live
+from tools import live, live_drive
 from tsw import lease
 from tsw.home import Home
 from tsw.machine.base import Caller
@@ -900,3 +904,265 @@ def test_title_e2e_checks_read_the_receipts_not_the_requests(
         result="Archived session w-T002.",
     )
     assert set(ids().values()) == {"passed"}
+
+
+# ------------------------------------------------------------- T340: fewer operator steps
+
+
+def host_plan(run: live.Run, tasks: list[str]) -> dict[str, Any]:
+    spec = live.scenario("host-e2e")
+    chosen = live.selected(spec, tasks)
+    code = [str(t["task_id"]) for t in chosen if t["kind"] != "research"]
+    values = {
+        "run_id": run.id,
+        "code_tasks": "、".join(code),
+        "prestart_step": "；T003 先预启动一个待命会话，等我说再派发" if "T003" in tasks else "",
+    }
+    return live.operator_plan("host-e2e", spec, run, values=values, tasks=tasks, code=code)
+
+
+def test_host_e2e_leaves_the_user_only_what_the_host_reserves_for_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OPERATOR.md lists the user's steps with the reason each cannot be automated; the links
+    open the run's own folders with the first messages filled in; everything else is the
+    session's or the drive's."""
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    run = live.Run.create("host-e2e")
+    plan = host_plan(run, ["T001", "T002"])
+    users = [s for s in plan["steps"] if s["who"] == "user"]
+    assert users and all(s.get("why") for s in users)
+    # Required of the user: pressing send in the two sessions a link opens (and trusting).
+    assert [s["link"] for s in users if not s.get("optional")] == ["trust", "main"]
+    query = {
+        k: urllib.parse.parse_qs(urllib.parse.urlsplit(v).query) for k, v in plan["links"].items()
+    }
+    assert query["trust"]["folder"] == [str(run.repo)]
+    assert query["main"] == {"folder": [str(run.home)], "q": ["执行 T001、T002"]}
+    # Without T003 its rules and its end condition are dropped; {code} became each code task.
+    ids = [r["id"] for r in plan["drive"]]
+    assert ids == ["answer-T001", "accept", "convert-follow-up"]
+    accept = next(r for r in plan["drive"] if r["id"] == "accept")
+    assert accept["text"] == "我验收 T001、T002"
+    assert [c["task"] for c in accept["after"]] == ["T001", "T002"]
+    assert {c.get("task") for c in plan["done"]} == {"T001", "T002"}
+    text = live.operator_markdown("host-e2e", live.scenario("host-e2e"), run, plan)
+    assert "## 你要做的（只有这些）" in text and text.count("为什么不能自动化：") == len(users)
+    assert plan["links"]["main"] in text and "“用 add”" in text
+    every = host_plan(run, ["T001", "T002", "T003"])
+    assert {"dispatch-T003", "pause-T003", "resume-T003", "cancel-T003"} <= {
+        r["id"] for r in every["drive"]
+    }
+    main_query = urllib.parse.parse_qs(urllib.parse.urlsplit(every["links"]["main"]).query)
+    assert "T003 先预启动" in main_query["q"][0]
+
+
+def test_the_run_folder_starts_sessions_in_auto_mode_without_rules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    run = live.Run.create("host-e2e")
+    run.bin.mkdir()
+    live.session_settings(run, run.home)
+    data = json.loads((run.home / ".claude" / "settings.local.json").read_text(encoding="utf-8"))
+    assert data["permissions"] == {"defaultMode": "auto"}
+    # Check A reads the mode of the main session's first prompt from the recorded hooks.
+    records: list[dict[str, Any]] = [
+        {"event": "SessionStart", "session": "local_m", "payload": {}},
+        {"event": "UserPromptSubmit", "session": "local_m", "payload": {"permission_mode": "auto"}},
+        {"event": "UserPromptSubmit", "session": "local_m", "payload": {"permission_mode": "plan"}},
+        {"event": "UserPromptSubmit", "session": "local_w", "payload": {"permission_mode": "x"}},
+    ]
+
+    def write() -> None:
+        lines = "".join(json.dumps(r) + "\n" for r in records)
+        (run.dir / "hook-payloads.jsonl").write_text(lines, encoding="utf-8")
+
+    write()
+    assert live.main_mode(run, ["local_m"])["status"] == "passed"
+    records[1]["payload"]["permission_mode"] = "default"
+    write()
+    assert live.main_mode(run, ["local_m"])["status"] == "failed"
+    assert live.main_mode(run, ["local_none"])["status"] == "failed"
+
+
+def test_an_unwatched_run_reports_the_observation_unverified() -> None:
+    unwatched = live.observed(argparse.Namespace(trust_prompted=None, blocked=None))
+    assert unwatched["status"] == live.NOT_VERIFIED
+    watched = live.observed(argparse.Namespace(trust_prompted="no", blocked="no"))
+    assert watched["status"] == "passed"
+    blocked = live.observed(argparse.Namespace(trust_prompted="no", blocked="yes"))
+    assert blocked["status"] == "failed"
+
+
+def drive_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rules: Any = None) -> live.Run:
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    run = live.Run.create("host-e2e")
+    plan = host_plan(run, ["T001", "T002"])
+    manifest = run.manifest()
+    manifest.update(links=plan["links"], drive=plan["drive"], driveDone=plan["done"])
+    if rules is not None:
+        manifest.update(drive=rules, driveDone=[])
+    run.save(manifest)
+    monkeypatch.setattr(live.live_drive, "workdeck_command", lambda: ["workdeck"])
+    return run
+
+
+def test_drive_sends_each_message_once_when_its_events_arrive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = drive_run(tmp_path, monkeypatch)
+    lease = ev(1, "lease.acquired", "")
+    lease["actor"] = {"role": "orchestrator", "session_id": "local_m"}
+    ledger: list[dict[str, Any]] = [lease, ev(2, "attempt.bound", "T001", session_ref="local_w1")]
+    script = iter(
+        [
+            [ev(3, "input.escalated", "T001", kind="in_session")],
+            [ev(4, "task.accepted", "T001"), ev(5, "task.accepted", "T002")],
+            [ev(6, "task.user_accepted", "T001"), ev(7, "task.user_accepted", "T002")],
+            [ev(8, "follow_up.recorded", "T002")],
+            [ev(9, "follow_up.converted", "T002")],
+        ]
+    )
+    sent: list[tuple[str, str]] = []
+
+    def events(_run: live.Run) -> list[dict[str, Any]]:
+        ledger.extend(next(script, []))
+        return list(ledger)
+
+    def send(_run: live.Run, session: str, text: str, _ref: str, _cmd: Any) -> dict[str, Any]:
+        sent.append((session, text))
+        return {"state": "delivered"}
+
+    monkeypatch.setattr(live, "events", events)
+    monkeypatch.setattr(live, "send_as_user", send)
+    args = argparse.Namespace(run_id=run.id, poll=0, timeout_minutes=1, tries=2)
+    assert live.drive(args) == 0
+    assert sent == [
+        ("local_w1", "用 add"),
+        ("local_m", "我验收 T001、T002"),
+        ("local_m", "把 T002 的 follow-up 转成任务，先不执行"),
+    ]
+    # A second drive of the same run sends nothing again.
+    sent.clear()
+    assert live.drive(args) == 0 and sent == []
+
+
+def test_drive_never_resends_a_message_whose_delivery_is_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rules = [{"id": "x", "to": "T001", "text": "用 add", "after": []}]
+    run = drive_run(tmp_path, monkeypatch, rules)
+    ledger = [ev(1, "attempt.bound", "T001", session_ref="local_w1")]
+    calls: list[str] = []
+
+    def send(*_a: Any) -> dict[str, Any]:
+        calls.append("x")
+        return {"state": "no-confirmation"}
+
+    monkeypatch.setattr(live, "events", lambda _run: ledger)  # pyright: ignore[reportUnknownLambdaType]
+    monkeypatch.setattr(live, "send_as_user", send)
+    args = argparse.Namespace(run_id=run.id, poll=0, timeout_minutes=1, tries=2)
+    assert live.drive(args) == 1 and calls == ["x"]
+    assert live.drive_log(run)[-1]["state"] == "stopped"
+    assert live.drive(args) == 1 and calls == ["x"]
+
+
+def test_drive_gives_up_after_the_allowed_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rules = [{"id": "x", "to": "T001", "text": "用 add", "after": []}]
+    run = drive_run(tmp_path, monkeypatch, rules)
+    ledger = [ev(1, "attempt.bound", "T001", session_ref="local_w1")]
+    calls: list[str] = []
+
+    def send(*_a: Any) -> dict[str, Any]:
+        calls.append("x")
+        return {"state": "failed", "detail": "未运行，暂不可投递"}
+
+    monkeypatch.setattr(live, "events", lambda _run: ledger)  # pyright: ignore[reportUnknownLambdaType]
+    monkeypatch.setattr(live, "send_as_user", send)
+    args = argparse.Namespace(run_id=run.id, poll=0, timeout_minutes=1, tries=2)
+    assert live.drive(args) == 1 and calls == ["x", "x"]
+
+
+class FakeWorkdeck:
+    """A loopback server speaking workdeck's portal protocol: the handshake, one tree, and a
+    delivery for every send (the daemon is not part of this repository)."""
+
+    def __init__(self, nodes: list[dict[str, Any]], verdict: str) -> None:
+        self.server = socket.create_server(("127.0.0.1", 0))
+        self.port = int(self.server.getsockname()[1])
+        self.nodes, self.verdict = nodes, verdict
+        self.received: list[dict[str, Any]] = []
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+
+    @staticmethod
+    def push(conn: socket.socket, message: dict[str, Any]) -> None:
+        data = json.dumps(message).encode()
+        size = (
+            bytes([len(data)]) if len(data) < 126 else bytes([126]) + len(data).to_bytes(2, "big")
+        )
+        conn.sendall(bytes([0x81]) + size + data)
+
+    def serve(self) -> None:
+        with self.server:
+            conn, _ = self.server.accept()
+        with conn:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                request += conn.recv(4096)
+            key = next(
+                line.split(b":", 1)[1].strip().decode()
+                for line in request.split(b"\r\n")
+                if line.lower().startswith(b"sec-websocket-key")
+            )
+            accept = live_drive.accept_key(key)
+            conn.sendall(
+                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                + f"Connection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n".encode()
+            )
+            self.push(conn, {"type": "hello"})
+            self.push(conn, {"type": "tree", "projects": [{"sessions": self.nodes}]})
+            buf = b""
+            while True:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    return
+                buf += chunk
+                while len(buf) >= 6:
+                    size, start = buf[1] & 0x7F, 2
+                    if size == 126:
+                        size, start = int.from_bytes(buf[2:4], "big"), 4
+                    if len(buf) < start + 4 + size:
+                        break
+                    mask, body = buf[start : start + 4], buf[start + 4 : start + 4 + size]
+                    opcode = buf[0] & 0x0F
+                    buf = buf[start + 4 + size :]
+                    if opcode == 8:
+                        return
+                    message = json.loads(bytes(b ^ mask[i % 4] for i, b in enumerate(body)))
+                    self.received.append(message)
+                    ref = message["ref"]
+                    delivery = {"sessionId": message["sessionId"], "state": "written"}
+                    self.push(conn, {"type": "delivery", "delivery": delivery, "ref": ref})
+                    final = {**delivery, "state": self.verdict, "deliveredHow": "new-turn"}
+                    self.push(conn, {"type": "delivery", "delivery": final, "ref": ref})
+
+
+def test_the_workdeck_client_reads_the_tree_and_waits_for_the_delivery() -> None:
+    nodes = [{"id": "local_m", "cwd": "x", "children": [{"id": "local_w", "children": []}]}]
+    fake = FakeWorkdeck(nodes, "delivered")
+    with live_drive.WorkdeckClient(fake.port, timeout=5) as client:
+        found = live_drive.tree(client, time.monotonic() + 5)
+        assert {n["id"] for n in found} == {"local_m", "local_w"}
+        result = live_drive.deliver(client, "local_w", "用 add", "r1", time.monotonic() + 5)
+    assert result["state"] == "delivered" and result["deliveredHow"] == "new-turn"
+    fake.thread.join(timeout=5)
+    assert fake.received == [
+        {"type": "send", "sessionId": "local_w", "text": "用 add", "priority": "later", "ref": "r1"}
+    ]

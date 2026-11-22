@@ -45,6 +45,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +54,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tools import live_drive  # noqa: E402
 from tools.checks.repo import utf8_stdio  # noqa: E402
 from tsw.home import Home  # noqa: E402
 from tsw.machine.ask_user import user_words  # noqa: E402
@@ -838,8 +840,9 @@ def session_settings(run: Run, directory: Path) -> None:
     none, as in a real data directory (decision 0003): a folder with its own settings asks for
     trust again, which is what the run checks. Workers find the run's data directory because it
     claims the sessions working inside it (``tsw init --claim-sessions``). The file carries no
-    permission rules. The run's tasks call the GitHub stand-in by its full path (a session's
-    shell does not take ``PATH`` from project settings); the hooks still recognise ``gh`` by its
+    permission rules, only ``permissions.defaultMode`` (auto). The run's tasks call the GitHub
+    stand-in by its full path (a session's shell does not take ``PATH`` from project settings);
+    the hooks still recognise ``gh`` by its
     program name.
     """
     run.check_inside(directory)
@@ -869,7 +872,10 @@ def session_settings(run: Run, directory: Path) -> None:
         }
     ]
     env = {"TSW_HOME": str(run.home), "TSW_LIVE_RUN": str(run.dir)}
-    data: dict[str, Any] = {"env": env, "hooks": hooks}
+    # A deep link cannot set the permission mode (live_drive.deeplink): sessions opened here
+    # start in auto mode instead of the operator switching it before the first message (T340).
+    # Workers inherit the main session's mode when it starts them; their folders stay bare.
+    data: dict[str, Any] = {"env": env, "hooks": hooks, "permissions": {"defaultMode": "auto"}}
     settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
@@ -958,34 +964,287 @@ def prepare(name: str, args: argparse.Namespace) -> int:
             fill(task["goal"], values),
             *[a for item in task["acceptance"] for a in ("--acceptance", item)],
         )
-    code = "、".join(str(t["task_id"]) for t in tasks if t["kind"] != "research")
+    code = [str(t["task_id"]) for t in tasks if t["kind"] != "research"]
     life = any(t["task_id"] == "T003" for t in tasks)
-    values["code_tasks"] = code
+    values["code_tasks"] = "、".join(code)
     values["prestart_step"] = "；T003 先预启动一个待命会话，等我说再派发" if life else ""
-    values["life_step"] = (
-        "在主会话中依次说：“派发 T003”，T003 的 worker 记录就绪后再说"
-        "“暂停 T003”、“恢复 T003”、“取消 T003”。"
-        if life
-        else "（本次运行不含 T003，跳过暂停、恢复与取消。）"
-    )
-    steps = [fill(s, values) for s in spec["operator"]]
-    operator = [
-        f"# live {name} {run.id}",
-        "",
-        "开始前确认：",
-        "",
-        *[f"- {p}" for p in spec.get("prerequisites", [])],
-        "",
-        "按顺序操作（每一步都在 Claude 桌面 app 中，不在终端）：",
-        "",
-        *[f"{i}. {s}" for i, s in enumerate(steps, 1)],
-        "",
-    ]
-    (run.dir / "OPERATOR.md").write_text("\n".join(operator), encoding="utf-8")
+    ids = [str(t["task_id"]) for t in tasks]
+    plan = operator_plan(name, spec, run, values=values, tasks=ids, code=code)
+    manifest = run.manifest()
+    manifest["links"] = plan["links"]
+    manifest["drive"] = plan["drive"]
+    manifest["driveDone"] = plan["done"]
+    run.save(manifest)
+    text = operator_markdown(name, spec, run, plan)
+    (run.dir / "OPERATOR.md").write_text(text, encoding="utf-8")
     run.record("claude-session", "main", note="用户在 app 中于 home/ 新建；verify 时补记会话 ID")
-    print("\n".join(operator))
+    print(text)
     print(f"run {run.id}: {run.dir}")
     return 0
+
+
+# ---------------------------------------------------------------------------- operator steps
+#
+# A scenario's ``operator`` lists every step that is not the harness's own, each with who does it
+# (docs/development/test-environments.md, the table of operator steps):
+#
+#   {"who": "user", "text": ..., "why": ..., "link": <id>}   only the user can (``why`` says why)
+#   {"who": "session", "text": ...}                          the session that runs live.py
+#   {"who": "script", "text": ...}                           a live.py command, no judgement
+#
+# ``links`` are deep links into the Claude app (``folder`` is ``home``, ``repo`` or a path under
+# the run; ``q`` the message filled in), opened by ``live.py <scenario> open``. ``drive`` lists
+# the messages ``live.py <scenario> drive`` sends in the user's place through workdeck, each once
+# its ``after`` events are in the run's ledger (``task: "{code}"`` stands for every code task of
+# the run); a rule with ``open`` opens a link instead. ``done`` lists the events that end the
+# drive. Rules and steps naming a task the run leaves out are dropped.
+
+
+def run_folder(run: Run, name: str) -> Path:
+    folder = {"home": run.home, "repo": run.repo}.get(name) or run.dir / name
+    run.check_inside(folder)
+    return folder
+
+
+def expand_after(after: Iterable[Mapping[str, Any]], code: list[str]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for cond in after:
+        if cond.get("task") == "{code}":
+            out += [{**cond, "task": t} for t in code]
+        else:
+            out.append(dict(cond))
+    return out
+
+
+def operator_plan(
+    name: str,
+    spec: Mapping[str, Any],
+    run: Run,
+    *,
+    values: Mapping[str, str],
+    tasks: list[str],
+    code: list[str],
+) -> dict[str, Any]:
+    """The run's links, drive rules and operator steps, with the run's values filled in."""
+    chosen = set(tasks)
+
+    def keep(item: Mapping[str, Any]) -> bool:
+        return {str(t) for t in item.get("tasks") or ()} <= chosen
+
+    links = {
+        key: live_drive.deeplink(run_folder(run, str(link["folder"])), fill(str(link["q"]), values))
+        for key, link in (spec.get("links") or {}).items()
+    }
+    rules: list[dict[str, Any]] = []
+    for raw in spec.get("drive") or ():
+        if not keep(raw):
+            continue
+        rule = {**raw, "after": expand_after(raw.get("after") or (), code)}
+        if "text" in rule:
+            rule["text"] = fill(str(rule["text"]), values)
+        parsed = live_drive.Rule.parse({"to": "", "text": "", **rule}, {})
+        if parsed.tasks - {""} <= chosen:
+            rules.append(rule)
+    done = [
+        c
+        for c in expand_after(spec.get("done") or (), code)
+        if not c.get("task") or c["task"] in chosen
+    ]
+    steps = []
+    for raw in spec["operator"]:
+        step = {"who": "user", "text": raw} if isinstance(raw, str) else dict(raw)
+        if not keep(step):
+            continue
+        step["text"] = fill(str(step["text"]), values)
+        if step.get("why"):
+            step["why"] = fill(str(step["why"]), values)
+        steps.append(step)
+    return {"name": name, "links": links, "drive": rules, "done": done, "steps": steps}
+
+
+def operator_markdown(name: str, spec: Mapping[str, Any], run: Run, plan: Mapping[str, Any]) -> str:
+    """OPERATOR.md: what the user does (and why only they can), then what the session that runs
+    live.py does, then the messages the drive sends in the user's place."""
+    who: dict[str, list[dict[str, Any]]] = {"user": [], "session": [], "script": []}
+    for step in plan["steps"]:
+        who[str(step["who"])].append(step)
+    lines = [f"# live {name} {run.id}", "", "开始前确认：", ""]
+    lines += [f"- {p}" for p in spec.get("prerequisites", [])]
+    lines += ["", "## 你要做的（只有这些）", ""]
+    for i, step in enumerate(who["user"], 1):
+        lines.append(f"{i}. {step['text']}")
+        if step.get("why"):
+            lines.append(f"   为什么不能自动化：{step['why']}")
+        if step.get("link"):
+            link = plan["links"][step["link"]]
+            lines.append(f"   链接（运行 live 的会话会替你打开；没有弹出时手动打开）：{link}")
+    if who["session"] or who["script"]:
+        lines += ["", "## 运行 live.py 的会话做的（你不用做）", ""]
+        for i, step in enumerate(who["session"] + who["script"], 1):
+            lines.append(f"{i}. {step['text']}")
+    if plan["drive"]:
+        lines += [
+            "",
+            "## 脚本替你发的消息（`live.py " + name + " drive`，经本机 workdeck，按账本事件）",
+            "",
+        ]
+        for rule in plan["drive"]:
+            when = "、".join(
+                c["event"] + (f"（{c['task']}）" if c.get("task") else "") for c in rule["after"]
+            )
+            target = "主会话" if rule["to"] == "main" else f"{rule['to']} 的 worker 会话"
+            what = (
+                f"打开链接 {rule['open']}"
+                if rule.get("open")
+                else f"发给 {target}：“{rule['text']}”"
+            )
+            lines.append(f"- {rule['id']}：{when or '立即'}之后，{what}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def open_step(args: argparse.Namespace) -> int:
+    """Open one of the run's links in the Claude app (the user then presses send)."""
+    run = Run.open(args.run_id)
+    links = run.manifest().get("links") or {}
+    if args.link not in links:
+        raise SystemExit(f"live: 运行 {run.id} 没有链接 {args.link}（有：{sorted(links)}）")
+    live_drive.open_link(links[args.link])
+    print(f"已打开 {args.link}：{links[args.link]}")
+    return 0
+
+
+def run_sessions(run: Run, command: list[str] | None = None) -> list[dict[str, Any]]:
+    """The Claude sessions working inside the run directory, as workdeck sees them (title,
+    folder, running, permission mode); read only, the daemon may message none of them."""
+    with (
+        live_drive.Daemon(
+            run.dir / "workdeck" / "list", [], command or live_drive.workdeck_command()
+        ) as daemon,
+        live_drive.WorkdeckClient(daemon.port, timeout=5) as client,
+    ):
+        nodes = live_drive.tree(client, time.monotonic() + 30)
+    return [n for n in nodes if live_drive.inside(str(n.get("cwd") or ""), run.dir)]
+
+
+def session_role(run: Run, cwd: str) -> str:
+    """The manifest name of a session found in the run by its folder."""
+    path = Path(cwd).resolve()
+    if path == run.repo.resolve():
+        return "repo-trust"
+    if path == run.home.resolve():
+        return "main"
+    rel = path.relative_to(run.home.resolve()) if run.home.resolve() in path.parents else None
+    if rel is not None and rel.parts and rel.parts[0] == "routine":
+        return "routine"
+    return f"session:{path.name}"
+
+
+def sessions_cmd(args: argparse.Namespace) -> int:
+    """List the run's sessions and record the ones the manifest does not have yet (the folder
+    trust session, a routine session), so cleanup can name every session to archive."""
+    run = Run.open(args.run_id)
+    found = run_sessions(run)
+    known = {e.get("ref") for e in run.manifest()["entries"] if e["kind"] == "claude-session"}
+    for node in sorted(found, key=lambda n: str(n.get("createdAt") or "")):
+        sid = str(node["id"])
+        role = session_role(run, str(node.get("cwd") or ""))
+        if sid not in known and not node.get("archived"):
+            if role == "main":
+                run.bind_main(sid)
+            else:
+                run.record("claude-session", f"{role}:{sid}", state="created", ref=sid)
+        rel = scrub(str(node.get("cwd") or ""), run)
+        state = "archived" if node.get("archived") else "running" if node.get("running") else "idle"
+        mode = node.get("permissionMode") or "-"
+        print(f"{sid}\t{role}\t{state}\t{mode}\t{rel}\t{node.get('title')}")
+    return 0
+
+
+def drive_log(run: Run) -> list[dict[str, Any]]:
+    path = run.dir / "drive.jsonl"
+    if not path.is_file():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def drive(args: argparse.Namespace) -> int:
+    """Send the scenario's messages in the user's place (DN008 §2: a message through workdeck is
+    the user's own), each once its events are in the ledger; open the links a rule names.
+
+    Every message goes to one session of this run only: the daemon may message that session and
+    no other, and the session must work inside the run directory. A message workdeck could not
+    deliver is tried again on the next poll (at most ``--tries`` times); one whose delivery is
+    unknown is never resent (workdeck's own rule), the drive stops and says so.
+    """
+    run = Run.open(args.run_id)
+    manifest = run.manifest()
+    rules = [
+        live_drive.Rule.parse({"to": "", "text": "", **r}, {}) for r in manifest.get("drive") or ()
+    ]
+    opens = {str(r["id"]): str(r["open"]) for r in manifest.get("drive") or () if r.get("open")}
+    done_when = list(manifest.get("driveDone") or ())
+    command = live_drive.workdeck_command() if any(r.id not in opens for r in rules) else []
+    deadline = time.monotonic() + args.timeout_minutes * 60
+    log_path = run.dir / "drive.jsonl"
+
+    def note(**record: Any) -> None:
+        record = {"time": utc(), **record}
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        print(scrub(json.dumps(record, ensure_ascii=False), run), flush=True)
+
+    while True:
+        log = drive_log(run)
+        sent = [r["rule"] for r in log if r.get("state") in ("delivered", "opened", "unknown")]
+        stuck = [r for r in log if r.get("state") in ("unknown", "no-confirmation")]
+        if stuck:
+            note(
+                rule=stuck[-1]["rule"],
+                state="stopped",
+                detail="投递结果未知，不自动重发；请在 app 中查看后手动处理",
+            )
+            return 1
+        evs = events(run)
+        for rule in live_drive.due(rules, evs, sent):
+            tries = sum(1 for r in log if r.get("rule") == rule.id and r.get("state") == "failed")
+            if tries >= args.tries:
+                note(rule=rule.id, state="stopped", detail=f"已失败 {tries} 次")
+                return 1
+            if rule.id in opens:
+                link = (manifest.get("links") or {})[opens[rule.id]]
+                live_drive.open_link(link)
+                note(rule=rule.id, state="opened", link=opens[rule.id])
+                continue
+            session = live_drive.session_of(rule.to, evs)
+            if session is None:
+                continue  # the ledger names no session for it yet
+            note(rule=rule.id, state="sending", to=rule.to, session=session, text=rule.text)
+            result = send_as_user(run, session, rule.text, rule.id, command)
+            note(rule=rule.id, to=rule.to, session=session, **result)
+        if all(r.id in sent for r in rules) and all(live_drive.holds(c, evs) for c in done_when):
+            note(rule="-", state="finished")
+            return 0
+        if time.monotonic() > deadline:
+            missing = [r.id for r in rules if r.id not in sent]
+            note(rule="-", state="timeout", detail=f"未发送：{missing}")
+            return 1
+        time.sleep(args.poll)
+
+
+def send_as_user(run: Run, session: str, text: str, ref: str, command: list[str]) -> dict[str, Any]:
+    """One message through a workdeck daemon that may message ``session`` only."""
+    folder = run.dir / "workdeck" / ref
+    with (
+        live_drive.Daemon(folder, [session], command) as daemon,
+        live_drive.WorkdeckClient(daemon.port, timeout=5) as client,
+    ):
+        nodes = live_drive.tree(client, time.monotonic() + 30)
+        node = next((n for n in nodes if n.get("id") == session), None)
+        if node is None or not live_drive.inside(str(node.get("cwd") or ""), run.dir):
+            return {"state": "failed", "detail": "会话不在本次运行目录中，拒绝发送"}
+        result = live_drive.deliver(client, session, text, ref, time.monotonic() + 120)
+    return {k: result.get(k) for k in ("state", "detail", "deliveredHow") if result.get(k)}
 
 
 def first(
@@ -1030,6 +1289,7 @@ def host_verify(args: argparse.Namespace) -> int:
             f"product_repo=<repo>; 主会话 {main_sessions}; 主会话事件 {len(orch)} 条",
         )
     )
+    checks.append(main_mode(run, main_sessions))
     spec = scenario("host-e2e")
     chosen = selected(spec, run.manifest().get("tasks"))
     tasks = tuple(str(t["task_id"]) for t in chosen)
@@ -2128,6 +2388,21 @@ def observed(args: argparse.Namespace) -> dict[str, Any]:
     asked to trust its execution directory, and whether a worker's tsw tool, message to the
     main session or merge was held for a permission prompt or refused by the classifier."""
     trust, blocked = getattr(args, "trust_prompted", None), getattr(args, "blocked", None)
+    if trust is None and blocked is None:
+        # An unattended run (T340): nobody watched. A trust prompt would have held the worker's
+        # session before it started (H2), a permission prompt its tool call (H3, H4, C); only a
+        # refusal the worker worked around goes unseen, so this is reported, not passed.
+        return {
+            **check(
+                "O",
+                "操作者观察：worker 会话创建时没有信任确认；"
+                "worker 的 tsw 工具、发消息与合并没有被拦",
+                False,
+                "无人观察（无人值守运行）：信任确认与权限确认会让会话停住，"
+                "由 H2、H3、H4、C 间接覆盖；被分类器拒绝后绕开的情况只有在场的观察者看得到",
+            ),
+            "status": NOT_VERIFIED,
+        }
     return check(
         "O",
         "操作者观察：worker 会话创建时没有信任确认；worker 的 tsw 工具、发消息与合并没有被拦",
@@ -2137,6 +2412,29 @@ def observed(args: argparse.Namespace) -> dict[str, Any]:
             "blocked": blocked or "未记录",
             "evidence": "操作者在 app 中的观察（verify 的 --trust-prompted / --blocked）",
         },
+    )
+
+
+def main_mode(run: Run, mains: Iterable[str]) -> dict[str, Any]:
+    """A: the main session ran its first turn in auto mode without the operator switching it
+    (``permissions.defaultMode`` of the run's data directory, T340): the ``permission_mode`` of
+    its first ``UserPromptSubmit`` payload."""
+    path = run.dir / "hook-payloads.jsonl"
+    wanted, modes = set(mains), {}
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            record = json.loads(line)
+            payload = record.get("payload")
+            sid = str(record.get("session") or "")
+            if record.get("event") != "UserPromptSubmit" or not isinstance(payload, dict):
+                continue
+            if sid in wanted and sid not in modes:
+                modes[sid] = payload.get("permission_mode")
+    return check(
+        "A",
+        "主会话以 auto 模式开始（运行数据目录的 permissions.defaultMode），不需要操作者切换",
+        bool(modes) and all(m == "auto" for m in modes.values()),
+        {"first_prompt_permission_mode": modes or "没有主会话的 UserPromptSubmit 记录"},
     )
 
 
@@ -2494,6 +2792,25 @@ def setup_scenario(args: argparse.Namespace) -> int:
     return int(module.main(args.path, args.source))
 
 
+def operator_commands(steps: Any) -> None:
+    """``open``, ``drive`` and ``sessions``: what a scenario with an operator shares (T340)."""
+    opened = steps.add_parser("open", help="在 Claude app 中打开本运行的一个链接（用户再点发送）")
+    opened.add_argument("run_id")
+    opened.add_argument("link", help="链接名（OPERATOR.md 中列出）")
+    opened.set_defaults(handler=open_step)
+    driven = steps.add_parser(
+        "drive", help="按账本事件经本机 workdeck 替用户发送场景中的消息（在后台运行）"
+    )
+    driven.add_argument("run_id")
+    driven.add_argument("--poll", type=float, default=10, help="查看账本的间隔（秒）")
+    driven.add_argument("--timeout-minutes", type=float, default=120)
+    driven.add_argument("--tries", type=int, default=5, help="投递失败时最多重试的次数")
+    driven.set_defaults(handler=drive)
+    listed = steps.add_parser("sessions", help="列出在本运行目录中工作的会话，并补记进清单")
+    listed.add_argument("run_id")
+    listed.set_defaults(handler=sessions_cmd)
+
+
 def main(argv: list[str] | None = None) -> int:
     utf8_stdio()
     parser = argparse.ArgumentParser(prog="live.py", description="live 场景（只在本机）")
@@ -2520,8 +2837,10 @@ def main(argv: list[str] | None = None) -> int:
         help="操作者观察：worker 的 tsw 工具、发给主会话的消息或合并是否出现权限确认或分类器拒绝",
     )
     ver.set_defaults(handler=host_verify)
+    operator_commands(steps)
     routine = sub.add_parser("routine-e2e", help="例行会话与 Teams 渠道（需要用户在场）")
     routine_steps = routine.add_subparsers(dest="step", required=True)
+    operator_commands(routine_steps)
     routine_steps.add_parser("prepare").set_defaults(handler=routine_prepare)
     routine_ver = routine_steps.add_parser("verify")
     routine_ver.add_argument("run_id")
@@ -2539,6 +2858,7 @@ def main(argv: list[str] | None = None) -> int:
     routine_ver.set_defaults(handler=routine_verify)
     handoff = sub.add_parser("handoff-e2e", help="主会话交接与唤醒（需要用户在场）")
     handoff_steps = handoff.add_subparsers(dest="step", required=True)
+    operator_commands(handoff_steps)
     handoff_steps.add_parser("prepare").set_defaults(handler=handoff_prepare)
     handoff_ver = handoff_steps.add_parser("verify")
     handoff_ver.add_argument("run_id")
@@ -2552,6 +2872,7 @@ def main(argv: list[str] | None = None) -> int:
         "change-e2e", help="用户在 worker 会话中追加要求，worker 登记并重新交付（需要用户在场）"
     )
     changed_steps = changed.add_subparsers(dest="step", required=True)
+    operator_commands(changed_steps)
     changed_steps.add_parser("prepare").set_defaults(handler=change_prepare)
     changed_ver = changed_steps.add_parser("verify")
     changed_ver.add_argument("run_id")
@@ -2566,6 +2887,7 @@ def main(argv: list[str] | None = None) -> int:
         help="worker 会话的标题：派发、终端验收后加前缀、用户改过名不动（需要用户在场）",
     )
     titled_steps = titled.add_subparsers(dest="step", required=True)
+    operator_commands(titled_steps)
     titled_steps.add_parser("prepare").set_defaults(handler=title_prepare)
     titled_ver = titled_steps.add_parser("verify")
     titled_ver.add_argument("run_id")
