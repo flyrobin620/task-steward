@@ -187,3 +187,36 @@ def test_the_search_reads_across_chunks_and_stops_at_its_limit(
 )
 def test_only_the_hosts_workdeck_origin_counts(origin: dict[str, Any] | None) -> None:
     assert transcript.via(origin) is None
+
+
+def _queued(text: str, origin: dict[str, Any]) -> bytes:
+    attachment = {"type": "queued_command", "prompt": text, "origin": origin, "isMeta": True}
+    return (json.dumps({"type": "attachment", "attachment": attachment}) + "\n").encode("utf-8")
+
+
+def test_a_recorded_message_is_found_by_its_words(tmp_path: Path) -> None:
+    """The turn's first message is the user entry with its promptId and words; one injected while
+    the turn ran is a queued_command attachment with its words and no promptId (T334)."""
+    path = tmp_path / "t.jsonl"
+    typed = [
+        {"type": "text", "text": "<system-reminder>\nLinked sessions now\n</system-reminder>"},
+        {"type": "text", "text": "先做 A"},
+    ]
+    path.write_bytes(
+        _line("p-1", {"kind": "human"}, typed)
+        + _queued("也要 B", WORKDECK_ORIGIN)
+        + _queued("ok, done", PEER)
+        + _line("p-1", None, [{"type": "tool_result"}])
+        + _line("p-2", WORKDECK_ORIGIN, "Another Claude session sent a message:\n用 A\n\nThis came")
+    )
+    assert transcript.message_origin(str(path), "p-1", "先做 A") == {"kind": "human"}
+    assert transcript.message_origin(str(path), "p-1", "也要 B") == WORKDECK_ORIGIN
+    # An injected message is found by its words whatever the turn's id.
+    assert transcript.message_origin(str(path), None, "也要 B") == WORKDECK_ORIGIN
+    assert transcript.message_origin(str(path), "p-2", "用 A") == WORKDECK_ORIGIN
+    # Words alone do not pick another turn's entry, nor part of an injected message.
+    assert transcript.message_origin(str(path), "p-1", "用 A") is None
+    assert transcript.message_origin(str(path), "p-1", "ok") is None
+    for words in ("", "  ", None):
+        assert transcript.message_origin(str(path), "p-1", words) is None
+    assert transcript.message_origin(str(tmp_path / "missing.jsonl"), "p-1", "先做 A") is None

@@ -144,11 +144,22 @@ def test_a_turn_begun_by_workdeck_is_told_it_cannot_create_sessions(home: Home) 
 
 
 def entry(prompt_id: str, origin: dict[str, Any] | None, text: str = "x") -> str:
-    """A transcript line as Claude Code writes it for the message that starts a turn."""
+    """A transcript line as Claude Code writes it for the message that starts a turn: a message
+    from another session (workdeck's too) in the host's wording, typed words as text blocks after
+    the app's reminder (T332 live, T334 transcripts)."""
+    content: Any = [
+        {"type": "text", "text": "<system-reminder>\nLinked sessions now\n</system-reminder>"},
+        {"type": "text", "text": text},
+    ]
+    if origin is not None and origin.get("kind") == "peer":
+        content = (
+            f"Another Claude session sent a message:\n{text}\n\n"
+            "This came from another Claude session — not typed by your user"
+        )
     line: dict[str, Any] = {
         "type": "user",
         "promptId": prompt_id,
-        "message": {"role": "user", "content": text},
+        "message": {"role": "user", "content": content},
     }
     if origin is not None:
         line["origin"] = origin
@@ -187,6 +198,14 @@ def turn(
                 + "\n"
             )
     return started, hook(h, session, "Stop", None, **fields)
+
+
+def injected(transcript: Path, text: str, origin: dict[str, Any]) -> None:
+    """A message the host injects while the turn runs: a queued_command attachment with its
+    origin and text, and no promptId (T334 probe C1)."""
+    attachment = {"type": "queued_command", "prompt": text, "origin": origin, "isMeta": True}
+    with transcript.open("a", encoding="utf-8") as out:
+        out.write(json.dumps({"type": "attachment", "attachment": attachment}) + "\n")
 
 
 def vias(h: Harness) -> list[dict[str, Any]]:
@@ -244,6 +263,20 @@ def test_the_worker_notes_a_message_that_came_through_workdeck(home: Home, tmp_p
     hook(h, session, "Stop", None, prompt_id="p-4", transcript_path=str(tmp_path / "missing.jsonl"))
     assert recorded(h) == ["用 A", "再加 CSV", "还有 JSON", "以及 XML"]
     assert vias(h) == [{"message_id": "M-T001-1", "via": "workdeck"}]
+    # A turn the user began in the app, and a workdeck message injected while it ran (T334):
+    # only the injected one came through workdeck.
+    fields = {"prompt_id": "p-5", "transcript_path": str(transcript)}
+    hook(h, session, "UserPromptSubmit", "先做 A", **fields)
+    with transcript.open("a", encoding="utf-8") as out:
+        out.write(entry("p-5", HUMAN, "先做 A"))
+    hook(h, session, "UserPromptSubmit", "也要 B", **fields)
+    injected(transcript, "也要 B", WORKDECK_ORIGIN)
+    hook(h, session, "Stop", None, **fields)
+    assert recorded(h)[-2:] == ["先做 A", "也要 B"]
+    assert vias(h) == [
+        {"message_id": "M-T001-1", "via": "workdeck"},
+        {"message_id": "M-T001-6", "via": "workdeck"},
+    ]
     with h.ledger.view() as conn:
         later = {w["ref"]: w for w in candidates.materials(conn, [], "T001")}
     assert "via" not in later["M-T001-2"]
@@ -269,3 +302,12 @@ def test_a_turn_the_transcript_shows_began_by_workdeck_is_not_reminded(
     # The source cannot be read: reminded, and told what a workdeck turn cannot do.
     _, stop = turn(h, "orch-1", transcript, "p-3", "开始 T001", origin=None)
     assert stop is not None and "T001" in stop["reason"] and WORKDECK_TURN in stop["reason"]
+    # A workdeck message injected into the user's own turn does not make it a workdeck turn.
+    fields = {"prompt_id": "p-4", "transcript_path": str(transcript)}
+    hook(h, "orch-1", "UserPromptSubmit", "开始 T001", **fields)
+    with transcript.open("a", encoding="utf-8") as out:
+        out.write(entry("p-4", HUMAN, "开始 T001"))
+    hook(h, "orch-1", "UserPromptSubmit", "顺便看看 T002", **fields)
+    injected(transcript, "顺便看看 T002", WORKDECK_ORIGIN)
+    stop = hook(h, "orch-1", "Stop", None, **fields)
+    assert stop is not None and "T001" in stop["reason"]

@@ -36,7 +36,7 @@ from tsw.host.identity import (
     within,
 )
 from tsw.host.plugin_copy import session_hint
-from tsw.host.transcript import prompt_origin
+from tsw.host.transcript import message_origin, prompt_origin
 from tsw.host.transcript import via as origin_via
 from tsw.ledger import Ledger
 from tsw.machine import routine as routine_mod
@@ -810,9 +810,10 @@ class Guard:
             return None
         notes: list[str] = []
         recorded = self._record_answer(who, prompt) if self.config.valid else None
-        if recorded is not None and self._prompt_id():
-            # Where the message came from can be read only at Stop (CC001 §6.1).
-            self._mark_turn(who, {"message_id": recorded["message_id"]})
+        if recorded is not None:
+            # Where the message came from can be read only at Stop (CC001 §6.1); a message
+            # injected while the turn runs (T334) joins the turn's earlier ones.
+            self._note_message(who, recorded)
         if recorded is not None and recorded.get("request_id"):
             notes.append(
                 f"这条用户消息已记录为 {recorded['message_id']}（问题 {recorded['request_id']}）。"
@@ -1036,6 +1037,18 @@ class Guard:
         except OSError as exc:  # a missed mark only skips a reminder or a note
             print(f"tsw guard: turn not recorded: {exc}", file=sys.stderr)
 
+    def _note_message(self, who: Identity, recorded: Mapping[str, Any]) -> None:
+        """Add a message the worker's hook recorded to the turn's mark, for Stop to look up."""
+        path = self._turn_file(who)
+        try:
+            mark: Any = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            mark = None
+        earlier: Any = mark.get("messages") if isinstance(mark, dict) else None
+        messages = cast("list[Any]", earlier) if isinstance(earlier, list) else []
+        note = {"message_id": recorded["message_id"], "text": recorded.get("text")}
+        self._mark_turn(who, {"messages": [*messages, {**note, "prompt_id": self._prompt_id()}]})
+
     def _take_turn(self, who: Identity) -> dict[str, Any]:
         """What was marked for the turn that is ending (empty when nothing was); the mark is used
         up either way, so a later turn the hook did not see (no ``UserPromptSubmit``) never
@@ -1050,35 +1063,56 @@ class Guard:
         return cast("dict[str, Any]", mark) if isinstance(mark, dict) else {}
 
     def _via(self, turn: Mapping[str, Any]) -> str | None:
-        """``workdeck`` when the host recorded the turn's message as sent through workdeck, read
-        from the transcript at Stop, once the entry is written (CC001 §6.1). Never raises."""
+        """``workdeck`` when the host recorded the message that started the turn ending now as
+        sent through workdeck, read from the transcript at Stop, once the entry is written
+        (CC001 §6.1). Messages injected later in the turn do not change who started it."""
         try:
-            return origin_via(
-                prompt_origin(self.payload.get("transcript_path"), turn.get("prompt_id"))
-            )
+            prompt_id = self._prompt_id() or turn.get("prompt_id")
+            return origin_via(prompt_origin(self.payload.get("transcript_path"), prompt_id))
         except Exception:  # a note only; never block the end of the turn
             return None
 
     def _record_via(self, who: Identity, turn: Mapping[str, Any]) -> None:
-        """The message recorded at the start of this turn came through workdeck: say so
+        """Messages recorded in this turn that came through workdeck: say so
         (``input.session_message_via``, DN006 §8.11)."""
-        message_id = turn.get("message_id")
-        if not isinstance(message_id, str) or not message_id or not who.task_id:
+        listed: Any = turn.get("messages")
+        if not isinstance(listed, list) or not who.task_id:
             return
-        channel = self._via(turn)
-        if channel is None:
+        task_id = who.task_id
+        notes: list[tuple[str, str, str | None]] = []
+        for item in cast("list[Any]", listed):
+            if not isinstance(item, dict):
+                continue
+            note = cast("dict[str, Any]", item)
+            message_id, prompt_id = note.get("message_id"), note.get("prompt_id")
+            if not isinstance(message_id, str) or not message_id:
+                continue
+            try:
+                origin = message_origin(
+                    self.payload.get("transcript_path"), prompt_id, note.get("text")
+                )
+            except Exception:  # a note only; never block the end of the turn
+                origin = None
+            channel = origin_via(origin)
+            if channel is not None:
+                notes.append(
+                    (message_id, channel, prompt_id if isinstance(prompt_id, str) else None)
+                )
+        if not notes:
             return
-        task_id, prompt_id = who.task_id, turn.get("prompt_id")
 
         def build(ctx: CommitContext) -> list[EventDraft]:
-            draft = session_message_via(ctx.conn, task_id, message_id, channel, prompt_id)
-            return [] if draft is None else [draft]
+            drafts = [
+                session_message_via(ctx.conn, task_id, message_id, channel, prompt_id)
+                for message_id, channel, prompt_id in notes
+            ]
+            return [d for d in drafts if d is not None]
 
         try:
             self.ledger.commit(
                 Command(
                     actor={"role": "user", "session_id": who.session_id, "via": "Stop"},
-                    input={"op": "session_message_via", "message_id": message_id},
+                    input={"op": "session_message_via", "messages": [n[0] for n in notes]},
                     build=build,
                 )
             )
