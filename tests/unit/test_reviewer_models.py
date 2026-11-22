@@ -231,6 +231,11 @@ def test_model_answers_are_checked_and_optional() -> None:
         {"home": home, "reviewer_model": "gpt-6.2-sol", "reviewer_effort": "high"}, qs
     )
     assert problems == [] and answers["reviewer_model"] == "gpt-6.2-sol"
+    # An effort the configuration does not accept is refused here, before the install changes
+    # anything (review T330 PR #80).
+    for bad in ("ultra", "turbo"):
+        _, problems = q.normalize({"home": home, "reviewer_effort": bad}, qs)
+        assert any(p.startswith("reviewer_effort：") for p in problems)
 
 
 def test_differences_name_the_model_and_effort() -> None:

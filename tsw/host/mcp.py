@@ -784,6 +784,12 @@ class Server:
             }
         if name == "reviewer_models":
             reviewer = _opt_str(args, "reviewer")
+            # One snapshot of the file: the values, their sources and the digest a later
+            # config_change binds to all come from it (review T330 PR #80).
+            text = confedit.read_text(self.home)
+            parsed = confedit.parse(text)
+            if parsed is not None:
+                config = load_config(self.home, main_layer=parsed)
             offered = reviewer_models.offer(config.values, reviewer)
             target = offered["reviewer"]
             picked = offered["preselected"]
@@ -799,7 +805,7 @@ class Server:
                 example = {"problem": exc.message}
             return {
                 **offered,
-                "file_sha256": confedit.text_sha(confedit.read_text(self.home)),
+                "file_sha256": confedit.text_sha(text),
                 "how": "把 models 交给用户选（Claude app 中用 wrap_up 的按钮，多时列出编号），"
                 "不替用户选；推理强度只能是所选模型的 efforts 之一。再调用 config_change："
                 "ops 用 example_ops 的形式换成用户选的值，roles.reviewer 是权限类键，"

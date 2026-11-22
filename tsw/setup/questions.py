@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from tsw.config import DEFAULTS, MODEL_ID, VERSION
+from tsw.config import DEFAULTS, EFFORTS, MODEL_ID, VERSION
 from tsw.plugins.catalog import CHANNELS, HOST_INTEGRATIONS
 from tsw.review import models as reviewer_models
 from tsw.review.models import ModelList
@@ -376,6 +376,11 @@ def normalize(answers: Mapping[str, Any], qs: list[Question]) -> tuple[dict[str,
             continue  # not answered: the reviewer's default model and effort (DN004 §3.4)
         if q.id == "reviewer_model" and not MODEL_ID.match(str(value).strip()):
             problems.append(f"{q.id}：模型 ID 格式不正确（{value}）")
+            continue
+        if q.id == "reviewer_effort" and str(value).strip() not in EFFORTS:
+            # Whatever the question was bound to: the configuration accepts only these
+            # (review T330 PR #80), so the install does not stop after changing the machine.
+            problems.append(f"{q.id}：须为 {' / '.join(EFFORTS)} 之一（{value}）")
             continue
         if q.kind == "path":
             path = Path(str(value)).expanduser()
