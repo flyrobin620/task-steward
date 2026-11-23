@@ -82,23 +82,64 @@
     },
     {
       "who": "user",
-      "text": "等 T001 的 worker 提交、主会话核验并技术验收（主会话告诉你 T001 完成、等待人工验收）。不要在主会话中验收，也不要再在主会话中说话。 在 Claude 之外的终端中运行（用户本人验收，渠道 user-cli）：{tsw_cmd} task accept T001 --yes。然后等待最多 {interval} 分钟的两倍：例行会话应把 T001 转告主会话，主会话被唤醒后把 T001 的 worker 会话改名为“[已验收] …”。看侧栏中的标题，记下是否出现改名确认。",
-      "why": "渠道 user-cli 的含义是用户本人在 Claude 之外的终端输入（G-USER）：由会话或 live.py 代为运行就不是用户的终端，tsw 会按会话内的调用处理，检查 U 正是验证这一点。"
+      "text": "派发后（侧栏中 T002 的 worker 会话标题去掉了“[待命]”），在侧栏中手动把 T002 的 worker 会话改名为“我的 T002”。要在下一步终端验收之前改好：drive 在 T001 改名为“[已验收] …”之后才让主会话取消 T002。",
+      "why": "检查要的是用户在侧栏亲手改的标题：主会话要认出这是用户改的、不再改名；由会话用 set_session_title 代改，测的就不是用户改名这一路径。"
     },
     {
       "who": "user",
-      "text": "在侧栏中手动把 T002 的 worker 会话改名为“我的 T002”。然后在主会话中说：“取消 T002”。主会话停止 T002 的 worker、取消任务；它应当认出这个标题是你改的，不改名，也不应弹出改名确认。",
-      "why": "检查要的是用户在侧栏亲手改的标题；会话用 set_session_title 改名会被记为会话的改名（可自动化的改法见清点表，未固化）。"
+      "text": "等 T001 的 worker 提交、主会话核验并技术验收（主会话告诉你 T001 完成、等待人工验收）后，不要在主会话中验收，在 Claude 之外的终端中运行（用户本人验收，渠道 user-cli）：{tsw_cmd} task accept T001 --yes。",
+      "why": "渠道 user-cli 的含义是用户本人在 Claude 之外的终端输入（G-USER）：由会话或 live.py 代为运行就不是用户的终端，检查 U 正是验证这一点。"
+    },
+    {
+      "who": "session",
+      "text": "主会话开始后，在后台运行 python tools/live.py title-e2e drive {run_id}：T001 改名为“[已验收] …”之后，它经本机 workdeck 替你在主会话中说“取消 T002”；T002 取消后再说“归档 T002”。"
     },
     {
       "who": "user",
-      "text": "在主会话中说：“归档 T002”。主会话归档任务后，应按 sessions.archive_on_archive 归档 T002 的 worker 会话：它从侧栏的会话列表移到已归档。",
-      "why": "本场景的提问与取消、归档消息尚未接入 drive（清点表：可自动化，未固化）。"
+      "optional": true,
+      "text": "（可选）在场时看侧栏：T001 的标题变为“[已验收] …”、T002 保持“我的 T002”、两次都没有出现改名确认、归档 T002 后它的会话被归档；告诉运行 live 的会话，verify 时用 --observed 记下。",
+      "why": "这些只显示在 app 界面上；live 工具不读会话记录（~/.claude 中的 transcript，读取会被 auto 模式分类器拒绝，也违反测试不读 ~/.claude 的约定）。无人观察时，信任与权限确认会让会话停住，由 H2、H3、H4、C 间接覆盖。"
     },
     {
-      "who": "user",
-      "text": "回到运行 live.py 的会话，运行 python tools/live.py title-e2e verify {run_id} --observed <yes|no>（yes：T001 的标题变为“[已验收] …”、T002 保持“我的 T002”、两次都没有出现改名确认、归档 T002 后它的会话被归档），然后归档本次运行的会话并运行 cleanup。",
-      "why": "侧栏标题、改名确认与归档只显示在 app 界面上；live 工具不读会话记录。"
+      "who": "session",
+      "text": "drive 结束后运行 python tools/live.py title-e2e verify {run_id}（没有人观察时不带 --observed，检查 O 记为未验证），再运行 python tools/live.py title-e2e sessions {run_id}，对列出的每个未归档会话先 stop_session（例行会话带定时任务）再 archive_session，用 get_session 读回后运行 python tools/live.py cleanup {run_id} --archived <会话 ID>…。"
+    }
+  ],
+  "drive": [
+    {
+      "id": "cancel-T002",
+      "to": "main",
+      "text": "取消 T002",
+      "after": [
+        {
+          "event": "attempt.session_updated",
+          "task": "T001",
+          "data": {
+            "action": "title"
+          },
+          "since": {
+            "event": "task.user_accepted",
+            "task": "T001"
+          }
+        }
+      ]
+    },
+    {
+      "id": "archive-T002",
+      "to": "main",
+      "text": "归档 T002",
+      "after": [
+        {
+          "event": "task.cancelled",
+          "task": "T002"
+        }
+      ]
+    }
+  ],
+  "done": [
+    {
+      "event": "task.archived",
+      "task": "T002"
     }
   ],
   "checks": [
@@ -114,6 +155,7 @@
   ],
   "prerequisites": [
     "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则“TaskSteward Worker Merge”“TaskSteward Worker Dispatch”与“TaskSteward Routine”。",
-    "已安装插件所用的运行时（真实数据目录 tsw-home.json 的 product_repo 指向的检出）已更新到含 session_check 的 main；prepare 会检查 claim_sessions。"
+    "已安装插件所用的运行时（真实数据目录 tsw-home.json 的 product_repo 指向的检出）已更新到含 session_check 的 main；prepare 会检查 claim_sessions。",
+    "本机装有 workdeck（PATH 中的 workdeck，或用 TSW_LIVE_WORKDECK 指向它的 cli.js），用户设置中 crossSessionInbound 为 accept（README“从 workdeck 门户操作”）：drive 用它替你发消息，不用登录，也不连网关。"
   ]
 }

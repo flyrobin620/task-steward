@@ -95,11 +95,13 @@
       "text": "现在提问",
       "after": [
         {
-          "event": "controller.lease_released"
-        },
-        {
           "event": "controller.lease_acquired",
-          "min": 2
+          "data": {
+            "renewed": false
+          },
+          "since": {
+            "event": "controller.lease_released"
+          }
         }
       ]
     },
@@ -111,11 +113,14 @@
         {
           "event": "worker.progress",
           "task": "T001",
-          "min": 2
-        },
-        {
-          "event": "input.resolved",
-          "task": "T001"
+          "since": {
+            "event": "orchestrator.decision",
+            "task": "T001",
+            "since": {
+              "event": "worker.question",
+              "task": "T001"
+            }
+          }
         }
       ]
     }

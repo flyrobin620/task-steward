@@ -46,10 +46,10 @@ live 层级调用真实 app 与模型，有费用，并且需要用户在场：�
 | --- | --- | --- |
 | `reviewer` | `python tools/live.py reviewer` | 不需要；结束时自动清理线程 |
 | `host-e2e` | `python tools/live.py host-e2e prepare`；按运行目录中的 `OPERATOR.md`：`open` 打开链接、后台运行 `drive`，再 `python tools/live.py host-e2e verify <runId>` | 需要：在 `repo/` 与 `home/` 两个由链接打开的会话中点发送并信任文件夹；回答问题、验收、转任务由 `drive` 经 workdeck 替用户发送 |
-| `routine-e2e` | `python tools/live.py routine-e2e prepare`，按 `OPERATOR.md` 在 app 与 Teams 中操作，再 `python tools/live.py routine-e2e verify <runId>` | 需要：在链接打开的主会话中点发送、不在 worker 会话中回答、在 Teams 自聊中以任务 ID 开头回复、观察卡片 |
+| `routine-e2e` | `python tools/live.py routine-e2e prepare`，按 `OPERATOR.md` 在 app 与 Teams 中操作，再 `python tools/live.py routine-e2e verify <runId>` | 需要：在链接打开的主会话中点发送、在 Teams 自聊中以任务 ID 开头回复、看卡片是否分行；取消由 `drive` 发送 |
 | `handoff-e2e` | `python tools/live.py handoff-e2e prepare`，按 `OPERATOR.md`：`open` 打开链接、后台运行 `drive`，再 `python tools/live.py handoff-e2e verify <runId>` | 需要：在链接打开的两个主会话（B 由 `drive` 在 A 让出后打开）中点发送；其余消息由 `drive` 发送 |
 | `change-e2e` | `python tools/live.py change-e2e prepare`，按 `OPERATOR.md`：`open` 打开链接、后台运行 `drive`，再 `python tools/live.py change-e2e verify <runId>` | 需要：在 `repo/` 与 `home/` 两个由链接打开的会话中点发送并信任；追加要求与验收由 `drive` 发送 |
-| `title-e2e` | `python tools/live.py title-e2e prepare`，按 `OPERATOR.md` 在 app 与终端中操作，再 `python tools/live.py title-e2e verify <runId> --observed yes` | 需要：在链接打开的会话中点发送并信任、在 Claude 之外的终端运行 `tsw task accept`、在侧栏手动改一个会话的标题、取消与归档 T002、观察标题 |
+| `title-e2e` | `python tools/live.py title-e2e prepare`，按 `OPERATOR.md`：`open` 打开链接、后台运行 `drive`，再 `python tools/live.py title-e2e verify <runId>`（在场观察时加 `--observed`） | 需要：在链接打开的会话中点发送并信任、在侧栏手动改一个会话的标题、在 Claude 之外的终端运行 `tsw task accept`；取消与归档 T002 由 `drive` 发送 |
 | 收尾 | `python tools/live.py <场景> sessions <runId>`，运行 live 的会话归档列出的会话，再 `python tools/live.py cleanup <runId> --archived <会话 ID>…`，`python tools/live.py discard <runId>` | 不需要 |
 
 `verify` 逐项核对隔离账本中的事件（场景定义的 `checks`），把结果写进运行目录的 `result.json` 与可附在

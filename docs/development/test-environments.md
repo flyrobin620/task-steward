@@ -107,8 +107,10 @@
 | routine | 在 Teams 自聊中回复 | 用户 | 用户 | — | 例行会话读取的是用户自聊中的新消息；由会话经 WorkIQ 代发需要用户另行同意，未固化 |
 | routine | Teams 卡片是否分行显示（`--card-multiline`） | 用户观察 | 用户观察 | — | 只能在 Teams 客户端中看到 |
 | title | 在 Claude 之外的终端运行 `tsw task accept` | 用户 | 用户 | — | `user-cli` 渠道的含义就是用户本人的终端（G-USER），由会话或脚本代为运行就不是 |
-| title | 在侧栏手动改标题；取消、归档 T002 | 用户 | 用户 | — | 改名要验证的是用户亲手改的标题；取消与归档消息可以接入 drive，未固化 |
-| title | 侧栏标题与改名确认（`--observed`） | 用户观察 | 用户观察 | — | 改名确认只显示在 app 界面上 |
+| title | 在侧栏手动改 T002 的标题 | 用户 | 用户 | — | 要验证的是主会话认出用户亲手改的标题；由会话代改测的就不是这条路径 |
+| title | 在主会话中取消、归档 T002 | 用户 | drive | workdeck | — |
+| routine | 在主会话中取消 T001、T002 | 用户 | drive | workdeck | — |
+| title | 侧栏标题与改名确认（`--observed`） | 用户观察，必须填写 | 可选；无人观察时检查记为未验证 | — | 改名确认只显示在 app 界面上 |
 | host、routine、handoff、change | 信任确认、权限确认与分类器拒绝（`--trust-prompted`、`--blocked`） | 用户观察，必须填写 | 可选；无人观察时检查记为未验证 | — | 只显示在 app 界面上，live 工具不读 transcript；无人值守时信任与权限确认会让会话停住，由账本检查间接覆盖 |
 | 全部 | `verify`、`cleanup` | 运行 live 的会话（用户提供观察） | 运行 live 的会话 | `live.py` | — |
 | 全部 | 归档本次运行的会话 | 用户（带定时任务的例行会话，会话工具归档不了） | 运行 live 的会话 | `sessions`、`stop_session`、`archive_session` | — |

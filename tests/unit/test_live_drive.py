@@ -131,3 +131,36 @@ def test_the_workdeck_command_prefers_the_named_cli(tmp_path: Path) -> None:
     assert d.workdeck_command({"TSW_LIVE_WORKDECK": str(cli)})[-1] == str(cli)
     exe = tmp_path / "workdeck.cmd"
     assert d.workdeck_command({"TSW_LIVE_WORKDECK": str(exe)}) == [str(exe)]
+
+
+def test_a_condition_can_require_an_order_of_events() -> None:
+    """``since``: a new acquisition by another session after the release, not A's own renewal
+    before it (review r1 F3)."""
+    cond = {
+        "event": "controller.lease_acquired",
+        "data": {"renewed": False},
+        "since": {"event": "controller.lease_released"},
+    }
+    a_first = ev("controller.lease_acquired", renewed=False)
+    a_renews = ev("controller.lease_acquired", renewed=True)
+    released = ev("controller.lease_released")
+    assert not d.holds(cond, [a_first, a_renews, released])
+    assert not d.holds(cond, [a_first, released, a_renews])
+    assert d.holds(
+        cond, [a_first, a_renews, released, ev("controller.lease_acquired", renewed=False)]
+    )
+    nested = {
+        "event": "worker.progress",
+        "task": "T001",
+        "since": {
+            "event": "orchestrator.decision",
+            "task": "T001",
+            "since": {"event": "worker.question", "task": "T001"},
+        },
+    }
+    early = [ev("worker.progress", "T001"), ev("orchestrator.decision", "T001")]
+    assert not d.holds(nested, early)
+    asked = [*early, ev("worker.question", "T001"), ev("worker.progress", "T001")]
+    assert not d.holds(nested, asked)
+    answered = [*asked, ev("orchestrator.decision", "T001"), ev("worker.progress", "T001")]
+    assert d.holds(nested, answered)

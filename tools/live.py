@@ -1206,20 +1206,25 @@ def drive(args: argparse.Namespace) -> int:
 
     while True:
         log = drive_log(run)
-        sent = [r["rule"] for r in log if r.get("state") in ("delivered", "opened", "unknown")]
-        stuck = [r for r in log if r.get("state") in ("unknown", "no-confirmation")]
+        last = {str(r["rule"]): str(r.get("state")) for r in log if r.get("rule") != "-"}
+        sent = [rule for rule, state in last.items() if state in ("delivered", "opened")]
+        # Anything but a confirmed delivery or a confirmed failure, including a send this
+        # process (or an earlier one) never saw the end of, may have reached the session.
+        stuck = [
+            rule for rule, state in last.items() if state not in ("delivered", "opened", "failed")
+        ]
         if stuck:
             note(
-                rule=stuck[-1]["rule"],
+                rule="-",
                 state="stopped",
-                detail="投递结果未知，不自动重发；请在 app 中查看后手动处理",
+                detail=f"{stuck[0]} 的投递结果未知，不自动重发；请在 app 中查看后手动处理",
             )
             return 1
         evs = events(run)
         for rule in live_drive.due(rules, evs, sent):
             tries = sum(1 for r in log if r.get("rule") == rule.id and r.get("state") == "failed")
             if tries >= args.tries:
-                note(rule=rule.id, state="stopped", detail=f"已失败 {tries} 次")
+                note(rule="-", state="stopped", detail=f"{rule.id} 已失败 {tries} 次")
                 return 1
             if rule.id in opens:
                 link = (manifest.get("links") or {})[opens[rule.id]]
@@ -1230,8 +1235,13 @@ def drive(args: argparse.Namespace) -> int:
             if session is None:
                 continue  # the ledger names no session for it yet
             note(rule=rule.id, state="sending", to=rule.to, session=session, text=rule.text)
-            result = send_as_user(run, session, rule.text, rule.id, command)
+            try:
+                result = send_as_user(run, session, rule.text, rule.id, command)
+            except (OSError, TimeoutError, SystemExit) as exc:
+                result = {"state": "unknown", "detail": f"发送中断：{exc}"}
             note(rule=rule.id, to=rule.to, session=session, **result)
+            if result.get("state") not in ("delivered", "failed"):
+                break  # stopped at the top of the next round, before anything else is sent
         if all(r.id in sent for r in rules) and all(live_drive.holds(c, evs) for c in done_when):
             note(rule="-", state="finished")
             return 0
@@ -1555,12 +1565,12 @@ def title_verify(args: argparse.Namespace) -> int:
             f"product_repo=<repo>; 主会话事件 {len(orch)} 条",
         ),
         *title_checks(run, evs),
-        check(
+        unwatched(
             "O",
             "操作者观察：T001 改为“[已验收] …”，T002 保持用户的标题，没有出现改名确认，"
             "归档 T002 后它的会话被归档",
-            args.observed == "yes",
-            {"observed": args.observed or "未记录", "evidence": "操作者在 app 中的观察"},
+            args.observed,
+            "yes",
         ),
     ]
     notes = [

@@ -104,21 +104,41 @@ class Rule:
         return cls(str(raw["id"]), str(raw["to"]), text, after, frozenset(needs))
 
 
-def holds(condition: Mapping[str, Any], events: Iterable[Mapping[str, Any]]) -> bool:
-    """At least ``min`` (default 1) events of the given type (and task, and data values) are in
-    the ledger."""
+def matches(condition: Mapping[str, Any], event: Mapping[str, Any]) -> bool:
+    if event.get("type") != condition["event"]:
+        return False
+    if condition.get("task") and event.get("task_id") != condition["task"]:
+        return False
     data = condition.get("data") or {}
-    need, seen = int(condition.get("min", 1)), 0
-    for e in events:
-        if e.get("type") != condition["event"]:
-            continue
-        if condition.get("task") and e.get("task_id") != condition["task"]:
-            continue
-        if all((e.get("data") or {}).get(k) == v for k, v in data.items()):
-            seen += 1
-            if seen >= need:
-                return True
-    return False
+    return all((event.get("data") or {}).get(k) == v for k, v in data.items())
+
+
+def first_at(condition: Mapping[str, Any], events: Sequence[Mapping[str, Any]]) -> int | None:
+    """The position of the first event matching ``condition`` (after its own ``since``)."""
+    start = 0
+    if condition.get("since"):
+        at = first_at(condition["since"], events)
+        if at is None:
+            return None
+        start = at + 1
+    for i in range(start, len(events)):
+        if matches(condition, events[i]):
+            return i
+    return None
+
+
+def holds(condition: Mapping[str, Any], events: Sequence[Mapping[str, Any]]) -> bool:
+    """At least ``min`` (default 1) events of the given type (and task, and data values) are in
+    the ledger; with ``since`` (itself a condition), only events after the first event matching
+    it count, so an order can be required ("a new acquisition after the release")."""
+    start = 0
+    if condition.get("since"):
+        at = first_at(condition["since"], events)
+        if at is None:
+            return False
+        start = at + 1
+    seen = sum(1 for e in events[start:] if matches(condition, e))
+    return seen >= int(condition.get("min", 1))
 
 
 def applicable(rules: Iterable[Rule], tasks: Iterable[str]) -> list[Rule]:

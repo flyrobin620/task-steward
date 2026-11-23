@@ -63,14 +63,13 @@
       "why": "deeplink 只能预填文件夹与消息，不会自动发送（app 的 code/new 只读 q、folder、file、environment、runner_pool）；主会话必须由用户在 app 中发出第一条消息：由其他会话启动的会话，第一条消息是那个会话的话，不是用户的话（DN008 §2、CC001 §4），主会话不会据此执行任务。首次打开 home/ 还要信任它（它带 .claude/settings.local.json）。"
     },
     {
-      "who": "user",
-      "text": "两个 worker 各自提出问题后，不要在 worker 会话中回答。等约 {timeout_plus} 分钟，例行会话会把两个问题转给主会话。",
-      "why": "这一步要求的就是不回答（等待超时转交）。"
+      "who": "session",
+      "text": "两个 worker 提问后，不在 worker 会话中回答（drive 不替你回答它们），等约 {timeout_plus} 分钟由例行会话转交主会话；然后在后台运行 python tools/live.py routine-e2e drive {run_id}，两个 worker 都记录“收到答复”后，它经本机 workdeck 替你在主会话中说“取消 T001、T002”。"
     },
     {
       "who": "user",
-      "text": "主会话应对 T001 按任务书代答，对 T002（reserved）按 handle-input skill 经配置的 teams-chat 渠道转达（本运行的 plugins.human_channels 只有 teams-chat，所以不在主会话里问你）：你的 Teams 自聊里会出现以 [TaskSteward] 开头的卡片。确认卡片分行、分段显示：标题、任务、问题、回复方式与 worker 会话链接各自成行，选项 A、B 各占一行。",
-      "why": "卡片是否分行显示只能在 Teams 客户端中看到。"
+      "text": "主会话会把 T002 的问题经 teams-chat 渠道转达：你的 Teams 自聊里会出现以 [TaskSteward] 开头的卡片（T001 由主会话按任务书代答，不会来问你）。看卡片是否分行、分段显示：标题、任务、问题、回复方式与 worker 会话链接各自成行，选项 A、B 各占一行；告诉运行 live 的会话，verify 时用 --card-multiline 记下。",
+      "why": "卡片是否分行显示只能在 Teams 客户端中看到；live 工具只能核对发出的内容（检查 C 的其余部分）。"
     },
     {
       "who": "user",
@@ -79,13 +78,40 @@
     },
     {
       "who": "user",
-      "text": "等例行会话下一次运行（不超过 {interval} 分钟），主会话会登记答复并通知 T002 的 worker。确认两个 worker 都记录了“收到答复”。",
-      "why": "等待例行会话的下一次运行，无需操作。"
+      "optional": true,
+      "text": "（可选）在场时留意 app 是否为 routine/ 弹出信任确认，以及例行会话设定定时任务、发消息时是否出现权限确认或分类器拒绝；告诉运行 live 的会话，verify 时用 --trust-prompted / --blocked 记下。",
+      "why": "这些只显示在 app 界面上；live 工具不读会话记录（~/.claude 中的 transcript，读取会被 auto 模式分类器拒绝，也违反测试不读 ~/.claude 的约定）。无人观察时，信任与权限确认会让会话停住，由 H2、H3、H4、C 间接覆盖。"
     },
     {
-      "who": "user",
-      "text": "回到运行 live.py 的会话，运行 python tools/live.py routine-e2e verify {run_id} --trust-prompted <yes|no> --blocked <yes|no> --card-multiline <yes|no>（按你在 app 与 Teams 中看到的填写；主会话是否被例行会话的定时运行唤醒由检查 W 从 hook 记录判定，不用填写），然后在主会话中取消 T001、T002，归档本次运行的会话（含例行会话）并运行 cleanup。",
-      "why": "--card-multiline 与 --trust-prompted、--blocked 是 Teams 与 app 界面上的观察；live 工具不读会话记录。"
+      "who": "session",
+      "text": "drive 结束后运行 python tools/live.py routine-e2e verify {run_id} --card-multiline <用户的观察>（没有人观察时不带 --trust-prompted / --blocked，检查 O 记为未验证；主会话是否被例行会话的定时运行唤醒由检查 W 从 hook 记录判定），再运行 python tools/live.py routine-e2e sessions {run_id}，对列出的每个未归档会话（含例行会话）先 stop_session 再 archive_session，用 get_session 读回后运行 python tools/live.py cleanup {run_id} --archived <会话 ID>…。"
+    }
+  ],
+  "drive": [
+    {
+      "id": "cancel",
+      "to": "main",
+      "text": "取消 T001、T002",
+      "after": [
+        {
+          "event": "worker.progress",
+          "task": "T001"
+        },
+        {
+          "event": "worker.progress",
+          "task": "T002"
+        }
+      ]
+    }
+  ],
+  "done": [
+    {
+      "event": "task.cancelled",
+      "task": "T001"
+    },
+    {
+      "event": "task.cancelled",
+      "task": "T002"
     }
   ],
   "checks": [
@@ -100,6 +126,7 @@
   "prerequisites": [
     "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则，包括“TaskSteward Routine”。",
     "已在 Claude Code 中连接 WorkIQ MCP（mcp__workiq__*），主会话能用 create_entity 往 Teams 自聊发消息，例行会话能用 fetch 读取自聊消息；用户设置中的“TaskSteward Routine”是本版本 install-hint 给出的文本（读取工具为 mcp__workiq__fetch）。",
-    "这次运行会向你的 Teams 自聊发一张问题卡片；运行结束后可以自行删除。"
+    "这次运行会向你的 Teams 自聊发一张问题卡片；运行结束后可以自行删除。",
+    "本机装有 workdeck（PATH 中的 workdeck，或用 TSW_LIVE_WORKDECK 指向它的 cli.js），用户设置中 crossSessionInbound 为 accept（README“从 workdeck 门户操作”）：drive 用它替你发消息，不用登录，也不连网关。"
   ]
 }

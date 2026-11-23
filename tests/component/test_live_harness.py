@@ -1199,3 +1199,115 @@ def test_every_operator_step_says_who_and_every_user_step_why(
     text = live.operator_markdown(name, spec, run, plan)
     users = [s for s in plan["steps"] if s["who"] == "user"]
     assert text.count("为什么不能自动化：") == len(users)
+
+
+@pytest.mark.parametrize("state", ["sending", "written", "enqueued", "unknown"])
+def test_drive_stops_on_a_send_it_never_saw_finish(
+    state: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A send whose last record is not a confirmed delivery or failure, from this process or an
+    earlier one, may have reached the session: never sent again (review r1 F1)."""
+    rules = [{"id": "x", "to": "T001", "text": "用 add", "after": []}]
+    run = drive_run(tmp_path, monkeypatch, rules)
+    ledger = [ev(1, "attempt.bound", "T001", session_ref="local_w1")]
+    (run.dir / "drive.jsonl").write_text(
+        json.dumps({"rule": "x", "state": state}) + "\n", encoding="utf-8"
+    )
+    calls: list[str] = []
+
+    def send(*_a: Any) -> dict[str, Any]:
+        calls.append("x")
+        return {"state": "delivered"}
+
+    monkeypatch.setattr(live, "events", lambda _run: ledger)  # pyright: ignore[reportUnknownLambdaType]
+    monkeypatch.setattr(live, "send_as_user", send)
+    args = argparse.Namespace(run_id=run.id, poll=0, timeout_minutes=1, tries=2)
+    assert live.drive(args) == 1 and calls == []
+    assert "x" in live.drive_log(run)[-1]["detail"]
+
+
+def test_drive_treats_an_interrupted_send_as_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rules = [
+        {"id": "x", "to": "T001", "text": "用 add", "after": []},
+        {"id": "y", "to": "T001", "text": "再说一句", "after": []},
+    ]
+    run = drive_run(tmp_path, monkeypatch, rules)
+    ledger = [ev(1, "attempt.bound", "T001", session_ref="local_w1")]
+    calls: list[str] = []
+
+    def send(_run: live.Run, _session: str, text: str, *_a: Any) -> dict[str, Any]:
+        calls.append(text)
+        raise ConnectionError("workdeck closed the connection")
+
+    monkeypatch.setattr(live, "events", lambda _run: ledger)  # pyright: ignore[reportUnknownLambdaType]
+    monkeypatch.setattr(live, "send_as_user", send)
+    args = argparse.Namespace(run_id=run.id, poll=0, timeout_minutes=1, tries=2)
+    # The second rule is not sent after the first one's outcome became unknown.
+    assert live.drive(args) == 1 and calls == ["用 add"]
+    states = [r["state"] for r in live.drive_log(run)]
+    assert states == ["sending", "unknown", "stopped"]
+
+
+def test_handoff_drive_runs_to_the_end_on_the_normal_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A renews, releases; B acquires; the worker asks, B answers, the worker records it; only
+    then T001 is cancelled (review r1 F2, F3)."""
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    spec = live.scenario("handoff-e2e")
+    run = live.Run.create("handoff-e2e")
+    plan = live.operator_plan(
+        "handoff-e2e", spec, run, values={"run_id": run.id}, tasks=["T001"], code=["T001"]
+    )
+    manifest = run.manifest()
+    manifest.update(links=plan["links"], drive=plan["drive"], driveDone=plan["done"])
+    run.save(manifest)
+
+    def orch(seq: int, type_: str, task: str, sid: str, **data: Any) -> dict[str, Any]:
+        e = ev(seq, type_, task, **data)
+        e["actor"] = {"role": "orchestrator", "session_id": sid}
+        return e
+
+    ledger: list[dict[str, Any]] = [
+        orch(1, "controller.lease_acquired", "", "local_a", renewed=False),
+        ev(2, "attempt.bound", "T001", session_ref="local_w"),
+    ]
+    script = iter(
+        [
+            [ev(3, "worker.progress", "T001")],
+            [
+                orch(4, "controller.lease_acquired", "", "local_a", renewed=True),
+                orch(5, "controller.lease_released", "", "local_a"),
+            ],
+            [orch(6, "controller.lease_acquired", "", "local_b", renewed=False)],
+            [ev(7, "worker.question", "T001")],
+            [orch(8, "orchestrator.decision", "T001", "local_b", decision="answer")],
+            [ev(9, "worker.progress", "T001")],
+            [orch(10, "task.cancelled", "T001", "local_b")],
+        ]
+    )
+    actions: list[str] = []
+
+    def events(_run: live.Run) -> list[dict[str, Any]]:
+        ledger.extend(next(script, []))
+        return list(ledger)
+
+    def send(_run: live.Run, session: str, text: str, *_a: Any) -> dict[str, Any]:
+        actions.append(f"{session}:{text}")
+        return {"state": "delivered"}
+
+    monkeypatch.setattr(live, "events", events)
+    monkeypatch.setattr(live, "send_as_user", send)
+    monkeypatch.setattr(live.live_drive, "open_link", lambda url: actions.append("open"))  # pyright: ignore[reportUnknownLambdaType]
+    monkeypatch.setattr(live.live_drive, "workdeck_command", lambda: ["workdeck"])
+    args = argparse.Namespace(run_id=run.id, poll=0, timeout_minutes=1, tries=2)
+    assert live.drive(args) == 0
+    assert actions == [
+        "local_a:我要换一个主会话：让出调度租约",
+        "open",
+        "local_w:现在提问",
+        "local_b:取消 T001",
+    ]
