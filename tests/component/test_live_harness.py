@@ -1311,3 +1311,21 @@ def test_handoff_drive_runs_to_the_end_on_the_normal_path(
         "local_w:现在提问",
         "local_b:取消 T001",
     ]
+
+
+def test_title_drive_ends_only_after_the_session_of_t002_is_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The task's archive is not the end: its session is archived afterwards (attempt.closed),
+    and verify and cleanup must not start before that (review r2 F5)."""
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    spec = live.scenario("title-e2e")
+    run = live.Run.create("title-e2e")
+    plan = live.operator_plan(
+        "title-e2e", spec, run, values={"run_id": run.id}, tasks=["T001", "T002"], code=[]
+    )
+    closed_before = [ev(1, "attempt.closed", "T002"), ev(2, "task.archived", "T002")]
+    assert not all(live_drive.holds(c, closed_before) for c in plan["done"])
+    closed_after = [*closed_before, ev(3, "attempt.closed", "T002", disposition="archived")]
+    assert all(live_drive.holds(c, closed_after) for c in plan["done"])

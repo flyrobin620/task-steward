@@ -138,8 +138,12 @@
   ],
   "done": [
     {
-      "event": "task.archived",
-      "task": "T002"
+      "event": "attempt.closed",
+      "task": "T002",
+      "since": {
+        "event": "task.archived",
+        "task": "T002"
+      }
     }
   ],
   "checks": [
