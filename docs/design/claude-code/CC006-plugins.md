@@ -120,7 +120,7 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 3. `claude-app` 声明 `detach`，`routine_start` 返回 `detach: true`：主会话随即调用 `mcp__ccd_session_mgmt__detach_session(session_id)`，成功后 `routine_detached`（`generation`），再用 `SendMessage` 告诉例行会话“已绑定，调用 routine_board 开始”。原因：app 在主会话启动的会话（linked side session）每结束一轮、主会话空闲时，都用 side-sessions-event 继续主会话一轮（`start_session` 的 `wake_when_done` 说明：“whether or not this is set”），不区分这一轮是不是定时任务触发、有没有转发内容；`detach_session` 的说明：“it stops nesting under the session that started it, is no longer archived with it, and that session is no longer told when its turns end”。分离后：
    - 例行会话转发用的 `send_message` 按会话 ID 发给主会话，与是否 linked 无关；主会话也按会话 ID 给它发消息（`stale` 时）。
    - 它不再出现在主会话的 `list_sessions {linked:true}` 与 linked 列表中，按会话名对账只在分离之前进行。
-   - 主会话被归档时不再连带归档它；它继续把结果转给下一个持有调度租约的主会话。关闭例行会话（`routine.enabled=false`）时主会话停止、归档它，`stop_session` 与 `archive_session` 对非本会话启动的会话可能要用户确认（auto 模式由分类器判断）。
+   - 主会话被归档时不再连带归档它；它继续把结果转给下一个持有调度租约的主会话。关闭例行会话（`routine.enabled=false`）时先让它删除自己的定时任务、再由主会话归档它（§6.6）；`archive_session` 对非本会话启动的会话可能要用户确认（auto 模式由分类器判断）。
    - `detach_session` 不能撤销，没有确认卡片，不受派发窗口限制（不创建会话）。分离失败或没有记录时 `attention` 的 `routine` 为 `attached`，主会话的 Stop hook 在任何一轮提醒补做；本版本之前启动的例行会话也这样迁移。
 4. 新目录第一次使用时 app 要求用户确认信任，确认只能在用户看着主会话时弹出（CC001 §3），所以启动只在用户 turn 中进行。
 
@@ -138,6 +138,7 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 | `fetch` 的工具报错或返回错误 | 照样调用 `routine_run`，`fetched` 为工具返回的原文（行中的 `fetch.on_error` 也这样写）；连续失败的计数与通知由 tsw 完成（DN006 §8.9.5） |
 | `routine_run` 返回非空的 `forward` | `mcp__ccd_session_mgmt__send_message`，`session_id` 为 `forward` 中的主会话 ID，正文原样 |
 | 维护动作 `arm` | 有旧任务引用时先 `CronDelete`；再 `CronCreate`（`recurring: true`，`durable: false`，`cron` 与 `prompt` 原样）；然后 `routine_armed` 登记返回的任务引用 |
+| 维护动作 `disarm`（只在关闭例行会话后出现，此时不列出例行项） | `CronDelete`（`job_ref`）；然后 `routine_disarmed` 登记（`job_ref`，`result` 为 `CronDelete` 返回的原文；任务已不存在时同样登记）；结果的 `forward.send` 为 true 时把 `message` 原样发给 `session_id`（主会话）。维护项自带这段做法（`do`），本版本之前启动、会话开始时的说明里没有 `disarm` 的例行会话照着做 |
 | 维护动作 `clear_context` | 本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`：app 在这一轮结束、会话空闲后清空 |
 
 WorkIQ 的读取方式（T286 在用户的自聊上实测）：列出与单条读取都遵守 `$select`，只返回选定的字段；列出支持 `$filter=createdDateTime lt <时间>`（与 `$orderby=createdDateTime desc` 同用），`gt` 与 `lt` 用 `and` 组合时报错，所以读取窗口的起点仍由 tsw 按每页最早的消息判断；`entityUrls` 中的多个路径一次取完，结果按路径的顺序放在 `results` 中，各带自己的 `statusCode`。
@@ -152,7 +153,7 @@ tsw 核对取到的内容（DN006 §8.9.5 的“核对”）：列出的每条�
 
 ### 6.3 宿主侧护栏与允许规则
 
-例行会话角色见 CC001 §5；hooks 对它执行 CC008 的 CC-B8、CC-B10（已撤销、待绑定）与 CC-B11（不编辑、不运行命令、不建会话）。与 worker 的执行目录一样，`routine/` 不带权限规则（带规则的目录会再次要求信任，决定 0003）：例行会话的定时任务、取数、转发与清空上下文由用户设置中的 auto 模式规则“TaskSteward Routine”放行（`tsw host install-hint` 给出，CC008 §6），创建它的 `start_session` 与随后的 `detach_session` 由“TaskSteward Worker Dispatch”覆盖。
+例行会话角色见 CC001 §5；hooks 对它执行 CC008 的 CC-B8、CC-B10（已撤销、待绑定）与 CC-B11（不编辑、不运行命令、不建会话）。与 worker 的执行目录一样，`routine/` 不带权限规则（带规则的目录会再次要求信任，决定 0003）：例行会话的定时任务、取数、转发与清空上下文由用户设置中的 auto 模式规则“TaskSteward Routine”放行（`tsw host install-hint` 给出，CC008 §6），创建它的 `start_session`、随后的 `detach_session` 与停掉定时任务后的 `archive_session`（§6.6）由“TaskSteward Worker Dispatch”覆盖；“TaskSteward Routine”也覆盖 `disarm` 的 `CronDelete`。
 
 ### 6.4 主会话的问题流程 skill
 
@@ -177,6 +178,21 @@ tsw 核对取到的内容（DN006 §8.9.5 的“核对”）：列出的每条�
 | R3 | 例行会话能按会话 ID 给主会话发消息 | 改用 `SendMessage`（`to` 为 `local_…` 会话 ID） |
 | R4 | `SendMessageToSelf` 返回消息 ID、chat ID 与发送者 ID；`ListChatMessages` 能读回用户在自聊中的消息与发送者 | 发送者取自读回的卡片消息。T253 起改用 WorkIQ（§7）：`create_entity` 返回创建的消息（`id`、`chatId`、`from.user.id`），`fetch` 读回自聊中的消息与发送者（T253 主会话实测） |
 | R5 | 分离后例行会话空跑结束时主会话不再收到 side-sessions-event；例行会话的转发仍以 `<cross-session-message` 送达主会话，没有确认卡片（T250 live routine-e2e 的检查 W，从主会话的 hook 记录判定） | 转发改用 `SendMessage`（`to` 为主会话 ID）；仍需确认时把放行写进 auto 规则 |
+| R6 | 分离后的例行会话删除定时任务后，主会话的 `archive_session` 放行（T345 只实测了未分离的会话） | 仍被拒时 `routine_archived` 之前由用户在侧栏归档；考虑例行会话 `archive_session("self")` |
+
+### 6.6 停止与归档（T345）
+
+例行会话带着会话内的循环定时任务时，app 认为它仍有后台工作：`archive_session` 返回“still has live work (an agent run, a Remote Control client, a queued message or a background task)… they can also archive it from the sidebar”，空闲时 `stop_session` 也没有可停的（T332、T340 的 live）。
+
+实测（T345，2026-11-23，auto 模式；探测会话由测试会话启动、未分离）：探测会话 `CronCreate`（`recurring: true`、`durable: false`）后，`archive_session` 被拒，原因同上；它 `CronDelete` 该任务（`CronList` 为空）后，同一个 `archive_session` 放行。分离（`detach_session`）后的例行会话是否同样放行由 live 收尾验证（§6.5 的 R6）。
+
+所以关闭例行会话按 DN006 §8.9.6 先停后归档，每一步都由 tsw 给出：
+
+1. 主会话：`attention` 的 `routine` 为 `retiring`、`step` 为 `disarm` 时，`send_message` 给例行会话（`session_id`）“运行 routine_board”。
+2. 例行会话：`routine_board` 返回 `enabled: false`、没有例行项、维护动作 `disarm`（`job_ref`）；`CronDelete` → `routine_disarmed` → 把结果中的消息转给主会话。
+3. 主会话：收到消息（或 `step` 为 `archive`）时 `archive_session(session_id, reason)`，成功后 `routine_archived`（`generation`，`result` 为返回原文）。仍被拒时告诉用户在侧栏归档，用户归档后用 `get_session` 读回，同样 `routine_archived`（`note` 写明）。
+
+主会话的 Stop hook 在任何一轮提醒 `retiring` 的下一步（发消息与归档都不创建会话，不受派发窗口限制）。live 场景收尾用同一条路径：`tools/live.py <场景> retire-routine <runId>` 在隔离数据目录中关闭例行会话并给出例行会话的 ID，运行 live 的会话按第 1 步发消息，隔离的主会话按第 3 步归档；`--wait` 等到 `routine.archived`（超时时由运行 live 的会话自己归档并登记），用户不必在侧栏操作。
 
 ## 7. `teams-chat` 渠道
 

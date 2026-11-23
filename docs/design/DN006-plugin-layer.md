@@ -556,11 +556,11 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | 绑定后一直没有设定定时任务（第一次运行没有完成） | 过了同样的失效窗口，同样标为 `stale`，由主会话发消息让它运行 |
 | 仍挂在主会话名下（适配器声明 `detach`，已绑定但没有 `routine.detached`） | `attention` 标为 `attached`；主会话在任何一轮（不限用户 turn）分离它并用 `routine_detached` 记录。分离之前它每轮结束都会唤醒主会话，所以主会话最迟在下一次被它唤醒时补做；本版本之前启动的例行会话也这样迁移 |
 | 会话不存在（被归档、删除，或找不到） | `attention` 标为 `missing`，主会话在下一个用户 turn 重新启动（§8.9.7） |
-| 用户关闭例行会话（`routine.enabled=false`） | 主会话停止并归档现有会话；超时转交只在主会话运行 `sync` 时发生，Teams 答复不再自动回收 |
+| 用户关闭例行会话（`routine.enabled=false`） | 先停定时任务、再归档：宿主可能拒绝归档带着定时任务的会话（Claude app 的 `archive_session` 返回“still has live work”，删除定时任务后放行，T345 实测）。`attention` 的 `routine` 为 `retiring`：`step` 为 `disarm` 时主会话给例行会话发消息“运行 routine_board”，后者不再列出例行项，只返回维护动作 `disarm`（要删除的定时任务引用）；执行者删除定时任务后用 `routine_disarmed` 登记（`routine.disarmed`，删除失败或任务已不存在时同样登记，带宿主返回的原文），并把结果中的消息转给主会话；`step` 为 `archive` 时主会话归档它，用 `routine_archived` 登记（`routine.archived`；归档被拒时告诉用户在侧栏归档，用户归档后同样登记）。登记后该代次不再是当前的例行会话。关闭期间超时转交只在主会话运行 `sync` 时发生，Teams 答复不再自动回收；重新打开后，已停掉定时任务、还没归档的例行会话在下一次运行时重新设定（`arm`），已归档的按 `missing` 在下一个用户 turn 启动新的代次 |
 
 #### 8.9.7 启动与参数
 
-例行会话在用户第一次要求执行待办的那一轮由主会话启动：`routine_start` 记录 `routine.start_requested`（代次、会话名 `routine-g<K>`、执行目录 `routine/`）并返回创建会话的参数，主会话用会话适配器创建会话后用 `routine_bind` 记录 `routine.bound`；结果未知时按会话名对账（§4.1）。适配器声明 `detach` 时（`routine_start` 返回 `detach: true`），主会话随即把会话从自己名下分离，再用 `routine_detached` 记录 `routine.detached`；分离之后例行会话不再随主会话归档，转发仍按会话 ID 发给调度租约的持有者，主会话也仍按会话 ID 给它发消息，按会话名对账只在分离之前进行。会话 ID 等于当前代次的例行会话时角色为例行会话，旧代次的为已撤销（DN001 §7.1）。`attention` 的 `routine` 给出状态：`missing`、`starting`、`attached`、`unarmed`、`ok`、`stale`（`attached` 先于后两者报告；`ok` 不列出），其后是每个连续读取失败的 Teams chat 一项 `fetch_failing`（§8.9.5）。
+例行会话在用户第一次要求执行待办的那一轮由主会话启动：`routine_start` 记录 `routine.start_requested`（代次、会话名 `routine-g<K>`、执行目录 `routine/`）并返回创建会话的参数，主会话用会话适配器创建会话后用 `routine_bind` 记录 `routine.bound`；结果未知时按会话名对账（§4.1）。适配器声明 `detach` 时（`routine_start` 返回 `detach: true`），主会话随即把会话从自己名下分离，再用 `routine_detached` 记录 `routine.detached`；分离之后例行会话不再随主会话归档，转发仍按会话 ID 发给调度租约的持有者，主会话也仍按会话 ID 给它发消息，按会话名对账只在分离之前进行。会话 ID 等于当前代次的例行会话时角色为例行会话，旧代次的为已撤销（DN001 §7.1）。`attention` 的 `routine` 给出状态：`missing`、`starting`、`attached`、`unarmed`、`ok`、`stale`（`attached` 先于后两者报告；`ok` 不列出），关闭后还有没归档的例行会话时为 `retiring`（`step`：`disarm` 或 `archive`，§8.9.6），其后是每个连续读取失败的 Teams chat 一项 `fetch_failing`（§8.9.5）。
 
 参数见 DN003 §3.1b：`roles.routine`（会话适配器、模型，默认 `claude-sonnet-5-5`、effort `low`、权限模式）与 `routine`（`enabled`、`interval_minutes` 默认 10、`renew_after_days`、`context_reset_hours`、`stale_after_intervals`；`teams_lookback_hours` 已弃用）。承载例行会话的会话适配器须为 `interactive`，并声明 `timer`（会话内的定时唤醒）。
 

@@ -174,10 +174,10 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一
 | `handoff_resolve` / `input_relay` | ✓ | — | 对转交的会话内问题代为决定（T12）或转达给用户（DN006 §8.1b） |
 | `follow_up_record` / `follow_up_update` | ✓ | 仅本任务，用户验收前 | 记录与修改任务的 follow-up（DN002 §5.7）；不改变任务状态 |
 | `follow_up_convert` / `follow_up_dismiss` | ✓ | — | 把 follow-up 转为新任务或并入已有任务、驳回 follow-up（DN002 §5.7） |
-| `routine_start` / `routine_bind` / `routine_detached` | ✓ | — | 启动例行会话、绑定会话并记录它已从主会话名下分离（DN006 §8.9.7） |
+| `routine_start` / `routine_bind` / `routine_detached` / `routine_archived` | ✓ | — | 启动例行会话、绑定会话并记录它已从主会话名下分离（DN006 §8.9.7）；关闭后记录它已归档（DN006 §8.9.6） |
 | `session_check` / `session_record` | ✓ | — | 验收、取消、派发后让 worker 会话的标题与归档跟上任务状态，用户改过的标题不动（DN002 §5.8） |
 | `channel_sent` | ✓ | — | 登记发出的 Teams 卡片，并把任务加入 Teams 例行项（DN006 §8.7） |
-| `routine_board` / `routine_run` / `routine_armed` | — | — | 只给例行会话：读取到期的例行项、运行例行项的脚本、登记定时任务（DN006 §8.9） |
+| `routine_board` / `routine_run` / `routine_armed` / `routine_disarmed` | — | — | 只给例行会话：读取到期的例行项、运行例行项的脚本、登记定时任务的设定与删除（DN006 §8.9） |
 | `review_run` / `review_triage` / `review_decide` | — | ✓ | DN004 |
 | `submit` | — | ✓ | T13，执行 G-SUBMIT 检查；worker 已合并时带合并记录（DN002 §3.5） |
 | `report_back` | — | ✓ | `[report]` 回传 |
@@ -204,9 +204,9 @@ cwd 只作一致性校验：会话 ID 对应的执行目录与会话目录不一
 | worker | `progress_note` `question` `ask_user` `user_answer` `input_handoff` `requirement_change` `review_start` `review_fail` `review_complete` `review_triage` `review_decide` `review_exhausted` `self_check_failed` `submit` `task_pause`（仅 T14）`output_link` `follow_up_record` `follow_up_update` | E01–E07、T11、T12、T13、T14；本会话中的需求变更（T17、T28，必要时 T23） |
 | 主会话 | `handoff_resolve` `input_relay` | 转交后的 T12 与转达（DN006 §8.1b） |
 | 主会话 | `follow_up_record` `follow_up_update` `follow_up_convert` `follow_up_dismiss` | follow-up 的记录、修改、转为任务（含 T01）与驳回（DN002 §5.7） |
-| 主会话 | `routine_start` `routine_bind` `routine_detached` `channel_sent` | 启动、绑定、分离例行会话；登记 Teams 卡片（DN006 §8.7、§8.9） |
+| 主会话 | `routine_start` `routine_bind` `routine_detached` `routine_archived` `channel_sent` | 启动、绑定、分离、归档例行会话；登记 Teams 卡片（DN006 §8.7、§8.9） |
 | 主会话 | `session_check` `session_record` | worker 会话的标题与归档：比较当前标题、记录改名与归档回执（DN002 §5.8），不改变任务状态 |
-| 例行会话 | `routine_board` `routine_run` `routine_armed` | 运行例行表：转交到期问题（`by: system`）、取出 Teams 答复转给主会话、定时任务的设定与续期（DN006 §8.9） |
+| 例行会话 | `routine_board` `routine_run` `routine_armed` `routine_disarmed` | 运行例行表：转交到期问题（`by: system`）、取出 Teams 答复转给主会话、定时任务的设定、续期与关闭后的删除（DN006 §8.9） |
 
 主会话的写工具都要求持有调度租约（G-LEASE）；worker 工具要求调用者就是该任务当前 attempt 绑定的会话；例行工具要求调用者就是当前代次绑定的例行会话。
 
