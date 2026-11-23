@@ -331,7 +331,7 @@
       "id": "UC-DISPATCH-001",
       "title": "派发与 attempt（T07–T10、T15、R-ATTEMPT、预启动）",
       "actor": "主会话",
-      "acceptance": "派发须持有租约、有名额与资源、依赖满足，新建会话还须在用户 turn；按 R-ATTEMPT 选择新建、复用 planned、投递待命会话或续用；会话未创建经 T09 回到就绪且代次失效，迟到会话只记录；执行目录冲突暂停；会话丢失回到就绪并以新 attempt 接手；其他主会话启动的会话不能续用；执行目录可以不给（缺省 work/<任务>/<attempt>，同一 attempt 续用时沿用它记录的目录，新 attempt 用缺省目录，接手旧目录时由主会话给出），含 { } < > 占位符的执行目录在记录任何事件之前被拒绝",
+      "acceptance": "派发须持有租约、有名额与资源、依赖满足，新建会话还须在用户 turn；按 R-ATTEMPT 选择新建、复用 planned、投递待命会话或续用；会话未创建经 T09 回到就绪且代次失效，迟到会话只记录；执行目录冲突暂停；会话丢失回到就绪并以新 attempt 接手；其他主会话启动的会话不能续用；执行目录可以不给（同一 attempt 续用时沿用它记录的目录，原 attempt 为 replaced / closed 时新 attempt 接手它的执行目录（DN002 §5.5），否则缺省 work/<任务>/<attempt>；给出时用给出的目录），含 { } < > 占位符的执行目录在记录任何事件之前被拒绝",
       "surfaces": [
         "cli"
       ],
@@ -359,7 +359,7 @@
       "id": "UC-DISPATCH-002",
       "title": "仓库任务的 worktree 与任务书中的仓库说明（CC006 §8）",
       "actor": "主会话 / worker",
-      "acceptance": "仓库配置了本机 git 检出（repositories.<id>.path）的任务，attempt_start 在记录事件之前于执行目录下创建 worktree <执行目录>/<仓库 id>（分支按 worktrees.branch_pattern，基线为 base_ref 或远端默认分支），事件记录 worktree，MCP 返回的 cwd 为该 worktree；同一 attempt 的后续代次沿用已有 worktree，已有同名分支时用它；路径上已有其他内容（worktree_conflict）或 git 失败（worktree_unavailable）时拒绝且不记录事件；没有可用检出时不建 worktree，会话在执行目录中启动；任务书含“仓库与 worktree”一节：会话目录与分支（或没有 worktree 的原因）、须完整阅读并遵守的仓库指令文件（repositories.<id>.instructions，默认 AGENTS.md、CLAUDE.md、.github/copilot-instructions.md）并在报告中写明读了哪些、有 worktree 时列出数据目录的 skill（不含主会话专用的）；未配置的仓库没有这一节",
+      "acceptance": "仓库配置了本机 git 检出（repositories.<id>.path）的任务，attempt_start 在记录事件之前于执行目录下创建 worktree <执行目录>/<仓库 id>（分支按 worktrees.branch_pattern，基线为 base_ref 或远端默认分支），事件记录 worktree，MCP 返回的 cwd 为该 worktree；同一 attempt 的后续代次沿用已有 worktree，已有同名分支时用它；新 attempt 接手本任务较早的 replaced / closed attempt 的执行目录时（DN002 §5.5、CC006 §8.3），已有的所配置仓库的 worktree 在分支上就沿用它与当前分支，不 fetch、不切换、不动工作区（未提交与未跟踪的改动保留），事件的 worktree 记 created=false 与 taken_over，任务书写明接手自哪个 attempt 与实际分支；分离 HEAD 或不是所配置仓库的 worktree 照旧 worktree_conflict，其他任务的 attempt 也记录过的目录不按接手处理；路径上已有其他内容（worktree_conflict）或 git 失败（worktree_unavailable）时拒绝且不记录事件；没有可用检出时不建 worktree，会话在执行目录中启动；任务书含“仓库与 worktree”一节：会话目录与分支（或没有 worktree 的原因）、须完整阅读并遵守的仓库指令文件（repositories.<id>.instructions，默认 AGENTS.md、CLAUDE.md、.github/copilot-instructions.md）并在报告中写明读了哪些、有 worktree 时列出数据目录的 skill（不含主会话专用的）；未配置的仓库没有这一节",
       "surfaces": [
         "mcp"
       ],

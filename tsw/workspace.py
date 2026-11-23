@@ -14,6 +14,10 @@ settings and ``CLAUDE.md`` (CC006 §8). Two things it does not do, so the brief 
 
 A repository without a usable checkout (no ``path``, a missing directory, not a git
 repository) gets no worktree: the session starts in the execution directory as before.
+
+A new attempt that takes over the execution directory of an earlier replaced or closed attempt
+of the same task (DN002 §5.5) keeps the worktree it finds there and the branch it is on, with
+whatever is uncommitted: nothing is fetched, switched or cleaned (CC006 §8.3, T344).
 """
 
 from __future__ import annotations
@@ -56,12 +60,24 @@ class Workspace:
     # GitHub at all, so that a brief can still say how to find the account.
     gh_account: tuple[str, str, str] | None = None
     github: bool = False
+    # The earlier attempt whose worktree this one keeps (DN002 §5.5), when it does.
+    taken_over: str | None = None
 
 
-def plan(
-    home: Home, config: EffectiveConfig, row: Any, attempt_id: str, workdir: str
+def plan(  # noqa: PLR0917 - the workspace is planned from exactly these inputs
+    home: Home,
+    config: EffectiveConfig,
+    row: Any,
+    attempt_id: str,
+    workdir: str,
+    takeover: str | None = None,
 ) -> Workspace | None:
-    """The workspace of the task in ``row``; None when its repository is not configured."""
+    """The workspace of the task in ``row``; None when its repository is not configured.
+
+    ``takeover`` names the earlier attempt of the task whose execution directory this one takes
+    over (DN002 §5.5): when a worktree of the configured repository is already there on a
+    branch, that worktree and its branch are kept instead of a branch of this attempt's own.
+    """
     repo_id = resolve_repository(config, str(row["repo"] or ""))
     if repo_id is None:
         return None
@@ -97,9 +113,47 @@ def plan(
         return Workspace(
             repo_id, instructions, None, None, None, remote, base_ref, missing, account, github
         )
+    assert checkout is not None
+    kept = _kept_branch(checkout, worktree) if takeover else None
     return Workspace(
-        repo_id, instructions, checkout, worktree, branch, remote, base_ref, None, account, github
+        repo_id,
+        instructions,
+        checkout,
+        worktree,
+        kept or branch,
+        remote,
+        base_ref,
+        None,
+        account,
+        github,
+        takeover if kept else None,
     )
+
+
+def _kept_branch(checkout: Path, worktree: Path) -> str | None:
+    """The branch of the worktree a new attempt takes over, if it is one to keep: the
+    directory itself (no link) is the top of a worktree of the configured repository and is on
+    a branch. Anything else is left to ``ensure``, which refuses what it cannot use."""
+    if worktree.is_symlink() or not worktree.is_dir() or not _contained(worktree):
+        return None
+    code, head, _ = _git(worktree, "symbolic-ref", "--quiet", "--short", "HEAD")
+    top = _git(worktree, "rev-parse", "--show-toplevel")[1]
+    if (
+        code != 0
+        or not head
+        or head.startswith("-")
+        or not top
+        or not _same(Path(top), worktree)
+        or not _same(_common_dir(worktree), _common_dir(checkout))
+    ):
+        return None
+    return head
+
+
+def _contained(path: Path) -> bool:
+    """Whether ``path`` is itself, not a link or junction to somewhere else."""
+    resolved = os.path.normcase(os.path.realpath(path))
+    return resolved == os.path.normcase(str(Path(os.path.realpath(path.parent)) / path.name))
 
 
 def _gh_account(
@@ -142,15 +196,14 @@ def ensure(ws: Workspace) -> dict[str, Any]:
     """Create the worktree (idempotent) and return what is recorded about it.
 
     An existing worktree on the task's branch is used as it is (a later generation of the same
-    attempt). Anything else at that path is refused, as is a git command that fails: the
-    caller records nothing then.
+    attempt, or the worktree of an attempt taken over). Anything else at that path is refused,
+    as is a git command that fails: the caller records nothing then.
     """
     assert ws.checkout is not None and ws.worktree is not None and ws.branch is not None
     path, branch = ws.worktree, ws.branch
     # Whatever is there must be the directory itself: a link or a Windows junction (which
     # is_symlink does not report) would put the worktree outside the execution directory.
-    resolved = os.path.normcase(os.path.realpath(path))
-    redirected = resolved != os.path.normcase(str(Path(os.path.realpath(path.parent)) / path.name))
+    redirected = not _contained(path)
     if path.is_symlink() or redirected or (path.exists() and not path.is_dir()):
         raise rejected("worktree 路径已有其他内容", reason="worktree_conflict", path=str(path))
     if path.exists():
@@ -192,6 +245,7 @@ def _record(ws: Workspace, *, base: str | None, created: bool, fetched: bool) ->
         "base": base,
         "created": created,
         "fetched": fetched,
+        **({"taken_over": ws.taken_over} if ws.taken_over else {}),
     }
 
 
@@ -293,7 +347,18 @@ def brief_section(
     """The brief's "仓库与 worktree" section; ``gh_skill`` is the rendered gh-account skill."""
     files = "、".join(f"`{p}`" for p in ws.instructions)
     lines = ["## 仓库与 worktree", ""]
-    if ws.worktree is not None:
+    if ws.worktree is not None and ws.taken_over:
+        lines += [
+            f"- 会话目录：`{ws.worktree}`，是仓库 {ws.repo_id} 的 git worktree，"
+            f"分支 `{ws.branch}`：本 attempt 接手 {ws.taken_over} 的执行目录（DN002 §5.5），"
+            "沿用它的 worktree 与当前分支，tsw 没有切换分支、fetch 或清理，未提交的改动原样保留。"
+            "开始前先看 `git status` 与 "
+            "`git log` 了解现场（已有的提交、PR 与未提交的改动），需要时自己与主分支同步。会话就在"
+            "这里启动，宿主按仓库自己的配置加载它的 skill、`.mcp.json`、项目插件、hooks 与设置、"
+            "CLAUDE.md。不要另建 worktree 或 clone。",
+            f"- 报告草稿与其他非仓库产物写在执行目录 `{workdir}`（会话目录的上级），不要写进仓库。",
+        ]
+    elif ws.worktree is not None:
         lines += [
             f"- 会话目录：`{ws.worktree}`，是仓库 {ws.repo_id} 的 git worktree，分支 `{ws.branch}`"
             "（预启动或派发时由 tsw 创建；需要时自己与主分支同步）。会话就在这里启动，宿主按仓库"

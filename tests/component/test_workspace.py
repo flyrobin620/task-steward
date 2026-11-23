@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -463,3 +464,176 @@ def test_the_brief_names_the_repository_gh_account(  # noqa: PLR0917 - one per t
     assert expected in line and "不用 `gh auth switch`" in line
     assert (f"`{skill_path}`" in line) is rendered
     assert brief.index(GH_LINE) < brief.index("## 目标")
+
+
+def _dispatch(h: Harness, task_id: str, **given: object) -> dict[str, Any]:
+    """T07 and attempt_start (dispatch), bound to a worker session; returns the start's data."""
+    h.run("task_dispatch", task_id=task_id, user_turn=True, **given)
+    started = h.run("attempt_start", task_id=task_id, purpose="dispatch", user_turn=True)
+    data = started["events"][0]["data"]
+    h.run(
+        "attempt_reconcile",
+        task_id=task_id,
+        attempt=data["attempt"],
+        generation=data["generation"],
+        outcome="created",
+        session_ref=f"w-{task_id}-{data['attempt']}",
+        brief_delivered=True,
+    )
+    return dict(data)
+
+
+def _lose(h: Harness, task_id: str, attempt: str) -> None:
+    """T15: the session is gone; the attempt is replaced and the task is ready again."""
+    h.run("attempt_update", task_id=task_id, attempt=attempt, event="lost", evidence="不存在")
+
+
+@pytest.mark.transition("T15")
+def test_a_new_attempt_takes_over_a_replaced_attempts_worktree(home: Home, tmp_path: Path) -> None:
+    """DN002 §5.5, CC006 §8.3 (T344): a2 keeps the worktree, branch and uncommitted work of a1."""
+    repo = checkout(tmp_path)
+    h = harness(home, repo)
+    h.register("T001")
+    h.plan("T001")
+    worktree = Path(_dispatch(h, "T001")["worktree"]["path"])
+    # The work of a1: a commit on its branch, a changed file and an untracked one.
+    (worktree / "done.txt").write_text("committed\n", encoding="utf-8")
+    git(worktree, "add", "done.txt")
+    git(worktree, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "a1")
+    head = git(worktree, "rev-parse", "HEAD")
+    (worktree / "AGENTS.md").write_bytes(b"# demo\nchanged by a1\n")
+    (worktree / "draft.txt").write_text("untracked\n", encoding="utf-8")
+    _lose(h, "T001", "a1")
+    assert h.status("T001") == "ready"
+
+    second = _dispatch(h, "T001")  # no workdir: the directory of a1 is taken over
+    assert (second["attempt"], h.task("T001")["current_attempt"]) == ("a2", "a2")
+    rows = h.query("SELECT attempt, workdir FROM attempts WHERE task_id = 'T001' ORDER BY attempt")
+    assert [(r["attempt"], r["workdir"]) for r in rows] == [
+        ("a1", "work/T001/a1"),
+        ("a2", "work/T001/a1"),
+    ]
+    assert second["worktree"] == {
+        "repo": "demo",
+        "path": str(worktree),
+        "branch": "tsw/t001-a1",
+        "base": None,
+        "created": False,
+        "fetched": False,
+        "taken_over": "a1",
+    }
+    # Nothing was switched, fetched or cleaned: the commit and uncommitted work of a1 are there.
+    assert git(worktree, "rev-parse", "--abbrev-ref", "HEAD") == "tsw/t001-a1"
+    assert git(worktree, "rev-parse", "HEAD") == head
+    assert (worktree / "AGENTS.md").read_bytes() == b"# demo\nchanged by a1\n"
+    assert (worktree / "draft.txt").is_file()
+    assert "tsw/t001-a2" not in git(repo, "branch", "--list")
+    brief = (h.home.root / "runs" / "T001" / "a2" / "brief.md").read_text(encoding="utf-8")
+    assert "- 执行目录：work/T001/a1" in brief
+    assert f"会话目录：`{worktree}`" in brief and "分支 `tsw/t001-a1`" in brief
+    assert "接手 a1 的执行目录" in brief and "未提交的改动原样保留" in brief
+    # The worker of a2 works in the worktree it took over.
+    with h.ledger.view() as conn:
+        who = resolve(conn, h.home, {SESSION_ENV: "w-T001-a2"}, worktree)
+    assert (who.role, who.cwd_consistent) == ("worker", True)
+
+
+def test_the_branch_taken_over_is_the_one_the_worktree_is_on(home: Home, tmp_path: Path) -> None:
+    """a1 moved to another branch (a later PR); a2 and then a3 keep that branch."""
+    repo = checkout(tmp_path)
+    h = harness(home, repo)
+    h.register("T001")
+    h.plan("T001")
+    worktree = Path(_dispatch(h, "T001")["worktree"]["path"])
+    git(worktree, "switch", "-q", "-c", "fix-ci")
+    (worktree / "wip.txt").write_text("wip\n", encoding="utf-8")
+    _lose(h, "T001", "a1")
+    assert _dispatch(h, "T001")["worktree"]["branch"] == "fix-ci"
+    _lose(h, "T001", "a2")
+    made = _dispatch(h, "T001")["worktree"]
+    assert (made["branch"], made["taken_over"], made["created"]) == ("fix-ci", "a2", False)
+    assert (worktree / "wip.txt").is_file()
+    brief = (h.home.root / "runs" / "T001" / "a3" / "brief.md").read_text(encoding="utf-8")
+    assert "分支 `fix-ci`" in brief and "接手 a2 的执行目录" in brief
+
+
+def test_a_given_directory_is_not_taken_over(home: Home, tmp_path: Path) -> None:
+    repo = checkout(tmp_path)
+    h = harness(home, repo)
+    h.register("T001")
+    h.plan("T001")
+    _dispatch(h, "T001")
+    _lose(h, "T001", "a1")
+    made = _dispatch(h, "T001", workdir="work/T001/a2")["worktree"]
+    assert (made["branch"], made["created"]) == ("tsw/t001-a2", True)
+    assert "taken_over" not in made
+    brief = (h.home.root / "runs" / "T001" / "a2" / "brief.md").read_text(encoding="utf-8")
+    assert "接手" not in brief
+
+
+def test_a_detached_worktree_is_not_taken_over(home: Home, tmp_path: Path) -> None:
+    repo = checkout(tmp_path)
+    h = harness(home, repo)
+    h.register("T001")
+    h.plan("T001")
+    worktree = Path(_dispatch(h, "T001")["worktree"]["path"])
+    git(worktree, "switch", "-q", "--detach")
+    _lose(h, "T001", "a1")
+    h.run("task_dispatch", task_id="T001", user_turn=True)
+    with pytest.raises(TswError) as refused:
+        h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
+    assert refused.value.details["reason"] == "worktree_conflict"
+    rows = h.query("SELECT phase FROM attempts WHERE task_id = 'T001' AND attempt = 'a2'")
+    assert [r["phase"] for r in rows] == ["planned"]
+
+
+def test_another_tasks_directory_is_not_taken_over(home: Home, tmp_path: Path) -> None:
+    """A directory an attempt of T001 recorded is not for T002 to take over, even when given."""
+    repo = checkout(tmp_path)
+    h = harness(home, repo)
+    for task_id in ("T001", "T002"):
+        h.register(task_id)
+        h.plan(task_id)
+    _dispatch(h, "T001")
+    _lose(h, "T001", "a1")
+    h.run("task_dispatch", task_id="T002", user_turn=True, workdir="work/T001/a1")
+    with pytest.raises(TswError) as refused:
+        h.run("attempt_start", task_id="T002", purpose="dispatch", user_turn=True)
+    assert refused.value.details["reason"] == "worktree_conflict"
+
+
+def test_a_prestart_takes_over_a_lost_standby_directory(home: Home, tmp_path: Path) -> None:
+    """A standby session lost (replaced, DN002 §5.6) is prestarted again in the same directory."""
+    repo = checkout(tmp_path)
+    h = harness(home, repo)
+    h.register("T001")
+    h.plan("T001")
+    first = h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=first["events"][0]["data"]["generation"],
+        outcome="created",
+        session_ref="w-standby",
+    )
+    h.run("attempt_update", task_id="T001", attempt="a1", event="lost", evidence="不存在")
+    rows = h.query("SELECT phase FROM attempts WHERE task_id = 'T001' AND attempt = 'a1'")
+    assert [r["phase"] for r in rows] == ["replaced"]
+    made = h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    data = made["events"][0]["data"]
+    assert (data["attempt"], data["workdir"]) == ("a2", "work/T001/a1")
+    assert (data["worktree"]["branch"], data["worktree"]["taken_over"]) == ("tsw/t001-a1", "a1")
+    # A generation that was not created is retried in the same directory, not a new one.
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a2",
+        generation=data["generation"],
+        outcome="not_created",
+    )
+    retried = h.run("attempt_start", task_id="T001", purpose="prestart", user_turn=True)
+    again = retried["events"][0]["data"]
+    assert (again["attempt"], again["generation"], again["workdir"]) == ("a2", 2, "work/T001/a1")
+    assert again["worktree"]["taken_over"] == "a1"
+    assert not (h.home.root / "work" / "T001" / "a2").exists()
