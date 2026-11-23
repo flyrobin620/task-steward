@@ -82,13 +82,26 @@ def escape(value: Any) -> str:
 _e = escape
 
 
+def work_parts(ref: str) -> list[str] | None:
+    """The segments of a path in the data directory's ``work/`` (DN006 §8.10, T341):
+    ``work/<task>/...`` with every segment non-empty, not ``.`` or ``..``, and free of ``\\``,
+    ``:`` and control characters; None for any other text."""
+    parts = ref.split("/")
+    if len(parts) < 3 or parts[0] != "work":
+        return None
+    for part in parts:
+        if part in ("", ".", "..") or any(c in "\\:" or ord(c) < 32 or ord(c) == 127 for c in part):
+            return None
+    return parts
+
+
 def link_for(ref: str) -> str | None:
     """A link for an output reference, relative to ``views/``; None when it is not a location."""
     if ref.startswith(("https://", "http://")):
         return ref
     if ref.startswith("legacy://"):
         return "../legacy/" + quote(ref[len("legacy://") :], safe="/")
-    if ref.startswith("runs/"):
+    if ref.startswith("runs/") or work_parts(ref) is not None:
         return "../" + quote(ref, safe="/")
     return None
 

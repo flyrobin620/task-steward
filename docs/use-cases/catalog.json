@@ -1389,6 +1389,27 @@
       }
     },
     {
+      "id": "UC-DIRECT-010",
+      "title": "Dashboard 只读提供执行目录 work/ 下已登记的产出（T341，DN006 §8.10）",
+      "actor": "用户 / 经 workdeck gateway 访问 Dashboard 的浏览器",
+      "acceptance": "产出 ref 为 work/<任务>/... 且每段非空、不是 . 或 ..、不含反斜杠、冒号与控制字符时，看板卡片、单任务视图的产出与检索卡片链接到 ../work/...（静态 STATUS.html 相同），其他写法为文字；Dashboard 应用对 /work/<路径> 只提供与某条产出 ref 逐字相同且在该产出所属任务 work/<任务>/ 之下的文件（任何类型，含 worker 登记的草稿），以及某条已登记产出所在目录或子目录中扩展名为 .css .png .jpg .jpeg .gif .webp .svg .ico .bmp .woff .woff2 .ttf .otf 的文件；解析符号链接与 junction 后须是普通文件且在 work/<任务>/（资源还须在产出目录）的真实路径之下；其余（未登记的文件、同目录的其他页面与脚本、别的任务执行目录中的 ref、目录、不规范的路径、越界）404 且写明“不是已登记的产出”，已登记但文件不存在时 404“文件不存在（执行目录可能已清理）”；与 runs/ 相同核对令牌 cookie 与 Host，响应带 script-src 'none' 的 CSP、nosniff、no-store，.md 为纯文本、加 ?view=html 返回渲染的片段；worker 说明「问用户」要求提问依赖执行目录中的文件时先用 output_link 登记并在问题中写明产出编号",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；真实 Dashboard（本机与经 workdeck gateway）打开 T339 的 work/ 产出由任务报告中的本机运行记录（T341）"
+      }
+    },
+    {
       "id": "UC-SETUP-001",
       "title": "安装脚本 tsw setup 与两条安装路径的入口（T308，DN009，CC009）",
       "actor": "用户 / 终端入口 setup.ps1 / 会话入口 setup skill",

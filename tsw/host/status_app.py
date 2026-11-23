@@ -5,7 +5,8 @@ renders the Dashboard page from the ledger's projection with the user's direct a
 a button runs :func:`tsw.direct.perform` on the ``status-app`` channel, the same implementation as
 ``tsw task accept``. Each task has its own read-only view at ``/tasks/<task>``
 (:mod:`tsw.host.task_view`). Report links on the page are served read-only from ``runs/`` and
-``legacy/``; a Markdown file asked for with ``?view=html`` comes back rendered
+``legacy/``, and from ``work/`` only the registered outputs with the styles, images and fonts in
+their directories (T341); a Markdown file asked for with ``?view=html`` comes back rendered
 (:mod:`tsw.host.markdown`) for the page's document dialog (T278). The standing preferences have
 their own page at ``/preferences`` (:mod:`tsw.host.preference_view`), whose forms record, replace
 and revoke them as the user on the same channel, the same implementation as ``tsw preference
@@ -39,6 +40,7 @@ from collections.abc import Callable, Iterable, Mapping
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urlsplit
 
@@ -52,7 +54,7 @@ from tsw.host import workdeck
 from tsw.host.markdown import MAX_SOURCE_CHARS, render_markdown
 from tsw.host.preference_view import parse_filter, render_preferences
 from tsw.host.session_labels import LABELS_PATH, MAX_LABELS_BODY, answer, requested_ids
-from tsw.host.status import AppView, Revision, render
+from tsw.host.status import AppView, Revision, render, work_parts
 from tsw.host.task_view import card_state, not_found, render_task, timeline
 from tsw.host.version import REPO_ROOT
 from tsw.ledger import Ledger
@@ -64,6 +66,15 @@ COOKIE = "tsw_status"
 TOKEN_HEADER = "X-TSW-Token"
 # Files a page may link to (``tsw.host.status.link_for``), served read-only.
 SERVED_DIRS = ("runs", "legacy")
+# In ``work/`` only the registered outputs, and the styles, images and fonts in their directories
+# (DN006 §8.10, T341).
+WORK_DIR = "work"
+WORK_RESOURCES = frozenset(
+    {".css", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp"}
+    | {".woff", ".woff2", ".ttf", ".otf"}
+)
+NOT_REGISTERED = "不是已登记的产出"
+WORK_GONE = "文件不存在（执行目录可能已清理）"
 MAX_BODY = 16 * 1024
 # How long in all, and how much, a connection is read after its answer before it is closed
 # (_Server).
@@ -244,6 +255,46 @@ class StatusApp:
             if page is None:
                 return False, not_found(task_id, view)
             return True, page
+
+    def work_file(self, path: str) -> tuple[Path | None, str]:
+        """The file a ``work/`` path names when it is a registered output or a style, image or
+        font in a registered output's directory (DN006 §8.10, T341), else None and why. Links
+        and junctions are resolved: the file stays in its task's ``work/<task>/``, a resource
+        also in its output's directory."""
+        parts = work_parts(path)
+        if parts is None:
+            return None, NOT_REGISTERED
+        resource = Path(parts[-1]).suffix.lower() in WORK_RESOURCES
+        ledger, _ = self.ledger()
+        with ledger.view() as conn:
+            rows = conn.execute(
+                "SELECT task_id, ref FROM outputs WHERE substr(ref, 1, 5) = 'work/'"
+            ).fetchall()
+        bounds: list[tuple[Path, Path]] = []
+        for row in rows:
+            ref = str(row["ref"])
+            own = work_parts(ref)
+            if own is None or own[1] != str(row["task_id"]):
+                continue  # not in its own task's work directory
+            root = self.home.root.joinpath(WORK_DIR, own[1])
+            if ref == path:
+                bounds.append((root, root))
+            elif resource and own[1] == parts[1] and path.startswith(ref.rsplit("/", 1)[0] + "/"):
+                bounds.append((root, self.home.root.joinpath(*own[:-1])))
+        if not bounds:
+            return None, NOT_REGISTERED
+        target = self.home.root.joinpath(*parts)
+        if not target.exists():
+            return None, WORK_GONE
+        real = target.resolve()
+        for root, folder in bounds:
+            if (
+                real.is_file()
+                and real.is_relative_to(root.resolve())
+                and real.is_relative_to(folder.resolve())
+            ):
+                return real, ""
+        return None, NOT_REGISTERED
 
     def preferences_page(self, query: str = "", token: str | None = None) -> str:
         """The standing-preferences page (DN006 §8.10, T290) for the address's filter."""
@@ -481,6 +532,19 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             self._send(status, page.encode("utf-8"), "text/html; charset=utf-8")
 
         def _serve_file(self, path: str, view: str = "") -> None:
+            if path.startswith(f"/{WORK_DIR}/"):
+                try:
+                    found, why = app.work_file(path[1:])
+                except TswError as exc:
+                    self._text(
+                        HTTPStatus.SERVICE_UNAVAILABLE, f"错误 [{exc.code.value}] {exc.message}"
+                    )
+                    return
+                if found is None:
+                    self._text(HTTPStatus.NOT_FOUND, why)
+                    return
+                self._send_file(found, view)
+                return
             parts = [p for p in path.split("/") if p]
             if not parts or parts[0] not in SERVED_DIRS or any(p in ("..", ".") for p in parts):
                 self._text(HTTPStatus.NOT_FOUND, "没有这个页面")
@@ -490,6 +554,10 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             if not target.is_relative_to(root / parts[0]) or not target.is_file():
                 self._text(HTTPStatus.NOT_FOUND, "没有这个文件")
                 return
+            self._send_file(target, view)
+
+        def _send_file(self, target: Path, view: str) -> None:
+            """A file of the data directory, read-only, under the documents' CSP."""
             extra = {"Content-Security-Policy": SERVED_CSP}
             markdown = target.suffix.lower() == ".md"
             if markdown and view == "html":
