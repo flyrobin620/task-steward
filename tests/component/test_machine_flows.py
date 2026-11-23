@@ -459,8 +459,10 @@ def test_attempt_from_another_orchestrator_is_not_continued(h: Harness) -> None:
         event="replaced",
         evidence="旧会话已停止",
     )
-    h.run("task_dispatch", orch2, task_id="T001", workdir="w", user_turn=True)
+    # Without a workdir the new attempt takes over the same execution directory (DN002 §5.5).
+    taken = h.run("task_dispatch", orch2, task_id="T001", user_turn=True)
     assert h.task("T001")["current_attempt"] == "a2"
+    assert taken["events"][0]["data"]["workdir"] == "~/wt/T001"
 
 
 @mark.use_case("UC-LIFE-001")

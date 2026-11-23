@@ -32,7 +32,7 @@ SOURCE: dict[str, Any] = {
 WORKDIR: dict[str, Any] = {
     **S,
     "description": "执行目录（相对数据目录或绝对路径）。通常不给：缺省为 work/<任务>/<attempt>，"
-    "已有会话时沿用它的目录；给出时必须是实际路径，含 { } < > 的占位符被拒绝",
+    "任务已有执行目录时沿用它（含接手 replaced / closed 的新 attempt）；给出时必须是实际路径，含 { } < > 的占位符被拒绝",
 }
 FINDINGS: dict[str, Any] = {
     "type": "array",
