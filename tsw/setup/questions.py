@@ -339,7 +339,7 @@ def questions(env: Mapping[str, str], checkout: Path) -> list[Question]:
             "user_settings",
             "是否允许安装脚本维护 Claude Code 用户设置（先备份，"
             "只改 env.TSW_HOME、env.TSW_PYTHON 与"
-            "三条 auto 模式规则）",
+            "tsw 的 auto 模式规则）",
             "bool",
             "install.json",
             default=True,

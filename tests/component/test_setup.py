@@ -86,7 +86,7 @@ def test_a_terminal_install_from_nothing_reaches_a_verified_install(tmp_path: Pa
     assert config["dashboard"]["port"] == 47801
     assert "repositories" not in config and "accounts" not in config
     assert (home / "CLAUDE.md").is_file() and (home / "roles" / "worker.md").is_file()
-    # The user settings: the data directory, the interpreter and the three rules.
+    # The user settings: the data directory, the interpreter and the rules.
     user = settings(env)
     assert user["env"]["TSW_HOME"] == str(home)
     assert user["env"]["TSW_PYTHON"]

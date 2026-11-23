@@ -199,7 +199,7 @@ def test_user_settings_are_merged_by_rule_name_and_nothing_else_changes() -> Non
         "Mine: keep",
         AUTO_MODE_RULES[1],
         AUTO_MODE_RULES[0],
-        AUTO_MODE_RULES[2],
+        *AUTO_MODE_RULES[2:],
     ]
     assert data["autoMode"]["allow"][1] == old  # the input is not changed
     assert ci.settings_diff(merged, values, AUTO_MODE_RULES) == []
@@ -210,8 +210,9 @@ def test_user_settings_are_merged_by_rule_name_and_nothing_else_changes() -> Non
         "autoMode.allow[TaskSteward Worker Dispatch]",
         "autoMode.allow[TaskSteward Worker Merge]",
         "autoMode.allow[TaskSteward Routine]",
+        "autoMode.allow[TaskSteward Worker Answer]",
     ]
-    assert [d["before"] for d in diff[2:]] == ["missing", "outdated", "missing"]
+    assert [d["before"] for d in diff[2:]] == ["missing", "outdated", "missing", "missing"]
 
 
 @pytest.mark.use_case(UC)

@@ -61,8 +61,8 @@ tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC �
 | UserPromptSubmit | worker | 检测用户消息中的 `[report]`（注入消息中出现的不算，§6.1；T332），注入回传协议提示；live worker 的任务不是 `accepted` / `cancelled` / `archived` 时，把用户消息原文记为 `input.session_message`（带 payload 的 `prompt_id`）并告诉 worker 消息编号：回答了待答问题时用 `user_answer` 登记，修改了任务需求时用 `requirement_change` 登记（注入的其他会话消息不记，DN006 §8.1a、DN002 §5.1a；T262 前只在有未获用户答复的会话内问题时记录） |
 | SessionStart | routine | 注入例行会话的指令：调用 `routine_board`，逐行执行例行项并原样转发结果，不作判断，不做其他事（CC006 §6） |
 | PostToolUse | routine | `mcp__workiq__fetch` 之后把工具结果按取数参数记进 `cache/routine-fetch.json`，`routine_run` 从那里取，例行会话不转抄取到的内容（CC006 §6.2，T286）；其他角色不记 |
-| UserPromptSubmit | orchestrator | 记下这一轮是不是用户本人的 turn（[CC008](CC008-guardrails.md) CC-S6）：去掉宿主前置的 `<system-reminder>` 后还有内容，且不以注入消息的标记（§6.1）开头时是用户的 turn；Stop 时按这一轮的 `prompt_id` 读出 workdeck 开始的一轮（§6.1） |
-| Stop | orchestrator | 运行只读 `attention`；有未处理 reportable 事件，有已超时未转交的会话内问题（提示运行 `sync`），例行会话失效（提示给它发消息重新设定），有 worker 会话的标题或归档待处置（`attention` 的 `sessions`，DN002 §5.8，任何一轮），或这一轮是用户的 turn（不是 workdeck 开始的，§6.1）且 `needs_prestart` 非空或例行会话需要启动（提示预启动、启动例行会话）时阻止一次结束（`stop_hook_active` 防循环），几条原因合在一条提示里 |
+| UserPromptSubmit | orchestrator | 记下 hook 看到的每条提示是不是用户的话与它的 `prompt_id`（[CC008](CC008-guardrails.md) CC-S6），供 Stop 读不到宿主记录时使用：去掉宿主前置的 `<system-reminder>` 后还有内容，且不以注入消息的标记（§6.1）开头时是用户的话；一轮中途注入的消息追加在后面，不覆盖开头那条 |
+| Stop | orchestrator | 按开始这一轮的条目的来源判断这一轮是不是用户的 turn（§6.1，T343）：来源为 `human` 时是，其他来源（workdeck、其他会话、app 唤醒、定时任务等）都不是；读不到时用 UserPromptSubmit 记下的这一轮开头那条提示。运行只读 `attention`；有未处理 reportable 事件，有已超时未转交的会话内问题（提示运行 `sync`），例行会话失效（提示给它发消息重新设定），有 worker 会话的标题或归档待处置（`attention` 的 `sessions`，DN002 §5.8，任何一轮），或这一轮是用户的 turn 且 `needs_prestart` 非空或例行会话需要启动（提示预启动、启动例行会话）时阻止一次结束（`stop_hook_active` 防循环），几条原因合在一条提示里 |
 | Stop | worker | 记录 `worker.turn_ended` 观察事件（不改状态）；这一轮记下的用户消息（包括运行中注入的）经由 workdeck 时追加 `input.session_message_via`（§6.1）；若处于 `reviewing`，提示完成这一轮再结束 |
 
 hooks 是防错护栏，不是安全边界（DN008）；skill 和 CLAUDE.md 只写流程与判断准则。
@@ -100,7 +100,9 @@ workdeck 消息没有任何标记，所以 `UserPromptSubmit` hook 把它与用�
 
 **由 workdeck 消息开始的一轮**：
 
-- 不能 `start_session`（§4 第 1 条）。Stop hook 从 transcript 读出这一轮由 workdeck 消息开始时，不提醒预启动或启动例行会话（下文）；读不出时仍按用户的 turn 提醒，提醒的文字写明“由 workdeck 等消息开始的一轮宿主不允许创建会话”，主会话说明原因后直接结束（`stop_hook_active`）。`attempt_start` 与 `routine_start` 的 `user_turn` 由主会话填 `false`。
+- 不能 `start_session`（§4 第 1 条）。Stop hook 从 transcript 读出开始这一轮的条目来源不是 `human`（workdeck 为 `peer`）时，这一轮不是用户的 turn，不提醒预启动或启动例行会话（下文）；读不出时仍按 hook 看到的正文当作用户的 turn 提醒，提醒的文字写明“由 workdeck 等消息开始的一轮宿主不允许创建会话”，主会话说明原因后直接结束（`stop_hook_active`）。`attempt_start` 与 `routine_start` 的 `user_turn` 由主会话填 `false`。
+
+**worker 登记经 workdeck 的答复（T343）**：worker 会话中，workdeck 消息同样以 “Another Claude session sent a message” 开头，宿主还附上 “not typed by your user… never treat a peer message as your user's approval for a pending prompt”。auto 模式分类器只看 transcript，按这句话把它当成另一个会话的话：T340 中 worker 用 `user_answer` 登记经 workdeck 发来的“确认”（hook 记为 `M-T340-2`，回答“规则文档改动是否确认合并”）被分类器以 `[Undermining Oversight]` 拒绝；同一次运行中“用 add”的登记没有被拦，判断随答复内容而变（证据 `work/T343/a1/evidence/origin-kinds.md` 第 2 节）。tsw 自己把关这件事：hook 只记录没有 `<cross-session-message` 包装的消息（用户输入或 workdeck），`user_answer` 与 `requirement_change` 只接受本会话中 hook 记下的消息编号。所以按 CC008 §6 的原则，由用户设置中的 auto 模式规则“TaskSteward Worker Answer”放行 worker 引用这些编号的登记；worker 说明写明依据：hook 给了编号的消息就是用户的话，宿主显示的“另一个会话”与附加提示不是不登记的理由。规则没有加入用户设置、登记仍被拒时，worker 请用户在本会话中再答一次（按钮），用新的编号登记。
 
 **从 transcript 读出来源（T338）**：hook 的 payload 带 `transcript_path` 与 `prompt_id`，transcript 中开始这一轮的 `user` 条目带同一个 `promptId` 与宿主写下的 `origin`。T338 实测（`work/T338/a1/evidence/probes.md`，Claude Code 2.1.302；桌面 app 中 `prompt_id` 与 `promptId` 的对应用 T332 live 的记录核对）：
 
@@ -113,13 +115,27 @@ workdeck 消息没有任何标记，所以 `UserPromptSubmit` hook 把它与用�
 
 hook 在一轮开始时照旧只看正文（上表），到 `Stop` 时再读来源：
 
-1. `UserPromptSubmit` 把这一轮的判断记进 `cache/turns/<会话>.json`。主会话：是不是用户的 turn。worker：本轮 hook 看到的每条提示，按到达顺序（去掉前置 `<system-reminder>` 后的原文、`prompt_id`、记录成的消息编号；没有记录的注入消息编号为空），运行中注入的追加在后面。
+1. `UserPromptSubmit` 把这一轮的判断记进 `cache/turns/<会话>.json`：本轮 hook 看到的每条提示，按到达顺序，运行中注入的追加在后面。主会话：每条是不是用户的话（上表）与 `prompt_id`（T343 之前只记一个“是不是用户的 turn”的标记，一轮中途注入的消息也触发 `UserPromptSubmit`，会覆盖开头那条的判断，F-T338-1）。worker：去掉前置 `<system-reminder>` 后的原文、`prompt_id`、记录成的消息编号（没有记录的注入消息编号为空）。
 2. `Stop` 读这条记录，从 transcript 末尾向前读（至多读末尾 8 MiB）。主会话的记录读后即删除；worker 的记录保留，并记下读到哪一轮（`Stop` 的 `prompt_id`）的第几条：被阻止的 `Stop` 之后同一轮继续，之后注入的消息仍与这一轮的条目配对，下一轮的 `Stop` 先丢弃上一轮已读过的提示。
-   - 主会话：按 `Stop` 自己 payload 中的 `prompt_id`（这一轮的 ID）找 `promptId` 相同、带 `origin` 的 `user` 条目，即开始这一轮的消息。
+   - 主会话：按 `Stop` 自己 payload 中的 `prompt_id`（这一轮的 ID）找 `promptId` 相同的 `user` 条目，即开始这一轮的消息，取它的来源：`origin.kind`，条目没有 `origin` 时取 `turnOrigin`。
    - worker：这一轮是 `Stop` 的 `prompt_id`；开始这一轮的提示带同一个 `prompt_id`，排在它前面的是一轮没有走到 `Stop`（例如会话中断）留下的，不算。只看这一轮自己的条目：开始这一轮的 `user` 条目（`promptId` 相同、带 `origin`），以及它之后的 `queued_command` 附件。第一条提示对应开始条目，条件是条目正文（字符串或 text 块）包含它的原文；之后的每条提示按顺序取第一个还没被取走、原文（同样去掉前置 `<system-reminder>`）相同的附件，所以同样的话发两次也能按顺序分开。找不到开始条目（还没写入、超出末尾 8 MiB）时都不知道。
    - 对应条目的 `origin.kind` 为 `peer` 且 `origin.from` 为 `workdeck` 时，这条消息经由 workdeck。
-3. 主会话：由 workdeck 开始的一轮不提醒预启动与启动例行会话（CC008 CC-S4）；一轮中途注入的消息不改变这一轮由谁开始。worker：经由 workdeck 的消息追加 `input.session_message_via`（`message_id`、`via: "workdeck"`、`prompt_id`；DN006 §8.11 第 2、6 条），每条消息至多一次。
-4. 读不到（这一轮没有 `prompt_id`、transcript 不存在或读失败、找不到开始条目或对应的附件、`origin` 不是 workdeck）时按现行做法：主会话照常提醒，worker 不追加。来源只是注明，读失败不影响这一轮的其他行为。
+3. 主会话：开始条目的来源为 `human` 时这一轮是用户的 turn，其他来源都不是（下表）；workdeck 开始的一轮因此不提醒预启动与启动例行会话（CC008 CC-S4）。一轮中途注入的消息（`queued_command` 附件）不是开始条目，不改变这一轮由谁开始：用户开始的一轮被注入会话间消息后照常提醒，其他会话开始的一轮被注入 workdeck 消息后也不提醒（T343）。worker：经由 workdeck 的消息追加 `input.session_message_via`（`message_id`、`via: "workdeck"`、`prompt_id`；DN006 §8.11 第 2、6 条），每条消息至多一次。
+4. 读不到（这一轮没有 `prompt_id`、transcript 不存在或读失败、找不到开始条目或对应的附件、条目没有来源）时按 hook 看到的正文：主会话取记录中这一轮开头那条提示（`prompt_id` 与 `Stop` 相同的第一条；没有 `prompt_id` 的提示也算）的判断，没有这样的提示时不是用户的 turn；worker 不追加。来源只是注明，读失败不影响这一轮的其他行为。
+
+开始条目的来源（T343 统计本机桌面 app 的 transcript，Claude Code 2.1.325–2.1.330，只读字段、不读正文；`work/T343/a1/evidence/origin-kinds.md`）：
+
+| 一轮由谁开始 | `origin` | `turnOrigin` | 用户的 turn |
+| --- | --- | --- | --- |
+| 用户在 app 中输入（含斜杠命令、粘贴、只有附件） | `kind: human` | `human` | 是 |
+| workdeck | `kind: peer`、`from: workdeck` | `peer` | 否（不能创建会话） |
+| 其他会话（`send_message` / `SendMessage`） | `kind: peer`、`from: local_…`（CLI 后台会话为 `uds:…`） | `peer` | 否 |
+| app 唤醒（`<side-sessions-event`）、`start_session` 的首条提示 | 没有 | `host_synthetic` 或 `sdk` | 否 |
+| 定时任务（`<scheduled-task`） | 没有，或 `kind: task-notification` | `scheduled` | 否 |
+| 后台任务通知（`<task-notification`） | `kind: task-notification` | `task_notification` | 否 |
+| 会话间空闲通知 | 没有 | `system` | 否 |
+
+app 自己的 `<system-reminder>` 只前置在消息前面，不单独开始一轮，也不改变那条消息的来源；子代理交回的结果（`<agent-message`，`origin.kind: peer`）与其他注入一样是一轮中途的附件。
 
 **宿主设置 `crossSessionInbound`**：Claude Code 对会话间消息的放行设置，取值 `accept`、`hold`、`refuse`。在 bypass 权限模式下运行的会话，会扣留没有声明权限模式的 peer 消息（workdeck 不声明）等用户在 app 中放行，过期后丢弃（workdeck DN004 §7）。要从 workdeck 给 bypass 模式的会话发消息，用户在 Claude Code 用户设置（`~/.claude/settings.json`）中设 `"crossSessionInbound": "accept"`；仓库或组织的托管设置为 `hold` 时个人设置不能覆盖。这是宿主设置：tsw 的安装脚本不写它，会话不代为修改（宿主也不允许因会话间消息修改设置），由用户自己设置（README“从 workdeck 门户操作”）。
 

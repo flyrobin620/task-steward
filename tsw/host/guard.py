@@ -36,7 +36,7 @@ from tsw.host.identity import (
     within,
 )
 from tsw.host.plugin_copy import session_hint
-from tsw.host.transcript import prompt_origin, turn_origins
+from tsw.host.transcript import prompt_origin, turn_origins, typed_by_user
 from tsw.host.transcript import via as origin_via
 from tsw.ledger import Ledger
 from tsw.machine import routine as routine_mod
@@ -64,13 +64,15 @@ SESSION_ACTIONS = {"title": "改标题", "archive": "归档"}  # DN002 §5.8
 # The host's session-scheduling tools, and the tag every scheduled prompt of a session carries.
 SCHEDULERS = ("CronCreate", "ScheduleWakeup")
 SCHEDULED_TAG = "<scheduled-task"
-# Under the data directory's cache/: what UserPromptSubmit saw of each session's current turn
-# (the orchestrator's: whether it is the user's; a worker's: the message it recorded), with the
-# turn's ``prompt_id``, so Stop can read where the turn's message came from (CC001 §6.1).
+# Under the data directory's cache/: what UserPromptSubmit saw of each session's current turn, in
+# order (the orchestrator's: whether each prompt is the user's; a worker's: the message it
+# recorded), with each ``prompt_id``, so Stop can read where the turn's messages came from
+# (CC001 §6.1).
 TURNS_DIR = "turns"
 # When Stop cannot read the turn's source from the transcript, a turn begun by a message the user
 # sent through workdeck looks like one the user typed in the app; only the latter may create
-# sessions (CC001 §6.1).
+# sessions (CC001 §6.1). Said only then: a turn the transcript shows the user typed needs no such
+# warning.
 WORKDECK_TURN = (
     "这一轮若由 workdeck 发来的消息开始（没有 <cross-session-message> 包装的会话间消息），"
     "宿主不允许创建会话：不要调用 start_session，说明原因后直接结束，"
@@ -805,7 +807,9 @@ class Guard:
     def on_UserPromptSubmit(self, who: Identity) -> dict[str, Any] | None:
         prompt = str(self.payload.get("prompt") or "")
         if who.role == "orchestrator":
-            self._mark_turn(who, {"user_turn": not is_automated(prompt)})
+            # Appended, not replaced: a message injected while the turn runs fires this hook too
+            # (T334 probe C1) and must not change who began the turn (CC008 CC-S6, F-T338-1).
+            self._note_prompt(who, prompt, None, user_turn=not is_automated(prompt))
             return None
         if who.role != "worker":
             return None
@@ -906,9 +910,12 @@ class Guard:
         again = bool(self.payload.get("stop_hook_active"))
         if who.role == "orchestrator":
             turn = self._take_turn(who)
-            user_turn = bool(turn.get("user_turn"))
             if again or not self.config.valid:
                 return None
+            # Who began the turn: the host's record of its first message, read now that it is
+            # written; what the hook saw of that message when it cannot be read (CC-S6).
+            known = typed_by_user(self._start_origin(turn))
+            user_turn = known if known is not None else self._began_with_user(turn)
             reasons: list[str] = []
             with self.ledger.view() as conn:
                 pending = inbox_mod.inbox(conn, self.ledger.storage, self.config)
@@ -931,10 +938,6 @@ class Guard:
                     else []
                 )
             state = routine[0]["state"] if routine else None
-            if (prestart or (state == "missing" and user_turn)) and self._via(turn) is not None:
-                # A turn begun by a message the user sent through workdeck: the host lets no
-                # session be created in it, so there is nothing to remind of (CC001 §6.1, T338).
-                user_turn, prestart = False, []
             if pending and may_dispatch:
                 reasons.append(
                     f"还有 {len(pending)} 条未处理的回传，先调用 inbox 处理并 inbox_ack。"
@@ -987,7 +990,7 @@ class Guard:
                     "（purpose: prestart，user_turn: true）→ start_session → attempt_reconcile。"
                     "确实不该现在预启动时（例如用户要求先不开始），说明原因后直接结束。"
                 )
-            if prestart or (state == "missing" and user_turn):
+            if (prestart or (state == "missing" and user_turn)) and known is None:
                 reasons.append(WORKDECK_TURN)
             return {"decision": "block", "reason": "".join(reasons)} if reasons else None
         if who.role == "routine":
@@ -1037,9 +1040,17 @@ class Guard:
         except OSError as exc:  # a missed mark only skips a reminder or a note
             print(f"tsw guard: turn not recorded: {exc}", file=sys.stderr)
 
-    def _note_prompt(self, who: Identity, prompt: str, recorded: Mapping[str, Any] | None) -> None:
-        """Add a prompt the worker's hook saw to the turn's mark, with the message it recorded
-        (None for an injected one it did not record), for Stop to look up in order."""
+    def _note_prompt(
+        self,
+        who: Identity,
+        prompt: str,
+        recorded: Mapping[str, Any] | None,
+        *,
+        user_turn: bool | None = None,
+    ) -> None:
+        """Add a prompt the hook saw to the turn's mark, for Stop to look up in order: a
+        worker's with the message it recorded (None for an injected one it did not record), the
+        orchestrator's with whether it is the user's own words (``user_turn``)."""
         path = self._turn_file(who)
         try:
             mark: Any = json.loads(path.read_text(encoding="utf-8"))
@@ -1048,11 +1059,13 @@ class Guard:
         kept = cast("dict[str, Any]", mark) if isinstance(mark, dict) else {}
         earlier: Any = kept.get("prompts")
         seen = cast("list[Any]", earlier) if isinstance(earlier, list) else []
-        note = {
+        note: dict[str, Any] = {
             "prompt": user_words(prompt),
             "message_id": recorded["message_id"] if recorded else None,
             "prompt_id": self._prompt_id(),
         }
+        if user_turn is not None:
+            note = {"user_turn": user_turn, "prompt_id": note["prompt_id"]}
         # ``turn`` and ``upto``: what the last Stop read (see _record_via).
         last = {k: kept[k] for k in ("turn", "upto") if k in kept}
         self._mark_turn(who, {**last, "prompts": [*seen, note]})
@@ -1070,15 +1083,41 @@ class Guard:
             path.unlink()
         return cast("dict[str, Any]", mark) if isinstance(mark, dict) else {}
 
-    def _via(self, turn: Mapping[str, Any]) -> str | None:
-        """``workdeck`` when the host recorded the message that started the turn ending now as
-        sent through workdeck, read from the transcript at Stop, once the entry is written
-        (CC001 §6.1). Messages injected later in the turn do not change who started it."""
+    def _start_origin(self, turn: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Where the message that began the turn ending now came from, as the host recorded it:
+        read from the transcript at Stop, once the entry is written (CC001 §6.1). Messages
+        injected later in the turn are attachments, not the turn's start, so they never change
+        it. None when it cannot be read."""
         try:
-            prompt_id = self._prompt_id() or turn.get("prompt_id")
-            return origin_via(prompt_origin(self.payload.get("transcript_path"), prompt_id))
-        except Exception:  # a note only; never block the end of the turn
+            return prompt_origin(
+                self.payload.get("transcript_path"),
+                self._prompt_id() or self._first_note(turn).get("prompt_id"),
+            )
+        except Exception:  # never block the end of the turn on it
             return None
+
+    def _began_with_user(self, turn: Mapping[str, Any]) -> bool:
+        """What the hook saw of the turn's first message: whether it was the user's own words
+        (CC008 CC-S6); False when the hook saw no message of this turn."""
+        return bool(self._first_note(turn).get("user_turn"))
+
+    def _first_note(self, turn: Mapping[str, Any]) -> dict[str, Any]:
+        """The first prompt the hook noted for the turn ending now: the first with Stop's
+        ``prompt_id`` (one without an id may be it too). Prompts left by a turn that never
+        reached Stop carry another id and are passed over."""
+        listed: Any = turn.get("prompts")
+        notes = (
+            [cast("dict[str, Any]", n) for n in cast("list[Any]", listed) if isinstance(n, dict)]
+            if isinstance(listed, list)
+            else []
+        )
+        if not notes and "user_turn" in turn:
+            notes = [dict(turn)]  # a mark written before T343: one judgment for the turn
+        stop_id = self._prompt_id()
+        for note in notes:
+            if stop_id is None or note.get("prompt_id") in (None, stop_id):
+                return note
+        return {}
 
     def _record_via(self, who: Identity) -> None:
         """Messages recorded in the turn ending now that came through workdeck: say so

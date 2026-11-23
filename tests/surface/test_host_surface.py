@@ -493,6 +493,7 @@ def test_plugin_package_and_generated_files(home: Path) -> None:
         "TaskSteward Worker Dispatch",
         "TaskSteward Worker Merge",
         "TaskSteward Routine",
+        "TaskSteward Worker Answer",
     ]
     assert "--admin" in rules[1]
     # Worker Merge accepts the gh-account skill's one account prefix, nothing joined (T279).

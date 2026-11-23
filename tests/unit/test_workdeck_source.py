@@ -238,3 +238,56 @@ def test_the_turns_prompts_are_paired_with_its_entries_in_order(tmp_path: Path) 
     tail = len(_queued("也要 B", WORKDECK_ORIGIN)) + 10
     assert transcript.turn_origins(str(path), "p-1", ["继续"], limit=tail) == [None]
     assert transcript.turn_origins(str(path), "p-1", ["继续"], limit=size) == [human]
+
+
+# --- T343: who began the turn, from its start entry (CC001 §6.1, CC008 CC-S6) ---------------
+
+
+def _turn_origin_only(prompt_id: str, turn_origin: str, content: Any = "words") -> bytes:
+    """A turn-starting entry the app writes with ``turnOrigin`` but no ``origin``: its wake-ups,
+    a session's first prompt, scheduled tasks (T343 counts)."""
+    entry = {
+        "type": "user",
+        "promptId": prompt_id,
+        "turnOrigin": turn_origin,
+        "message": {"content": content},
+    }
+    return (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def test_a_start_entry_without_origin_gives_its_turn_origin(tmp_path: Path) -> None:
+    path = tmp_path / "t.jsonl"
+    path.write_bytes(
+        _turn_origin_only("p-1", "host_synthetic", "<side-sessions-event>x</side-sessions-event>")
+        + _turn_origin_only("p-2", "scheduled", '<scheduled-task name="r">x</scheduled-task>')
+        + _line("p-3", {"kind": "human"})
+        + _line("p-3", None, [{"type": "tool_result"}])
+        + _line("p-4", None)  # neither: not known
+    )
+    assert transcript.prompt_origin(str(path), "p-1") == {"kind": "host_synthetic"}
+    assert transcript.prompt_origin(str(path), "p-2") == {"kind": "scheduled"}
+    assert transcript.prompt_origin(str(path), "p-3") == {"kind": "human"}
+    assert transcript.prompt_origin(str(path), "p-4") is None
+    assert transcript.via(transcript.prompt_origin(str(path), "p-1")) is None
+
+
+@pytest.mark.parametrize(
+    ("origin", "typed"),
+    [
+        ({"kind": "human"}, True),
+        (WORKDECK_ORIGIN, False),  # the user's words, but a turn it begins cannot create sessions
+        (PEER, False),
+        ({"kind": "task-notification"}, False),
+        ({"kind": "host_synthetic"}, False),
+        ({"kind": "sdk"}, False),
+        ({"kind": "scheduled"}, False),
+        ({"kind": "system"}, False),
+        ({"kind": ""}, None),
+        ({"from": "workdeck"}, None),
+        (None, None),
+    ],
+)
+def test_only_a_message_typed_in_the_app_begins_the_users_turn(
+    origin: dict[str, Any] | None, typed: bool | None
+) -> None:
+    assert transcript.typed_by_user(origin) is typed
