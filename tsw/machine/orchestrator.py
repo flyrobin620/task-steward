@@ -824,6 +824,31 @@ def _ensure_dir(home: Home, recorded: str) -> None:
         ) from exc
 
 
+def _sync_dispatched_brief(
+    ctx: CommitContext, config: EffectiveConfig, row: Mapping[str, Any], current: Mapping[str, Any]
+) -> None:
+    """Bring the brief task_dispatch wrote up to the worktree the session is about to start in.
+
+    Which branch a taken-over worktree keeps is read from the worktree (CC006 §8.3); it can
+    differ from what the brief says when the worktree changed between dispatch and this start
+    (a start refused for a detached HEAD, retried after the branch was checked out again). The
+    brief is rewritten, at its own revision, only when it differs.
+    """
+    path = current["brief_path"]
+    if not path or int(current["brief_revision"] or 0) != int(row["revision"]):
+        return
+    attempt_id = str(current["attempt"])
+    workdir = str(current["workdir"] or f"work/{row['task_id']}/{attempt_id}")
+    read_set = [str(n) for n in loads(current["read_set"], [])]
+    brief = _brief(ctx, row, attempt_id, workdir, read_set, config)
+    try:
+        old = ctx.storage.read_artifact(str(path)).decode("utf-8")
+    except OSError:
+        old = ""
+    if brief != old:
+        ctx.storage.put_artifact(str(path), brief.encode("utf-8"))
+
+
 @tool(
     "attempt_start",
     "orchestrator",
@@ -902,6 +927,8 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         # failure refuses the start like a directory that cannot be created.
         ws = _plan(ctx, env.config, row, attempt_id, str(recorded or workdir))
         made = ensure(ws) if ws is not None and ws.worktree is not None else None
+        if purpose == "dispatch" and made is not None and current is not None:
+            _sync_dispatched_brief(ctx, env.config, row, current)
         generation = (int(previous["generation"]) if previous else 0) + 1
         # The title the session is created with, and the base the later titles are made of
         # (DN002 §5.8): tsw renames a session only while it still has the title tsw gave it.

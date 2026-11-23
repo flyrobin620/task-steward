@@ -585,6 +585,16 @@ def test_a_detached_worktree_is_not_taken_over(home: Home, tmp_path: Path) -> No
     assert refused.value.details["reason"] == "worktree_conflict"
     rows = h.query("SELECT phase FROM attempts WHERE task_id = 'T001' AND attempt = 'a2'")
     assert [r["phase"] for r in rows] == ["planned"]
+    brief_path = h.home.root / "runs" / "T001" / "a2" / "brief.md"
+    assert "分支 `tsw/t001-a2`" in brief_path.read_text(encoding="utf-8")  # as dispatched
+    # Back on its branch, the worktree is taken over, and the brief says so (review r1 F1).
+    git(worktree, "switch", "-q", "tsw/t001-a1")
+    started = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
+    made = started["events"][0]["data"]["worktree"]
+    assert (made["branch"], made["taken_over"]) == ("tsw/t001-a1", "a1")
+    brief = brief_path.read_text(encoding="utf-8")
+    assert "分支 `tsw/t001-a1`" in brief and "接手 a1 的执行目录" in brief
+    assert "tsw/t001-a2" not in brief
 
 
 def test_another_tasks_directory_is_not_taken_over(home: Home, tmp_path: Path) -> None:
