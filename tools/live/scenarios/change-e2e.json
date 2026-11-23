@@ -39,17 +39,82 @@
       ]
     }
   ],
+  "links": {
+    "trust": {
+      "folder": "repo",
+      "q": "只为信任这个文件夹：回复“好”即可，不做其他事。"
+    },
+    "main": {
+      "folder": "home",
+      "q": "执行 T001"
+    }
+  },
   "operator": [
-    "开始前，在 Claude 桌面 app 以本运行的仓库检出 {repo} 为文件夹新建一个会话并信任该文件夹，然后归档这个会话：真实使用中仓库的主检出已经信任过，worker 的 worktree 沿用主检出的信任。",
-    "在 Claude 桌面 app 新建会话，文件夹选择本运行的数据目录 {home}（首次打开需要信任该文件夹），权限模式用 auto。",
-    "在该主会话中说：“执行 T001”。等 worker 提交、主会话核验并技术验收（主会话告诉你 T001 完成、等待人工验收）。不要验收。",
-    "到 T001 的 worker 会话中说：“追加要求：README 再加一行‘支持加、减、乘、除’，然后重新提交”。worker 应引用 hook 给出的消息编号调用 requirement_change（任务从 done 回到执行中，revision 2），再评审、开新的 PR、合并、提交，并唤醒主会话。",
-    "主会话应被唤醒，从 inbox 看到 worker 登记的需求变更与新的提交，确认后按 revision 2 核验并再次技术验收（不需要退回或重新派发）。留意 worker 与主会话发消息、worker 合并时是否出现权限确认或分类器拒绝，记下来。",
-    "回到运行 live.py 的会话，运行 python tools/live.py change-e2e verify {run_id} --blocked <yes|no>（按你在 app 中看到的填写），然后在主会话中验收或取消 T001，归档本次运行的会话并运行 cleanup。"
+    {
+      "who": "session",
+      "text": "运行 python tools/live.py change-e2e open {run_id} trust，在 app 中打开以 repo/ 为文件夹、消息已填好的新会话。"
+    },
+    {
+      "who": "user",
+      "link": "trust",
+      "text": "在弹出的 repo/ 会话中点发送，在信任确认中选择信任。",
+      "why": "信任文件夹是宿主要求用户本人确认的动作（确认框写明由谁允许执行），脚本与会话都不能代替；真实使用中仓库的主检出已经信任过，worker 的 worktree 沿用主检出的信任，所以先信任本运行的 repo/。"
+    },
+    {
+      "who": "session",
+      "text": "运行 python tools/live.py change-e2e sessions {run_id}，看到 repo/ 会话（repo-trust）后运行 python tools/live.py change-e2e open {run_id} main；repo/ 会话在收尾时与其他会话一起归档。"
+    },
+    {
+      "who": "user",
+      "link": "main",
+      "text": "在弹出的 home/ 会话中（消息“执行 T001”已填好）点发送，首次打开时信任该文件夹。权限模式不用改：home/ 的设置让它以 auto 模式开始。",
+      "why": "deeplink 只能预填文件夹与消息，不会自动发送（app 的 code/new 只读 q、folder、file、environment、runner_pool）；主会话必须由用户在 app 中发出第一条消息：由其他会话启动的会话，第一条消息是那个会话的话，不是用户的话（DN008 §2、CC001 §4），主会话不会据此执行任务。首次打开 home/ 还要信任它（它带 .claude/settings.local.json）。"
+    },
+    {
+      "who": "session",
+      "text": "主会话开始后，在后台运行 python tools/live.py change-e2e drive {run_id}：主会话技术验收 T001 后，它经本机 workdeck 替你在 T001 的 worker 会话中追加要求；主会话按 revision 2 再次技术验收后，替你在主会话中验收 T001。"
+    },
+    {
+      "who": "user",
+      "optional": true,
+      "text": "（可选）在场时留意worker 与主会话发消息、worker 合并时是否出现权限确认或分类器拒绝；看到了就告诉运行 live 的会话，verify 时用 --blocked 记下。",
+      "why": "这些只显示在 app 界面上；live 工具不读会话记录（~/.claude 中的 transcript，读取会被 auto 模式分类器拒绝，也违反测试不读 ~/.claude 的约定）。无人观察时，信任与权限确认会让会话停住，由 H2、H3、H4、C 间接覆盖。"
+    },
+    {
+      "who": "session",
+      "text": "drive 结束后运行 python tools/live.py change-e2e verify {run_id}（没有人观察时不带 --blocked，检查 O 记为未验证），再运行 python tools/live.py change-e2e sessions {run_id}，对列出的每个未归档会话archive_session（本场景关闭了例行会话），用 get_session 读回后运行 python tools/live.py cleanup {run_id} --archived <会话 ID>…。"
+    }
   ],
-  "prerequisites": [
-    "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则“TaskSteward Worker Merge”与“TaskSteward Worker Dispatch”。",
-    "已安装插件所用的运行时（真实数据目录 tsw-home.json 的 product_repo 指向的检出）已更新到含 requirement_change 的 main；prepare 会检查 claim_sessions。"
+  "drive": [
+    {
+      "id": "change-T001",
+      "to": "T001",
+      "text": "追加要求：README 再加一行‘支持加、减、乘、除’，然后重新提交",
+      "after": [
+        {
+          "event": "task.accepted",
+          "task": "T001"
+        }
+      ]
+    },
+    {
+      "id": "accept",
+      "to": "main",
+      "text": "我验收 T001",
+      "after": [
+        {
+          "event": "task.accepted",
+          "task": "T001",
+          "min": 2
+        }
+      ]
+    }
+  ],
+  "done": [
+    {
+      "event": "task.user_accepted",
+      "task": "T001"
+    }
   ],
   "checks": [
     "H1 隔离：数据目录与产品仓库指向本运行，主会话在其中操作",
@@ -60,5 +125,10 @@
     "C 自行合并：最后一次提交带 merge，merged_head 等于提交 HEAD，替身记录的 PR 已合并且合并提交在 origin 的 main 上",
     "I 通知：主会话确认（orchestrator.inbox_acked）了 worker 登记的需求变更事件",
     "O 操作者观察：worker 与主会话发消息、worker 合并时没有被拦（verify 的 --blocked no）"
+  ],
+  "prerequisites": [
+    "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则“TaskSteward Worker Merge”与“TaskSteward Worker Dispatch”。",
+    "已安装插件所用的运行时（真实数据目录 tsw-home.json 的 product_repo 指向的检出）已更新到含 requirement_change 的 main；prepare 会检查 claim_sessions。",
+    "本机装有 workdeck（PATH 中的 workdeck，或用 TSW_LIVE_WORKDECK 指向它的 cli.js），用户设置中 crossSessionInbound 为 accept（README“从 workdeck 门户操作”）：drive 用它替你发消息，不用登录，也不连网关。"
   ]
 }

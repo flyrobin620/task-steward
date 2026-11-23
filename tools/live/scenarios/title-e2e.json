@@ -49,19 +49,107 @@
       ]
     }
   ],
+  "links": {
+    "trust": {
+      "folder": "repo",
+      "q": "只为信任这个文件夹：回复“好”即可，不做其他事。"
+    },
+    "main": {
+      "folder": "home",
+      "q": "为 T001、T002 预启动待命会话，然后派发并执行它们"
+    }
+  },
   "operator": [
-    "开始前，在 Claude 桌面 app 以本运行的仓库检出 {repo} 为文件夹新建一个会话并信任该文件夹，然后归档这个会话：真实使用中仓库的主检出已经信任过，worker 的 worktree 沿用主检出的信任。",
-    "在 Claude 桌面 app 新建会话，文件夹选择本运行的数据目录 {home}（首次打开需要信任该文件夹），权限模式用 auto。",
-    "在该主会话中说：“为 T001、T002 预启动待命会话，然后派发并执行它们”。留意侧栏：两个 worker 会话先以“[待命]”开头的标题出现，派发后主会话把“[待命]”去掉。",
-    "等 T001 的 worker 提交、主会话核验并技术验收（主会话告诉你 T001 完成、等待人工验收）。不要在主会话中验收，也不要再在主会话中说话。",
-    "在 Claude 之外的终端中运行（用户本人验收，渠道 user-cli）：{tsw_cmd} task accept T001 --yes。然后等待最多 {interval} 分钟的两倍：例行会话应把 T001 转告主会话，主会话被唤醒后把 T001 的 worker 会话改名为“[已验收] …”。看侧栏中的标题，记下是否出现改名确认。",
-    "在侧栏中手动把 T002 的 worker 会话改名为“我的 T002”。然后在主会话中说：“取消 T002”。主会话停止 T002 的 worker、取消任务；它应当认出这个标题是你改的，不改名，也不应弹出改名确认。",
-    "在主会话中说：“归档 T002”。主会话归档任务后，应按 sessions.archive_on_archive 归档 T002 的 worker 会话：它从侧栏的会话列表移到已归档。",
-    "回到运行 live.py 的会话，运行 python tools/live.py title-e2e verify {run_id} --observed <yes|no>（yes：T001 的标题变为“[已验收] …”、T002 保持“我的 T002”、两次都没有出现改名确认、归档 T002 后它的会话被归档），然后归档本次运行的会话并运行 cleanup。"
+    {
+      "who": "session",
+      "text": "运行 python tools/live.py title-e2e open {run_id} trust，在 app 中打开以 repo/ 为文件夹、消息已填好的新会话。"
+    },
+    {
+      "who": "user",
+      "link": "trust",
+      "text": "在弹出的 repo/ 会话中点发送，在信任确认中选择信任。",
+      "why": "信任文件夹是宿主要求用户本人确认的动作（确认框写明由谁允许执行），脚本与会话都不能代替；真实使用中仓库的主检出已经信任过，worker 的 worktree 沿用主检出的信任，所以先信任本运行的 repo/。"
+    },
+    {
+      "who": "session",
+      "text": "运行 python tools/live.py title-e2e sessions {run_id}，看到 repo/ 会话（repo-trust）后运行 python tools/live.py title-e2e open {run_id} main；repo/ 会话在收尾时与其他会话一起归档。"
+    },
+    {
+      "who": "user",
+      "link": "main",
+      "text": "在弹出的 home/ 会话中（消息“为 T001、T002 预启动待命会话，然后派发并执行它们”已填好）点发送，首次打开时信任该文件夹。权限模式不用改：home/ 的设置让它以 auto 模式开始。留意侧栏：两个 worker 会话先以“[待命]”开头的标题出现，派发后主会话把“[待命]”去掉。",
+      "why": "deeplink 只能预填文件夹与消息，不会自动发送（app 的 code/new 只读 q、folder、file、environment、runner_pool）；主会话必须由用户在 app 中发出第一条消息：由其他会话启动的会话，第一条消息是那个会话的话，不是用户的话（DN008 §2、CC001 §4），主会话不会据此执行任务。首次打开 home/ 还要信任它（它带 .claude/settings.local.json）。"
+    },
+    {
+      "who": "user",
+      "text": "派发后（侧栏中 T002 的 worker 会话标题去掉了“[待命]”），在侧栏中手动把 T002 的 worker 会话改名为“我的 T002”。要在下一步终端验收之前改好：drive 在 T001 改名为“[已验收] …”之后才让主会话取消 T002。",
+      "why": "检查要的是用户在侧栏亲手改的标题：主会话要认出这是用户改的、不再改名；由会话用 set_session_title 代改，测的就不是用户改名这一路径。"
+    },
+    {
+      "who": "user",
+      "text": "等 T001 的 worker 提交、主会话核验并技术验收（主会话告诉你 T001 完成、等待人工验收）后，不要在主会话中验收，在 Claude 之外的终端中运行（用户本人验收，渠道 user-cli）：{tsw_cmd} task accept T001 --yes。",
+      "why": "渠道 user-cli 的含义是用户本人在 Claude 之外的终端输入（G-USER）：由会话或 live.py 代为运行就不是用户的终端，检查 U 正是验证这一点。"
+    },
+    {
+      "who": "session",
+      "text": "主会话开始后，在后台运行 python tools/live.py title-e2e drive {run_id}：T001 改名为“[已验收] …”之后，它经本机 workdeck 替你在主会话中说“取消 T002”；T002 取消后再说“归档 T002”。"
+    },
+    {
+      "who": "user",
+      "optional": true,
+      "text": "（可选）在场时看侧栏：T001 的标题变为“[已验收] …”、T002 保持“我的 T002”、两次都没有出现改名确认、归档 T002 后它的会话被归档；告诉运行 live 的会话，verify 时用 --observed 记下。",
+      "why": "这些只显示在 app 界面上；live 工具不读会话记录（~/.claude 中的 transcript，读取会被 auto 模式分类器拒绝，也违反测试不读 ~/.claude 的约定）。无人观察时，信任与权限确认会让会话停住，由 H2、H3、H4、C 间接覆盖。"
+    },
+    {
+      "who": "session",
+      "text": "drive 结束后运行 python tools/live.py title-e2e verify {run_id}（没有人观察时不带 --observed，检查 O 记为未验证），再运行 python tools/live.py title-e2e sessions {run_id}，对列出的每个未归档会话 archive_session（例行会话除外，见你要做的最后一步），用 get_session 读回后运行 python tools/live.py cleanup {run_id} --archived <会话 ID>…（用户归档例行会话后，读回并补记它）。"
+    },
+    {
+      "who": "user",
+      "text": "运行 live 的会话归档其他会话后，在侧栏中归档“TaskSteward 例行会话”（目录为本运行的 home/routine）。",
+      "why": "例行会话带着会话内的定时任务（CronCreate），app 认为它仍有后台工作：archive_session 被拒绝（“still has live work … they can also archive it from the sidebar”），它空闲时 stop_session 也没有可停的（T332、T340 两次 live 实测）。删除会话同样要用户确认。"
+    }
   ],
-  "prerequisites": [
-    "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则“TaskSteward Worker Merge”“TaskSteward Worker Dispatch”与“TaskSteward Routine”。",
-    "已安装插件所用的运行时（真实数据目录 tsw-home.json 的 product_repo 指向的检出）已更新到含 session_check 的 main；prepare 会检查 claim_sessions。"
+  "drive": [
+    {
+      "id": "cancel-T002",
+      "to": "main",
+      "text": "取消 T002",
+      "after": [
+        {
+          "event": "attempt.session_updated",
+          "task": "T001",
+          "data": {
+            "action": "title"
+          },
+          "since": {
+            "event": "task.user_accepted",
+            "task": "T001"
+          }
+        }
+      ]
+    },
+    {
+      "id": "archive-T002",
+      "to": "main",
+      "text": "归档 T002",
+      "after": [
+        {
+          "event": "task.cancelled",
+          "task": "T002"
+        }
+      ]
+    }
+  ],
+  "done": [
+    {
+      "event": "attempt.closed",
+      "task": "T002",
+      "since": {
+        "event": "task.archived",
+        "task": "T002"
+      }
+    }
   ],
   "checks": [
     "H1 隔离：数据目录与产品仓库指向本运行，主会话在其中操作",
@@ -73,5 +161,10 @@
     "X 用户改过名：T002 取消之后，主会话记录 T002 的 attempt.session_updated（user_title，读到的标题为用户改的），之后没有 T002 的 renamed",
     "R 归档：T002 归档（task.archived）之后，主会话记录 T002 的 attempt.closed（disposition archived，via sessions.archive_on_archive）",
     "O 操作者观察：T001 的标题变为“[已验收] …”，T002 保持用户改的标题，两次都没有出现改名确认，归档 T002 后它的会话被归档（verify 的 --observed yes）"
+  ],
+  "prerequisites": [
+    "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则“TaskSteward Worker Merge”“TaskSteward Worker Dispatch”与“TaskSteward Routine”。",
+    "已安装插件所用的运行时（真实数据目录 tsw-home.json 的 product_repo 指向的检出）已更新到含 session_check 的 main；prepare 会检查 claim_sessions。",
+    "本机装有 workdeck（PATH 中的 workdeck，或用 TSW_LIVE_WORKDECK 指向它的 cli.js），用户设置中 crossSessionInbound 为 accept（README“从 workdeck 门户操作”）：drive 用它替你发消息，不用登录，也不连网关。"
   ]
 }

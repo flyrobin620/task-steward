@@ -30,22 +30,115 @@
       ]
     }
   ],
+  "links": {
+    "main": {
+      "folder": "home",
+      "q": "执行 T001"
+    },
+    "b": {
+      "folder": "home",
+      "q": "你接手主会话：确认持有调度租约，然后处理 inbox 与 attention"
+    }
+  },
   "operator": [
-    "在 Claude 桌面 app 新建会话 A，文件夹选择本运行的数据目录 {home}（首次打开需要信任该文件夹），权限模式用 auto。",
-    "在 A 中说：“执行 T001”。A 派发 T001 的 worker（本场景关闭了例行会话）。等 worker 记录“就绪”并结束这一轮。",
-    "在 A 中说：“我要换一个主会话：让出调度租约”。A 应调用 lease_release，并说明之后只读运行。",
-    "再新建会话 B，文件夹同样选择 {home}，权限模式用 auto。在 B 中说：“你接手主会话：确认持有调度租约，然后处理 inbox 与 attention”。B 应在会话开始时已经领取租约。",
-    "到 T001 的 worker 会话（侧栏中在 A 名下）中说：“现在提问”。worker 调用 question，再把 wake.message 发给 wake.session_id（应为 B）。",
-    "B 应被 worker 的消息唤醒，用 judge 回答这个问题，并按会话 ID 给 worker 发消息转达“收到”。确认 worker 记录了“收到主会话回复”。留意 A 是否收到 worker 的消息、是否试图领取租约或处理回传，以及 worker 与 B 发消息时是否出现权限确认或分类器拒绝，记下来。",
-    "回到运行 live.py 的会话，运行 python tools/live.py handoff-e2e verify {run_id} --blocked <yes|no>（按你在 app 中看到的填写），然后在 B 中取消 T001，归档本次运行的会话（A、B 与 worker）并运行 cleanup。"
+    {
+      "who": "session",
+      "text": "运行 python tools/live.py handoff-e2e open {run_id} main，在 app 中打开会话 A（home/，消息已填好）；然后在后台运行 python tools/live.py handoff-e2e drive {run_id}。"
+    },
+    {
+      "who": "user",
+      "link": "main",
+      "text": "在弹出的 home/ 会话中（消息“执行 T001”已填好）点发送，首次打开时信任该文件夹。权限模式不用改：home/ 的设置让它以 auto 模式开始。这是会话 A。",
+      "why": "deeplink 只能预填文件夹与消息，不会自动发送（app 的 code/new 只读 q、folder、file、environment、runner_pool）；主会话必须由用户在 app 中发出第一条消息：由其他会话启动的会话，第一条消息是那个会话的话，不是用户的话（DN008 §2、CC001 §4），主会话不会据此执行任务。首次打开 home/ 还要信任它（它带 .claude/settings.local.json）。"
+    },
+    {
+      "who": "user",
+      "link": "b",
+      "text": "A 让出租约后，drive 会再弹出一个 home/ 会话 B（消息“你接手主会话：确认持有调度租约，然后处理 inbox 与 attention”已填好）：点发送。",
+      "why": "同上：B 是新的主会话，第一条消息必须是用户的话；deeplink 不会自动发送。"
+    },
+    {
+      "who": "user",
+      "optional": true,
+      "text": "（可选）在场时留意A 是否收到 worker 的消息、是否试图领取租约或处理回传，以及 worker 与 B 发消息时是否出现权限确认或分类器拒绝；看到了就告诉运行 live 的会话，verify 时用 --blocked 记下。",
+      "why": "这些只显示在 app 界面上；live 工具不读会话记录（~/.claude 中的 transcript，读取会被 auto 模式分类器拒绝，也违反测试不读 ~/.claude 的约定）。无人观察时，信任与权限确认会让会话停住，由 H2、H3、H4、C 间接覆盖。"
+    },
+    {
+      "who": "session",
+      "text": "drive 结束后运行 python tools/live.py handoff-e2e verify {run_id}（没有人观察时不带 --blocked，检查 O 记为未验证），再运行 python tools/live.py handoff-e2e sessions {run_id}，对列出的每个未归档会话archive_session（本场景关闭了例行会话），用 get_session 读回后运行 python tools/live.py cleanup {run_id} --archived <会话 ID>…。"
+    }
   ],
-  "prerequisites": [
-    "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则。"
+  "drive": [
+    {
+      "id": "release",
+      "to": "main",
+      "text": "我要换一个主会话：让出调度租约",
+      "after": [
+        {
+          "event": "worker.progress",
+          "task": "T001"
+        }
+      ]
+    },
+    {
+      "id": "open-b",
+      "open": "b",
+      "after": [
+        {
+          "event": "controller.lease_released"
+        }
+      ]
+    },
+    {
+      "id": "ask",
+      "to": "T001",
+      "text": "现在提问",
+      "after": [
+        {
+          "event": "controller.lease_acquired",
+          "data": {
+            "renewed": false
+          },
+          "since": {
+            "event": "controller.lease_released"
+          }
+        }
+      ]
+    },
+    {
+      "id": "cancel",
+      "to": "main",
+      "text": "取消 T001",
+      "after": [
+        {
+          "event": "worker.progress",
+          "task": "T001",
+          "since": {
+            "event": "orchestrator.decision",
+            "task": "T001",
+            "since": {
+              "event": "worker.question",
+              "task": "T001"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "done": [
+    {
+      "event": "task.cancelled",
+      "task": "T001"
+    }
   ],
   "checks": [
     "H1 隔离：数据目录与产品仓库指向本运行，两个主会话都在其中操作",
     "L 交接：A 记录 controller.lease_stood_down（via: release）与 controller.lease_released，之后 B 以 controller.lease_acquired 领取（不是续期、没有接管），A 之后没有再领取",
     "K 唤醒：B 领取之后 worker 记录 worker.question；B 的 hook 记录在提问之后收到来自 worker 会话的 <cross-session-message>，A 在让出之后没有收到；B 以 orchestrator.decision 回答，worker 之后记录 progress_note",
     "O 操作者观察：worker 与 B 发消息时没有被拦（verify 的 --blocked no）"
+  ],
+  "prerequisites": [
+    "用户设置（~/.claude/settings.json）中已有 tsw host install-hint 给出的 autoMode 规则。",
+    "本机装有 workdeck（PATH 中的 workdeck，或用 TSW_LIVE_WORKDECK 指向它的 cli.js），用户设置中 crossSessionInbound 为 accept（README“从 workdeck 门户操作”）：drive 用它替你发消息，不用登录，也不连网关。"
   ]
 }
