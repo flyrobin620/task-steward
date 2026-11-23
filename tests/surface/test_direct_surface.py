@@ -699,7 +699,9 @@ def test_the_dashboard_serves_registered_work_outputs_only(h: Harness, dashboard
     # The task view and the board link it like a report.
     view = dashboard.request("GET", "/tasks/T001")[2].decode("utf-8")
     assert f'<a href="../{page}">O-T001-zh</a>' in view
-    assert f'href="../{page}"' in dashboard.request("GET", "/")[2].decode("utf-8")
+    # The board is at the app's root: its links stay under a proxy's prefix without rewriting.
+    board = dashboard.request("GET", "/")[2].decode("utf-8")
+    assert f'href="{page}"' in board and f'href="../{page}"' not in board
     # The page, under the documents' policy: its scripts do not run, its styles load.
     status, headers, body = dashboard.request("GET", "/" + page)
     assert (status, headers["Content-Type"]) == (200, "text/html; charset=utf-8")
@@ -732,3 +734,35 @@ def test_the_dashboard_serves_registered_work_outputs_only(h: Harness, dashboard
     h.home.root.joinpath(*page.split("/")).unlink()
     status, _, body = dashboard.request("GET", "/" + page)
     assert (status, body.decode("utf-8")) == (404, "文件不存在（执行目录可能已清理）")
+
+
+@mark.use_case("UC-DIRECT-010")
+def test_a_linked_work_output_is_served_by_the_name_asked_for(h: Harness, dashboard: App) -> None:
+    h.register("T001")
+    folder = h.home.root / "work" / "T001" / "a1" / "docs"
+    folder.mkdir(parents=True)
+    (folder / "notes.txt").write_text("# 笔记\n\n正文\n", encoding="utf-8")
+    (folder / "private.html").write_text("<h1>未登记</h1>", encoding="utf-8")
+    try:
+        (folder / "notes.md").symlink_to(folder / "notes.txt")
+        (folder / "style.css").symlink_to(folder / "private.html")
+    except OSError as exc:  # pragma: no cover - Windows without the symlink privilege
+        pytest.skip(f"cannot create a symbolic link here: {exc}")
+    h.run(
+        "output_link",
+        task_id="T001",
+        output_id="O-T001-notes",
+        type="research",
+        ref="work/T001/a1/docs/notes.md",
+        evidence=["test"],
+        verified_at="2026-11-23T00:00:00Z",
+    )
+    handed_back(h)
+    dashboard.cookie = f"tsw_status_{dashboard.port}={dashboard.token}"
+    # A registered .md that is a link renders as Markdown: the type follows the name asked for.
+    status, headers, body = dashboard.request("GET", "/work/T001/a1/docs/notes.md?view=html")
+    assert (status, headers["Content-Type"]) == (200, "text/html; charset=utf-8")
+    assert body.decode("utf-8").startswith('<article class="md"><h1 id="md-笔记">笔记</h1>')
+    # A link named like a style does not hand out the page it leads to.
+    status, _, body = dashboard.request("GET", "/work/T001/a1/docs/style.css")
+    assert (status, body.decode("utf-8")) == (404, "不是已登记的产出")

@@ -159,3 +159,20 @@ def test_a_file_symlink_out_of_range_is_refused(h: Harness, tmp_path: Path) -> N
     app = StatusApp(h.home)
     assert app.work_file("work/T001/a1/repo/docs/html/zh-CN/leak.png") == (None, NOT_REGISTERED)
     assert app.work_file(PAGE) == (None, NOT_REGISTERED)
+
+
+@mark.use_case("UC-DIRECT-010")
+def test_a_resource_link_must_lead_to_a_resource(h: Harness) -> None:
+    folder = h.home.root.joinpath(*PAGE.split("/")).parent
+    try:
+        (folder / "style2.css").symlink_to(folder / "DN014.html")
+        (folder / "secret.png").symlink_to(h.home.root / "work/T001/a1/repo/.env")
+        (folder / "alias.png").symlink_to(folder / "img" / "LOGO.PNG")
+    except OSError as exc:  # pragma: no cover - Windows without the symlink privilege
+        pytest.skip(f"cannot create a symbolic link here: {exc}")
+    app = StatusApp(h.home)
+    base = PAGE.rsplit("/", 1)[0]
+    assert app.work_file(f"{base}/style2.css") == (None, NOT_REGISTERED)
+    assert app.work_file(f"{base}/secret.png") == (None, NOT_REGISTERED)
+    found, why = app.work_file(f"{base}/alias.png")
+    assert why == "" and found is not None and found.name == "LOGO.PNG"

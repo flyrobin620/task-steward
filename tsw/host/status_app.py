@@ -40,7 +40,7 @@ from collections.abc import Callable, Iterable, Mapping
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urlsplit
 
@@ -270,7 +270,8 @@ class StatusApp:
             rows = conn.execute(
                 "SELECT task_id, ref FROM outputs WHERE substr(ref, 1, 5) = 'work/'"
             ).fetchall()
-        bounds: list[tuple[Path, Path]] = []
+        # (task's work directory, directory the file must stay in, whether only resources pass)
+        bounds: list[tuple[Path, Path, bool]] = []
         for row in rows:
             ref = str(row["ref"])
             own = work_parts(ref)
@@ -278,20 +279,22 @@ class StatusApp:
                 continue  # not in its own task's work directory
             root = self.home.root.joinpath(WORK_DIR, own[1])
             if ref == path:
-                bounds.append((root, root))
+                bounds.append((root, root, False))
             elif resource and own[1] == parts[1] and path.startswith(ref.rsplit("/", 1)[0] + "/"):
-                bounds.append((root, self.home.root.joinpath(*own[:-1])))
+                bounds.append((root, self.home.root.joinpath(*own[:-1]), True))
         if not bounds:
             return None, NOT_REGISTERED
         target = self.home.root.joinpath(*parts)
         if not target.exists():
             return None, WORK_GONE
         real = target.resolve()
-        for root, folder in bounds:
+        for root, folder, only_resources in bounds:
             if (
                 real.is_file()
                 and real.is_relative_to(root.resolve())
                 and real.is_relative_to(folder.resolve())
+                # A link named like a style may not hand out the page or data file it leads to.
+                and (not only_resources or real.suffix.lower() in WORK_RESOURCES)
             ):
                 return real, ""
         return None, NOT_REGISTERED
@@ -543,7 +546,7 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 if found is None:
                     self._text(HTTPStatus.NOT_FOUND, why)
                     return
-                self._send_file(found, view)
+                self._send_file(found, view, PurePosixPath(path).name)
                 return
             parts = [p for p in path.split("/") if p]
             if not parts or parts[0] not in SERVED_DIRS or any(p in ("..", ".") for p in parts):
@@ -554,12 +557,14 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             if not target.is_relative_to(root / parts[0]) or not target.is_file():
                 self._text(HTTPStatus.NOT_FOUND, "没有这个文件")
                 return
-            self._send_file(target, view)
+            self._send_file(target, view, parts[-1])
 
-        def _send_file(self, target: Path, view: str) -> None:
-            """A file of the data directory, read-only, under the documents' CSP."""
+        def _send_file(self, target: Path, view: str, name: str) -> None:
+            """A file of the data directory, read-only, under the documents' CSP; its type follows
+            the ``name`` asked for, not the file a link leads to."""
             extra = {"Content-Security-Policy": SERVED_CSP}
-            markdown = target.suffix.lower() == ".md"
+            suffix = PurePosixPath(name).suffix.lower()
+            markdown = suffix == ".md"
             if markdown and view == "html":
                 # The page's document dialog (DN006 §8.10, T278): the file rendered, escaped.
                 source = target.read_bytes().decode("utf-8", errors="replace")
@@ -571,8 +576,8 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 self._send(HTTPStatus.OK, body.encode("utf-8"), "text/html; charset=utf-8", extra)
                 return
             # Markdown (briefs, reports' sources) is otherwise shown as text, not downloaded.
-            plain = markdown or target.suffix.lower() in (".txt", ".log")
-            kind = "text/plain" if plain else mimetypes.guess_type(target.name)[0]
+            plain = markdown or suffix in (".txt", ".log")
+            kind = "text/plain" if plain else mimetypes.guess_type(name)[0]
             kind = kind or "application/octet-stream"
             if kind.startswith("text/") or kind in ("application/json", "application/xml"):
                 kind += "; charset=utf-8"

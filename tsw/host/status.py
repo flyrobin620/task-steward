@@ -95,14 +95,17 @@ def work_parts(ref: str) -> list[str] | None:
     return parts
 
 
-def link_for(ref: str) -> str | None:
-    """A link for an output reference, relative to ``views/``; None when it is not a location."""
+def link_for(ref: str, up: str = "../") -> str | None:
+    """A link for an output reference; None when it is not a location. A file of the data
+    directory is reached through ``up``: ``../`` from ``views/`` and from the app's task views,
+    nothing from the app's board at its root, so the link stays under a proxy's path prefix even
+    when the proxy does not rewrite it (DN006 §8.10)."""
     if ref.startswith(("https://", "http://")):
         return ref
     if ref.startswith("legacy://"):
-        return "../legacy/" + quote(ref[len("legacy://") :], safe="/")
+        return up + "legacy/" + quote(ref[len("legacy://") :], safe="/")
     if ref.startswith("runs/") or work_parts(ref) is not None:
-        return "../" + quote(ref, safe="/")
+        return up + quote(ref, safe="/")
     return None
 
 
@@ -198,8 +201,8 @@ class Output:
     ref: str
     delivery: str | None
 
-    def html(self, cls: str) -> str:
-        href = link_for(self.ref)
+    def html(self, cls: str, up: str = "../") -> str:
+        href = link_for(self.ref, up)
         link = f'<a href="{_e(href)}">{_e(self.label)}</a>' if href else _e(self.label)
         extra = f"<small>{_e(self.delivery)}</small>" if self.delivery else ""
         return f'<span class="out {cls}">{link}{extra}</span>'
@@ -268,16 +271,16 @@ def _requirement(goal: str, acceptance: list[Any] | tuple[str, ...]) -> str:
 
 
 def brief_html(
-    row: dict[str, Any], attempt: dict[str, Any] | None, history: list[Revision] | None
+    row: dict[str, Any],
+    attempt: dict[str, Any] | None,
+    history: list[Revision] | None,
+    up: str = "../",
 ) -> str:
     """The task's brief at its current revision, and, in the app, the earlier revisions."""
     acceptance: list[Any] = loads(row["acceptance"], []) or []
     path = attempt.get("brief_path") if attempt else None
-    link = (
-        f'<p><a href="{_e(link_for(str(path)))}">打开 worker 的任务书（brief.md）</a></p>'
-        if path and link_for(str(path))
-        else ""
-    )
+    href = link_for(str(path), up) if path else None
+    link = f'<p><a href="{_e(href)}">打开 worker 的任务书（brief.md）</a></p>' if href else ""
     body = _requirement(str(row["goal"] or ""), acceptance) + link
     if not body:
         return ""
@@ -365,13 +368,15 @@ def _card(
     submission: dict[str, Any] = loads(row["submission"], None) or {}
     report_info: dict[str, Any] = submission.get("report") or {}
     report: str | None = report_info.get("html_path")
+    # The app's board is at the app's root; the static page is in views/ (link_for).
+    up = "" if app is not None else "../"
     prs = [o for o in outputs if o.kind in PR_TYPES]
     others = [o for o in outputs if o.kind not in PR_TYPES]
-    links = [o.html("pr") for o in prs]
+    links = [o.html("pr", up) for o in prs]
     if report and not any(o.ref == report for o in outputs):
-        links.append(Output("report", "报告", str(report), None).html("rep"))
+        links.append(Output("report", "报告", str(report), None).html("rep", up))
     face = [o for o in others if o.kind == "report"][:2]
-    links += [o.html("rep") for o in face]
+    links += [o.html("rep", up) for o in face]
     rest = [o for o in others if o not in face]
 
     sub = f" <small>· {_e(row['substate'])}</small>" if row["substate"] else ""
@@ -398,7 +403,7 @@ def _card(
         + "</div>"
         for cls, head, text in card.notes
     )
-    brief = brief_html(row, attempt, app.history.get(task_id, []) if app else None)
+    brief = brief_html(row, attempt, app.history.get(task_id, []) if app else None, up)
 
     body: list[str] = []
     if note:
@@ -418,7 +423,7 @@ def _card(
         )
     if rest:
         items = "".join(
-            f"<li>{_e(OUTPUT_TYPES.get(o.kind, o.kind))} · {o.html('')}</li>" for o in rest
+            f"<li>{_e(OUTPUT_TYPES.get(o.kind, o.kind))} · {o.html('', up)}</li>" for o in rest
         )
         body.append(f"<h4>其他产出（{len(rest)}）</h4><ul>{items}</ul>")
     more = (

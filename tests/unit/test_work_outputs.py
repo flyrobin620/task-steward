@@ -48,6 +48,11 @@ def test_a_registered_work_output_links_like_a_report() -> None:
         "../work/T001/a1/%E8%AE%BE%E8%AE%A1%20%E8%8D%89%E7%A8%BF.md"
     )
     assert link_for("runs/T001/a1/result.html") == "../runs/T001/a1/result.html"
+    # From the app's board at its root, the same files without going up.
+    assert link_for(DN015, "") == DN015
+    assert link_for("runs/T001/a1/result.html", "") == "runs/T001/a1/result.html"
+    assert link_for("legacy://old/runs/T1/r.html", "") == "legacy/old/runs/T1/r.html"
+    assert link_for("https://example.test/pr/1", "") == "https://example.test/pr/1"
     for ref in ("work/T001/../../tsw-home.json", "work/T001", "C:/work/T001/x.html", "x.html"):
         assert link_for(ref) is None, ref
 
@@ -75,6 +80,8 @@ def test_the_board_and_the_task_view_link_the_work_output(conn: sqlite3.Connecti
     card = "".join(o.html("o") for o in outputs_by_task(conn)["T339"])
     assert f'<a href="../{DN015}">O-T339-design-zh</a>' in card
     assert "O-T339-odd" in card and "secret.txt" not in card  # text, no link
+    board = "".join(o.html("o", "") for o in outputs_by_task(conn)["T339"])
+    assert f'<a href="{DN015}">O-T339-design-zh</a>' in board
     view, count = _outputs(conn, "T339")
     assert count == 2
     assert f'<a href="../{DN015}">O-T339-design-zh</a>' in view
