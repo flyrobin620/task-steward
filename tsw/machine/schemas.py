@@ -29,10 +29,17 @@ SOURCE: dict[str, Any] = {
     },
     "required": ["channel", "principal", "message_ref", "text", "target"],
 }
-WORKDIR: dict[str, Any] = {
+WORKDIR_DISPATCH: dict[str, Any] = {
     **S,
-    "description": "执行目录（相对数据目录或绝对路径）。通常不给：缺省为 work/<任务>/<attempt>，"
-    "任务已有执行目录时沿用它（含接手 replaced / closed 的新 attempt）；给出时必须是实际路径，含 { } < > 的占位符被拒绝",
+    "description": "执行目录（相对数据目录或绝对路径）。通常不给：同一 attempt 续用（待命、续用、"
+    "复用 planned）时沿用它记录的目录，新建 attempt 时为 work/<任务>/<attempt>；新 attempt 要接手 "
+    "replaced / closed 的 attempt 的目录（DN002 §5.5）时给出该目录。给出时必须是实际路径，"
+    "含 { } < > 的占位符被拒绝",
+}
+WORKDIR_START: dict[str, Any] = {
+    **S,
+    "description": "执行目录（相对数据目录或绝对路径）。通常不给：派发时会话建在派发记录的目录；"
+    "预启动时为 work/<任务>/<attempt>。给出时必须是实际路径，含 { } < > 的占位符被拒绝",
 }
 FINDINGS: dict[str, Any] = {
     "type": "array",
@@ -104,7 +111,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     "task_dispatch": schema(
         ["task_id", "user_turn"],
         task_id=S,
-        workdir=WORKDIR,
+        workdir=WORKDIR_DISPATCH,
         branch=S,
         user_turn=B,
         read_set={
@@ -118,7 +125,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         task_id=S,
         purpose={"enum": ["dispatch", "prestart"]},
         user_turn=B,
-        workdir=WORKDIR,
+        workdir=WORKDIR_START,
         session_title={
             **S,
             "description": "会话的简短基准标题（不给时为“<任务> <任务标题>”）；结果中的 "

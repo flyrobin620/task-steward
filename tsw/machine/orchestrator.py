@@ -673,9 +673,12 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             raise rejected("未知的 attempt 阶段", reason="invalid_attempt", phase=previous["phase"])
         if mode in ("new", "reuse_planned"):
             guards.g_window(env.config, user_turn)
-        # Not given: the task's recorded directory is kept, by the same session and by a new
-        # attempt that takes over a replaced or closed one (DN002 §5.5); none yet, the default.
-        kept_dir = previous["workdir"] if previous is not None else None
+        # Not given: the same attempt keeps the directory it recorded (standby, continued, a
+        # planned one reused); a new attempt gets the default. Taking over a replaced or closed
+        # attempt's directory (DN002 §5.5) is asked for by giving it: a repository task's
+        # worktree is made per attempt (CC006 §8) and would conflict (self-review r7 F6).
+        same = previous is not None and mode != "new"
+        kept_dir = previous["workdir"] if same and previous is not None else None
         workdir = given_workdir or (str(kept_dir) if kept_dir else f"work/{task_id}/{attempt_id}")
         # A session dispatched again keeps the preferences added for it before: only new ones
         # are checked, and the brief checks every one kept, so a revoked one says so (PR #52).
