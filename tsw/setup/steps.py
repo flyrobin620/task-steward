@@ -488,16 +488,23 @@ def _user_settings(ctx: Context, apply: bool) -> dict[str, Any]:
     diff = claude_install.settings_diff(data, values, AUTO_MODE_RULES)
     result: dict[str, Any] = {"state": "todo" if diff else "ok", "file": str(path), "diff": diff}
     if apply and diff:
+        ownership = claude_install.settings_ownership(ctx.env)
         ctx.record.begin(
             "user_settings",
-            {
-                **claude_install.settings_ownership(ctx.env),
-                "rules": list(claude_install.RULE_NAMES),
-            },
+            {**ownership, "rules": list(claude_install.RULE_NAMES)},
         )
         # What this run writes: a removal only takes back values still equal to it.
         entry = ctx.record.step("user_settings")
         entry["written_env"] = values
+        # A rule added since an earlier install (T343: Worker Answer) becomes ours too, unless the
+        # user already had it: ``begin`` keeps the first install's lists as they were.
+        owned: list[str] = [str(n) for n in entry.get("rules") or []]
+        added = [n for n in claude_install.RULE_NAMES if n not in owned]
+        if added:
+            entry["rules"] = owned + added
+            had = set(cast("list[str]", ownership["rules_before"]))
+            before = {str(n) for n in entry.get("rules_before") or []}
+            entry["rules_before"] = sorted(before | {n for n in added if n in had})
         ctx.record.save()
         report = claude_install.apply_user_settings(ctx.env, values, AUTO_MODE_RULES, ctx.backups)
         backups = [*ctx.record.step("user_settings").get("backups", []), report["backup"]]

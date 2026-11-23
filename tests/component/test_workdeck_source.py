@@ -438,6 +438,23 @@ def test_a_turn_that_never_reached_stop_leaves_nothing_for_the_next(
     assert hook(h, "orch-1", "Stop", None, **fields) is None
 
 
+def test_a_mark_written_before_the_update_keeps_its_judgment(home: Home, tmp_path: Path) -> None:
+    """The hook was updated mid-turn: the old single mark stays the turn's first prompt when a
+    message is injected after the update (PR #87 review)."""
+    h, transcript = planned(home, tmp_path)
+    mark = home.cache_dir / "turns" / "orch-1.json"
+    mark.parent.mkdir(parents=True, exist_ok=True)
+    mark.write_text(json.dumps({"user_turn": True, "prompt_id": "p-1"}), encoding="utf-8")
+    fields = {"prompt_id": "p-1", "transcript_path": str(transcript)}
+    hook(h, "orch-1", "UserPromptSubmit", CROSS, **fields)
+    stop = hook(h, "orch-1", "Stop", None, **fields)
+    assert stop is not None and "T001" in stop["reason"]
+    # Stop reads an old mark as it is, too.
+    mark.write_text(json.dumps({"user_turn": True, "prompt_id": "p-2"}), encoding="utf-8")
+    stop = hook(h, "orch-1", "Stop", None, **{**fields, "prompt_id": "p-2"})
+    assert stop is not None and "T001" in stop["reason"]
+
+
 def test_the_rules_say_a_recorded_workdeck_answer_is_the_users(home: Home) -> None:
     """F-T340-1: the main session does not doubt it; the worker registers it (T343)."""
     skill = (REPO_ROOT / "tsw" / "host" / "orchestrate_skill.md").read_text(encoding="utf-8")

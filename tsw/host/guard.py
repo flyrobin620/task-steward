@@ -1059,6 +1059,10 @@ class Guard:
         kept = cast("dict[str, Any]", mark) if isinstance(mark, dict) else {}
         earlier: Any = kept.get("prompts")
         seen = cast("list[Any]", earlier) if isinstance(earlier, list) else []
+        if not seen and "user_turn" in kept:
+            # A mark written before T343 holds one judgment for the turn: keep it as the first
+            # prompt, so a message injected now does not take its place (PR #87 review).
+            seen = [{"user_turn": kept["user_turn"], "prompt_id": kept.get("prompt_id")}]
         note: dict[str, Any] = {
             "prompt": user_words(prompt),
             "message_id": recorded["message_id"] if recorded else None,

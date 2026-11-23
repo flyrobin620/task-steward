@@ -115,7 +115,7 @@ workdeck 消息没有任何标记，所以 `UserPromptSubmit` hook 把它与用�
 
 hook 在一轮开始时照旧只看正文（上表），到 `Stop` 时再读来源：
 
-1. `UserPromptSubmit` 把这一轮的判断记进 `cache/turns/<会话>.json`：本轮 hook 看到的每条提示，按到达顺序，运行中注入的追加在后面。主会话：每条是不是用户的话（上表）与 `prompt_id`（T343 之前只记一个“是不是用户的 turn”的标记，一轮中途注入的消息也触发 `UserPromptSubmit`，会覆盖开头那条的判断，F-T338-1）。worker：去掉前置 `<system-reminder>` 后的原文、`prompt_id`、记录成的消息编号（没有记录的注入消息编号为空）。
+1. `UserPromptSubmit` 把这一轮的判断记进 `cache/turns/<会话>.json`：本轮 hook 看到的每条提示，按到达顺序，运行中注入的追加在后面。主会话：每条是不是用户的话（上表）与 `prompt_id`（T343 之前只记一个“是不是用户的 turn”的标记，一轮中途注入的消息也触发 `UserPromptSubmit`，会覆盖开头那条的判断，F-T338-1；更新前写下的这种标记作为这一轮的第一条提示读取）。worker：去掉前置 `<system-reminder>` 后的原文、`prompt_id`、记录成的消息编号（没有记录的注入消息编号为空）。
 2. `Stop` 读这条记录，从 transcript 末尾向前读（至多读末尾 8 MiB）。主会话的记录读后即删除；worker 的记录保留，并记下读到哪一轮（`Stop` 的 `prompt_id`）的第几条：被阻止的 `Stop` 之后同一轮继续，之后注入的消息仍与这一轮的条目配对，下一轮的 `Stop` 先丢弃上一轮已读过的提示。
    - 主会话：按 `Stop` 自己 payload 中的 `prompt_id`（这一轮的 ID）找 `promptId` 相同的 `user` 条目，即开始这一轮的消息，取它的来源：`origin.kind`，条目没有 `origin` 时取 `turnOrigin`。
    - worker：这一轮是 `Stop` 的 `prompt_id`；开始这一轮的提示带同一个 `prompt_id`，排在它前面的是一轮没有走到 `Stop`（例如会话中断）留下的，不算。只看这一轮自己的条目：开始这一轮的 `user` 条目（`promptId` 相同、带 `origin`），以及它之后的 `queued_command` 附件。第一条提示对应开始条目，条件是条目正文（字符串或 text 块）包含它的原文；之后的每条提示按顺序取第一个还没被取走、原文（同样去掉前置 `<system-reminder>`）相同的附件，所以同样的话发两次也能按顺序分开。找不到开始条目（还没写入、超出末尾 8 MiB）时都不知道。
