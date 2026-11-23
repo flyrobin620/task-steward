@@ -1411,6 +1411,7 @@ def test_retire_routine_switches_it_off_and_waits_for_the_archive(
     assert "已归档" in capsys.readouterr().out
     # The fallback records an archive the live session did itself, as the lease holder.
     calls: list[tuple[Any, ...]] = []
+
     def fake_tsw(_run: live.Run, *_args: str, **_kw: Any) -> Any:
         return {"lease": {"holder_session": "orch-1"}}
 
