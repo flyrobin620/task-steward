@@ -6,6 +6,7 @@ acceptance and cancellation (DN002 §3.2, §5; DN006 §8.3)."""
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -614,7 +615,7 @@ def _taken_over(ctx: CommitContext, task_id: str, attempt_id: str, workdir: str)
     ):
         if str(other["task_id"]) == task_id and str(other["attempt"]) == attempt_id:
             continue
-        if not same_dir(ctx.home, str(other["workdir"]), workdir):
+        if not _same_place(ctx.home, str(other["workdir"]), workdir):
             continue
         other_number = _attempt_number(str(other["attempt"]))
         if (
@@ -626,6 +627,18 @@ def _taken_over(ctx: CommitContext, task_id: str, attempt_id: str, workdir: str)
         if found is None or other_number > found[0]:
             found = (other_number, str(other["attempt"]))
     return found[1] if found else None
+
+
+def _same_place(home: Home, a: str, b: str) -> bool:
+    """Whether two recorded execution directories are the same directory: as written, or once
+    links and junctions are resolved (an alias must not hide another task's use, PR #88)."""
+    if same_dir(home, a, b):
+        return True
+
+    def real(value: str) -> str:
+        return os.path.normcase(os.path.realpath(workdir_path(home, value)))
+
+    return real(a) == real(b)
 
 
 def _inherited_workdir(conn: sqlite3.Connection, task_id: str, attempt_id: str) -> str | None:

@@ -647,3 +647,36 @@ def test_a_prestart_takes_over_a_lost_standby_directory(home: Home, tmp_path: Pa
     assert (again["attempt"], again["generation"], again["workdir"]) == ("a2", 2, "work/T001/a1")
     assert again["worktree"]["taken_over"] == "a1"
     assert not (h.home.root / "work" / "T001" / "a2").exists()
+
+
+def _link(link: Path, target: Path) -> None:
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True
+        )
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+def test_an_alias_of_another_tasks_directory_is_not_taken_over(home: Home, tmp_path: Path) -> None:
+    """PR #88 review: T001 recorded a link to the directory T002 now works in; T001 a2 must not
+    take over the worktree of T002 through the link."""
+    repo = checkout(tmp_path)
+    h = harness(home, repo)
+    for task_id in ("T001", "T002"):
+        h.register(task_id)
+        h.plan(task_id)
+    real = h.home.root / "work" / "shared"
+    real.mkdir(parents=True)
+    _link(h.home.root / "work" / "alias", real)
+    first = _dispatch(h, "T001", workdir="work/alias")
+    git(repo, "worktree", "remove", "--force", first["worktree"]["path"])
+    _lose(h, "T001", "a1")
+    second = _dispatch(h, "T002", workdir="work/shared")  # T002 at work now, in the same place
+    assert second["worktree"]["branch"] == "tsw/t002-a1"
+    h.run("task_dispatch", task_id="T001", user_turn=True)  # takes over work/alias by default
+    with pytest.raises(TswError) as refused:
+        h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=True)
+    assert refused.value.details["reason"] == "worktree_conflict"
+    assert git(real / "demo", "rev-parse", "--abbrev-ref", "HEAD") == "tsw/t002-a1"
