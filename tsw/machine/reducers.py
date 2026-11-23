@@ -947,6 +947,21 @@ def routine_detached(conn: sqlite3.Connection, event: Event) -> None:
     )
 
 
+def routine_disarmed(conn: sqlite3.Connection, event: Event) -> None:
+    conn.execute(
+        "UPDATE routine_sessions SET armed_ref = NULL, armed_cron = NULL, armed_at = NULL "
+        "WHERE generation = ? AND armed_ref = ?",
+        (int(event.data["generation"]), event.data["job_ref"]),
+    )
+
+
+def routine_archived(conn: sqlite3.Connection, event: Event) -> None:
+    conn.execute(
+        "UPDATE routine_sessions SET status = 'archived' WHERE generation = ?",
+        (int(event.data["generation"]),),
+    )
+
+
 def routine_job_added(conn: sqlite3.Connection, event: Event) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO routine_jobs(job_id, script, input, added_seq) VALUES(?, ?, ?, ?)",
@@ -1148,6 +1163,8 @@ REDUCERS: dict[str, Reducer] = {
     "routine.bound": routine_bound,
     "routine.armed": routine_armed,
     "routine.detached": routine_detached,
+    "routine.disarmed": routine_disarmed,
+    "routine.archived": routine_archived,
     "routine.job_added": routine_job_added,
     "routine.job_updated": routine_job_updated,
     "routine.job_removed": routine_job_removed,

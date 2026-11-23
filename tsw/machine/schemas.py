@@ -486,6 +486,17 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         cron=S,
         interval_minutes=INT,
     ),
+    "routine_disarmed": schema(
+        ["job_ref"],
+        job_ref={**S, "description": "routine_board 的 disarm 给出的定时任务引用"},
+        result={**S, "description": "CronDelete 返回的原文（任务已不存在或删除失败时同样填写）"},
+    ),
+    "routine_archived": schema(
+        ["generation"],
+        generation={**INT, "description": "已归档的例行会话代次（attention 的 routine 中给出）"},
+        result={**S, "description": "archive_session 返回的原文"},
+        note={**S, "description": "可选：例如用户在侧栏归档、由 get_session 读回"},
+    ),
     "routine_run": schema(
         ["job_id"],
         job_id={**S, "description": "routine_board 列出的例行项"},

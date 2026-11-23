@@ -192,10 +192,12 @@ def routine_attention(
 ) -> list[dict[str, Any]]:
     """The routine session when it needs the orchestrator (DN006 §8.9.6–§8.9.7): ``missing`` while
     tasks are being worked on, ``starting`` (to reconcile), ``attached`` (to detach), ``unarmed``
-    or ``stale``; after it, ``fetch_failing`` for each Teams chat it has not been able to read
-    several times in a row (T253)."""
+    or ``stale``, ``retiring`` once switched off (to disarm, then archive, T345); after it,
+    ``fetch_failing`` for each Teams chat it has not been able to read several times in a row
+    (T253)."""
     state = routine_mod.status(conn, config, now or utc_now(), cache)
-    failing = routine_mod.failing_fetches(cache) if state["state"] != "disabled" else []
+    off = state["state"] in ("disabled", "retiring")
+    failing = [] if off else routine_mod.failing_fetches(cache)
     if state["state"] in ("ok", "disabled"):
         return failing
     if state["state"] == "missing" and not working(conn):

@@ -130,3 +130,75 @@ def test_the_routine_session_end_to_end(home: Path) -> None:
         )
     )
     assert "request_not_found" in sent[1]["result"]["content"][0]["text"]
+
+
+@pytest.mark.use_case("UC-ROUTINE-002")
+def test_a_switched_off_routine_session_is_disarmed_then_archived(home: Path) -> None:
+    started = payload(
+        by_id(
+            mcp(
+                home,
+                home,
+                "orch-1",
+                INIT,
+                NOTE,
+                call(1, "lease_acquire"),
+                call(2, "routine_start", user_turn=True),
+                call(3, "routine_bind", generation=1, session_id="r-1"),
+                call(4, "routine_detached", generation=1),
+            )
+        )[2]
+    )
+    cwd = Path(started["cwd"])
+    armed = by_id(
+        mcp(
+            home,
+            cwd,
+            "r-1",
+            INIT,
+            NOTE,
+            LIST,
+            call(2, "routine_armed", job_ref="job-1", cron="*/10 * * * *", interval_minutes=10),
+        )
+    )
+    assert "routine_disarmed" in {t["name"] for t in armed[1]["result"]["tools"]}
+    config = home / "config" / "task-steward.json"
+    settings = json.loads(config.read_text(encoding="utf-8"))
+    settings["routine"] = {"enabled": False}
+    config.write_text(json.dumps(settings), encoding="utf-8")
+    # The orchestrator's Stop hook says to wake it, in any turn.
+    stop = hook(home, "orch-1", "Stop", home)
+    assert stop["decision"] == "block" and "运行 routine_board" in stop["reason"]
+    run = by_id(
+        mcp(
+            home,
+            cwd,
+            "r-1",
+            INIT,
+            NOTE,
+            call(1, "routine_board"),
+            call(2, "routine_disarmed", job_ref="job-1", result="Cancelled job job-1."),
+        )
+    )
+    out = payload(run[1])
+    assert out["jobs"] == [] and [m["action"] for m in out["maintenance"]] == ["disarm"]
+    forward = payload(run[2])["forward"]
+    assert forward["send"] is True and forward["session_id"] == "orch-1"
+    assert "archive_session(session_id=r-1)" in forward["message"]
+    done = by_id(
+        mcp(
+            home,
+            home,
+            "orch-1",
+            INIT,
+            NOTE,
+            LIST,
+            call(2, "attention"),
+            call(3, "routine_archived", generation=1, result="Archived session r-1"),
+            call(4, "attention"),
+        )
+    )
+    assert "routine_archived" in {t["name"] for t in done[1]["result"]["tools"]}
+    assert payload(done[2])["routine"][0]["step"] == "archive"
+    assert payload(done[3])["events"][0]["type"] == "routine.archived"
+    assert payload(done[4])["routine"] == []

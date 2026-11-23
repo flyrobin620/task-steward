@@ -10,11 +10,13 @@ import pytest
 
 from tsw.machine.routine import (
     CARD_PREFIX,
+    DISARM_DO,
     TEAMS_CHECKED_KEPT,
     TEAMS_FETCH_ALERT_AFTER,
     body_arguments,
     checked_messages,
     cron_for,
+    disarmed_text,
     failing_fetches,
     fetch_failure,
     fetched_messages,
@@ -684,3 +686,13 @@ def test_only_the_newest_judgements_are_kept() -> None:
     messages = kept["teams_checked"]["48:notes"]["messages"]
     assert len(messages) == TEAMS_CHECKED_KEPT
     assert "m0004" not in messages and "m0005" in messages
+
+
+@pytest.mark.use_case("UC-ROUTINE-002")
+def test_the_message_after_the_timer_is_deleted_says_how_to_archive() -> None:
+    text = disarmed_text({"generation": 3, "session_ref": "local_r3"})
+    assert text.startswith("[TaskSteward 例行会话] routine-g3（local_r3）")
+    assert "archive_session(session_id=local_r3)" in text
+    assert "routine_archived（generation: 3" in text
+    # A routine session started before disarm existed learns what to do from the item itself.
+    assert "CronDelete" in DISARM_DO and "routine_disarmed" in DISARM_DO

@@ -72,6 +72,14 @@ START_BACKGROUND = (
     "告诉主会话哪些 worker 会话的标题还没跟上任务状态），"
     "把脚本给出的消息原样转给主会话。它不改代码、不运行命令、不建会话，也不作任何判断。"
 )
+# What a routine session does with ``disarm`` (DN006 §8.9.6, T345). The maintenance item carries
+# it, so a routine session started before ``disarm`` existed does it too.
+DISARM_DO = (
+    "CronDelete 删除 job_ref 这个定时任务；然后调用 routine_disarmed（job_ref，result 为 "
+    "CronDelete 返回的原文；任务已不存在或删除失败时同样登记）；结果中 forward.send 为 true 时用 "
+    "mcp__ccd_session_mgmt__send_message 把 message 原样发给 session_id。不执行例行项，结束这一轮。"
+)
+DISARM_RESULT_CHARS = 500  # how much of the host's answer to CronDelete is kept
 RECENT_RUNS = 24  # run times kept in cache/routine.json (DN006 §8.9.3)
 # Host tools for the data a job fetches before its script runs, by host integration (CC006 §6).
 # Teams chats are read with WorkIQ (T253): the Teams MCP tools answered "Session not found" in the
@@ -187,7 +195,7 @@ def status(
 ) -> dict[str, Any]:
     """The routine session's state for ``attention`` (DN006 §8.9.7)."""
     if not config.get("routine.enabled"):
-        return {"state": "disabled"}
+        return retiring(conn) or {"state": "disabled"}
     newest = latest(conn)
     current = bound(conn)
     if newest is not None and newest["status"] == "starting":
@@ -216,6 +224,34 @@ def status(
         late = parse_time(now) - last > window
         return {"state": "stale" if late else "unarmed", **out}
     return {"state": "stale" if _stale(current, config, now, cache) else "ok", **out}
+
+
+def retiring(conn: sqlite3.Connection) -> dict[str, Any] | None:
+    """With the routine session switched off, the one still bound and what is left to do: delete
+    its timer (``disarm``), then archive it (``archive``). A host may refuse to archive a session
+    that still holds a timer (DN006 §8.9.6, T345)."""
+    current = bound(conn)
+    if current is None:
+        return None
+    return {
+        "state": "retiring",
+        "step": "disarm" if current["armed_ref"] else "archive",
+        "generation": int(current["generation"]),
+        "session_name": current["session_name"],
+        "session_id": current["session_ref"],
+    }
+
+
+def disarmed_text(row: Mapping[str, Any]) -> str:
+    """What the routine session tells the orchestrator once its timer is gone (CC006 §6.6)."""
+    generation = int(row["generation"])
+    return (
+        f"[TaskSteward 例行会话] routine-g{generation}（{row['session_ref']}）已删除定时任务"
+        "（routine.enabled=false）。请归档它："
+        f"mcp__ccd_session_mgmt__archive_session(session_id={row['session_ref']})，成功后 "
+        f"routine_archived（generation: {generation}，result 为返回原文）；仍被拒时请用户在侧栏"
+        "归档，读回后同样登记（note 写明）。"
+    )
 
 
 def _last_run(current: Mapping[str, Any], cache: Mapping[str, Any]) -> str | None:
@@ -262,6 +298,20 @@ def board(
         dict(cache) if cache.get("generation") == generation else {"generation": generation}
     )
     if not config.get("routine.enabled"):
+        if current["armed_ref"]:
+            # Switched off with the timer still set: delete it first, so the host lets the
+            # orchestrator archive this session (DN006 §8.9.6, T345).
+            return {
+                "enabled": False,
+                "generation": generation,
+                "note": "配置关闭了例行会话（routine.enabled=false）：按 disarm 删除定时任务，"
+                "不执行例行项，结束这一轮",
+                "maintenance": [
+                    {"action": "disarm", "job_ref": current["armed_ref"], "do": DISARM_DO}
+                ],
+                "jobs": [],
+                "orchestrator_session": orchestrator_session(conn, now),
+            }, kept
         return {
             "enabled": False,
             "note": "配置关闭了例行会话（routine.enabled=false）：不执行例行项，结束这一轮",
@@ -1595,6 +1645,61 @@ def routine_armed(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         ]
 
     return _cmd(env, "routine_armed", inp, build)
+
+
+@tool(
+    "routine_disarmed",
+    "routine",
+    description="登记已删除的定时任务（routine.disarmed，关闭例行会话后的 disarm，DN006 §8.9.6）",
+)
+def routine_disarmed(inp: Mapping[str, Any], env: ToolEnv) -> Command:
+    job_ref = text(inp, "job_ref")
+    result = opt_text(inp, "result")
+
+    def build(ctx: CommitContext) -> list[EventDraft]:
+        row = require_routine(ctx.conn, env)
+        if not row["armed_ref"]:
+            raise rejected("当前没有登记的定时任务", reason="not_armed")
+        if row["armed_ref"] != job_ref:
+            raise rejected(
+                "job_ref 不是登记的定时任务（取自 routine_board 的 disarm）",
+                reason="job_mismatch",
+                armed_ref=row["armed_ref"],
+            )
+        data: dict[str, Any] = {"generation": int(row["generation"]), "job_ref": job_ref}
+        if result:
+            data["result"] = result[:DISARM_RESULT_CHARS]
+        return [EventDraft(type="routine.disarmed", data=data)]
+
+    return _cmd(env, "routine_disarmed", inp, build)
+
+
+@tool(
+    "routine_archived",
+    "orchestrator",
+    description="登记例行会话已归档（routine.archived，DN006 §8.9.6）：该代次不再是当前的例行会话",
+)
+def routine_archived(inp: Mapping[str, Any], env: ToolEnv) -> Command:
+    generation = integer(inp, "generation", minimum=1)
+    result = opt_text(inp, "result")
+    note = opt_text(inp, "note")
+
+    def build(ctx: CommitContext) -> list[EventDraft]:
+        current = bound(ctx.conn)
+        if current is None or int(current["generation"]) != generation:
+            raise rejected("只能登记当前已绑定的例行会话代次", reason="invalid_generation")
+        data: dict[str, Any] = {"generation": generation, "session_ref": current["session_ref"]}
+        if result:
+            data["result"] = result[:DISARM_RESULT_CHARS]
+        if note:
+            data["note"] = note
+        if current["armed_ref"]:
+            # Archived with its timer still set (the user did it from the sidebar): kept so the
+            # record says the timer was not deleted first.
+            data["armed_ref"] = current["armed_ref"]
+        return [EventDraft(type="routine.archived", data=data)]
+
+    return _cmd(env, "routine_archived", inp, build)
 
 
 @tool(

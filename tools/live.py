@@ -15,6 +15,7 @@
     python tools/live.py <scenario> sessions RUN_ID                 the run's sessions (workdeck)
     python tools/live.py cleanup RUN_ID [--archived SESSION ...]   finish a run's cleanup
     python tools/live.py list                                       runs and their state
+    python tools/live.py auto-mode-rule                             the live cleanup rule (T345)
 
 Scenarios are defined in ``tools/live/scenarios/*.json`` (docs/development/testing-layers.md).
 Every run gets ``.local/live/<runId>/`` (docs/development/test-environments.md): its own data
@@ -72,6 +73,27 @@ RUNS = ROOT / ".local" / "live"  # --runs-dir or TSW_LIVE_RUNS put runs elsewher
 STRIP_PREFIXES = ("CLAUDE", "ANTHROPIC")
 WORKER_SESSION = "live-worker-1"
 ORCH_SESSION = "live-setup"
+# The auto mode rule a developer adds to their own user settings so the session running a live
+# scenario may archive that run's sessions (T345, F-T341-1). The classifier refuses an
+# archive_session the user did not ask for in that session ([Unauthorized Access] for the folder
+# trust session, [Unsanctioned Communication] for the run's main session, T341); a worker's brief
+# is not the user's words. Claude Code reads autoMode only from user, command-line and managed
+# settings (CC008 §6), and live.py never writes ~/.claude: ``auto-mode-rule`` prints it.
+AUTO_MODE_LIVE_CLEANUP = (
+    "TaskSteward Live Cleanup: In a session running TaskSteward's live scenarios from a "
+    "task-steward checkout (python tools/live.py), archiving with archive_session a session that "
+    "python tools/live.py <scenario> sessions <runId> listed for that run, whose working "
+    "directory is inside that run's own directory (<live runs directory>/<runId>/, by default "
+    ".local/live/<runId>/ in the checkout or the directory TSW_LIVE_RUNS names), at the step of "
+    "that run's OPERATOR.md that says to archive it, is the user's standing instruction: the run "
+    "created those sessions as throwaway test sessions and the test procedure "
+    "(docs/development/test-environments.md) ends by archiving them. The same holds for sending "
+    "that run's routine session (working "
+    "directory <runId>/home/routine) the one message 运行 routine_board that python tools/live.py "
+    "<scenario> retire-routine <runId> printed, so it deletes its timer before it is archived. "
+    "This is not Unauthorized Access or Unsanctioned Communication. It does not cover deleting "
+    "sessions, any other message, or any session outside that run's directory."
+)
 GIT_ID = (
     "-c",
     "user.name=live",
@@ -1173,6 +1195,127 @@ def sessions_cmd(args: argparse.Namespace) -> int:
         mode = node.get("permissionMode") or "-"
         print(f"{sid}\t{role}\t{state}\t{mode}\t{rel}\t{node.get('title')}")
     return 0
+
+
+def routine_state(evs: Iterable[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """The run's newest bound routine session and how far its retirement went (CC006 §6.6)."""
+    bound: dict[int, str] = {}
+    armed: dict[int, str | None] = {}
+    done: dict[str, dict[int, int]] = {"routine.disarmed": {}, "routine.archived": {}}
+    for e in evs:
+        data = e.get("data") or {}
+        if e["type"] == "routine.bound":
+            bound[int(data["generation"])] = str(data["session_ref"])
+        elif e["type"] == "routine.armed":
+            armed[int(data["generation"])] = str(data["job_ref"])
+        elif e["type"] in done:
+            done[e["type"]][int(data["generation"])] = int(e["sequence"])
+            if e["type"] == "routine.disarmed":
+                armed[int(data["generation"])] = None
+    if not bound:
+        return None
+    gen = max(bound)
+    return {
+        "generation": gen,
+        "session_id": bound[gen],
+        "armed": armed.get(gen),
+        "disarmed": done["routine.disarmed"].get(gen),
+        "archived": done["routine.archived"].get(gen),
+    }
+
+
+def switch_routine_off(run: Run) -> bool:
+    """``routine.enabled=false`` in the run's own configuration; whether it changed."""
+    path = run.home / "config" / "task-steward.json"
+    run.check_inside(path)
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    routine = settings.get("routine") if isinstance(settings.get("routine"), dict) else {}
+    if routine.get("enabled") is False:
+        return False
+    settings["routine"] = {**routine, "enabled": False}
+    path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    return True
+
+
+def retire_routine(args: argparse.Namespace) -> int:
+    """Retire the run's routine session without the user (CC006 §6.6, T345): switch it off in the
+    run's configuration, have it delete its timer (the live session sends it one message), and let
+    the run's main session archive it. ``--wait`` waits for ``routine.archived``; ``--archived``
+    records an archive the live session had to do itself."""
+    run = Run.open(args.run_id)
+    state = routine_state(events(run))
+    if state is None:
+        print("本运行没有绑定过例行会话：不用处理")
+        return 0
+    sid, gen = state["session_id"], state["generation"]
+    name = f"routine:{sid}"
+    if args.archived is not None:
+        holder = (tsw(run, "lease", "show") or {}).get("lease") or {}
+        if not holder.get("holder_session"):
+            raise SystemExit("live: 隔离账本中没有持有调度租约的主会话，不能登记")
+        if state["archived"] is None:
+            tool(
+                run,
+                "routine_archived",
+                "orchestrator",
+                str(holder["holder_session"]),
+                generation=gen,
+                result=args.archived,
+                note="运行 live 的会话在主会话没有归档时代为归档（retire-routine --archived）",
+            )
+        run.record("claude-session", name, state="archived", ref=sid, confirmed=f"{utc()} 归档回执")
+        print(f"已登记 routine-g{gen}（{sid}）归档")
+        return 0
+    if not args.wait:
+        changed = switch_routine_off(run)
+        run.record("claude-session", name, state="created", ref=sid, retire_requested=utc())
+        print(
+            json.dumps(
+                {
+                    "generation": gen,
+                    "session_id": sid,
+                    "switched_off": changed,
+                    "armed": state["armed"],
+                    "message": "运行 routine_board",
+                },
+                ensure_ascii=False,
+            )
+        )
+        if state["archived"] is not None:
+            print("例行会话已归档（账本中有 routine.archived）")
+        else:
+            print(
+                f"下一步：用 SendMessage 给 {sid} 发“运行 routine_board”"
+                "（它删除定时任务后告诉主会话，主会话归档它），再运行 python tools/live.py "
+                f"{run.manifest()['scenario']} retire-routine {run.id} --wait"
+            )
+        return 0
+    deadline = time.monotonic() + args.timeout_minutes * 60
+    while True:
+        state = routine_state(events(run)) or state
+        if state["archived"] is not None:
+            run.record("claude-session", name, ref=sid, retired=utc())
+            print(
+                f"routine-g{gen}（{sid}）：已删除定时任务（事件 {state['disarmed']}），"
+                f"已归档（事件 {state['archived']}）；用 get_session 读回后照常 cleanup --archived"
+            )
+            return 0
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(args.poll)
+    scenario_name = run.manifest()["scenario"]
+    if state["disarmed"] is None:
+        print(
+            f"超时：routine-g{gen}（{sid}）还没有删除定时任务（账本中没有 routine.disarmed）。"
+            "确认已给它发消息“运行 routine_board”，再加 --wait 等一次。"
+        )
+    else:
+        print(
+            f"超时：定时任务已删除（事件 {state['disarmed']}），主会话还没有归档它。"
+            f"由运行 live 的会话调用 archive_session({sid})，再运行 python tools/live.py "
+            f"{scenario_name} retire-routine {run.id} --archived <archive_session 返回的原文>。"
+        )
+    return 2
 
 
 def drive_log(run: Run) -> list[dict[str, Any]]:
@@ -2798,6 +2941,15 @@ def discard(args: argparse.Namespace) -> int:
     return 0
 
 
+def auto_mode_rule(args: argparse.Namespace) -> int:
+    """Print the live cleanup rule for the user's own settings (``autoMode.allow``)."""
+    del args
+    print(
+        json.dumps({"autoMode": {"allow": [AUTO_MODE_LIVE_CLEANUP]}}, ensure_ascii=False, indent=2)
+    )
+    return 0
+
+
 def list_runs(args: argparse.Namespace) -> int:
     if not runs_dir().is_dir():
         return 0
@@ -2840,6 +2992,20 @@ def operator_commands(steps: Any) -> None:
     listed = steps.add_parser("sessions", help="列出在本运行目录中工作的会话，并补记进清单")
     listed.add_argument("run_id")
     listed.set_defaults(handler=sessions_cmd)
+    retired = steps.add_parser(
+        "retire-routine",
+        help="关闭本运行的例行会话：删除它的定时任务后由主会话归档（用户不必在侧栏操作，T345）",
+    )
+    retired.add_argument("run_id")
+    retired.add_argument("--wait", action="store_true", help="等到账本中有 routine.archived")
+    retired.add_argument("--poll", type=float, default=10, help="查看账本的间隔（秒）")
+    retired.add_argument("--timeout-minutes", type=float, default=10)
+    retired.add_argument(
+        "--archived",
+        metavar="RESULT",
+        help="运行 live 的会话自己归档后，登记 archive_session 返回的原文",
+    )
+    retired.set_defaults(handler=retire_routine)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2945,6 +3111,10 @@ def main(argv: list[str] | None = None) -> int:
     drop.add_argument("run_id")
     drop.set_defaults(handler=discard)
     sub.add_parser("list").set_defaults(handler=list_runs)
+    sub.add_parser(
+        "auto-mode-rule",
+        help="打印让运行 live 的会话归档本运行会话的 auto 模式规则（加到用户设置）",
+    ).set_defaults(handler=auto_mode_rule)
     args = parser.parse_args(argv)
     if args.runs_dir:
         os.environ["TSW_LIVE_RUNS"] = str(Path(args.runs_dir).expanduser().resolve())

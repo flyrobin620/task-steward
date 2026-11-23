@@ -84,12 +84,15 @@
     },
     {
       "who": "session",
-      "text": "drive 结束后运行 python tools/live.py routine-e2e verify {run_id} --card-multiline <用户的观察>（没有人观察时不带 --trust-prompted / --blocked，检查 O 记为未验证；主会话是否被例行会话的定时运行唤醒由检查 W 从 hook 记录判定），再运行 python tools/live.py routine-e2e sessions {run_id}，对列出的每个未归档会话 archive_session（例行会话除外，见你要做的最后一步），用 get_session 读回后运行 python tools/live.py cleanup {run_id} --archived <会话 ID>…（用户归档例行会话后，读回并补记它）。"
+      "text": "drive 结束后运行 python tools/live.py routine-e2e verify {run_id} --card-multiline <用户的观察>（没有人观察时不带 --trust-prompted / --blocked，检查 O 记为未验证；主会话是否被例行会话的定时运行唤醒由检查 W 从 hook 记录判定）。"
     },
     {
-      "who": "user",
-      "text": "运行 live 的会话归档其他会话后，在侧栏中归档“TaskSteward 例行会话”（目录为本运行的 home/routine）。",
-      "why": "例行会话带着会话内的定时任务（CronCreate），app 认为它仍有后台工作：archive_session 被拒绝（“still has live work … they can also archive it from the sidebar”），它空闲时 stop_session 也没有可停的（T332、T340 两次 live 实测）。删除会话同样要用户确认。"
+      "who": "session",
+      "text": "然后运行 python tools/live.py routine-e2e retire-routine {run_id}：它在本运行的配置中关闭例行会话并给出例行会话的 ID；用 SendMessage 给例行会话发“运行 routine_board”（它删除定时任务后告诉本运行的主会话，主会话归档它，CC006 §6.6），再运行 python tools/live.py routine-e2e retire-routine {run_id} --wait 等到 routine.archived。超时时按它的提示自己 archive_session，再用 --archived 登记。"
+    },
+    {
+      "who": "session",
+      "text": "最后运行 python tools/live.py routine-e2e sessions {run_id}，对列出的每个未归档会话 archive_session，用 get_session 读回（包括上一步已归档的例行会话）后运行 python tools/live.py cleanup {run_id} --archived <会话 ID>…。"
     }
   ],
   "drive": [

@@ -24,7 +24,7 @@ import pytest
 from tests.machine_harness import MACHINE, Harness
 from tools import live, live_drive
 from tsw import lease
-from tsw.home import Home
+from tsw.home import Home, init_home
 from tsw.machine.base import Caller
 
 STUB = Path(live.LIVE / "gh_stub.py")
@@ -933,11 +933,13 @@ def test_host_e2e_leaves_the_user_only_what_the_host_reserves_for_them(
     plan = host_plan(run, ["T001", "T002"])
     users = [s for s in plan["steps"] if s["who"] == "user"]
     assert users and all(s.get("why") for s in users)
-    # Required of the user: pressing send in the two sessions a link opens (and trusting),
-    # and archiving the routine session, which the host refuses to archive for a session.
+    # Required of the user: only pressing send in the two sessions a link opens (and trusting).
+    # The routine session is retired by the tools since T345, no longer from the sidebar.
     required = [s for s in users if not s.get("optional")]
-    assert [s.get("link") for s in required] == ["trust", "main", None]
-    assert "例行会话" in required[-1]["text"]
+    assert [s.get("link") for s in required] == ["trust", "main"]
+    sessions = [s["text"] for s in plan["steps"] if s["who"] == "session"]
+    retire = next(i for i, s in enumerate(sessions) if "retire-routine" in s)
+    assert "verify" in sessions[retire - 1] and "sessions" in sessions[retire + 1]
     query = {
         k: urllib.parse.parse_qs(urllib.parse.urlsplit(v).query) for k, v in plan["links"].items()
     }
@@ -1360,3 +1362,78 @@ def test_sessions_records_what_the_ledger_cannot_name(
     }
     out = capsys.readouterr().out
     assert "local_w	worker" in out and "	auto	" in out and str(run.dir) not in out
+
+
+@pytest.mark.use_case("UC-ROUTINE-002")
+def test_retire_routine_switches_it_off_and_waits_for_the_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """T345: the live session retires the run's routine session through tsw, not the sidebar:
+    the run's configuration switches it off, it deletes its timer, the main session archives it."""
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    monkeypatch.setattr(lease, "this_machine", lambda: MACHINE)
+    run = live.Run.create("host-e2e")
+    home, _ = init_home(run.home)
+    h = Harness(home)
+
+    def args(**extra: Any) -> argparse.Namespace:
+        base = {"run_id": run.id, "wait": False, "archived": None, "poll": 0, "timeout_minutes": 0}
+        return argparse.Namespace(**{**base, **extra})
+
+    assert live.retire_routine(args()) == 0 and "不用处理" in capsys.readouterr().out
+    out = h.run("routine_start", user_turn=True)
+    h.run("routine_bind", generation=out["events"][0]["data"]["generation"], session_id="local_r")
+    routine = Caller(role="routine", session_id="local_r", machine=MACHINE)
+    h.run("routine_armed", routine, job_ref="job-1", cron="*/10 * * * *", interval_minutes=10)
+    assert live.retire_routine(args()) == 0
+    first = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert first == {
+        "generation": 1,
+        "session_id": "local_r",
+        "switched_off": True,
+        "armed": "job-1",
+        "message": "运行 routine_board",
+    }
+    config = json.loads((run.home / "config" / "task-steward.json").read_text(encoding="utf-8"))
+    assert config["routine"]["enabled"] is False
+    entry = next(e for e in run.manifest()["entries"] if e.get("ref") == "local_r")
+    assert entry["name"] == "routine:local_r" and entry["state"] == "created"
+    # Not deleted yet: --wait times out and says what is missing.
+    assert live.retire_routine(args(wait=True)) == 2
+    assert "routine.disarmed" in capsys.readouterr().out
+    h.run("routine_disarmed", routine, job_ref="job-1", result="Cancelled job job-1.")
+    assert live.retire_routine(args(wait=True)) == 2
+    assert "--archived" in capsys.readouterr().out
+    # The main session archived it: --wait returns at once.
+    h.run("routine_archived", generation=1, result="Archived session local_r")
+    assert live.retire_routine(args(wait=True)) == 0
+    assert "已归档" in capsys.readouterr().out
+    # The fallback records an archive the live session did itself, as the lease holder.
+    calls: list[tuple[Any, ...]] = []
+    def fake_tsw(_run: live.Run, *_args: str, **_kw: Any) -> Any:
+        return {"lease": {"holder_session": "orch-1"}}
+
+    def fake_tool(_run: live.Run, *args: str, **inp: Any) -> None:
+        calls.append((*args, inp))
+
+    monkeypatch.setattr(live, "tsw", fake_tsw)
+    monkeypatch.setattr(live, "tool", fake_tool)
+    assert live.retire_routine(args(archived="Archived session local_r")) == 0
+    assert calls == []  # already recorded in the ledger: nothing to add
+    assert next(e for e in run.manifest()["entries"] if e.get("ref") == "local_r")["state"] == (
+        "archived"
+    )
+
+
+@pytest.mark.use_case("UC-ROUTINE-002")
+def test_the_live_cleanup_rule_is_printed_for_the_users_settings(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """F-T341-1: the classifier refused the live session's archives the user had not asked for in
+    that session; the rule the developer adds covers only the run's own sessions."""
+    assert live.main(["auto-mode-rule"]) == 0
+    [rule] = json.loads(capsys.readouterr().out)["autoMode"]["allow"]
+    assert rule.startswith("TaskSteward Live Cleanup:") and rule == live.AUTO_MODE_LIVE_CLEANUP
+    assert "archive_session" in rule and "retire-routine" in rule and "运行 routine_board" in rule
+    assert "does not cover deleting sessions, any other message" in rule

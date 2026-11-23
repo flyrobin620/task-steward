@@ -14,6 +14,7 @@ import pytest
 
 from tests.machine_harness import MACHINE, Harness
 from tsw import lease
+from tsw.config import load_config
 from tsw.errors import TswError
 from tsw.home import Home
 from tsw.host import inbox as inbox_mod
@@ -1037,3 +1038,140 @@ def test_a_note_is_read_once_while_a_question_waits(home: Home) -> None:
     )
     server.call("routine_board", {})
     assert routine_mod.load_cache(h.home)["teams_checked"]["48:notes"]["messages"] == {}
+
+
+def switch_off(h: Harness) -> None:
+    """The user switches the routine session off (routine.enabled=false)."""
+    path = h.home.path("config/task-steward.json")
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    settings["routine"] = {**settings.get("routine", {}), "enabled": False}
+    path.write_text(json.dumps(settings), encoding="utf-8")
+    h.config = load_config(h.home).require_valid()
+
+
+@pytest.mark.use_case("UC-ROUTINE-002")
+def test_a_switched_off_routine_session_deletes_its_timer_then_is_archived(home: Home) -> None:
+    # T345: the Claude app refuses to archive a session that still holds a recurring CronCreate
+    # task ("still has live work"), and lets it through once the task is deleted.
+    h = Harness(home)
+    h.register("T001")
+    h.plan("T001")
+    h.dispatch("T001")
+    routine = start_routine(h)
+    cache: dict[str, Any] = {}
+    board(h, routine, cache)
+    h.run("routine_armed", routine, job_ref="job-1", cron="*/10 * * * *", interval_minutes=10)
+    switch_off(h)
+    retiring = {
+        "state": "retiring",
+        "step": "disarm",
+        "generation": 1,
+        "session_name": "routine-g1",
+        "session_id": "routine-1",
+    }
+    assert attention(h, cache) == [retiring]
+    # The orchestrator is told in any turn to wake it: messaging creates no session.
+    injected = '<cross-session-message from="w">x</cross-session-message>'
+    hook(h, "orch-1", "UserPromptSubmit", home.root, prompt=injected)
+    stop = hook(h, "orch-1", "Stop", home.root)
+    assert stop["decision"] == "block" and "运行 routine_board" in stop["reason"]
+    assert "routine-1" in stop["reason"]
+    # The board lists no jobs, only the timer to delete, with how to do it.
+    out = board(h, routine, cache)
+    assert out["enabled"] is False and out["jobs"] == []
+    assert out["orchestrator_session"] == "orch-1"
+    [disarm] = out["maintenance"]
+    assert disarm["action"] == "disarm" and disarm["job_ref"] == "job-1"
+    assert "CronDelete" in disarm["do"] and "routine_disarmed" in disarm["do"]
+    # Only the timer tsw recorded, only by the routine session in charge.
+    assert reason_of(lambda: h.run("routine_disarmed", routine, job_ref="job-9")) == "job_mismatch"
+    assert reason_of(lambda: h.run("routine_disarmed", job_ref="job-1")) == "role_denied"
+    server = Server(h.home, {SESSION_ENV: "routine-1"}, home.root / "routine")
+    done = server.call("routine_disarmed", {"job_ref": "job-1", "result": "Cancelled job job-1."})
+    assert done["events"][0]["type"] == "routine.disarmed"
+    assert done["events"][0]["data"] == {
+        "generation": 1,
+        "job_ref": "job-1",
+        "result": "Cancelled job job-1.",
+    }
+    forward = done["forward"]
+    assert forward["send"] is True and forward["session_id"] == "orch-1"
+    assert "archive_session(session_id=routine-1)" in forward["message"]
+    assert "routine_archived" in forward["message"] and "generation: 1" in forward["message"]
+    assert h.query("SELECT armed_ref, armed_at FROM routine_sessions") == [
+        {"armed_ref": None, "armed_at": None}
+    ]
+    assert reason_of(lambda: h.run("routine_disarmed", routine, job_ref="job-1")) == "not_armed"
+    # Nothing left on the board; the orchestrator archives it next.
+    again = board(h, routine, cache)
+    assert again["maintenance"] == [] and again["jobs"] == []
+    assert attention(h, cache) == [{**retiring, "step": "archive"}]
+    stop = hook(h, "orch-1", "Stop", home.root)
+    assert "archive_session(session_id=routine-1" in stop["reason"]
+    assert "routine_archived" in stop["reason"]
+    assert reason_of(lambda: h.run("routine_archived", generation=2)) == "invalid_generation"
+    assert reason_of(lambda: h.run("routine_archived", routine, generation=1)) == "role_denied"
+    archived = h.run("routine_archived", generation=1, result="Archived session routine-1")
+    assert archived["events"][0]["data"] == {
+        "generation": 1,
+        "session_ref": "routine-1",
+        "result": "Archived session routine-1",
+    }
+    assert attention(h, cache) == []
+    assert hook(h, "orch-1", "Stop", home.root) is None
+    with h.ledger.view() as conn:
+        who = resolve(conn, home, {SESSION_ENV: "routine-1"}, home.root / "routine")
+    assert who.role == "revoked" and who.phase == "archived"
+    # Switched on again: no routine session in charge, so the next user turn starts one.
+    settings_path = h.home.path("config/task-steward.json")
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    settings["routine"]["enabled"] = True
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
+    h.config = load_config(h.home).require_valid()
+    assert attention(h, cache) == [{"state": "missing"}]
+
+
+@pytest.mark.use_case("UC-ROUTINE-002")
+def test_switched_on_again_before_it_was_archived_it_arms_again(home: Home) -> None:
+    h = Harness(home)
+    routine = start_routine(h)
+    cache: dict[str, Any] = {}
+    board(h, routine, cache)
+    h.run("routine_armed", routine, job_ref="job-1", cron="*/10 * * * *", interval_minutes=10)
+    switch_off(h)
+    board(h, routine, cache)
+    h.run("routine_disarmed", routine, job_ref="job-1", result="No job with id job-1")
+    path = h.home.path("config/task-steward.json")
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    settings["routine"]["enabled"] = True
+    path.write_text(json.dumps(settings), encoding="utf-8")
+    h.config = load_config(h.home).require_valid()
+    out = board(h, routine, cache)
+    assert [m["action"] for m in out["maintenance"]] == ["arm"]
+    assert out["maintenance"][0]["replace"] is None
+    assert [j["job_id"] for j in out["jobs"]] == ["handoff-scan", "session-scan"]
+
+
+@pytest.mark.use_case("UC-ROUTINE-002")
+def test_switched_off_without_a_timer_or_a_session(home: Home) -> None:
+    h = Harness(home)
+    routine = start_routine(h)
+    switch_off(h)
+    # Bound but never armed: nothing to delete, archive it straight away.
+    assert attention(h)[0]["step"] == "archive"
+    out = board(h, routine, {})
+    assert out["maintenance"] == [] and out["jobs"] == []
+    # The user archived it from the sidebar: recorded the same way, with a note.
+    h.run("routine_archived", generation=1, note="用户在侧栏归档，get_session 读回 isArchived")
+    assert attention(h) == []  # nothing bound any more: nothing to retire
+    with h.ledger.view() as conn:
+        assert routine_mod.status(conn, h.config, h.clock.now, {}) == {"state": "disabled"}
+
+
+@pytest.mark.use_case("UC-ROUTINE-002")
+def test_the_routine_session_is_told_how_to_disarm(home: Home) -> None:
+    h = Harness(home)
+    start_routine(h, "r1")
+    start = hook(h, "r1", "SessionStart", home.root / "routine")
+    text = start["hookSpecificOutput"]["additionalContext"]
+    assert "disarm" in text and "routine_disarmed" in text

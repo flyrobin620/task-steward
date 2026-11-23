@@ -617,6 +617,8 @@ class Guard:
                 "原样发给 session_id；返回 next 时按 next 的 tool 与 arguments 取数，再用 "
                 "next.run 调用 routine_run，直到不再返回 next（不管多少次，一次一步；"
                 "读哪一页、哪些消息由 tsw 决定，不要自己转抄、截断或合并）。"
+                "有 disarm 时（关闭了例行会话）按它的 do 做：CronDelete 删除 job_ref，再 "
+                "routine_disarmed 登记，按结果的 forward 把消息发给主会话，不执行例行项。"
                 "有 clear_context 时最后调用 "
                 'mcp__ccd_session_mgmt__clear_session(session_id="self")。'
                 "不作任何判断，不改文件、不运行命令、不建会话；遇到问题发消息告诉主会话"
@@ -961,6 +963,28 @@ class Guard:
                     "它已经分离或不是本会话启动的（get_session 的 detached 为 true，或 "
                     "parentSessionId 不是本会话）时，同样调用 routine_detached，在 note 中写明。"
                 )
+            if state == "retiring":
+                # Not limited to the user's turn: messaging and archiving create no session.
+                item = routine[0]
+                gen = item.get("generation")
+                sid = item.get("session_id")
+                if item.get("step") == "disarm":
+                    reasons.append(
+                        f"例行会话已关闭（routine.enabled=false），但 routine-g{gen}（{sid}）还带着"
+                        "定时任务，app 不让归档它（attention 的 routine 为 retiring，step 为 "
+                        "disarm）：用 mcp__ccd_session_mgmt__send_message 给它发消息“运行 "
+                        "routine_board”，它删除定时任务后会告诉你。已经发过就直接结束。"
+                    )
+                else:
+                    reasons.append(
+                        f"例行会话已关闭，routine-g{gen}（{sid}）的定时任务已删除（attention 的 "
+                        "routine 为 retiring，step 为 archive）：调用 "
+                        f"mcp__ccd_session_mgmt__archive_session(session_id={sid}, "
+                        "reason=例行会话已关闭)，成功后 routine_archived"
+                        f"（generation: {gen}，result 为返回原文）。"
+                        "仍被拒时请用户在侧栏归档它，用 get_session 读回后同样 routine_archived"
+                        "（note 写明）。"
+                    )
             if sessions:
                 names = "、".join(
                     f"{item['task_id']} {item['attempt']}（{SESSION_ACTIONS[item['action']]}）"
