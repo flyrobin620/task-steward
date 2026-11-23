@@ -82,7 +82,7 @@
     },
     {
       "who": "session",
-      "text": "drive 结束后运行 python tools/live.py change-e2e verify {run_id}（没有人观察时不带 --blocked，检查 O 记为未验证），再运行 python tools/live.py change-e2e sessions {run_id}，对列出的每个未归档会话先 stop_session（例行会话带定时任务）再 archive_session，用 get_session 读回后运行 python tools/live.py cleanup {run_id} --archived <会话 ID>…。"
+      "text": "drive 结束后运行 python tools/live.py change-e2e verify {run_id}（没有人观察时不带 --blocked，检查 O 记为未验证），再运行 python tools/live.py change-e2e sessions {run_id}，对列出的每个未归档会话archive_session（本场景关闭了例行会话），用 get_session 读回后运行 python tools/live.py cleanup {run_id} --archived <会话 ID>…。"
     }
   ],
   "drive": [

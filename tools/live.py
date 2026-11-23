@@ -1147,6 +1147,8 @@ def session_role(run: Run, cwd: str) -> str:
     rel = path.relative_to(run.home.resolve()) if run.home.resolve() in path.parents else None
     if rel is not None and rel.parts and rel.parts[0] == "routine":
         return "routine"
+    if rel is not None and rel.parts and rel.parts[0] == "work":
+        return "worker"
     return f"session:{path.name}"
 
 
@@ -1159,7 +1161,9 @@ def sessions_cmd(args: argparse.Namespace) -> int:
     for node in sorted(found, key=lambda n: str(n.get("createdAt") or "")):
         sid = str(node["id"])
         role = session_role(run, str(node.get("cwd") or ""))
-        if sid not in known and not node.get("archived"):
+        worker = live_drive.inside(str(node.get("cwd") or ""), run.home / "work")
+        # A worker's session gets its entry from the ledger by its name (reconcile_sessions).
+        if sid not in known and not node.get("archived") and not worker:
             if role == "main":
                 run.bind_main(sid)
             else:

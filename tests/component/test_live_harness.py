@@ -933,8 +933,11 @@ def test_host_e2e_leaves_the_user_only_what_the_host_reserves_for_them(
     plan = host_plan(run, ["T001", "T002"])
     users = [s for s in plan["steps"] if s["who"] == "user"]
     assert users and all(s.get("why") for s in users)
-    # Required of the user: pressing send in the two sessions a link opens (and trusting).
-    assert [s["link"] for s in users if not s.get("optional")] == ["trust", "main"]
+    # Required of the user: pressing send in the two sessions a link opens (and trusting),
+    # and archiving the routine session, which the host refuses to archive for a session.
+    required = [s for s in users if not s.get("optional")]
+    assert [s.get("link") for s in required] == ["trust", "main", None]
+    assert "例行会话" in required[-1]["text"]
     query = {
         k: urllib.parse.parse_qs(urllib.parse.urlsplit(v).query) for k, v in plan["links"].items()
     }
@@ -1329,3 +1332,31 @@ def test_title_drive_ends_only_after_the_session_of_t002_is_closed(
     assert not all(live_drive.holds(c, closed_before) for c in plan["done"])
     closed_after = [*closed_before, ev(3, "attempt.closed", "T002", disposition="archived")]
     assert all(live_drive.holds(c, closed_after) for c in plan["done"])
+
+
+def test_sessions_records_what_the_ledger_cannot_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The folder trust session and the routine session get manifest entries for cleanup; a
+    worker's session does not (verify names it from the ledger), nor does a session outside."""
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    run = live.Run.create("host-e2e")
+    run.record("claude-session", "main")
+    nodes = [
+        {"id": "local_r", "cwd": str(run.repo)},
+        {"id": "local_m", "cwd": str(run.home), "permissionMode": "auto", "running": True},
+        {"id": "local_w", "cwd": str(run.home / "work" / "T001" / "a1" / "live-repo")},
+        {"id": "local_x", "cwd": str(run.home / "routine")},
+        {"id": "local_old", "cwd": str(run.repo), "archived": True},
+    ]
+    monkeypatch.setattr(live, "run_sessions", lambda _run: nodes)  # pyright: ignore[reportUnknownLambdaType]
+    assert live.sessions_cmd(argparse.Namespace(run_id=run.id)) == 0
+    entries = {e["name"]: e.get("ref") for e in run.manifest()["entries"]}
+    assert entries == {
+        "main": "local_m",
+        "repo-trust:local_r": "local_r",
+        "routine:local_x": "local_x",
+    }
+    out = capsys.readouterr().out
+    assert "local_w	worker" in out and "	auto	" in out and str(run.dir) not in out

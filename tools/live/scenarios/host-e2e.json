@@ -109,13 +109,18 @@
     },
     {
       "who": "session",
-      "text": "drive 结束后运行 python tools/live.py host-e2e verify {run_id}（没有人观察时不带 --trust-prompted / --blocked，检查 O 记为未验证），再运行 python tools/live.py host-e2e sessions {run_id}，对列出的每个未归档会话先 stop_session（例行会话带定时任务）再 archive_session，用 get_session 读回后运行 python tools/live.py cleanup {run_id} --archived <会话 ID>…。"
+      "text": "drive 结束后运行 python tools/live.py host-e2e verify {run_id}（没有人观察时不带 --trust-prompted / --blocked，检查 O 记为未验证），再运行 python tools/live.py host-e2e sessions {run_id}，对列出的每个未归档会话 archive_session（例行会话除外，见你要做的最后一步），用 get_session 读回后运行 python tools/live.py cleanup {run_id} --archived <会话 ID>…（用户归档例行会话后，读回并补记它）。"
     },
     {
       "who": "user",
       "optional": true,
       "text": "（可选）在场时留意：app 是否为 worker 的会话目录弹出信任确认，worker 的 tsw 工具、发给主会话的消息与合并是否出现权限确认或分类器拒绝；看到了就告诉运行 live 的会话，verify 时用 --trust-prompted / --blocked 记下。",
       "why": "这些只显示在 app 界面上；live 工具不读会话记录（~/.claude 中的 transcript，读取会被 auto 模式分类器拒绝，也违反测试不读 ~/.claude 的约定）。无人观察时，信任与权限确认会让会话停住，由 H2、H3、H4、C 间接覆盖。"
+    },
+    {
+      "who": "user",
+      "text": "运行 live 的会话归档其他会话后，在侧栏中归档“TaskSteward 例行会话”（目录为本运行的 home/routine）。",
+      "why": "例行会话带着会话内的定时任务（CronCreate），app 认为它仍有后台工作：archive_session 被拒绝（“still has live work … they can also archive it from the sidebar”），它空闲时 stop_session 也没有可停的（T332、T340 两次 live 实测）。删除会话同样要用户确认。"
     }
   ],
   "drive": [

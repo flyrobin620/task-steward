@@ -58,7 +58,7 @@
 - 运行结束时（包括失败）清理清单中的条目：归档本次创建的 Claude 会话与 Codex 线程，并用
   `get_session` / `thread/list`（已归档）读回确认。Claude 会话由运行 live 的会话用宿主的会话工具归档：
   `live.py <场景> sessions <runId>` 列出在运行目录中工作的会话（并把清单还没有的补记进去），对每个未归档
-  的会话 `archive_session`（带定时任务的例行会话先 `stop_session`），读回后用
+  的会话 `archive_session`（带定时任务的例行会话 app 不让会话工具归档，由用户在侧栏归档），读回后用
   `live.py cleanup <runId> --archived <会话 ID>` 记入清单；Codex 线程由 `cleanup` 归档并读回。进程退出、
   `finally` 执行或一次空列表都不等于清理完成；无法确认的条目报告为清理失败，并给出剩余对象。清理完成
   后才能用 `live.py discard <runId>` 删除运行目录。
@@ -113,4 +113,5 @@
 | title | 侧栏标题与改名确认（`--observed`） | 用户观察，必须填写 | 可选；无人观察时检查记为未验证 | — | 改名确认只显示在 app 界面上 |
 | host、routine、handoff、change | 信任确认、权限确认与分类器拒绝（`--trust-prompted`、`--blocked`） | 用户观察，必须填写 | 可选；无人观察时检查记为未验证 | — | 只显示在 app 界面上，live 工具不读 transcript；无人值守时信任与权限确认会让会话停住，由账本检查间接覆盖 |
 | 全部 | `verify`、`cleanup` | 运行 live 的会话（用户提供观察） | 运行 live 的会话 | `live.py` | — |
-| 全部 | 归档本次运行的会话 | 用户（带定时任务的例行会话，会话工具归档不了） | 运行 live 的会话 | `sessions`、`stop_session`、`archive_session` | — |
+| 全部 | 归档本次运行的会话（例行会话除外） | 用户 | 运行 live 的会话 | `sessions`、`archive_session`（归档主会话时连带归档它启动的 worker） | — |
+| host、routine、title | 归档例行会话 | 用户 | 用户（侧栏） | — | 例行会话带会话内定时任务，app 拒绝 `archive_session`（“still has live work”），空闲时 `stop_session` 无可停（T332、T340 实测） |
