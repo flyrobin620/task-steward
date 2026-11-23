@@ -1,6 +1,6 @@
 # CC006 Claude Code 插件
 
-- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T302 §9.2 待命前缀、任务归档后归档会话；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`；T283 §11 自我更新的载入时机与生效方式，§12 Dashboard 常驻服务；T287 §10.2 受理与派发时检查长期偏好；T293 §6.2 teams-replies 列出最后修改时间、已判定消息记在 `teams_checked`；T305 §2 安装与改指插件来源见 CC009；T309 §13 workdeck 插件 manifest）
+- 状态：设计草案（T242 r2 自 DN006 拆出；T243 增加 §6 例行会话与 §7 `teams-chat` 渠道；T250 例行会话启动后分离，R1 结论更正；T251 增加 §8 会话能用到的 skill、MCP 与插件、仓库任务的 worktree；T256 §4 与 human_channels 的关系，§6.4 问题流程 skill，§7 渠道 skill、富文本卡片；T276 §2 worker 说明由 render 放入数据目录、放在 worker 会话 prompt 开头；T272 §9 worker 会话的标题与归档；T302 §9.2 待命前缀、任务归档后归档会话；T279 §10 gh 账号 skill 与受理与写任务书 skill；T282 §2 插件不一致时由主会话经用户确认运行 `host render`；T283 §11 自我更新的载入时机与生效方式，§12 Dashboard 常驻服务；T287 §10.2 受理与派发时检查长期偏好；T293 §6.2 teams-replies 列出最后修改时间、已判定消息记在 `teams_checked`；T305 §2 安装与改指插件来源见 CC009；T309 §13 workdeck 插件 manifest；T344 §8.3 新 attempt 接手原 worktree）
 - 日期：2026-11-08
 - 实现：[DN006 插件层](../DN006-plugin-layer.md)
 - 相关：[CC001 Claude Code 上的会话与 hooks](CC001-sessions-and-hooks.md) · [CC004 Claude Code 评审器](CC004-reviewer.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md) · [CC009 Claude Code 上的安装](CC009-install.md)
@@ -235,6 +235,11 @@ T251 依据实测与官方文档（[skills](https://code.claude.com/docs/en/skil
 
 - **worktree**：任务的仓库在配置中有本机 git 检出（`repositories.<id>.path`）时，`attempt_start`（预启动或派发）在执行目录下创建 `<执行目录>/<仓库 id>` 的 git worktree：分支按 `worktrees.branch_pattern`，基线为 `base_ref`，未配置时取远端默认分支（`<remote>/HEAD`、`<remote>/main` 等第一个存在的）。创建前 `git fetch` 一次（失败不阻止创建，事件记录 `fetched`）。
   - worktree 在记录事件之前创建：路径上已有别的内容（`worktree_conflict`）或 git 失败（`worktree_unavailable`）时拒绝，不记录事件。同一 attempt 的后续代次沿用已有的 worktree；已有同名分支时用它。
+  - **接手**（DN002 §5.5，T344）：新 attempt 的执行目录是本任务较早的 `replaced` / `closed` attempt 记录的目录（不给 `workdir` 时的缺省），且 `<执行目录>/<仓库 id>` 已是所配置仓库的 worktree、检出在一个分支上时，沿用这个 worktree 与它当前的分支：不按 `branch_pattern` 建新分支，不 fetch、不切换分支、不动工作区，未提交与未跟踪的改动保留。用当前分支而不是原 attempt 创建时的分支，是因为原 worker 可能已切到别的分支（例如合并后修 CI 的新 PR）。
+    - 有多个较早 attempt 记录同一目录时，接手编号最大的那个。
+    - `worktree` 字段的 `created` 为 false、`base` 为空，`taken_over` 记录被接手的 attempt。
+    - 任务书的会话目录一行写明沿用哪个 attempt 的 worktree 与分支、未提交的改动保留，要求 worker 先看 `git status` 与 `git log` 了解现场。派发写任务书时与 `attempt_start` 用同样的判断，所以任务书写的分支就是会话实际所在的分支。
+    - worktree 处于分离 HEAD、不是所配置仓库的 worktree，或路径上是别的内容时，照旧拒绝（`worktree_conflict`），主会话按 T10 暂停或改给新的执行目录。原目录中没有 worktree 时照常创建（分支按 `branch_pattern`）。
   - `attempt.start_requested` 的 `worktree` 字段记录路径、分支、基线、是否新建与是否 fetch 成功。执行目录（`workdir`）仍是 `<执行目录>`，报告草稿与可写范围不变。
   - MCP 返回的 `cwd` 是 worktree，主会话用它创建 worker 会话。
   - 没有可用检出（未配置 `path`、目录不存在、不是 git 仓库）时不建 worktree，会话在执行目录中启动，任务书写明原因。
@@ -415,3 +420,13 @@ DN006 §8.10“workdeck 插件 manifest”在本宿主与 Windows 上的做法�
 - **宿主会话之外**：`tsw status serve` 在宿主会话的环境中拒绝运行（DN006 §8.10 第 2 条）。workdeck daemon 由它自己的登录计划任务启动，不在 Claude Code 会话的环境中；用户若在会话中前台启动 daemon，插件启动会被拒绝，门户显示插件的错误。
 - **`/.well-known/workdeck-plugin.json`**：生成时用 Dashboard 进程自己的解释器、产品检出与数据目录，所以常驻服务（`pythonw.exe`）给出的与终端运行的 Dashboard 给出的相同。
 - **`tsw setup` 的步骤**：`workdeck` 命令按 PATH 查找（npm 全局安装的是 `workdeck.cmd`）；manifest 写到临时文件后运行 `workdeck plugin add <文件> --replace`，结束后删除临时文件。workdeck 先备份它的配置再写入，并重启它的 daemon。
+
+## 附录 A：接手原 worktree 的备选方案（T344，存档）
+
+§8.3“接手”采用方案 A。
+
+| 方案 | 内容 | 未采用的原因 |
+| --- | --- | --- |
+| A（采用） | 沿用原 worktree 与它当前的分支，不动工作区 | — |
+| B | 在原 worktree 中按 `branch_pattern` 从当前 HEAD 切出新分支（如 `tsw/t001-a2`），未提交的改动随之保留 | 原 attempt 已开的 PR 在旧分支上，新分支要另开 PR；多一次 git 写操作，切换失败时还要处理半途的现场 |
+| C | 沿用原 attempt 创建时记录的分支，worktree 当前分支不同时拒绝 | 原 worker 合法地切到别的分支（例如合并后修 CI 的新 PR）时无法接手 |
