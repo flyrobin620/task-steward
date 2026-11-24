@@ -215,15 +215,6 @@ CREATE TABLE IF NOT EXISTS routine_detached(
     detached_at TEXT NOT NULL,
     note TEXT
 );
--- Timers the routine session tried to delete once switched off (DN006 §8.9.6, T345). Only
--- routine.disarmed writes it, so a projection made before it stays valid.
-CREATE TABLE IF NOT EXISTS routine_disarm(
-    generation INTEGER NOT NULL,
-    job_ref TEXT NOT NULL,
-    deleted INTEGER NOT NULL,
-    sequence INTEGER NOT NULL,
-    PRIMARY KEY(generation, job_ref)
-);
 CREATE TABLE IF NOT EXISTS routine_jobs(
     job_id TEXT PRIMARY KEY,
     script TEXT NOT NULL,

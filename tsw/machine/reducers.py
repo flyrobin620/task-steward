@@ -949,11 +949,7 @@ def routine_detached(conn: sqlite3.Connection, event: Event) -> None:
 
 def routine_disarmed(conn: sqlite3.Connection, event: Event) -> None:
     generation, job_ref = int(event.data["generation"]), event.data["job_ref"]
-    conn.execute(
-        "INSERT OR REPLACE INTO routine_disarm(generation, job_ref, deleted, sequence) "
-        "VALUES(?, ?, ?, ?)",
-        (generation, job_ref, 1 if event.data.get("deleted", True) else 0, event.sequence),
-    )
+    # Only the host's confirmation clears the reference (PR #89 review r4 F3).
     if event.data.get("deleted", True):
         conn.execute(
             "UPDATE routine_sessions SET armed_ref = NULL, armed_cron = NULL, armed_at = NULL "

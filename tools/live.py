@@ -1210,7 +1210,7 @@ def routine_state(evs: Iterable[Mapping[str, Any]]) -> dict[str, Any] | None:
             armed[int(data["generation"])] = str(data["job_ref"])
         elif e["type"] in done:
             done[e["type"]][int(data["generation"])] = int(e["sequence"])
-            if e["type"] == "routine.disarmed":
+            if e["type"] == "routine.disarmed" and data.get("deleted", True):
                 armed[int(data["generation"])] = None
     if not bound:
         return None
@@ -1318,18 +1318,30 @@ def retire_routine(args: argparse.Namespace) -> int:
         state = routine_state(events(run)) or state
         if state["archived"] is not None:
             run.record("claude-session", name, ref=sid, retired=utc())
+            if state["disarmed"] is None:
+                timer = "没有要删除的定时任务"
+            elif state["armed"] is not None:
+                timer = f"删除定时任务没有得到确认（事件 {state['disarmed']}）"
+            else:
+                timer = f"已删除定时任务（事件 {state['disarmed']}）"
             print(
-                f"routine-g{gen}（{sid}）：已删除定时任务（事件 {state['disarmed']}），"
-                f"已归档（事件 {state['archived']}）；用 get_session 读回后照常 cleanup --archived"
+                f"routine-g{gen}（{sid}）：{timer}，已归档（事件 {state['archived']}）；"
+                "用 get_session 读回后照常 cleanup --archived"
             )
             return 0
         if time.monotonic() >= deadline:
             break
         time.sleep(args.poll)
-    if state["armed"] is not None:
+    if state["armed"] is not None and state["disarmed"] is None:
         print(
             f"超时：routine-g{gen}（{sid}）还没有删除定时任务（账本中没有 routine.disarmed）。"
             "确认已给它发消息“运行 routine_board”，再加 --wait 等一次。"
+        )
+    elif state["armed"] is not None:
+        print(
+            f"超时：删除定时任务 {state['armed']} 没有得到确认（事件 {state['disarmed']}），"
+            "主会话还没有归档它；归档可能仍被拒（仍被拒时请用户在侧栏归档）。"
+            + archive_yourself(run, sid)
         )
     elif state["disarmed"] is not None:
         print(

@@ -1514,3 +1514,25 @@ def test_retire_routine_records_the_archive_under_an_expired_lease(
     archived = [e for e in live.events(run) if e["type"] == "routine.archived"]
     assert len(archived) == 1 and archived[0]["data"]["result"] == "Archived session local_r"
     assert archived[0]["data"]["armed_ref"] == "job-1"  # archived with its timer still set
+
+
+@pytest.mark.use_case("UC-ROUTINE-002")
+def test_retire_routine_says_when_the_deletion_was_not_confirmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review r5 F5: a deletion the host did not confirm is not reported as done."""
+    run, h, args = retire_run(tmp_path, monkeypatch)
+    routine = Caller(role="routine", session_id="local_r", machine=MACHINE)
+    h.run("routine_armed", routine, job_ref="job-1", cron="*/10 * * * *", interval_minutes=10)
+    assert live.retire_routine(args()) == 0
+    capsys.readouterr()
+    h.run("routine_disarmed", routine, job_ref="job-1", result="Error: tool failed")
+    state = live.routine_state(live.events(run))
+    assert state is not None and state["armed"] == "job-1" and state["disarmed"] is not None
+    assert live.retire_routine(args(wait=True)) == 2
+    out = capsys.readouterr().out
+    assert "没有得到确认" in out and "--archived" in out and "已删除" not in out
+    h.run("routine_archived", generation=1, result="Archived session local_r")
+    assert live.retire_routine(args(wait=True)) == 0
+    out = capsys.readouterr().out
+    assert "没有得到确认" in out and "已归档" in out

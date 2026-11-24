@@ -980,8 +980,13 @@ class Guard:
                     )
                 else:
                     reasons.append(
-                        f"例行会话已关闭，routine-g{gen}（{sid}）的定时任务已删除（attention 的 "
-                        "routine 为 retiring，step 为 archive）：调用 "
+                        f"例行会话已关闭，routine-g{gen}（{sid}）"
+                        + (
+                            f"删除定时任务 {item['unconfirmed']} 没有得到确认（归档可能仍被拒）"
+                            if item.get("unconfirmed")
+                            else "已没有要删除的定时任务"
+                        )
+                        + "（attention 的 routine 为 retiring，step 为 archive）：调用 "
                         f"mcp__ccd_session_mgmt__archive_session(session_id={sid}, "
                         "reason=例行会话已关闭)，成功后 routine_archived"
                         f"（generation: {gen}，result 为返回原文）。"

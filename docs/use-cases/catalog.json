@@ -590,7 +590,7 @@
       "id": "UC-ROUTINE-002",
       "title": "关闭例行会话：先删除它的定时任务，再由主会话归档（DN006 §8.9.6，T345）",
       "actor": "主会话 / 例行会话 / tsw / live 收尾",
-      "acceptance": "routine.enabled=false 且有已绑定的例行会话时，attention 的 routine 为 retiring（step 为 disarm：还有登记的定时任务；archive：没有），主会话 Stop hook 在任何一轮提醒下一步（发消息“运行 routine_board”或 archive_session 后 routine_archived）；routine_board 不列出例行项，有定时任务时只返回维护动作 disarm（job_ref 与做法 do）；例行会话 routine_disarmed 记录 routine.disarmed（只接受登记的 job_ref，带 CronDelete 原文；只有宿主确认删除了该任务时 deleted 为 true 并清除登记，否则保留登记、不再要求删除），结果的 forward 告诉主会话归档它（例行会话已重新打开时不转发）；主会话 routine_archived 记录 routine.archived（只对当前代次），该代次不再是当前的例行会话（之后解析为已撤销），重新打开时按 missing 启动新代次；已停未归档时重新打开则下次运行重新 arm；例行会话的 SessionStart 说明写明 disarm；live 收尾的 retire-routine 在运行的配置中关闭例行会话、给出例行会话 ID，--wait 等到 routine.archived（超时说明缺哪一步），--archived 登记运行 live 的会话代为归档的结果",
+      "acceptance": "routine.enabled=false 且有已绑定的例行会话时，attention 的 routine 为 retiring（step 为 disarm：还有登记的定时任务；archive：没有），主会话 Stop hook 在任何一轮提醒下一步（发消息“运行 routine_board”或 archive_session 后 routine_archived）；routine_board 不列出例行项，有定时任务时只返回维护动作 disarm（job_ref 与做法 do）；例行会话 routine_disarmed 记录 routine.disarmed（只接受登记的 job_ref，带 CronDelete 原文；只有宿主确认删除了该任务时 deleted 为 true 并清除登记，否则保留登记，这次关闭期间不再要求删除，attention 标明 unconfirmed，打开期间的运行清除这个标记），结果的 forward 告诉主会话归档它（例行会话已重新打开时不转发）；主会话 routine_archived 记录 routine.archived（只对当前代次），该代次不再是当前的例行会话（之后解析为已撤销），重新打开时按 missing 启动新代次；已停未归档时重新打开则下次运行重新 arm；例行会话的 SessionStart 说明写明 disarm；live 收尾的 retire-routine 在运行的配置中关闭例行会话、给出例行会话 ID，--wait 等到 routine.archived（超时说明缺哪一步），--archived 登记运行 live 的会话代为归档的结果",
       "surfaces": [
         "mcp",
         "hook"

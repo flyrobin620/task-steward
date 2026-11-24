@@ -94,15 +94,15 @@ def timer_deleted(result: str | None, job_ref: str) -> bool:
     return found is not None and found.group(1) == job_ref
 
 
-def disarm_tried(conn: sqlite3.Connection, generation: int, job_ref: str) -> bool:
-    """Whether the routine session already tried to delete this task (routine.disarmed)."""
-    return (
-        conn.execute(
-            "SELECT 1 FROM routine_disarm WHERE generation = ? AND job_ref = ?",
-            (generation, job_ref),
-        ).fetchone()
-        is not None
-    )
+DISARM_TRIED = "disarm_tried"  # routine cache: a deletion the host did not confirm (review r5)
+
+
+def disarm_tried(cache: Mapping[str, Any], generation: int, job_ref: str) -> bool:
+    """Whether, while switched off this time, the routine session already tried to delete this
+    task and the host did not confirm it. Kept in the routine cache, which every run made while
+    switched on clears (``board``): switched off again later, the deletion is asked once more
+    (PR #89 review r5 F4). A lost cache only asks for it once more."""
+    return cache.get("generation") == generation and cache.get(DISARM_TRIED) == job_ref
 
 
 RECENT_RUNS = 24  # run times kept in cache/routine.json (DN006 §8.9.3)
@@ -220,7 +220,7 @@ def status(
 ) -> dict[str, Any]:
     """The routine session's state for ``attention`` (DN006 §8.9.7)."""
     if not config.get("routine.enabled"):
-        return retiring(conn) or {"state": "disabled"}
+        return retiring(conn, cache) or {"state": "disabled"}
     newest = latest(conn)
     current = bound(conn)
     if newest is not None and newest["status"] == "starting":
@@ -251,7 +251,9 @@ def status(
     return {"state": "stale" if _stale(current, config, now, cache) else "ok", **out}
 
 
-def retiring(conn: sqlite3.Connection) -> dict[str, Any] | None:
+def retiring(
+    conn: sqlite3.Connection, cache: Mapping[str, Any] | None = None
+) -> dict[str, Any] | None:
     """With the routine session switched off, the one still bound and what is left to do: delete
     its timer (``disarm``), then archive it (``archive``). A host may refuse to archive a session
     that still holds a timer (DN006 §8.9.6, T345)."""
@@ -261,14 +263,17 @@ def retiring(conn: sqlite3.Connection) -> dict[str, Any] | None:
     armed = current["armed_ref"]
     # A deletion the host did not confirm is tried once: then archiving is tried (the host says
     # whether a timer is left), and the reference stays for a later arm to replace.
-    left = armed and not disarm_tried(conn, int(current["generation"]), str(armed))
-    return {
+    tried = bool(armed) and disarm_tried(cache or {}, int(current["generation"]), str(armed))
+    out: dict[str, Any] = {
         "state": "retiring",
-        "step": "disarm" if left else "archive",
+        "step": "disarm" if armed and not tried else "archive",
         "generation": int(current["generation"]),
         "session_name": current["session_name"],
         "session_id": current["session_ref"],
     }
+    if tried:
+        out["unconfirmed"] = str(armed)  # the deletion of this task was not confirmed
+    return out
 
 
 def disarmed_text(row: Mapping[str, Any], *, deleted: bool = True) -> str:
@@ -334,7 +339,7 @@ def board(
         dict(cache) if cache.get("generation") == generation else {"generation": generation}
     )
     if not config.get("routine.enabled"):
-        if current["armed_ref"] and not disarm_tried(conn, generation, str(current["armed_ref"])):
+        if current["armed_ref"] and not disarm_tried(kept, generation, str(current["armed_ref"])):
             # Switched off with the timer still set: delete it first, so the host lets the
             # orchestrator archive this session (DN006 §8.9.6, T345).
             return {
@@ -354,6 +359,7 @@ def board(
             "maintenance": [],
             "jobs": [],
         }, kept
+    kept.pop(DISARM_TRIED, None)
     maintenance: list[dict[str, Any]] = []
     interval = int(config.get("routine.interval_minutes"))
     renew = timedelta(days=int(config.get("routine.renew_after_days")))

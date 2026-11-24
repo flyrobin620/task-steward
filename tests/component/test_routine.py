@@ -1170,29 +1170,43 @@ def test_a_deletion_the_host_did_not_confirm_keeps_the_timer_reference(home: Hom
     assert done["events"][0]["data"]["deleted"] is False
     assert "没有得到确认" in done["forward"]["message"]
     assert h.query("SELECT armed_ref FROM routine_sessions") == [{"armed_ref": "job-1"}]
-    assert attention(h, cache)[0]["step"] == "archive"
+    # The host layer marked the try in the routine cache (the run's board reads it from there).
+    kept = routine_mod.load_cache(h.home)
+    assert kept[routine_mod.DISARM_TRIED] == "job-1"
+    cache[routine_mod.DISARM_TRIED] = kept[routine_mod.DISARM_TRIED]
+    [item] = attention(h, cache)
+    assert item["step"] == "archive" and item["unconfirmed"] == "job-1"
+    stop = hook(h, "orch-1", "Stop", home.root)
+    assert "没有得到确认" in stop["reason"] and "archive_session" in stop["reason"]
     again = board(h, routine, cache)
     assert again["maintenance"] == [] and again["jobs"] == []
     # Another job's confirmation is not this one's.
     assert not routine_mod.timer_deleted("Cancelled job job-2.", "job-1")
     assert routine_mod.timer_deleted("Cancelled job job-1.", "job-1")
-    # Switched on again: the old task is replaced, not left running beside a new one.
-    path = h.home.path("config/task-steward.json")
-    settings = json.loads(path.read_text(encoding="utf-8"))
-    settings["routine"]["enabled"] = True
-    path.write_text(json.dumps(settings), encoding="utf-8")
-    h.config = load_config(h.home).require_valid()
-    # The task may still be running: it is kept, not doubled.
+
+    def switch_on() -> None:
+        path = h.home.path("config/task-steward.json")
+        settings = json.loads(path.read_text(encoding="utf-8"))
+        settings["routine"]["enabled"] = True
+        path.write_text(json.dumps(settings), encoding="utf-8")
+        h.config = load_config(h.home).require_valid()
+
+    # Switched on again while the old task still runs: it is kept, not doubled, and the run
+    # made while switched on clears the mark (review r5 F4) ...
+    switch_on()
+    h.clock.now = "2026-11-05T00:10:00Z"
     assert board(h, routine, cache)["maintenance"] == []
-    # If it was gone after all, no run comes, and once stale it is replaced, not added to.
+    assert routine_mod.DISARM_TRIED not in cache
+    # ... so switched off once more, the same task is asked to be deleted again.
+    switch_off(h)
+    [disarm] = board(h, routine, cache)["maintenance"]
+    assert disarm["action"] == "disarm" and disarm["job_ref"] == "job-1"
+    # Had the task been gone after all, no run comes while switched on, and once stale it is
+    # replaced (CronDelete of the old reference first), not added to.
+    switch_on()
     h.clock.now = "2026-11-05T01:00:00Z"
     arm = board(h, routine, cache)["maintenance"]
     assert [m["action"] for m in arm] == ["arm"] and arm[0]["replace"] == "job-1"
-    # Re-armed and switched off once more: the new task is the one to delete.
-    h.run("routine_armed", routine, job_ref="job-2", cron="*/10 * * * *", interval_minutes=10)
-    switch_off(h)
-    [disarm] = board(h, routine, cache)["maintenance"]
-    assert disarm["action"] == "disarm" and disarm["job_ref"] == "job-2"
 
 
 @pytest.mark.use_case("UC-ROUTINE-002")
