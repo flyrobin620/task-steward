@@ -21,13 +21,40 @@ from tsw.storage.fs import atomic_write
 
 # Bump when tables or reduction rules change; older projections and checkpoints then need a
 # rebuild (DN007 §3.4).
-REDUCER_VERSION = 6
+REDUCER_VERSION = 7
 # Events that keep the task's business time: an import carries the source's own times, and a
 # renumbering only moves the task to a new id.
 IMPORTS = frozenset({"import.task_imported", "task.renumbered"})
 # Events that describe a task without anything happening in it: the card's keywords and
 # summary (DN007 §5.1) do not count as activity.
 QUIET = frozenset({"task.summary_recorded"})
+# Bookkeeping around a task rather than a change in it: they never move the time the task flow
+# orders by (``last_record``, DN006 §8.10, T352). The imports and the card, its sessions' titles
+# and archiving, the archive itself, the preference scan, the triage of its follow-ups and the
+# notices sent about it.
+BOOKKEEPING = (
+    IMPORTS
+    | QUIET
+    | frozenset(
+        {
+            "task.archived",
+            "task.preference_scanned",
+            "user.preference_candidate",
+            "user.preference_candidate_dismissed",
+            "attempt.session_updated",
+            "attempt.closed",
+            "follow_up.updated",
+            "follow_up.converted",
+            "follow_up.dismissed",
+            "channel.message_sent",
+            "channel.reply_seen",
+        }
+    )
+)
+# Once a task is accepted, cancelled or archived, only a record taking it out of that status
+# (a requirement change reopening it) moves its time; a turn in its session or a follow-up
+# recorded later does not.
+ENDED = frozenset({"accepted", "cancelled", "archived"})
 KEEP_CHECKPOINTS = 3
 
 SCHEMA_SQL = """
@@ -565,19 +592,36 @@ class Projection:
                 "last_sequence = excluded.last_sequence",
                 (event.command_id, event.command_digest, event.sequence, event.sequence),
             )
+        before = None
+        if event.task_id is not None and event.type not in BOOKKEEPING:
+            row = conn.execute(
+                "SELECT status FROM tasks WHERE task_id = ?", (event.task_id,)
+            ).fetchone()
+            before = None if row is None else str(row[0])
         reducer(conn, event)
         if event.task_id is not None:
             # An imported task keeps the business time it had in its source system (DN005 §4.3);
             # a renumbered task keeps its own.
-            # ``last_record`` is the time of the task's latest ledger record of any kind: the
-            # task flow orders by it (DN006 §8.10, T304).
+            # ``last_record`` is the time of the task's latest change of business: the task flow
+            # orders by it (DN006 §8.10, T352). Bookkeeping keeps it, and so does a record on an
+            # ended task that leaves its status as it was; until a task has one (an imported
+            # task), it is the task's business time.
+            moves = event.type not in BOOKKEEPING
+            if moves and before in ENDED:
+                row = conn.execute(
+                    "SELECT status FROM tasks WHERE task_id = ?", (event.task_id,)
+                ).fetchone()
+                moves = row is None or str(row[0]) != before
             conn.execute(
                 "UPDATE tasks SET last_activity = CASE WHEN ? THEN last_activity ELSE ? END, "
-                "source_seq = ?, last_record = ? WHERE task_id = ?",
+                "source_seq = ?, last_record = CASE WHEN ? THEN ? "
+                "WHEN last_record = '' THEN last_activity ELSE last_record END "
+                "WHERE task_id = ?",
                 (
                     event.type in IMPORTS | QUIET,
                     event.time,
                     event.sequence,
+                    moves,
                     event.time,
                     event.task_id,
                 ),

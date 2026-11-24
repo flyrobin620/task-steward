@@ -4,11 +4,13 @@ Every task is a card; the arrows run in the order the work is done (T304): from 
 depended on to the task depending on it, from the source of a follow-up to the task made from
 it, and, dotted, from a referenced task to the task referencing it (:mod:`tsw.host.relations`).
 
-Horizontally the dependencies come first and time second (the user's decision of 2026-11-18,
-T303's layout G3): a task depending on another, directly or not, is always left of it, so the
-flow completes from right to left; among the tasks free of that, the one with the latest ledger
-record is further left. Vertically each repository has its own lane. Every line has its own
-ports and channels; references never move a card.
+Horizontally the dependencies come first, the follow-ups shown second and time last (the
+user's decisions of 2026-11-18, T303's layout G3, and of 2026-11-24, T352): a task depending on
+another, directly or not, is always left of it, so the flow completes from right to left; a task
+made from a follow-up is left of its source unless a dependency says otherwise; among the tasks
+free of these, the one whose business changed last is further left (bookkeeping such as
+archiving does not count, :mod:`tsw.projection`). Vertically each repository has its own
+lane. Every line has its own ports and channels; references never move a card.
 
 The layout is computed here, when the page is generated, so it is tested like any other logic:
 the cards' positions and every line's waypoints, for each choice the page offers (the
@@ -66,7 +68,8 @@ class FlowTask:
     status: str
     seq: int  # registration order: the ledger sequence of the task's registration
     activity: str  # the task's latest activity (``last_activity``): orders the lanes
-    modified: str = ""  # the time of the task's latest ledger record (T304); ``activity`` if unset
+    # The task's latest change of business (``last_record``, T352); ``activity`` if unset.
+    modified: str = ""
 
     @property
     def when(self) -> str:
@@ -195,21 +198,48 @@ def _needs(
     return sorted(found)
 
 
-def sequence(tasks: Sequence[FlowTask], depends_on: Mapping[str, Iterable[str]]) -> list[str]:
-    """The tasks from left to right: dependencies first, then the latest ledger record.
+def _reaches(edges: Mapping[str, Iterable[str]], start: str, goal: str) -> bool:
+    """Whether ``goal`` can be reached from ``start`` along ``edges``."""
+    seen = {start}
+    todo = [start]
+    while todo:
+        for b in edges.get(todo.pop(), ()):
+            if b == goal:
+                return True
+            if b not in seen:
+                seen.add(b)
+                todo.append(b)
+    return False
 
-    Every task comes before the tasks it depends on, directly or not. Among the tasks whose
-    dependents are all placed, the one modified last goes next (on a tie the one registered
-    later). A last pass swaps two neighbours out of time order when no dependency path joins
-    them, until there is none. A dependency cycle (only an old record could have one) is broken
-    by taking the newest task left.
+
+def sequence(
+    tasks: Sequence[FlowTask],
+    depends_on: Mapping[str, Iterable[str]],
+    follow_ups: Mapping[str, Iterable[str]] | None = None,
+) -> list[str]:
+    """The tasks from left to right: dependencies first, then follow-ups, then the time.
+
+    Every task comes before the tasks it depends on, directly or not; with ``follow_ups`` (a
+    task to the tasks it was made from, when the follow-ups are shown), a task made from a
+    follow-up also comes before its source, unless a dependency puts them the other way round
+    (T352). Among the tasks whose left neighbours are all placed, the one modified last goes
+    next (on a tie the one registered later). A last pass swaps two neighbours out of time order
+    when no path of these joins them, until there is none. A dependency cycle (only an old
+    record could have one) is broken by taking the newest task left.
     """
     by_id = {t.task_id: t for t in tasks}
     newest = sorted(by_id, key=lambda t: (by_id[t].when, by_id[t].seq, t), reverse=True)
     rank = {t: i for i, t in enumerate(newest)}  # 0 is the newest
-    needs: dict[str, list[str]] = {t: [] for t in by_id}
-    waiting = {t: 0 for t in by_id}  # dependents of a task not yet placed (they go left of it)
+    needs: dict[str, list[str]] = {t: [] for t in by_id}  # a -> the tasks right of a
+    waiting = {t: 0 for t in by_id}  # tasks to be left of a task, not yet placed
     for a, b in _needs(by_id, depends_on):
+        needs[a].append(b)
+        waiting[b] += 1
+    # A follow-up that would close a cycle with what is already there gives way: the
+    # dependencies are added first, so they win.
+    for a, b in sorted(_pairs(follow_ups or {}, by_id), key=lambda p: (rank[p[0]], rank[p[1]])):
+        if b in needs[a] or _reaches(needs, b, a):
+            continue
         needs[a].append(b)
         waiting[b] += 1
 
@@ -233,9 +263,9 @@ def sequence(tasks: Sequence[FlowTask], depends_on: Mapping[str, Iterable[str]])
             waiting[b] -= 1
             if waiting[b] == 0:
                 heapq.heappush(ready, rank[b])
-    # What each task depends on, directly or not.
+    # The tasks each task must stay left of, directly or not.
     below: dict[str, set[str]] = {}
-    for t in reversed(order):  # a task's dependencies are right of it, so already done
+    for t in reversed(order):  # they are right of it, so already done
         seen: set[str] = set()
         for b in needs[t]:
             if b not in seen:
@@ -345,7 +375,7 @@ def lay_out(
     deps = _pairs(depends_on, by_id)
     fus = _pairs(follow_ups or {}, by_id)
     refs = _pairs(references or {}, by_id)
-    order = sequence(tasks, depends_on)
+    order = sequence(tasks, depends_on, follow_ups)
     pos = {t: i for i, t in enumerate(order)}
     lanes = lane_order(tasks)
     lane_of = {r: i for i, r in enumerate(lanes)}

@@ -243,6 +243,52 @@ def test_tasks_free_of_dependencies_go_newest_left() -> None:
 
 
 @mark.use_case("UC-DIRECT-004")
+def test_a_task_made_from_a_follow_up_is_left_of_its_source_when_shown() -> None:
+    # T285's case (T352): its follow-ups became T292 and T297, but archiving it made it the
+    # newest. Shown, the follow-ups put it right of both; unticked, time alone orders them.
+    tasks = [
+        task(285, when="2026-11-24T14:58"),
+        task(292, when="2026-11-18T03:00"),
+        task(297, when="2026-11-18T05:00"),
+        task(300, when="2026-11-20T00:00"),
+    ]
+    fus = {"T292": ["T285"], "T297": ["T285"]}
+    assert sequence(tasks, {}) == ["T285", "T300", "T297", "T292"]
+    assert sequence(tasks, {}, fus) == ["T300", "T297", "T292", "T285"]
+    shown = lay_out(tasks, {}, fus)
+    col = {t: c for t, (c, _) in shown.cards.items()}
+    assert col["T292"] < col["T285"] and col["T297"] < col["T285"]
+    assert [t for c in lay_out(tasks, {}).columns for t in c] == sequence(tasks, {})
+    # A dependency wins over a follow-up: the source depending on the task made from its
+    # follow-up stays left of it, and the rest still holds.
+    deps = {"T285": ["T292"]}
+    order = sequence(tasks, deps, fus)
+    assert order.index("T285") < order.index("T292")
+    assert order.index("T297") < order.index("T285")
+    # Through a chain of follow-ups and dependencies alike.
+    chain = sequence(tasks, {"T292": ["T300"]}, {"T300": ["T285"]})
+    assert chain.index("T292") < chain.index("T300") < chain.index("T285")
+    # On a larger board: every follow-up shown (they agree with the dependencies there) puts
+    # its task left of the source, and a neighbour out of time order is joined to it by a path
+    # of dependencies and follow-ups.
+    tasks, deps, fus, refs = synthetic(200, 0.3, 0)
+    assert sum(len(v) for v in fus.values()) > 2
+    layout = flow_layouts(tasks, deps, fus, refs)["all:dep,fu"]
+    col = {t: c for t, (c, _) in layout.cards.items()}
+    for a, bs in fus.items():
+        for b in bs:
+            assert col[a] < col[b], (a, b)
+    joined = {t: list(deps.get(t, [])) + list(fus.get(t, [])) for t in set(deps) | set(fus)}
+    closure = needs(joined)
+    order = sequence(tasks, deps, fus)
+    when = {t.task_id: (t.when, t.seq) for t in tasks}
+    for u, v in pairwise(order):
+        if when[u] < when[v]:
+            assert v in closure.get(u, set()), (u, v)
+    assert [t for c in layout.columns for t in c] == order
+
+
+@mark.use_case("UC-DIRECT-004")
 def test_no_line_within_a_column_and_a_lane_holds_six_per_column() -> None:
     tasks, deps, fus, refs = synthetic(160, 0.3, 1)
     layouts = flow_layouts(tasks, deps, fus, refs)

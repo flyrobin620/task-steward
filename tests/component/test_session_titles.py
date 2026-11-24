@@ -756,6 +756,58 @@ def test_an_archived_tasks_session_is_archived(home: Home) -> None:
     assert (row["status"], row["revision"]) == ("archived", 1)
 
 
+def worker_turn(h: Harness, task_id: str = "T001") -> None:
+    """The Stop hook's record of a worker turn (``worker.turn_ended``)."""
+    h.ledger.commit(
+        Command(
+            actor={"role": "worker", "session_id": f"w-{task_id}"},
+            input={"op": "turn_ended"},
+            build=lambda _ctx: [
+                EventDraft(
+                    type="worker.turn_ended",
+                    task_id=task_id,
+                    revision=1,
+                    attempt="a1",
+                    data={"attempt": "a1"},
+                )
+            ],
+        )
+    )
+
+
+@mark.use_case("UC-DIRECT-004")
+def test_the_task_flow_time_skips_the_bookkeeping_after_acceptance(home: Home) -> None:
+    # T352 (T285's case): the task flow orders by the task's latest change of business. The
+    # session renamed and archived, the task archived, a turn in its session after acceptance:
+    # none moves it, so archiving an old task does not put it at the newest end.
+    h = Harness(home)
+    session = delivered_and_done(h)
+    h.clock.now = "2026-11-06T00:00:00Z"
+    worker_turn(h)  # still done, not accepted: a turn is business
+    assert h.task("T001")["last_record"] == "2026-11-06T00:00:00Z"
+    h.clock.now = "2026-11-07T00:00:00Z"
+    accept_from_terminal(h)
+    assert h.status("T001") == "accepted"
+    h.clock.now = "2026-11-08T00:00:00Z"
+    worker_turn(h)
+    rename(h, session, BASE)
+    h.clock.now = "2026-12-01T00:00:00Z"
+    h.run("sync")
+    assert h.status("T001") == "archived"
+    h.clock.now = "2026-12-02T00:00:00Z"
+    h.run(
+        "session_record",
+        task_id="T001",
+        attempt="a1",
+        action="archive",
+        ok=True,
+        result=f"Archived session {session}.",
+    )
+    row = h.task("T001")
+    assert row["last_record"] == "2026-11-07T00:00:00Z"  # the user's acceptance
+    assert row["last_activity"] == "2026-12-02T00:00:00Z"  # the board's latest record moves on
+
+
 @mark.use_case("UC-SESSION-001")
 def test_an_archived_tasks_session_gone_or_failing(home: Home) -> None:
     h = Harness(home)

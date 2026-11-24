@@ -42,7 +42,7 @@ DN001 §8 只定义了事件格式和“JSONL 账本为唯一事实、SQLite 投
 
 | 表 | 主键 | 主要列 | 供谁使用 |
 | --- | --- | --- | --- |
-| `tasks` | task_id | title、repo、project_ids、kind、status、revision、definition_hash、lifecycle、last_activity、last_record（任务最近一条账本记录的时间，任何事件都更新；任务流按它排列，DN006 §8.10，T304）、stale、archived | 守卫、状态页、目录 |
+| `tasks` | task_id | title、repo、project_ids、kind、status、revision、definition_hash、lifecycle、last_activity、last_record（任务最近一次业务变化的时间，导入、检索卡片、会话改名与归档、任务归档等收尾记账以及任务结束后的记录不更新；任务流按它排列，DN006 §8.10，T304、T352）、stale、archived | 守卫、状态页、目录 |
 | `dependencies` | (task_id, dep_id) | bound_revision、kind（显式 / 推断）、reason | G-DEP、依赖失效传播 |
 | `attempts` | (task_id, attempt) | phase、session_ref、session_adapter、generation、generation_valid、workdir、branch、controller | R-ATTEMPT、对账、G-ONE-ATTEMPT |
 | `review_cycles` | (task_id, attempt, cycle) | rounds、base_budget、orchestrator_extension、user_extension、last_reviewed_head、thread_ref | E01 / E04 / E05、G-SUBMIT |
