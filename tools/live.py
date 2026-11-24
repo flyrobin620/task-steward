@@ -1237,11 +1237,34 @@ def switch_routine_off(run: Run) -> bool:
     return True
 
 
+def archive_yourself(run: Run, sid: str) -> str:
+    """The fallback when the run's main session did not archive the routine session."""
+    return (
+        f"由运行 live 的会话调用 archive_session({sid})，再运行 python tools/live.py "
+        f"{run.manifest()['scenario']} retire-routine {run.id} "
+        "--archived <archive_session 返回的原文>。"
+    )
+
+
+def lease_holder(run: Run) -> str:
+    """The run's main session that holds the scheduling lease, renewed when it has expired: a
+    write tool is refused under an expired lease (G-LEASE), and the run's main session may sit
+    idle long before cleanup (T345 review r1 F2). Renewing keeps the same holder."""
+    row = (tsw(run, "lease", "show") or {}).get("lease") or {}
+    holder = row.get("holder_session")
+    if not holder:
+        raise SystemExit("live: 隔离账本中没有持有调度租约的主会话，不能登记")
+    if row.get("expired"):
+        tsw(run, "lease", "acquire", "--session", str(holder))
+    return str(holder)
+
+
 def retire_routine(args: argparse.Namespace) -> int:
     """Retire the run's routine session without the user (CC006 §6.6, T345): switch it off in the
     run's configuration, have it delete its timer (the live session sends it one message), and let
     the run's main session archive it. ``--wait`` waits for ``routine.archived``; ``--archived``
-    records an archive the live session had to do itself."""
+    records an archive the live session had to do itself. A routine session that never set its
+    timer has nothing to delete and is archived straight away (review r1 F1)."""
     run = Run.open(args.run_id)
     state = routine_state(events(run))
     if state is None:
@@ -1250,15 +1273,12 @@ def retire_routine(args: argparse.Namespace) -> int:
     sid, gen = state["session_id"], state["generation"]
     name = f"routine:{sid}"
     if args.archived is not None:
-        holder = (tsw(run, "lease", "show") or {}).get("lease") or {}
-        if not holder.get("holder_session"):
-            raise SystemExit("live: 隔离账本中没有持有调度租约的主会话，不能登记")
         if state["archived"] is None:
             tool(
                 run,
                 "routine_archived",
                 "orchestrator",
-                str(holder["holder_session"]),
+                lease_holder(run),
                 generation=gen,
                 result=args.archived,
                 note="运行 live 的会话在主会话没有归档时代为归档（retire-routine --archived）",
@@ -1269,6 +1289,7 @@ def retire_routine(args: argparse.Namespace) -> int:
     if not args.wait:
         changed = switch_routine_off(run)
         run.record("claude-session", name, state="created", ref=sid, retire_requested=utc())
+        armed = state["armed"] is not None
         print(
             json.dumps(
                 {
@@ -1276,19 +1297,21 @@ def retire_routine(args: argparse.Namespace) -> int:
                     "session_id": sid,
                     "switched_off": changed,
                     "armed": state["armed"],
-                    "message": "运行 routine_board",
+                    "message": "运行 routine_board" if armed else None,
                 },
                 ensure_ascii=False,
             )
         )
         if state["archived"] is not None:
             print("例行会话已归档（账本中有 routine.archived）")
-        else:
+        elif armed:
             print(
                 f"下一步：用 SendMessage 给 {sid} 发“运行 routine_board”"
                 "（它删除定时任务后告诉主会话，主会话归档它），再运行 python tools/live.py "
                 f"{run.manifest()['scenario']} retire-routine {run.id} --wait"
             )
+        else:
+            print("例行会话没有登记的定时任务，不用发消息：" + archive_yourself(run, sid))
         return 0
     deadline = time.monotonic() + args.timeout_minutes * 60
     while True:
@@ -1303,18 +1326,18 @@ def retire_routine(args: argparse.Namespace) -> int:
         if time.monotonic() >= deadline:
             break
         time.sleep(args.poll)
-    scenario_name = run.manifest()["scenario"]
-    if state["disarmed"] is None:
+    if state["armed"] is not None:
         print(
             f"超时：routine-g{gen}（{sid}）还没有删除定时任务（账本中没有 routine.disarmed）。"
             "确认已给它发消息“运行 routine_board”，再加 --wait 等一次。"
         )
-    else:
+    elif state["disarmed"] is not None:
         print(
             f"超时：定时任务已删除（事件 {state['disarmed']}），主会话还没有归档它。"
-            f"由运行 live 的会话调用 archive_session({sid})，再运行 python tools/live.py "
-            f"{scenario_name} retire-routine {run.id} --archived <archive_session 返回的原文>。"
+            + archive_yourself(run, sid)
         )
+    else:
+        print("超时：例行会话没有登记的定时任务，主会话还没有归档它。" + archive_yourself(run, sid))
     return 2
 
 

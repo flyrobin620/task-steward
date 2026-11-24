@@ -15,15 +15,17 @@ import sys
 import threading
 import time
 import urllib.parse
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
-from tests.machine_harness import MACHINE, Harness
+from tests.machine_harness import MACHINE, ORCH, Harness
 from tools import live, live_drive
 from tsw import lease
+from tsw.errors import TswError
 from tsw.home import Home, init_home
 from tsw.machine.base import Caller
 
@@ -1438,3 +1440,77 @@ def test_the_live_cleanup_rule_is_printed_for_the_users_settings(
     assert rule.startswith("TaskSteward Live Cleanup:") and rule == live.AUTO_MODE_LIVE_CLEANUP
     assert "archive_session" in rule and "retire-routine" in rule and "运行 routine_board" in rule
     assert "does not cover deleting sessions, any other message" in rule
+
+
+def retire_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[live.Run, Harness, Callable[..., argparse.Namespace]]:
+    monkeypatch.setenv("TSW_LIVE_RUNS", str(tmp_path / "runs"))
+    monkeypatch.delenv("TSW_HOME", raising=False)
+    monkeypatch.setattr(lease, "this_machine", lambda: MACHINE)
+    run = live.Run.create("host-e2e")
+    home, _ = init_home(run.home)
+    h = Harness(home)
+    out = h.run("routine_start", user_turn=True)
+    h.run("routine_bind", generation=out["events"][0]["data"]["generation"], session_id="local_r")
+
+    def args(**extra: Any) -> argparse.Namespace:
+        base = {"run_id": run.id, "wait": False, "archived": None, "poll": 0, "timeout_minutes": 0}
+        return argparse.Namespace(**{**base, **extra})
+
+    return run, h, args
+
+
+@pytest.mark.use_case("UC-ROUTINE-002")
+def test_retire_routine_without_a_timer_archives_straight_away(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review r1 F1: a routine session that never set its timer has nothing to delete, so no
+    routine.disarmed ever comes; the live session is told to archive it, not to message it."""
+    _run, _h, args = retire_run(tmp_path, monkeypatch)
+    assert live.retire_routine(args()) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert json.loads(lines[0])["message"] is None
+    assert "不用发消息" in lines[1] and "--archived" in lines[1]
+    assert live.retire_routine(args(wait=True)) == 2
+    out = capsys.readouterr().out
+    assert "没有登记的定时任务" in out and "--archived" in out and "routine.disarmed" not in out
+
+
+@pytest.mark.use_case("UC-ROUTINE-002")
+def test_retire_routine_records_the_archive_under_an_expired_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review r1 F2: the run's main session sat idle and its lease expired; the fallback renews
+    it for the same holder through the real lease guard, then records the archive."""
+    run, h, args = retire_run(tmp_path, monkeypatch)
+    routine = Caller(role="routine", session_id="local_r", machine=MACHINE)
+    h.run("routine_armed", routine, job_ref="job-1", cron="*/10 * * * *", interval_minutes=10)
+    h.ledger.commit(lease.acquire("orch-1", machine=MACHINE, lease_minutes=1, actor=ORCH.actor()))
+    h.clock.now = "2026-11-05T01:00:00Z"  # an hour later: the lease has expired
+
+    def fake_tsw(_run: live.Run, *argv: str, **_kw: Any) -> Any:
+        if argv[:2] == ("lease", "show"):
+            with h.ledger.view() as conn:
+                row = lease.lease_row(conn)
+            assert row is not None
+            return {"lease": {**row, "expired": lease.is_expired(row, h.clock.now)}}
+        assert argv[:2] == ("lease", "acquire") and argv[3] == "orch-1"
+        h.ledger.commit(
+            lease.acquire("orch-1", machine=MACHINE, lease_minutes=60, actor=ORCH.actor())
+        )
+        return None
+
+    def real_tool(_run: live.Run, name: str, role: str, session: str, **inp: Any) -> Any:
+        return h.run(name, Caller(role=role, session_id=session, machine=MACHINE), **inp)
+
+    monkeypatch.setattr(live, "tsw", fake_tsw)
+    monkeypatch.setattr(live, "tool", real_tool)
+    # Without the renewal the write is refused: the lease guard is what the fallback meets.
+    with pytest.raises(TswError):
+        real_tool(run, "routine_archived", "orchestrator", "orch-1", generation=1)
+    assert live.retire_routine(args(archived="Archived session local_r")) == 0
+    assert "已登记" in capsys.readouterr().out
+    archived = [e for e in live.events(run) if e["type"] == "routine.archived"]
+    assert len(archived) == 1 and archived[0]["data"]["result"] == "Archived session local_r"
+    assert archived[0]["data"]["armed_ref"] == "job-1"  # archived with its timer still set
