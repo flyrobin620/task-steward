@@ -12,7 +12,8 @@ their own page at ``/preferences`` (:mod:`tsw.host.preference_view`), whose form
 and revoke them as the user on the same channel, the same implementation as ``tsw preference
 record`` / ``revoke`` (DN007 §6.2, T290). An embedding portal asks ``POST /workdeck/labels``
 which of its sessions are this data directory's workers, orchestrators and routine sessions
-(:mod:`tsw.host.session_labels`, T297).
+(:mod:`tsw.host.session_labels`, T297). The pages link a home-screen manifest and icons, served at
+the root (:mod:`tsw.host.pwa`, T355).
 
 Requests are admitted only with this run's token (DN006 §8.10, DN008 §9; the hosted service
 checks tokens against the hashes ``tsw dashboard open`` stored, T283): it is printed in the
@@ -50,7 +51,7 @@ from tsw.context.index import index_path, read_card
 from tsw.errors import TswError, rejected
 from tsw.events import Event, utc_now
 from tsw.home import Home
-from tsw.host import workdeck
+from tsw.host import pwa, workdeck
 from tsw.host.markdown import MAX_SOURCE_CHARS, render_markdown
 from tsw.host.preference_view import parse_filter, render_preferences
 from tsw.host.session_labels import LABELS_PATH, MAX_LABELS_BODY, answer, requested_ids
@@ -474,6 +475,12 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 # Token-free like /healthz: `workdeck plugin add` reads it before any sign-in. It
                 # holds local paths only, no token and no ledger data (DN006 §8.10, T309).
                 self._json(HTTPStatus.OK, app.workdeck_manifest())
+                return
+            found = pwa.asset(url.path)
+            if found is not None:
+                # Token-free too: the home-screen manifest and the icons are the product's own
+                # static files, no ledger data (DN006 §8.10, T355).
+                self._send(HTTPStatus.OK, *found)
                 return
             query = parse_qsl(url.query, keep_blank_values=True)
             presented = [value for key, value in query if key == "token"]

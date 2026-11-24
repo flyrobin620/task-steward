@@ -25,6 +25,7 @@ from urllib.parse import quote
 
 from tsw import preferences
 from tsw.commands import CommitContext
+from tsw.host import pwa
 from tsw.host.flow import FlowTask, render_flow
 from tsw.host.relations import references
 from tsw.host.status_assets import (
@@ -624,15 +625,17 @@ def pending_asks(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
     }
 
 
-def page_head(title: str, app: AppView | None) -> str:
-    """The page's ``<head>``: its policy, styles and scripts, and in the app the request token.
+def page_head(title: str, app: AppView | None, base: str = "./") -> str:
+    """The page's ``<head>``: its policy, styles and scripts, and in the app the request token
+    and the links that make it installable (:mod:`tsw.host.pwa`, relative to ``base``, the app's
+    root seen from the page). The offline ``views/STATUS.html`` has no server for them.
 
     The board and the task view share it, so both keep the same Content-Security-Policy.
     """
     if app:
         policy = (
             f'<meta http-equiv="Content-Security-Policy" content="{_e(APP_CSP)}">\n'
-            f'<meta name="tsw-token" content="{_e(app.token)}">'
+            f'<meta name="tsw-token" content="{_e(app.token)}">\n{pwa.head_links(base)}'
         )
         app_script = f"<script>{APP_SCRIPT}</script>"
     else:

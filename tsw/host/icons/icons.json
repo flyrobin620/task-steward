@@ -1,0 +1,31 @@
+{
+  "source": "icon.svg",
+  "sha256": "e02e49edc97251e4b2c3505abb35172b8606f244da38d1dd90e8f3325254b655",
+  "files": {
+    "apple-touch-icon.png": {
+      "size": 180,
+      "variant": "full",
+      "sha256": "3d0f5008f854460e7276cdf14703a09fa56c56529ac2847aef4363351a93ecc1"
+    },
+    "icon-192.png": {
+      "size": 192,
+      "variant": "any",
+      "sha256": "4a33414afc52840b3afc62a79989c20b5b49c99e6e751b423ab4fa3532bf2625"
+    },
+    "icon-512.png": {
+      "size": 512,
+      "variant": "any",
+      "sha256": "8d37b1aabf0cf9ae7c3074d887776b90fa5d74badd10bb751cddf3c053913fb3"
+    },
+    "icon-maskable-192.png": {
+      "size": 192,
+      "variant": "full",
+      "sha256": "54a74b65850a6e4619c10457d5960971811b63945d2543489650d185cfd10a61"
+    },
+    "icon-maskable-512.png": {
+      "size": 512,
+      "variant": "full",
+      "sha256": "a259d16bbf7d9785c8ccc7006b145ac8e7d0127454b5c54a8db8ab21fc947939"
+    }
+  }
+}

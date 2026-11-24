@@ -20,7 +20,7 @@ tsw = "tsw.cli:main"
 include = ["tsw*"]
 
 [tool.setuptools.package-data]
-tsw = ["host/*.md", "host/*.css", "host/*.js"]
+tsw = ["host/*.md", "host/*.css", "host/*.js", "host/icons/*"]
 
 [tool.setuptools.dynamic]
 version = {attr = "tsw.__version__"}

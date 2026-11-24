@@ -1435,6 +1435,27 @@
       }
     },
     {
+      "id": "UC-DIRECT-011",
+      "title": "Dashboard 可添加到主屏幕：Web App Manifest、apple-touch-icon 与 favicon（T355，DN006 §8.10）",
+      "actor": "用户 / 本机或经 workdeck gateway 把 Dashboard 添加到主屏幕的浏览器（iOS Safari 等）",
+      "acceptance": "Dashboard 应用的看板、长期偏好页与单任务视图（含不存在的任务）在 <head> 中用相对应用根的地址（看板与偏好页 ./，单任务视图 ../）链接 manifest.webmanifest（crossorigin=\"use-credentials\"）、icon.svg 与 icon-192.png（rel=icon）、apple-touch-icon.png（180×180），并有 apple-mobile-web-app-title「TaskSteward」与两种配色方案的 theme-color；应用的 CSP 加 manifest-src 'self' 与 img-src 'self'；静态 views/STATUS.html 不带这些链接。应用在根下不要令牌也提供 manifest.webmanifest（application/manifest+json：name「TaskSteward Dashboard」、short_name「TaskSteward」、display standalone、id / start_url / scope 均为 ./，图标地址都相对，所以本机与经路径前缀 /d/<设备>/plugins/tsw/ 都解析到应用根之下）、icon.svg 与 tsw.host.pwa.ICONS 中的 PNG（any 192/512、maskable 192/512、apple-touch-icon 180），照常核对 Host，不发 cookie、不带 CORS 头；其他地址仍要令牌。PNG 由 tools/icons.py render 从 icon.svg 生成并记在 icons.json，tools/icons.py check（单元测试）在来源改过未重新生成、PNG 尺寸或内容与记录不符、缺文件时失败",
+      "surfaces": [
+        "cli"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "不调用宿主与模型；经 workdeck gateway 在 iPhone Safari 添加到主屏幕、核对图标与名称由用户在合并并更新 tsw 后验证，结果与截图记在任务报告中（T355）"
+      }
+    },
+    {
       "id": "UC-SETUP-001",
       "title": "安装脚本 tsw setup 与两条安装路径的入口（T308，DN009，CC009）",
       "actor": "用户 / 终端入口 setup.ps1 / 会话入口 setup skill",

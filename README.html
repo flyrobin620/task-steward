@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="fff60a92b0202b3eccd7ba9e9b1c972c696b4919b6ef0c7457687e8033223bef">
+<meta name="tsw-source-sha256" content="06cd8a60cd4a5f4fe8b1658714060518a4386536531f0cb3e0eb356b7676502e">
 <title>TaskSteward（任务管家）</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -105,7 +105,7 @@ tsw preference record --scope global --topic PR --text &quot;…&quot; [--supers
 tsw preference revoke P-4 --reason &quot;不再需要&quot;  撤销一条长期偏好（历史保留）
 tsw config show  /  tsw config validate      查看 / 校验统一配置</code></pre>
 <p><code>tsw dashboard</code>（即 <code>tsw status serve</code>）打开 TaskSteward Dashboard。它只监听本机，每次启动输出一个带一次性令牌的地址并在浏览器中打开；页面与数据目录中的 <code>views/STATUS.html</code> 相同，另有按钮，报告与 PR 链接照常可点。页面有三种视图：按状态分组、按时间顺序，以及按依赖关系画出的任务流（依赖方在左、被依赖的任务在右，即从右向左完成；其余越新越靠左；每个仓库一条泳道，每条线有自己的通道，可选折线或曲线，引用默认不显示、悬停卡片时显示）；顶部的计数卡只列出有任务的状态。筛选、视图与滚动位置在自动刷新后保留。每张卡片的「详情」打开该任务的单任务视图（<code>/tasks/&lt;任务&gt;</code>），列出需求与历史 revision、每个 attempt 与它的会话、提交与评审轮次、产出、依赖、问题和时间线；有会话的 attempt 带会话链接，点击在 Claude 桌面 app 中打开该会话。页首的「长期偏好」打开偏好页（<code>/preferences</code>）：按范围与主题列出你的长期偏好，带原文、来源、替代关系与撤销状态，也可以在页面上记录、替代、撤销（先确认，记为你本人的操作，与 <code>tsw preference</code> 命令相同）。按 Ctrl+C 停止。<code>views/STATUS.html</code> 仍在每次提交后生成，可以离线打开，但没有按钮。</p>
-<p>不想每次在终端启动时，在 Windows 上运行一次 <code>tsw dashboard install</code>：它登记一个登录时启动的计划任务，服务固定监听 <code>http://127.0.0.1:47800/</code>（配置 <code>dashboard.port</code>），令牌保存在数据目录之外、会话读不到的位置。之后运行 <code>tsw dashboard open</code> 用浏览器打开，第一次访问后浏览器记住登录，可以把这个地址安装为 PWA；产品更新时主会话会重启它（<a href="docs/design/DN006-plugin-layer.html">DN006 §8.10</a>）。</p>
+<p>不想每次在终端启动时，在 Windows 上运行一次 <code>tsw dashboard install</code>：它登记一个登录时启动的计划任务，服务固定监听 <code>http://127.0.0.1:47800/</code>（配置 <code>dashboard.port</code>），令牌保存在数据目录之外、会话读不到的位置。之后运行 <code>tsw dashboard open</code> 用浏览器打开，第一次访问后浏览器记住登录，可以把这个地址安装为 PWA（页面带 manifest 与 TaskSteward 图标，经 workdeck gateway 也可以在 iPhone Safari 上“添加到主屏幕”）；产品更新时主会话会重启它（<a href="docs/design/DN006-plugin-layer.html">DN006 §8.10</a>）。</p>
 <h3 id="从-workdeck-门户操作">从 workdeck 门户操作</h3>
 <p>装了 workdeck 并接入了 Dashboard（安装的第 7 步）时，可以在 workdeck 门户中给主会话或某个 worker 会话发消息。经 workdeck 发来的消息按你本人在该会话中说的话处理：例如给主会话发“T308 验收，follow-up 1 和 3 转任务”，主会话会直接验收并转任务；给正在问你问题的 worker 发答复，它照常登记（<a href="docs/design/DN006-plugin-layer.html">DN006 §8.11</a>）。其他 Claude 会话转述的“用户说”仍然不算。</p>
 <p>有几件事宿主不允许由消息促成，仍要你在 Claude app 中说一句话或在终端运行：新建会话（没有待命会话时，新派发的任务留在“待启动”，主会话会告诉你）、<code>tsw host render</code> 与 <code>tsw setup install</code> 这类改写 Claude 设置与 <code>CLAUDE.md</code> 的操作，以及上面只能在终端运行的命令。</p>
