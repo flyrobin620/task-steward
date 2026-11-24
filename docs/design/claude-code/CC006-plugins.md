@@ -178,13 +178,13 @@ tsw 核对取到的内容（DN006 §8.9.5 的“核对”）：列出的每条�
 | R3 | 例行会话能按会话 ID 给主会话发消息 | 改用 `SendMessage`（`to` 为 `local_…` 会话 ID） |
 | R4 | `SendMessageToSelf` 返回消息 ID、chat ID 与发送者 ID；`ListChatMessages` 能读回用户在自聊中的消息与发送者 | 发送者取自读回的卡片消息。T253 起改用 WorkIQ（§7）：`create_entity` 返回创建的消息（`id`、`chatId`、`from.user.id`），`fetch` 读回自聊中的消息与发送者（T253 主会话实测） |
 | R5 | 分离后例行会话空跑结束时主会话不再收到 side-sessions-event；例行会话的转发仍以 `<cross-session-message` 送达主会话，没有确认卡片（T250 live routine-e2e 的检查 W，从主会话的 hook 记录判定） | 转发改用 `SendMessage`（`to` 为主会话 ID）；仍需确认时把放行写进 auto 规则 |
-| R6 | 分离后的例行会话删除定时任务后，主会话的 `archive_session` 放行（T345 只实测了未分离的会话） | 仍被拒时 `routine_archived` 之前由用户在侧栏归档；考虑例行会话 `archive_session("self")` |
+| R6 | 分离后的例行会话删除定时任务后，主会话的 `archive_session` 放行（T345 的探测只实测了未分离的会话） | **成立**（T345 host-e2e，2026-11-24）：分离的例行会话收到“运行 routine_board”后 `CronDelete`（“Cancelled job …”）并 `routine_disarmed`，转来的消息唤醒主会话，主会话 `archive_session` 放行并 `routine_archived`，`get_session` 读回 `isArchived: true` |
 
 ### 6.6 停止与归档（T345）
 
 例行会话带着会话内的循环定时任务时，app 认为它仍有后台工作：`archive_session` 返回“still has live work (an agent run, a Remote Control client, a queued message or a background task)… they can also archive it from the sidebar”，空闲时 `stop_session` 也没有可停的（T332、T340 的 live）。
 
-实测（T345，2026-11-23，auto 模式；探测会话由测试会话启动、未分离）：探测会话 `CronCreate`（`recurring: true`、`durable: false`）后，`archive_session` 被拒，原因同上；它 `CronDelete` 该任务（`CronList` 为空）后，同一个 `archive_session` 放行。分离（`detach_session`）后的例行会话是否同样放行由 live 收尾验证（§6.5 的 R6）。
+实测（T345，2026-11-23，auto 模式；探测会话由测试会话启动、未分离）：探测会话 `CronCreate`（`recurring: true`、`durable: false`）后，`archive_session` 被拒，原因同上；它 `CronDelete` 该任务（`CronList` 为空）后，同一个 `archive_session` 放行。分离（`detach_session`）后的例行会话同样放行（T345 host-e2e 收尾实测，§6.5 的 R6）。
 
 所以关闭例行会话按 DN006 §8.9.6 先停后归档，每一步都由 tsw 给出：
 
