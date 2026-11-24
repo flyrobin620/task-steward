@@ -138,7 +138,7 @@ DN006 §8.9 在 Claude app 上的做法。Claude app 托管的会话不能由 ts
 | `fetch` 的工具报错或返回错误 | 照样调用 `routine_run`，`fetched` 为工具返回的原文（行中的 `fetch.on_error` 也这样写）；连续失败的计数与通知由 tsw 完成（DN006 §8.9.5） |
 | `routine_run` 返回非空的 `forward` | `mcp__ccd_session_mgmt__send_message`，`session_id` 为 `forward` 中的主会话 ID，正文原样 |
 | 维护动作 `arm` | 有旧任务引用时先 `CronDelete`；再 `CronCreate`（`recurring: true`，`durable: false`，`cron` 与 `prompt` 原样）；然后 `routine_armed` 登记返回的任务引用 |
-| 维护动作 `disarm`（只在关闭例行会话后出现，此时不列出例行项） | `CronDelete`（`job_ref`）；然后 `routine_disarmed` 登记（`job_ref`，`result` 为 `CronDelete` 返回的原文；任务已不存在时同样登记）；结果的 `forward.send` 为 true 时把 `message` 原样发给 `session_id`（主会话）。维护项自带这段做法（`do`），本版本之前启动、会话开始时的说明里没有 `disarm` 的例行会话照着做 |
+| 维护动作 `disarm`（只在关闭例行会话后出现，此时不列出例行项） | `CronDelete`（`job_ref`）；然后 `routine_disarmed` 登记（`job_ref`，`result` 为 `CronDelete` 返回的原文；任务已不存在或删除失败时同样登记，例行会话不判断）。tsw 只把“Cancelled job <job_ref>.”（T345 实测的确认文字）当作删除成功，其他原文保留定时任务的登记（DN006 §8.9.6）；结果的 `forward.send` 为 true 时把 `message` 原样发给 `session_id`（主会话）。维护项自带这段做法（`do`），本版本之前启动、会话开始时的说明里没有 `disarm` 的例行会话照着做 |
 | 维护动作 `clear_context` | 本轮最后调用 `mcp__ccd_session_mgmt__clear_session(session_id="self")`：app 在这一轮结束、会话空闲后清空 |
 
 WorkIQ 的读取方式（T286 在用户的自聊上实测）：列出与单条读取都遵守 `$select`，只返回选定的字段；列出支持 `$filter=createdDateTime lt <时间>`（与 `$orderby=createdDateTime desc` 同用），`gt` 与 `lt` 用 `and` 组合时报错，所以读取窗口的起点仍由 tsw 按每页最早的消息判断；`entityUrls` 中的多个路径一次取完，结果按路径的顺序放在 `results` 中，各带自己的 `statusCode`。

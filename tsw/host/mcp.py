@@ -655,7 +655,8 @@ class Server:
         (PR #89 review)."""
         if config.get("routine.enabled"):
             return {"send": False, "note": "例行会话已重新打开：不请主会话归档它"}
-        generation = int(out["events"][-1]["data"]["generation"])
+        data = out["events"][-1]["data"]
+        generation = int(data["generation"])
         with ledger.view() as conn:
             target = routine_mod.orchestrator_session(conn, utc_now())
             row = conn.execute(
@@ -664,7 +665,9 @@ class Server:
             ).fetchone()
         if target is None or row is None:
             return {"send": False, "note": "主会话不在线：结果已在账本中，主会话下次运行时会看到"}
-        message = routine_mod.disarmed_text({"generation": row[0], "session_ref": row[1]})
+        message = routine_mod.disarmed_text(
+            {"generation": row[0], "session_ref": row[1]}, deleted=bool(data.get("deleted", True))
+        )
         return {"send": True, "session_id": target, "message": message}
 
     def _session_scan(self, conn: Any, config: EffectiveConfig, *, sending: bool) -> str:

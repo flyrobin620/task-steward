@@ -948,11 +948,18 @@ def routine_detached(conn: sqlite3.Connection, event: Event) -> None:
 
 
 def routine_disarmed(conn: sqlite3.Connection, event: Event) -> None:
+    generation, job_ref = int(event.data["generation"]), event.data["job_ref"]
     conn.execute(
-        "UPDATE routine_sessions SET armed_ref = NULL, armed_cron = NULL, armed_at = NULL "
-        "WHERE generation = ? AND armed_ref = ?",
-        (int(event.data["generation"]), event.data["job_ref"]),
+        "INSERT OR REPLACE INTO routine_disarm(generation, job_ref, deleted, sequence) "
+        "VALUES(?, ?, ?, ?)",
+        (generation, job_ref, 1 if event.data.get("deleted", True) else 0, event.sequence),
     )
+    if event.data.get("deleted", True):
+        conn.execute(
+            "UPDATE routine_sessions SET armed_ref = NULL, armed_cron = NULL, armed_at = NULL "
+            "WHERE generation = ? AND armed_ref = ?",
+            (generation, job_ref),
+        )
 
 
 def routine_archived(conn: sqlite3.Connection, event: Event) -> None:

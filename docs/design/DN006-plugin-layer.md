@@ -556,7 +556,7 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | 绑定后一直没有设定定时任务（第一次运行没有完成） | 过了同样的失效窗口，同样标为 `stale`，由主会话发消息让它运行 |
 | 仍挂在主会话名下（适配器声明 `detach`，已绑定但没有 `routine.detached`） | `attention` 标为 `attached`；主会话在任何一轮（不限用户 turn）分离它并用 `routine_detached` 记录。分离之前它每轮结束都会唤醒主会话，所以主会话最迟在下一次被它唤醒时补做；本版本之前启动的例行会话也这样迁移 |
 | 会话不存在（被归档、删除，或找不到） | `attention` 标为 `missing`，主会话在下一个用户 turn 重新启动（§8.9.7） |
-| 用户关闭例行会话（`routine.enabled=false`） | 先停定时任务、再归档：宿主可能拒绝归档带着定时任务的会话（Claude app 的 `archive_session` 返回“still has live work”，删除定时任务后放行，T345 实测）。`attention` 的 `routine` 为 `retiring`：`step` 为 `disarm` 时主会话给例行会话发消息“运行 routine_board”，后者不再列出例行项，只返回维护动作 `disarm`（要删除的定时任务引用）；执行者删除定时任务后用 `routine_disarmed` 登记（`routine.disarmed`，删除失败或任务已不存在时同样登记，带宿主返回的原文），并把结果中的消息转给主会话；`step` 为 `archive` 时主会话归档它，用 `routine_archived` 登记（`routine.archived`；归档被拒时告诉用户在侧栏归档，用户归档后同样登记）。登记后该代次不再是当前的例行会话。关闭期间超时转交只在主会话运行 `sync` 时发生，Teams 答复不再自动回收；重新打开后，已停掉定时任务、还没归档的例行会话在下一次运行时重新设定（`arm`），已归档的按 `missing` 在下一个用户 turn 启动新的代次 |
+| 用户关闭例行会话（`routine.enabled=false`） | 先停定时任务、再归档：宿主可能拒绝归档带着定时任务的会话（Claude app 的 `archive_session` 返回“still has live work”，删除定时任务后放行，T345 实测）。`attention` 的 `routine` 为 `retiring`：`step` 为 `disarm` 时主会话给例行会话发消息“运行 routine_board”，后者不再列出例行项，只返回维护动作 `disarm`（要删除的定时任务引用）；执行者删除定时任务后用 `routine_disarmed` 登记（`routine.disarmed`，删除失败或任务已不存在时同样登记，带宿主返回的原文），并把结果中的消息转给主会话。只有宿主确认删除了这个任务时 tsw 才清除定时任务的登记；没有确认时保留登记（之后重新打开例行会话时，失效检测按这个引用替换任务，不会多出第二个），不再要求删除，主会话照样尝试归档（PR #89 评审）；`step` 为 `archive` 时主会话归档它，用 `routine_archived` 登记（`routine.archived`；归档被拒时告诉用户在侧栏归档，用户归档后同样登记）。登记后该代次不再是当前的例行会话。关闭期间超时转交只在主会话运行 `sync` 时发生，Teams 答复不再自动回收；重新打开后，已停掉定时任务、还没归档的例行会话在下一次运行时重新设定（`arm`），已归档的按 `missing` 在下一个用户 turn 启动新的代次 |
 
 #### 8.9.7 启动与参数
 

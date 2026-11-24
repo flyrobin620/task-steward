@@ -1092,6 +1092,7 @@ def test_a_switched_off_routine_session_deletes_its_timer_then_is_archived(home:
     assert done["events"][0]["data"] == {
         "generation": 1,
         "job_ref": "job-1",
+        "deleted": True,
         "result": "Cancelled job job-1.",
     }
     forward = done["forward"]
@@ -1140,7 +1141,7 @@ def test_switched_on_again_before_it_was_archived_it_arms_again(home: Home) -> N
     h.run("routine_armed", routine, job_ref="job-1", cron="*/10 * * * *", interval_minutes=10)
     switch_off(h)
     board(h, routine, cache)
-    h.run("routine_disarmed", routine, job_ref="job-1", result="No job with id job-1")
+    h.run("routine_disarmed", routine, job_ref="job-1", result="Cancelled job job-1.")
     path = h.home.path("config/task-steward.json")
     settings = json.loads(path.read_text(encoding="utf-8"))
     settings["routine"]["enabled"] = True
@@ -1150,6 +1151,48 @@ def test_switched_on_again_before_it_was_archived_it_arms_again(home: Home) -> N
     assert [m["action"] for m in out["maintenance"]] == ["arm"]
     assert out["maintenance"][0]["replace"] is None
     assert [j["job_id"] for j in out["jobs"]] == ["handoff-scan", "session-scan"]
+
+
+@pytest.mark.use_case("UC-ROUTINE-002")
+def test_a_deletion_the_host_did_not_confirm_keeps_the_timer_reference(home: Home) -> None:
+    # PR #89 review r4 F3: CronDelete failed and the task may still be there. The reference is
+    # kept (a routine session switched on again replaces that task, not adds a second one), the
+    # deletion is not asked again, and the orchestrator goes on to try archiving.
+    h = Harness(home)
+    routine = start_routine(h)
+    cache: dict[str, Any] = {}
+    board(h, routine, cache)
+    h.run("routine_armed", routine, job_ref="job-1", cron="*/10 * * * *", interval_minutes=10)
+    switch_off(h)
+    assert [m["action"] for m in board(h, routine, cache)["maintenance"]] == ["disarm"]
+    server = Server(h.home, {SESSION_ENV: "routine-1"}, home.root / "routine")
+    done = server.call("routine_disarmed", {"job_ref": "job-1", "result": "Error: tool failed"})
+    assert done["events"][0]["data"]["deleted"] is False
+    assert "没有得到确认" in done["forward"]["message"]
+    assert h.query("SELECT armed_ref FROM routine_sessions") == [{"armed_ref": "job-1"}]
+    assert attention(h, cache)[0]["step"] == "archive"
+    again = board(h, routine, cache)
+    assert again["maintenance"] == [] and again["jobs"] == []
+    # Another job's confirmation is not this one's.
+    assert not routine_mod.timer_deleted("Cancelled job job-2.", "job-1")
+    assert routine_mod.timer_deleted("Cancelled job job-1.", "job-1")
+    # Switched on again: the old task is replaced, not left running beside a new one.
+    path = h.home.path("config/task-steward.json")
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    settings["routine"]["enabled"] = True
+    path.write_text(json.dumps(settings), encoding="utf-8")
+    h.config = load_config(h.home).require_valid()
+    # The task may still be running: it is kept, not doubled.
+    assert board(h, routine, cache)["maintenance"] == []
+    # If it was gone after all, no run comes, and once stale it is replaced, not added to.
+    h.clock.now = "2026-11-05T01:00:00Z"
+    arm = board(h, routine, cache)["maintenance"]
+    assert [m["action"] for m in arm] == ["arm"] and arm[0]["replace"] == "job-1"
+    # Re-armed and switched off once more: the new task is the one to delete.
+    h.run("routine_armed", routine, job_ref="job-2", cron="*/10 * * * *", interval_minutes=10)
+    switch_off(h)
+    [disarm] = board(h, routine, cache)["maintenance"]
+    assert disarm["action"] == "disarm" and disarm["job_ref"] == "job-2"
 
 
 @pytest.mark.use_case("UC-ROUTINE-002")

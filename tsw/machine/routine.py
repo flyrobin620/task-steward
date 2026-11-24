@@ -80,6 +80,31 @@ DISARM_DO = (
     "mcp__ccd_session_mgmt__send_message 把 message 原样发给 session_id。不执行例行项，结束这一轮。"
 )
 DISARM_RESULT_CHARS = 500  # how much of the host's answer to CronDelete is kept
+# What the host answers when it deleted the task, by host integration: only this counts as the
+# timer gone (T345, the Claude app's CronDelete: "Cancelled job 5b4b58fd."). Anything else, an
+# error or a text not seen before, keeps the task's reference, so a routine session switched on
+# again replaces that task instead of adding a second one (PR #89 review r4 F3); the routine
+# session passes the answer on as it is and judges nothing.
+CRON_DELETED = re.compile(r"^\s*Cancelled job (\S+?)\.?\s*$")
+
+
+def timer_deleted(result: str | None, job_ref: str) -> bool:
+    """Whether the host's answer to the deletion says this very task was deleted."""
+    found = CRON_DELETED.match(result or "")
+    return found is not None and found.group(1) == job_ref
+
+
+def disarm_tried(conn: sqlite3.Connection, generation: int, job_ref: str) -> bool:
+    """Whether the routine session already tried to delete this task (routine.disarmed)."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM routine_disarm WHERE generation = ? AND job_ref = ?",
+            (generation, job_ref),
+        ).fetchone()
+        is not None
+    )
+
+
 RECENT_RUNS = 24  # run times kept in cache/routine.json (DN006 §8.9.3)
 # Host tools for the data a job fetches before its script runs, by host integration (CC006 §6).
 # Teams chats are read with WorkIQ (T253): the Teams MCP tools answered "Session not found" in the
@@ -233,20 +258,30 @@ def retiring(conn: sqlite3.Connection) -> dict[str, Any] | None:
     current = bound(conn)
     if current is None:
         return None
+    armed = current["armed_ref"]
+    # A deletion the host did not confirm is tried once: then archiving is tried (the host says
+    # whether a timer is left), and the reference stays for a later arm to replace.
+    left = armed and not disarm_tried(conn, int(current["generation"]), str(armed))
     return {
         "state": "retiring",
-        "step": "disarm" if current["armed_ref"] else "archive",
+        "step": "disarm" if left else "archive",
         "generation": int(current["generation"]),
         "session_name": current["session_name"],
         "session_id": current["session_ref"],
     }
 
 
-def disarmed_text(row: Mapping[str, Any]) -> str:
-    """What the routine session tells the orchestrator once its timer is gone (CC006 §6.6)."""
+def disarmed_text(row: Mapping[str, Any], *, deleted: bool = True) -> str:
+    """What the routine session tells the orchestrator once it tried to delete its timer
+    (CC006 §6.6)."""
     generation = int(row["generation"])
+    done = (
+        "已删除定时任务"
+        if deleted
+        else "删除定时任务没有得到确认（原文见 routine.disarmed 的 result；归档可能仍被拒）"
+    )
     return (
-        f"[TaskSteward 例行会话] routine-g{generation}（{row['session_ref']}）已删除定时任务"
+        f"[TaskSteward 例行会话] routine-g{generation}（{row['session_ref']}）{done}"
         "（routine.enabled=false）。先确认 attention 的 routine 仍为 retiring、step 为 archive、"
         f"generation 为 {generation}（重新打开了例行会话就不归档），再归档它："
         f"mcp__ccd_session_mgmt__archive_session(session_id={row['session_ref']})，成功后 "
@@ -299,7 +334,7 @@ def board(
         dict(cache) if cache.get("generation") == generation else {"generation": generation}
     )
     if not config.get("routine.enabled"):
-        if current["armed_ref"]:
+        if current["armed_ref"] and not disarm_tried(conn, generation, str(current["armed_ref"])):
             # Switched off with the timer still set: delete it first, so the host lets the
             # orchestrator archive this session (DN006 §8.9.6, T345).
             return {
@@ -1667,7 +1702,12 @@ def routine_disarmed(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                 reason="job_mismatch",
                 armed_ref=row["armed_ref"],
             )
-        data: dict[str, Any] = {"generation": int(row["generation"]), "job_ref": job_ref}
+        data: dict[str, Any] = {
+            "generation": int(row["generation"]),
+            "job_ref": job_ref,
+            # Only the host's own confirmation clears the reference (review r4 F3).
+            "deleted": timer_deleted(result, job_ref),
+        }
         if result:
             data["result"] = result[:DISARM_RESULT_CHARS]
         return [EventDraft(type="routine.disarmed", data=data)]
