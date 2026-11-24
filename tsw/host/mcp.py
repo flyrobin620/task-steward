@@ -460,7 +460,7 @@ class Server:
             # The app refuses a cwd spelled differently from the folder on disk.
             out["cwd"] = os.path.realpath(self.home.root / routine_mod.WORKDIR)
         if name == "routine_disarmed" and out.get("events"):
-            out["forward"] = self._disarmed_forward(out, ledger)
+            out["forward"] = self._disarmed_forward(out, ledger, usable)
         if name == "routine_run":
             job_id = str(args.get("job_id") or "")
             out["forward"] = self._forward(job_id, out, ledger, usable)
@@ -647,8 +647,14 @@ class Server:
             return {"send": False, "note": "主会话不在线：结果已在账本中，主会话下次运行时会看到"}
         return {"send": True, "session_id": target, "message": message}
 
-    def _disarmed_forward(self, out: Mapping[str, Any], ledger: Ledger) -> dict[str, Any]:
-        """The routine session deleted its timer: the orchestrator archives it next (CC006 §6.6)."""
+    def _disarmed_forward(
+        self, out: Mapping[str, Any], ledger: Ledger, config: EffectiveConfig
+    ) -> dict[str, Any]:
+        """The routine session deleted its timer: the orchestrator archives it next (CC006 §6.6).
+        Switched on again meanwhile, it is kept: no message asks to archive a session in use
+        (PR #89 review)."""
+        if config.get("routine.enabled"):
+            return {"send": False, "note": "例行会话已重新打开：不请主会话归档它"}
         generation = int(out["events"][-1]["data"]["generation"])
         with ledger.view() as conn:
             target = routine_mod.orchestrator_session(conn, utc_now())

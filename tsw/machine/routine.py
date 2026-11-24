@@ -247,7 +247,8 @@ def disarmed_text(row: Mapping[str, Any]) -> str:
     generation = int(row["generation"])
     return (
         f"[TaskSteward 例行会话] routine-g{generation}（{row['session_ref']}）已删除定时任务"
-        "（routine.enabled=false）。请归档它："
+        "（routine.enabled=false）。先确认 attention 的 routine 仍为 retiring、step 为 archive、"
+        f"generation 为 {generation}（重新打开了例行会话就不归档），再归档它："
         f"mcp__ccd_session_mgmt__archive_session(session_id={row['session_ref']})，成功后 "
         f"routine_archived（generation: {generation}，result 为返回原文）；仍被拒时请用户在侧栏"
         "归档，读回后同样登记（note 写明）。"

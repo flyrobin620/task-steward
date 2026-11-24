@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="613942d03bfe429f9f9b2592984d6620fb2b1dbcb0fd95b8c0df6466335d3c6a">
+<meta name="tsw-source-sha256" content="e86646a6024a73732d51204a356c248388df32e5fc49c32fcefc7588ab400eeb">
 <title>CC006 Claude Code 插件</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -122,7 +122,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p>例行会话带着会话内的循环定时任务时，app 认为它仍有后台工作：<code>archive_session</code> 返回“still has live work (an agent run, a Remote Control client, a queued message or a background task)… they can also archive it from the sidebar”，空闲时 <code>stop_session</code> 也没有可停的（T332、T340 的 live）。</p>
 <p>实测（T345，2026-11-23，auto 模式；探测会话由测试会话启动、未分离）：探测会话 <code>CronCreate</code>（<code>recurring: true</code>、<code>durable: false</code>）后，<code>archive_session</code> 被拒，原因同上；它 <code>CronDelete</code> 该任务（<code>CronList</code> 为空）后，同一个 <code>archive_session</code> 放行。分离（<code>detach_session</code>）后的例行会话同样放行（T345 host-e2e 收尾实测，§6.5 的 R6）。</p>
 <p>所以关闭例行会话按 DN006 §8.9.6 先停后归档，每一步都由 tsw 给出：</p>
-<ol><li>主会话：<code>attention</code> 的 <code>routine</code> 为 <code>retiring</code>、<code>step</code> 为 <code>disarm</code> 时，<code>send_message</code> 给例行会话（<code>session_id</code>）“运行 routine_board”。</li><li>例行会话：<code>routine_board</code> 返回 <code>enabled: false</code>、没有例行项、维护动作 <code>disarm</code>（<code>job_ref</code>）；<code>CronDelete</code> → <code>routine_disarmed</code> → 把结果中的消息转给主会话。</li><li>主会话：收到消息（或 <code>step</code> 为 <code>archive</code>）时 <code>archive_session(session_id, reason)</code>，成功后 <code>routine_archived</code>（<code>generation</code>，<code>result</code> 为返回原文）。仍被拒时告诉用户在侧栏归档，用户归档后用 <code>get_session</code> 读回，同样 <code>routine_archived</code>（<code>note</code> 写明）。</li></ol>
+<ol><li>主会话：<code>attention</code> 的 <code>routine</code> 为 <code>retiring</code>、<code>step</code> 为 <code>disarm</code> 时，<code>send_message</code> 给例行会话（<code>session_id</code>）“运行 routine_board”。</li><li>例行会话：<code>routine_board</code> 返回 <code>enabled: false</code>、没有例行项、维护动作 <code>disarm</code>（<code>job_ref</code>）；<code>CronDelete</code> → <code>routine_disarmed</code> → 把结果中的消息转给主会话。</li><li>主会话：收到消息后，<code>attention</code> 仍为 <code>retiring</code>、<code>step</code> 为 <code>archive</code> 且代次相同时（消息可能晚到，用户可能已重新打开例行会话；重新打开后 tsw 也不再转发这条消息）<code>archive_session(session_id, reason)</code>，成功后 <code>routine_archived</code>（<code>generation</code>，<code>result</code> 为返回原文）。仍被拒时告诉用户在侧栏归档，用户归档后用 <code>get_session</code> 读回，同样 <code>routine_archived</code>（<code>note</code> 写明）。</li></ol>
 <p>主会话的 Stop hook 在任何一轮提醒 <code>retiring</code> 的下一步（发消息与归档都不创建会话，不受派发窗口限制）。live 场景收尾用同一条路径：<code>tools/live.py &lt;场景&gt; retire-routine &lt;runId&gt;</code> 在隔离数据目录中关闭例行会话并给出例行会话的 ID，运行 live 的会话按第 1 步发消息，隔离的主会话按第 3 步归档；<code>--wait</code> 等到 <code>routine.archived</code>（超时时由运行 live 的会话自己归档并登记），用户不必在侧栏操作。</p>
 <h2 id="7-teams-chat-渠道">7. <code>teams-chat</code> 渠道</h2>
 <p>DN006 §8.6–§8.7 在 Claude Code 上的做法。发送与读取都用 WorkIQ MCP（<code>mcp__workiq__*</code>，由用户连接，主会话与例行会话都能调用）；tsw 进程不能调用，所以发送与取数都由会话执行。不用 Teams MCP（<code>mcp__teams__*</code>）：T253 时它在主会话中一律返回“Session not found”，同一会话里 WorkIQ 正常；发送与读取用同一套工具，例行会话的 auto 模式规则也只需放行一个读取工具。</p>

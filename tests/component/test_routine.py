@@ -1175,3 +1175,33 @@ def test_the_routine_session_is_told_how_to_disarm(home: Home) -> None:
     start = hook(h, "r1", "SessionStart", home.root / "routine")
     text = start["hookSpecificOutput"]["additionalContext"]
     assert "disarm" in text and "routine_disarmed" in text
+
+
+@pytest.mark.use_case("UC-ROUTINE-002")
+def test_switched_on_again_before_the_disarm_is_recorded_no_archive_is_asked(
+    home: Home,
+) -> None:
+    # PR #89 review: the user switched the routine session on again between its board read and
+    # routine_disarmed; the orchestrator must not be asked to archive a session in use.
+    h = Harness(home)
+    routine = start_routine(h)
+    cache: dict[str, Any] = {}
+    board(h, routine, cache)
+    h.run("routine_armed", routine, job_ref="job-1", cron="*/10 * * * *", interval_minutes=10)
+    switch_off(h)
+    board(h, routine, cache)
+    path = h.home.path("config/task-steward.json")
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    settings["routine"]["enabled"] = True
+    path.write_text(json.dumps(settings), encoding="utf-8")
+    server = Server(h.home, {SESSION_ENV: "routine-1"}, home.root / "routine")
+    done = server.call("routine_disarmed", {"job_ref": "job-1", "result": "Cancelled job job-1."})
+    assert done["events"][0]["type"] == "routine.disarmed"
+    assert done["forward"]["send"] is False and "重新打开" in done["forward"]["note"]
+    # The message, when it is sent, says to check attention first.
+    with h.ledger.view() as conn:
+        row = routine_mod.bound(conn)
+    assert row is not None
+    assert "retiring" in routine_mod.disarmed_text(row) and "step 为 archive" in (
+        routine_mod.disarmed_text(row)
+    )

@@ -190,7 +190,7 @@ tsw 核对取到的内容（DN006 §8.9.5 的“核对”）：列出的每条�
 
 1. 主会话：`attention` 的 `routine` 为 `retiring`、`step` 为 `disarm` 时，`send_message` 给例行会话（`session_id`）“运行 routine_board”。
 2. 例行会话：`routine_board` 返回 `enabled: false`、没有例行项、维护动作 `disarm`（`job_ref`）；`CronDelete` → `routine_disarmed` → 把结果中的消息转给主会话。
-3. 主会话：收到消息（或 `step` 为 `archive`）时 `archive_session(session_id, reason)`，成功后 `routine_archived`（`generation`，`result` 为返回原文）。仍被拒时告诉用户在侧栏归档，用户归档后用 `get_session` 读回，同样 `routine_archived`（`note` 写明）。
+3. 主会话：收到消息后，`attention` 仍为 `retiring`、`step` 为 `archive` 且代次相同时（消息可能晚到，用户可能已重新打开例行会话；重新打开后 tsw 也不再转发这条消息）`archive_session(session_id, reason)`，成功后 `routine_archived`（`generation`，`result` 为返回原文）。仍被拒时告诉用户在侧栏归档，用户归档后用 `get_session` 读回，同样 `routine_archived`（`note` 写明）。
 
 主会话的 Stop hook 在任何一轮提醒 `retiring` 的下一步（发消息与归档都不创建会话，不受派发窗口限制）。live 场景收尾用同一条路径：`tools/live.py <场景> retire-routine <runId>` 在隔离数据目录中关闭例行会话并给出例行会话的 ID，运行 live 的会话按第 1 步发消息，隔离的主会话按第 3 步归档；`--wait` 等到 `routine.archived`（超时时由运行 live 的会话自己归档并登记），用户不必在侧栏操作。
 
