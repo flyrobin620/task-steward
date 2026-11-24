@@ -32,14 +32,15 @@ SOURCE: dict[str, Any] = {
 WORKDIR_DISPATCH: dict[str, Any] = {
     **S,
     "description": "执行目录（相对数据目录或绝对路径）。通常不给：同一 attempt 续用（待命、续用、"
-    "复用 planned）时沿用它记录的目录，新建 attempt 时为 work/<任务>/<attempt>；新 attempt 要接手 "
-    "replaced / closed 的 attempt 的目录（DN002 §5.5）时给出该目录。给出时必须是实际路径，"
-    "含 { } < > 的占位符被拒绝",
+    "复用 planned）时沿用它记录的目录；原 attempt 为 replaced / closed 时新 attempt 接手它的目录"
+    "（DN002 §5.5，仓库 worktree 与当前分支原样沿用）；其余为 work/<任务>/<attempt>。不接手时给出"
+    "新目录；给出时必须是实际路径，含 { } < > 的占位符被拒绝",
 }
 WORKDIR_START: dict[str, Any] = {
     **S,
     "description": "执行目录（相对数据目录或绝对路径）。通常不给：派发时会话建在派发记录的目录；"
-    "预启动时为 work/<任务>/<attempt>。给出时必须是实际路径，含 { } < > 的占位符被拒绝",
+    "预启动时接手 replaced / closed 的原 attempt 的目录（DN002 §5.5），没有时为 "
+    "work/<任务>/<attempt>。给出时必须是实际路径，含 { } < > 的占位符被拒绝",
 }
 FINDINGS: dict[str, Any] = {
     "type": "array",

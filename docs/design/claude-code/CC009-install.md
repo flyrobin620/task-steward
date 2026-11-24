@@ -63,7 +63,7 @@ claude plugin install task-steward@task-steward
 ## 5. 用户设置与 auto 模式规则（`apply_user_settings`）
 
 - 文件：用户设置 `~/.claude/settings.json`（设置了 `CLAUDE_CONFIG_DIR` 时用其中的 `settings.json`）。
-- 写入：`env.TSW_HOME`（会话从这里得到数据目录，DN006 §9.1）、`env.TSW_PYTHON`（插件的 MCP server 与 hooks 使用的解释器，见下）与 `autoMode.allow` 中 install hint 的三条规则（TaskSteward Worker Dispatch、Worker Merge、Routine；CC008 §6），按规则开头的名称识别并替换旧文本；先备份为带时间的副本（`%LOCALAPPDATA%\TaskSteward\backups\`，路径记进 `install.json`）。写之前在 `install.json` 记下这两个键原来的值与原来已有的规则名。
+- 写入：`env.TSW_HOME`（会话从这里得到数据目录，DN006 §9.1）、`env.TSW_PYTHON`（插件的 MCP server 与 hooks 使用的解释器，见下）与 `autoMode.allow` 中 install hint 的规则（TaskSteward Worker Dispatch、Worker Merge、Routine，T343 起加 Worker Answer；CC008 §6），按规则开头的名称识别并替换旧文本；先备份为带时间的副本（`%LOCALAPPDATA%\TaskSteward\backups\`，路径记进 `install.json`）。写之前在 `install.json` 记下这两个键原来的值与原来已有的规则名。之后的版本新增规则时（T343 的 Worker Answer），重跑在写之前把新规则补记为安装加入的；写之前用户已有同名规则的，记为原来已有，卸载时保留。
 - 移除（`remove`）：仍等于安装时写入的值的 env 键恢复为原来的值（原来没有就删除），之后被用户改过的不动；删除安装时加入的规则，安装前就有的同名规则保留（文本已是新的）；先备份。
 - 解释器可配置（DN009 §12）：插件的 `.mcp.json` 与 hooks 用 `${TSW_PYTHON:-python}` 运行启动器，没有设置时仍是 PATH 中的 `python`。Claude Code 在 `.mcp.json` 中展开 `${VAR:-default}`，hooks 的命令在 Windows 上由 Git Bash 运行（文档）；T308 实测两处都按 `TSW_PYTHON` 运行指定的解释器、未设置时回落到 `python`（Claude Code 2.1.302，`--plugin-dir` 加载的探针插件）。安装脚本把它设为找到的解释器的完整路径：新装的 Python 不在桌面 app 进程的 PATH 中时插件也能启动。
 - Claude Code 自动重新载入设置文件（CC006 §11.1）。

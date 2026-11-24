@@ -49,3 +49,14 @@ def test_without_a_worktree_the_section_says_why_and_lists_no_skills() -> None:
 def test_configured_instruction_files_replace_the_defaults() -> None:
     text = brief_section(workspace(instructions=("docs/RULES.md",)), [], "work/T001/a1")
     assert "`docs/RULES.md`（不存在的跳过）" in text and "AGENTS.md`" not in text
+
+
+def test_a_taken_over_worktree_names_the_attempt_and_keeps_the_work() -> None:
+    """DN002 §5.5, CC006 §8.3 (T344): a2 working in the worktree of a1."""
+    skills = [("weekly-update-email", "周报邮件", Path("/data/.claude/skills/w/SKILL.md"))]
+    text = brief_section(workspace(taken_over="a1"), skills, "work/T001/a1")
+    assert f"会话目录：`{Path('/data/work/T001/a1/demo')}`" in text
+    assert "分支 `tsw/t001-a1`" in text and "接手 a1 的执行目录" in text
+    assert "未提交的改动原样保留" in text and "`git status`" in text
+    assert "预启动或派发时由 tsw 创建" not in text
+    assert "执行目录 `work/T001/a1`" in text and "  - `weekly-update-email`：周报邮件" in text

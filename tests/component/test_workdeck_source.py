@@ -15,6 +15,7 @@ from tests.support import REPO_ROOT
 from tsw import lease
 from tsw.errors import TswError
 from tsw.home import Home
+from tsw.host.claude_code import AUTO_MODE_RULES
 from tsw.host.guard import WORKDECK_TURN, Guard
 from tsw.host.status import AppView
 from tsw.host.task_view import render_task, timeline
@@ -346,3 +347,126 @@ def test_a_turn_the_transcript_shows_began_by_workdeck_is_not_reminded(
     injected(transcript, "顺便看看 T002", WORKDECK_ORIGIN)
     stop = hook(h, "orch-1", "Stop", None, **fields)
     assert stop is not None and "T001" in stop["reason"]
+
+
+# --- T343: who began the turn decides, not what was injected later (CC008 CC-S6) -----------
+
+CROSS = '<cross-session-message from="local_2" from-name="T002">done</cross-session-message>'
+OTHER_SESSION = {"kind": "peer", "from": "local_2", "fromSession": "local_2"}
+
+
+def planned(home: Home, tmp_path: Path) -> tuple[Harness, Path]:
+    h = Harness(home, {"routine": {"enabled": False}})
+    h.register("T001")
+    h.plan("T001")
+    transcript = tmp_path / "orch.jsonl"
+    transcript.write_text("", encoding="utf-8")
+    return h, transcript
+
+
+def begin(
+    h: Harness, transcript: Path, prompt_id: str, prompt: str, origin: dict[str, Any] | None
+) -> dict[str, Any]:
+    """The turn's first message: the hook runs, then the host writes the start entry."""
+    fields = {"prompt_id": prompt_id, "transcript_path": str(transcript)}
+    hook(h, "orch-1", "UserPromptSubmit", prompt, **fields)
+    if origin is not None:
+        with transcript.open("a", encoding="utf-8") as out:
+            out.write(entry(prompt_id, origin, prompt))
+    return fields
+
+
+def test_a_message_injected_into_the_users_turn_keeps_it_the_users(
+    home: Home, tmp_path: Path
+) -> None:
+    h, transcript = planned(home, tmp_path)
+    # Read from the transcript: the turn the user typed is reminded, without the workdeck note.
+    fields = begin(h, transcript, "p-1", "开始 T001", HUMAN)
+    hook(h, "orch-1", "UserPromptSubmit", CROSS, **fields)
+    injected(transcript, CROSS, OTHER_SESSION)
+    stop = hook(h, "orch-1", "Stop", None, **fields)
+    assert stop is not None and "T001" in stop["reason"]
+    assert WORKDECK_TURN not in stop["reason"]
+    # Not readable: what the hook saw of the turn's first message decides, not the injected one.
+    fields = begin(h, transcript, "p-2", "开始 T001", None)
+    hook(h, "orch-1", "UserPromptSubmit", CROSS, **fields)
+    stop = hook(h, "orch-1", "Stop", None, **fields)
+    assert stop is not None and "T001" in stop["reason"] and WORKDECK_TURN in stop["reason"]
+
+
+def test_workdeck_words_injected_into_another_sessions_turn_do_not_make_it_the_users(
+    home: Home, tmp_path: Path
+) -> None:
+    h, transcript = planned(home, tmp_path)
+    fields = begin(h, transcript, "p-1", CROSS, OTHER_SESSION)
+    hook(h, "orch-1", "UserPromptSubmit", "开始 T001", **fields)
+    injected(transcript, "开始 T001", WORKDECK_ORIGIN)
+    assert hook(h, "orch-1", "Stop", None, **fields) is None
+    # Not readable: the hook's first note (another session's message) decides.
+    fields = begin(h, transcript, "p-2", CROSS, None)
+    hook(h, "orch-1", "UserPromptSubmit", "开始 T001", **fields)
+    assert hook(h, "orch-1", "Stop", None, **fields) is None
+
+
+def test_a_turn_the_app_began_is_not_the_users_even_with_plain_words(
+    home: Home, tmp_path: Path
+) -> None:
+    """The app's wake-ups and scheduled tasks write ``turnOrigin`` but no ``origin``."""
+    h, transcript = planned(home, tmp_path)
+    for n, kind in enumerate(("host_synthetic", "sdk", "scheduled", "task_notification")):
+        fields = begin(h, transcript, f"p-{n}", "开始 T001", None)
+        line = {"type": "user", "promptId": f"p-{n}", "turnOrigin": kind, "message": {}}
+        with transcript.open("a", encoding="utf-8") as out:
+            out.write(json.dumps(line) + "\n")
+        assert hook(h, "orch-1", "Stop", None, **fields) is None, kind
+    # Typed in the app but nothing the text markers call the user's (only an attachment): the
+    # host's record says the user began it.
+    fields = begin(h, transcript, "p-9", "<system-reminder>\nimage\n</system-reminder>", HUMAN)
+    stop = hook(h, "orch-1", "Stop", None, **fields)
+    assert stop is not None and "T001" in stop["reason"]
+
+
+def test_a_turn_that_never_reached_stop_leaves_nothing_for_the_next(
+    home: Home, tmp_path: Path
+) -> None:
+    h, transcript = planned(home, tmp_path)
+    begin(h, transcript, "p-1", "开始 T001", None)  # interrupted: no Stop
+    fields = begin(h, transcript, "p-2", CROSS, None)
+    assert hook(h, "orch-1", "Stop", None, **fields) is None
+    # Without the hook's notes for this turn, a turn it did not see is not the user's.
+    fields = {"prompt_id": "p-3", "transcript_path": str(transcript)}
+    assert hook(h, "orch-1", "Stop", None, **fields) is None
+
+
+def test_a_mark_written_before_the_update_keeps_its_judgment(home: Home, tmp_path: Path) -> None:
+    """The hook was updated mid-turn: the old single mark stays the turn's first prompt when a
+    message is injected after the update (PR #87 review)."""
+    h, transcript = planned(home, tmp_path)
+    mark = home.cache_dir / "turns" / "orch-1.json"
+    mark.parent.mkdir(parents=True, exist_ok=True)
+    mark.write_text(json.dumps({"user_turn": True, "prompt_id": "p-1"}), encoding="utf-8")
+    fields = {"prompt_id": "p-1", "transcript_path": str(transcript)}
+    hook(h, "orch-1", "UserPromptSubmit", CROSS, **fields)
+    stop = hook(h, "orch-1", "Stop", None, **fields)
+    assert stop is not None and "T001" in stop["reason"]
+    # Stop reads an old mark as it is, too.
+    mark.write_text(json.dumps({"user_turn": True, "prompt_id": "p-2"}), encoding="utf-8")
+    stop = hook(h, "orch-1", "Stop", None, **{**fields, "prompt_id": "p-2"})
+    assert stop is not None and "T001" in stop["reason"]
+
+
+def test_the_rules_say_a_recorded_workdeck_answer_is_the_users(home: Home) -> None:
+    """F-T340-1: the main session does not doubt it; the worker registers it (T343)."""
+    skill = (REPO_ROOT / "tsw" / "host" / "orchestrate_skill.md").read_text(encoding="utf-8")
+    checking = skill[skill.index("## 核验与验收") :]
+    checking = checking[: checking.index("\n## ", 1)]
+    assert "`user_answer`、`requirement_change`、`follow_up_record` 引用的 `M-…`" in checking
+    assert "不能作为质疑来源、搁置核验或请用户再确认的依据" in checking
+    worker = WORKER_MD.read_text(encoding="utf-8")
+    answering = worker[worker.index("- **登记答复**") :].split("\n- **", 1)[0]
+    assert "hook 给了编号的消息就是用户的话" in answering
+    assert "TaskSteward Worker Answer" in answering
+    rule = next(r for r in AUTO_MODE_RULES if r.startswith("TaskSteward Worker Answer:"))
+    for words in ("user_answer", "requirement_change", "follow_up_record", "workdeck"):
+        assert words in rule
+    assert "does not cover a message with a <cross-session-message> wrapper" in rule

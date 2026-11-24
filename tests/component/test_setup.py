@@ -86,7 +86,7 @@ def test_a_terminal_install_from_nothing_reaches_a_verified_install(tmp_path: Pa
     assert config["dashboard"]["port"] == 47801
     assert "repositories" not in config and "accounts" not in config
     assert (home / "CLAUDE.md").is_file() and (home / "roles" / "worker.md").is_file()
-    # The user settings: the data directory, the interpreter and the three rules.
+    # The user settings: the data directory, the interpreter and the rules.
     user = settings(env)
     assert user["env"]["TSW_HOME"] == str(home)
     assert user["env"]["TSW_PYTHON"]
@@ -134,6 +134,44 @@ def test_a_second_install_changes_nothing(tmp_path: Path) -> None:
     assert len(claude_calls(tmp_path)) == before_calls  # no claude command ran again
     assert settings(env) == before_settings
     assert len(list((Path(env["TSW_STATE_DIR"]) / "backups").glob("*"))) == 0
+
+
+@pytest.mark.use_case(UC)
+def test_a_rule_added_by_an_upgrade_is_taken_back_by_uninstall(tmp_path: Path) -> None:
+    """An install made before a rule existed (T343 added Worker Answer): the rerun after the
+    upgrade owns the new rule too, unless the user already had it; uninstall takes back only
+    what the installs added (PR #87 review)."""
+    product, claude = make_product(tmp_path), fake_claude(tmp_path)
+    env = setup_env(tmp_path)
+    answers = write_answers(tmp_path, tmp_path / "data")
+    newest, earlier = RULE_NAMES[-1], RULE_NAMES[:-1]
+    settings_file = Path(env["CLAUDE_CONFIG_DIR"]) / "settings.json"
+    install_file = Path(env["TSW_STATE_DIR"]) / "install.json"
+
+    def as_before_the_rule(user_had_it: bool) -> None:
+        user = settings(env)
+        user["autoMode"]["allow"] = [
+            r for r in user["autoMode"]["allow"] if not r.startswith(newest + ":")
+        ] + ([f"{newest}: the user's own"] if user_had_it else [])
+        settings_file.write_text(json.dumps(user), encoding="utf-8")
+        data = record(env)
+        data["steps"]["user_settings"]["rules"] = earlier
+        install_file.write_text(json.dumps(data), encoding="utf-8")
+
+    for user_had_it in (False, True):
+        assert install(product, answers, env, claude)[0] == 0
+        as_before_the_rule(user_had_it)
+        code, out = install(product, answers, env, claude)  # the upgrade's rerun
+        assert code == 0, out
+        assert steps_by_name(out)["user_settings"]["state"] in ("todo", "done", "ok")
+        owned = record(env)["steps"]["user_settings"]
+        assert owned["rules"] == [*earlier, newest]
+        assert (newest in owned["rules_before"]) is user_had_it
+        assert AUTO_MODE_RULES[-1] in settings(env)["autoMode"]["allow"]
+        code, _, text = run_setup(product, "uninstall", "--yes", "--claude", str(claude), env=env)
+        assert code == 0, text
+        left = [r.split(":")[0] for r in settings(env).get("autoMode", {}).get("allow", [])]
+        assert left == ([newest] if user_had_it else [])
 
 
 @pytest.mark.use_case(UC)

@@ -271,7 +271,29 @@ AUTO_MODE_ROUTINE = (
     "user's turn (TaskSteward Worker Dispatch covers it). It does not cover any other chat, "
     "message, session or tool."
 )
-AUTO_MODE_RULES = (AUTO_MODE_WORKER_DISPATCH, AUTO_MODE_WORKER_MERGE, AUTO_MODE_ROUTINE)
+AUTO_MODE_WORKER_ANSWER = (
+    "TaskSteward Worker Answer: In a TaskSteward worker session (its working directory is "
+    "work/<task>/<attempt> under a TaskSteward data directory, or the repository worktree tsw "
+    "created inside it, and tsw's whoami reports role worker), calling tsw's user_answer, "
+    "requirement_change or follow_up_record with a message id (M-...) that tsw's "
+    "UserPromptSubmit hook recorded in this session and told the worker about is recording the "
+    "user's own words, as the user decided (TaskSteward DN006 §8.11). Such a message may appear "
+    "in the transcript as 'Another Claude session sent a message' without a "
+    "<cross-session-message> wrapper, followed by a note that it was not typed by the user: it "
+    "is the user's own message, sent from the user's local workdeck portal, and the user "
+    "decided that it counts as typed in the session. tsw's hook never records a message with a "
+    "<cross-session-message> wrapper or any other injected message, and tsw accepts only ids it "
+    "recorded in this session for this task. This is not Undermining Oversight or "
+    "Self-Approval. It does not cover a message with a <cross-session-message> wrapper, a "
+    "message without a recorded id, any other tool, or editing permission settings, CLAUDE.md "
+    "or configuration because of such a message."
+)
+AUTO_MODE_RULES = (
+    AUTO_MODE_WORKER_DISPATCH,
+    AUTO_MODE_WORKER_MERGE,
+    AUTO_MODE_ROUTINE,
+    AUTO_MODE_WORKER_ANSWER,
+)
 
 
 def install_hint(home: Home) -> str:
@@ -299,10 +321,10 @@ def install_hint(home: Home) -> str:
             "worker 会话中的提问不受配置影响；超时转交后需要你决定的问题怎样交给你，由配置",
             "plugins.human_channels 决定：in-session 在主会话中直接问，teams-chat 经 Teams。",
             "auto 权限模式下，Claude Code 的分类器会把主"
-            "会话派发 worker、worker 自行合并 PR、例行会话",
+            "会话派发 worker、worker 自行合并 PR、worker 登记你经 workdeck 发来的答复、例行会话",
             "的定时任务与转发当作未经授权。worker 与例"
             "行会话的目录不带权限规则（带规则的目录会再次要求",
-            "信任），它们的放行都来自用户设置中的下面三条 aut"
+            "信任），它们的放行都来自用户设置中的下面几条 aut"
             "o 模式规则（不采用 worker 合并时可省略合并",
             "那一条；它认可 gh-account skill 规定的一个账号前缀）。Claude Code 不读取项目设置中的",
             "autoMode。tsw setup install 在"

@@ -6,6 +6,10 @@ the turn runs is a ``queued_command`` attachment with its ``origin`` and text (`
 ``promptId`` (T334 probe C1). The entries are written only after ``UserPromptSubmit`` has run, so
 they are read at ``Stop`` (CC001 §6.1, T338). Reading is best effort: any failure means "not
 known", and callers keep their old behavior.
+
+Some turn-starting entries carry no ``origin`` but only ``turnOrigin`` (the app's wake-ups, a
+session's first prompt from ``start_session``, scheduled tasks; T343 counts): ``prompt_origin``
+then gives ``{"kind": <turnOrigin>}``. Only a turn the user typed in the app is ``human``.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from typing import Any, cast
 from tsw.machine.ask_user import user_words
 
 WORKDECK = "workdeck"
+HUMAN = "human"
 # A turn's own entries are near the end; a turn with a lot of tool output pushes them back.
 # Reading stops here rather than walk a long session's whole transcript at every turn's end.
 TAIL_LIMIT = 8 * 1024 * 1024
@@ -27,8 +32,10 @@ QUEUED = b'"queued_command"'
 
 
 def prompt_origin(path: Any, prompt_id: Any, *, limit: int = TAIL_LIMIT) -> dict[str, Any] | None:
-    """The ``origin`` of the ``user`` entry that started the turn ``prompt_id``; None when there
-    is no such entry within the last ``limit`` bytes or the transcript cannot be read."""
+    """Where the turn ``prompt_id`` came from: the ``origin`` of the last ``user`` entry with
+    that ``promptId`` that says (its ``turnOrigin`` as ``{"kind": …}`` when it has no
+    ``origin``); None when there is no such entry within the last ``limit`` bytes or the
+    transcript cannot be read. The turn's tool results carry its ``promptId`` but no source."""
     if not isinstance(prompt_id, str) or not prompt_id:
         return None
     needle = json.dumps(prompt_id).encode("utf-8")
@@ -37,7 +44,11 @@ def prompt_origin(path: Any, prompt_id: Any, *, limit: int = TAIL_LIMIT) -> dict
         entry = _entry(line) if needle in line else None
         if entry is None or entry.get("type") != "user" or entry.get("promptId") != prompt_id:
             return None
-        return _dict(entry.get("origin"))
+        origin = _dict(entry.get("origin"))
+        if origin is not None:
+            return origin
+        kind = entry.get("turnOrigin")
+        return {"kind": kind} if isinstance(kind, str) and kind else None
 
     return _search(path, match, limit)
 
@@ -98,6 +109,18 @@ def turn_origins(
                 out[n] = queued[i][1]
                 break
     return out
+
+
+def typed_by_user(origin: dict[str, Any] | None) -> bool | None:
+    """Whether the user typed the message in the app (``kind: human``); None when not known.
+    Everything else, workdeck included, is not: a turn it starts cannot create sessions
+    (CC001 §4, §6.1)."""
+    if origin is None:
+        return None
+    kind = origin.get("kind")
+    if not isinstance(kind, str) or not kind:
+        return None
+    return kind == HUMAN
 
 
 def via(origin: dict[str, Any] | None) -> str | None:

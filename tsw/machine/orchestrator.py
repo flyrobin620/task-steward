@@ -6,6 +6,7 @@ acceptance and cancellation (DN002 §3.2, §5; DN006 §8.3)."""
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -45,7 +46,14 @@ from tsw.preferences import block as preference_block
 from tsw.preferences import brief_lines, is_ref, supplied_problems
 from tsw.roles import record_given, worker_instructions, worker_prompt
 from tsw.tasks import TaskSpec, register, render_spec, validate_spec
-from tsw.workspace import GH_ACCOUNT_SKILL, brief_section, ensure, home_skills, plan
+from tsw.workspace import (
+    GH_ACCOUNT_SKILL,
+    Workspace,
+    brief_section,
+    ensure,
+    home_skills,
+    plan,
+)
 
 
 def _cmd(env: ToolEnv, op: str, inp: Mapping[str, Any], build: Any) -> Command:
@@ -549,7 +557,7 @@ def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
     acceptance = "\n".join(f"- {item}" for item in loads(row["acceptance"], []))
     tasks = [name for name in read_set if not is_ref(name)]
     preferences = [name for name in read_set if is_ref(name)]
-    ws = plan(ctx.home, config, row, attempt_id, workdir)
+    ws = _plan(ctx, config, row, attempt_id, workdir)
     gh_skill = ctx.home.root / GH_ACCOUNT_SKILL
     repository = (
         brief_section(
@@ -575,6 +583,83 @@ def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
         + repository
         + f"## 目标\n\n{row['goal']}\n\n## 验收\n\n{acceptance}\n"
     ) + resume_package(ctx.conn, str(row["task_id"]))
+
+
+def _plan(
+    ctx: CommitContext,
+    config: EffectiveConfig,
+    row: Mapping[str, Any],
+    attempt_id: str,
+    workdir: str,
+) -> Workspace | None:
+    """The task's workspace, keeping the worktree of an attempt whose directory this one takes
+    over (DN002 §5.5): the brief and attempt_start decide the branch the same way."""
+    takeover = _taken_over(ctx, str(row["task_id"]), attempt_id, workdir)
+    return plan(ctx.home, config, row, attempt_id, workdir, takeover=takeover)
+
+
+def _attempt_number(attempt_id: str) -> int:
+    digits = attempt_id[1:] if attempt_id[:1] == "a" else ""
+    return int(digits) if digits.isdigit() else 0
+
+
+def _taken_over(ctx: CommitContext, task_id: str, attempt_id: str, workdir: str) -> str | None:
+    """The earlier attempt of the task whose execution directory ``attempt_id`` takes over
+    (DN002 §5.5): the latest replaced or closed one that recorded ``workdir``. None when no
+    such attempt did, or when any other attempt (another task's, or one of this task still
+    in use) recorded it too."""
+    number = _attempt_number(attempt_id)
+    found: tuple[int, str] | None = None
+    for other in ctx.conn.execute(
+        "SELECT task_id, attempt, phase, workdir FROM attempts WHERE workdir IS NOT NULL"
+    ):
+        if str(other["task_id"]) == task_id and str(other["attempt"]) == attempt_id:
+            continue
+        if not _same_place(ctx.home, str(other["workdir"]), workdir):
+            continue
+        other_number = _attempt_number(str(other["attempt"]))
+        if (
+            str(other["task_id"]) != task_id
+            or other["phase"] not in ("replaced", "closed")
+            or other_number >= number
+        ):
+            return None
+        if found is None or other_number > found[0]:
+            found = (other_number, str(other["attempt"]))
+    return found[1] if found else None
+
+
+def _same_place(home: Home, a: str, b: str) -> bool:
+    """Whether two recorded execution directories are the same directory: as written, or once
+    links and junctions are resolved (an alias must not hide another task's use, PR #88)."""
+    if same_dir(home, a, b):
+        return True
+
+    def real(value: str) -> str:
+        return os.path.normcase(os.path.realpath(workdir_path(home, value)))
+
+    return real(a) == real(b)
+
+
+def _inherited_workdir(conn: sqlite3.Connection, task_id: str, attempt_id: str) -> str | None:
+    """The directory ``attempt_id`` takes over by default (DN002 §5.5): that of the task's
+    attempt before it, when that one is replaced or closed. Every generation of the new attempt
+    gets the same answer, so a prestart retried after a generation that was not created stays in
+    the directory taken over."""
+    number = _attempt_number(attempt_id)
+    before = [
+        row
+        for row in conn.execute(
+            "SELECT attempt, phase, workdir FROM attempts WHERE task_id = ?", (task_id,)
+        )
+        if _attempt_number(str(row["attempt"])) < number
+    ]
+    if not before:
+        return None
+    last = max(before, key=lambda row: _attempt_number(str(row["attempt"])))
+    if last["phase"] in ("replaced", "closed") and last["workdir"]:
+        return str(last["workdir"])
+    return None
 
 
 def _brief_path(task_id: str, attempt_id: str) -> str:
@@ -674,11 +759,15 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         if mode in ("new", "reuse_planned"):
             guards.g_window(env.config, user_turn)
         # Not given: the same attempt keeps the directory it recorded (standby, continued, a
-        # planned one reused); a new attempt gets the default. Taking over a replaced or closed
-        # attempt's directory (DN002 §5.5) is asked for by giving it: a repository task's
-        # worktree is made per attempt (CC006 §8) and would conflict (self-review r7 F6).
+        # planned one reused); a new attempt takes over the directory of the replaced or closed
+        # one, with its worktree and branch as they are (DN002 §5.5, CC006 §8.3); the default
+        # otherwise.
         same = previous is not None and mode != "new"
-        kept_dir = previous["workdir"] if same and previous is not None else None
+        kept_dir = (
+            previous["workdir"]
+            if same and previous is not None
+            else _inherited_workdir(ctx.conn, task_id, attempt_id)
+        )
         workdir = given_workdir or (str(kept_dir) if kept_dir else f"work/{task_id}/{attempt_id}")
         # A session dispatched again keeps the preferences added for it before: only new ones
         # are checked, and the brief checks every one kept, so a revoked one says so (PR #52).
@@ -748,6 +837,31 @@ def _ensure_dir(home: Home, recorded: str) -> None:
         ) from exc
 
 
+def _sync_dispatched_brief(
+    ctx: CommitContext, config: EffectiveConfig, row: Mapping[str, Any], current: Mapping[str, Any]
+) -> None:
+    """Bring the brief task_dispatch wrote up to the worktree the session is about to start in.
+
+    Which branch a taken-over worktree keeps is read from the worktree (CC006 §8.3); it can
+    differ from what the brief says when the worktree changed between dispatch and this start
+    (a start refused for a detached HEAD, retried after the branch was checked out again). The
+    brief is rewritten, at its own revision, only when it differs.
+    """
+    path = current["brief_path"]
+    if not path or int(current["brief_revision"] or 0) != int(row["revision"]):
+        return
+    attempt_id = str(current["attempt"])
+    workdir = str(current["workdir"] or f"work/{row['task_id']}/{attempt_id}")
+    read_set = [str(n) for n in loads(current["read_set"], [])]
+    brief = _brief(ctx, row, attempt_id, workdir, read_set, config)
+    try:
+        old = ctx.storage.read_artifact(str(path)).decode("utf-8")
+    except OSError:
+        old = ""
+    if brief != old:
+        ctx.storage.put_artifact(str(path), brief.encode("utf-8"))
+
+
 @tool(
     "attempt_start",
     "orchestrator",
@@ -812,16 +926,22 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         instructions, digest = worker_instructions(ctx.home.root)
         previous = attempt(ctx.conn, task_id, attempt_id)
         # Every prestart generation records its directory, the default included, so a retry
-        # never inherits the directory of a generation that was not created.
-        workdir = given_workdir or f"work/{task_id}/{attempt_id}"
+        # never inherits the directory of a generation that was not created. A new attempt
+        # takes over the replaced or closed one's directory by default (DN002 §5.5).
+        inherited = (
+            _inherited_workdir(ctx.conn, task_id, attempt_id) if purpose == "prestart" else None
+        )
+        workdir = given_workdir or inherited or f"work/{task_id}/{attempt_id}"
         # The host creates the session in this directory and fails when it does not exist.
         recorded = current["workdir"] if purpose == "dispatch" and current is not None else None
         _ensure_dir(ctx.home, str(recorded or workdir))
         # A repository task works in a worktree of the repository inside that directory: the
         # session is created there (CC006 §8). It is made before anything is recorded; a
         # failure refuses the start like a directory that cannot be created.
-        ws = plan(ctx.home, env.config, row, attempt_id, str(recorded or workdir))
+        ws = _plan(ctx, env.config, row, attempt_id, str(recorded or workdir))
         made = ensure(ws) if ws is not None and ws.worktree is not None else None
+        if purpose == "dispatch" and made is not None and current is not None:
+            _sync_dispatched_brief(ctx, env.config, row, current)
         generation = (int(previous["generation"]) if previous else 0) + 1
         # The title the session is created with, and the base the later titles are made of
         # (DN002 §5.8): tsw renames a session only while it still has the title tsw gave it.
