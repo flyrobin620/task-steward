@@ -522,12 +522,6 @@ def card_notes(
     return card
 
 
-# Attention tiles: (label, colour, filter on click: statuses, flag).
-ATTENTION = (
-    ("待启动", "#0d9488", "", "tostart"),
-    ("待判断", "#7c3aed", "", ""),
-    ("待用户答复", "#e11d48", "", "asking"),
-)
 # The tasks taking a worker slot (DN002 G-SLOT), shown as the "运行中" pick (T273 revision 3).
 RUNNING = tuple(s for s in ORDER if s in OCCUPYING)
 
@@ -543,28 +537,15 @@ def _tile(label: str, n: int, color: str, *, st: str = "", flag: str = "", extra
     )
 
 
-def tiles(
-    *,
-    to_start: int,
-    judgments: int,
-    pending: int,
-    statuses: list[tuple[str, int]],
-    archived: int,
-) -> str:
-    """The count tiles: what needs attention, then each status on the board (DN006 §8.10).
+def tiles(*, statuses: list[tuple[str, int]], archived: int) -> str:
+    """The count tiles: each status on the board, in one row (DN006 §8.10, T353).
 
-    A tile whose count is zero is not shown. The status tiles are the statuses actually on the
-    board, with the counts of the bar and the picks below; the last one counts the archived
-    tasks and opens them in the task flow. The running tasks and the tasks with open
-    follow-ups are not tiles but picks below the kinds (:func:`quick_picks`).
+    A tile whose count is zero is not shown. The tiles are the statuses actually on the board,
+    with the counts of the bar and the picks below; the last one counts the archived tasks and
+    opens them in the task flow. What waits on the user is a filter (「关注」), not a tile
+    (T353); the running tasks and the tasks with open follow-ups are quick picks
+    (:func:`quick_picks`).
     """
-    attention = [
-        _tile(label, n, color, st=st, flag=flag)
-        for (label, color, st, flag), n in zip(
-            ATTENTION, (to_start, judgments, pending), strict=True
-        )
-        if n
-    ]
     states = [
         _tile(STATUS_LABELS.get(s, s), n, STATUS_COLORS.get(s, "#64748b"), st=s)
         for s, n in statuses
@@ -579,12 +560,9 @@ def tiles(
                 extra=' data-tile-archived="1"',
             )
         )
-    out = ""
-    if attention:
-        out += f'<div class="tile-group" aria-label="关注">{"".join(attention)}</div>'
-    if states:
-        out += f'<div class="tile-group states" aria-label="状态">{"".join(states)}</div>'
-    return out
+    if not states:
+        return ""
+    return f'<div class="tile-group states" aria-label="状态">{"".join(states)}</div>'
 
 
 def quick_picks(running: int, with_follow_ups: int) -> str:
@@ -603,7 +581,7 @@ def quick_picks(running: int, with_follow_ups: int) -> str:
         ),
         ("followups", "follow-up", with_follow_ups, "#0891b2", "有未处理 follow-up 的任务"),
     )
-    return '<span class="lbl">快捷</span>' + "".join(
+    return "".join(
         f'<button type="button" class="pick quick" style="--c:{color}" data-quick="{key}" '
         f'data-n="{n}" aria-pressed="false" title="{_e(title)}"{"" if n else " hidden"}>'
         f"{_e(label)}<small>{n}</small></button>"
@@ -687,7 +665,6 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
         )
         for row in shown
     ]
-    to_start = sum(1 for c in cards if "tostart" in c.flags)
     # Follow-ups (DN002 §5.7): open ones on their task's card, the source on the task made.
     open_follow_ups = open_count(conn)
     sources: dict[str, list[tuple[str, str]]] = {}
@@ -704,12 +681,6 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
         if c.follow_ups:
             c.flags.add("followups")
 
-    judgments = conn.execute(
-        "SELECT COUNT(*) AS n FROM judgments WHERE status = 'open'"
-    ).fetchone()["n"]
-    pending = conn.execute(
-        "SELECT COUNT(*) AS n FROM input_requests WHERE status = 'pending'"
-    ).fetchone()["n"]
     archived = counts.get("archived", 0)
     # The statuses on the board, in board order: the tiles, the bar, the picks and the groups
     # all come from this one count (DN006 §8.10, T273).
@@ -717,9 +688,6 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
         s for s in counts if s not in ORDER and s != "archived"
     )
     tiles_html = tiles(
-        to_start=to_start,
-        judgments=judgments,
-        pending=pending,
         statuses=[(s, counts[s]) for s in present],
         archived=archived,
     )
@@ -835,41 +803,52 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
 <html lang="zh-CN">
 {page_head(TITLE, app)}
 <body><main>
-<header class="hero"><div><div class="eyebrow">TASKSTEWARD · DASHBOARD</div><h1>{TITLE}</h1></div>
-<p class="meta">账本序号 {_e(meta.get("projected_seq", "0"))} · 最近记录 {_e(last)} · {
-        lease_text
-    }</p>
-{
+<header class="hero board-hero" id="hero"><div><div class="eyebrow">TASKSTEWARD · DASHBOARD</div><h1>{
+        TITLE
+    }</h1></div>
+<button type="button" class="ghost" id="hero-more" hidden aria-expanded="false" aria-controls="hero-info" aria-label="账本信息与页面设置" title="账本信息与页面设置">⋯</button>
+<div class="hero-info" id="hero-info"><p class="meta">账本序号 {
+        _e(meta.get("projected_seq", "0"))
+    } · 最近记录 {_e(last)} · {lease_text}</p>
+<div class="hero-buttons">{
         prefs_link
     }<button type="button" class="ghost" id="refresh" hidden aria-pressed="false" title="每 30 秒重新载入本页">自动刷新</button>
 <button type="button" class="ghost" id="style" hidden title="朴素或鲜艳">风格：朴素</button>
-<button type="button" class="ghost" id="theme" hidden>主题：跟随系统</button></header>
+<button type="button" class="ghost" id="theme" hidden>主题：跟随系统</button></div></div></header>
 <section class="tiles">{tiles_html}</section>
 <div class="dist" aria-hidden="true">{dist}</div>
 <section class="tools" id="tools" role="search" aria-label="筛选任务" hidden>
-<div class="row"><input id="q" type="search" placeholder="搜索编号、标题、仓库、问题、产出…（按 / 聚焦）" aria-label="搜索">
-<button type="button" class="ghost" id="mine" aria-pressed="false">只看待用户处理</button>
-<label>仓库 <select id="repo"><option value="">全部仓库</option>{repo_options}</select></label>
+<div class="fbar"><input id="q" type="search" placeholder="搜索编号、标题、仓库、问题、产出…（/）" aria-label="搜索">
+<button type="button" class="ghost" id="filter-open" aria-haspopup="dialog" aria-expanded="false" aria-controls="filter-pop" title="筛选与看板显示">筛选<span class="badge-n" id="filter-n"></span></button>
+<span class="views" role="group" aria-label="视图"><button type="button" class="ghost" id="view-status" aria-pressed="false" title="按状态分组"><span class="long">按状态</span><span class="short">状态</span></button><button type="button" class="ghost" id="timeline" aria-pressed="false" title="不分组，按最近一次修改时间倒序排列"><span class="long">按时间顺序</span><span class="short">时间</span></button><button type="button" class="ghost" id="view-flow" aria-pressed="false" title="按依赖关系画出任务的拓扑图"><span class="long">任务流</span><span class="short">流</span></button></span>
+<span class="count" id="count" role="status" aria-live="polite"></span></div>
+<div class="chosen" id="chosen" aria-label="已选的筛选条件"></div>
+<div class="scrim" id="filter-scrim" hidden></div>
+<div class="pop filter-pop" id="filter-pop" role="dialog" aria-label="筛选" hidden>
+<div class="sec"><h5>快捷</h5><div class="picks"><button type="button" class="ghost" id="mine" aria-pressed="false">只看待用户处理</button>{
+        quick_picks(occupying, sum(1 for c in cards if c.follow_ups))
+    }</div></div>
+<div class="sec"><h5>状态</h5><div class="picks">{status_picks}</div></div>
+<div class="sec"><h5>类型</h5><div class="picks">{kind_picks}</div></div>
+<div class="sec"><h5>仓库与关注</h5><div class="picks"><label>仓库 <select id="repo"><option value="">全部仓库</option>{
+        repo_options
+    }</select></label>
 <label>关注 <select id="flag"><option value="">全部</option><option value="user">待用户处理</option>
 <option value="asking">待用户答复</option><option value="tostart">待启动</option>
 <option value="paused">暂停</option><option value="alert">需要处理的异常</option>
-<option value="followups">有待处理的 follow-up</option></select></label>
-<span class="sep"></span>
-<span class="views" role="group" aria-label="视图"><button type="button" class="ghost" id="view-status" aria-pressed="false" title="按状态分组">按状态</button><button type="button" class="ghost" id="timeline" aria-pressed="false" title="不分组，按最近一次修改时间倒序排列">按时间顺序</button><button type="button" class="ghost" id="view-flow" aria-pressed="false" title="按依赖关系画出任务的拓扑图">任务流</button></span>
-<label class="board-only">排序 <select id="sort"><option value="status">状态优先</option><option value="activity">最近活动</option>
+<option value="followups">有待处理的 follow-up</option></select></label></div></div>
+<div class="sec board-only"><h5>看板显示</h5><div class="picks"><label>排序 <select id="sort"><option value="status">状态优先</option><option value="activity">最近活动</option>
 <option value="stalest">最久未动</option><option value="newest">编号：新→旧</option>
 <option value="oldest">编号：旧→新</option><option value="repo">仓库</option></select></label>
-<label class="board-only">分组 <select id="group"><option value="status">按状态</option><option value="repo">按仓库</option>
-<option value="kind">按类型</option><option value="none">不分组</option></select></label></div>
-<div class="row"><span class="lbl">状态</span>{status_picks}<span class="lbl">类型</span>{
-        kind_picks
-    }{quick_picks(occupying, sum(1 for c in cards if c.follow_ups))}
-<span class="sep"></span><span class="count" id="count" role="status" aria-live="polite"></span>
-<button type="button" class="ghost board-only" id="open-all">展开分组</button>
-<button type="button" class="ghost board-only" id="close-all">折叠分组</button>
-<button type="button" class="ghost board-only" id="cards-open">展开详情</button>
-<button type="button" class="ghost board-only" id="cards-close">收起详情</button>
-<button type="button" class="ghost" id="clear">清除筛选</button></div></section>
+<label>分组 <select id="group"><option value="status">按状态</option><option value="repo">按仓库</option>
+<option value="kind">按类型</option><option value="none">不分组</option></select></label>
+<button type="button" class="ghost" id="open-all">展开分组</button>
+<button type="button" class="ghost" id="close-all">折叠分组</button>
+<button type="button" class="ghost" id="cards-open">展开详情</button>
+<button type="button" class="ghost" id="cards-close">收起详情</button></div></div>
+<div class="pop-foot"><span class="count" id="count-pop"></span><span class="sep"></span>
+<button type="button" class="ghost" id="clear">清除筛选</button>
+<button type="button" class="ghost" id="filter-done">完成</button></div></div></section>
 <div id="board" data-order="{_e(order)}" data-kinds="{_e(" ".join(KINDS))}" data-running="{
         " ".join(RUNNING)
     }">{"".join(groups)}</div>

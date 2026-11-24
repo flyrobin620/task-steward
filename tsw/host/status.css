@@ -24,7 +24,6 @@ cursor:pointer}
 .ghost[aria-pressed=true]{background:color-mix(in srgb,var(--link) 14%,var(--panel));
 border-color:var(--link);color:var(--link);font-weight:600}
 :focus-visible{outline:2px solid var(--link);outline-offset:2px}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:6px 0 12px}
 .tile{position:relative;overflow:hidden;text-align:left;border:1px solid var(--line);border-radius:12px;
 padding:10px 14px;background:linear-gradient(135deg,color-mix(in srgb,var(--c) 16%,var(--panel)),
 var(--panel) 70%);box-shadow:var(--shadow)}
@@ -35,14 +34,13 @@ button.tile{cursor:pointer;font:inherit;color:inherit}
 button.tile:hover{border-color:var(--c)}
 .dist{display:flex;height:10px;border-radius:6px;overflow:hidden;margin:0 0 14px;background:var(--chip)}
 .dist i{display:block;background:var(--c);min-width:3px}
-.tools{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);
+.tools{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);
 backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
 margin:0 0 16px;display:grid;gap:8px}
 .row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
 .row>label{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
 .row select,.row input{background:var(--panel);border:1px solid var(--line);border-radius:8px;
 padding:5px 9px;color:var(--ink)}
-#q{width:min(30em,100%)}
 .sep{flex:1}
 .lbl{color:var(--muted);font-size:12px;margin-right:2px}
 .pick{border:1px solid color-mix(in srgb,var(--c) 45%,var(--line));
@@ -199,25 +197,46 @@ padding:4px 8px;white-space:nowrap}
 .tbl td .clip{display:block;max-height:9em;overflow:auto;white-space:pre-wrap}
 .tbl td p{margin:0}
 .tbl code,.facts code{font-size:12px}
-/* Count tiles in two groups: what needs attention, then the statuses on the board (T273). */
-.tiles{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+/* Count tiles: the statuses on the board in one row that swipes, or drags with the mouse (T353). */
+.tiles{display:flex;flex-wrap:nowrap;gap:10px;overflow-x:auto;scroll-snap-type:x proximity;
+scrollbar-width:thin;padding:2px 2px 6px;margin:4px 0 8px}
+.tiles.drag{cursor:grab}
+.tiles.dragging{cursor:grabbing;scroll-snap-type:none;user-select:none}
 .tile-group{display:contents}
-.tile-group+.tile-group>.tile:first-child{grid-column-start:1}
+.tiles .tile{flex:0 0 auto;min-width:128px;scroll-snap-align:start}
 /* The view switch, and the board's own controls that the task flow does not use. */
 .views{display:inline-flex}
 .views .ghost{border-radius:0;margin-left:-1px}
 .views .ghost:first-child{border-radius:8px 0 0 8px;margin-left:0}
 .views .ghost:last-child{border-radius:0 8px 8px 0}
 .tools[data-view=flow] .board-only{display:none}
+.views .short{display:none}
 /* The task flow (DN006 §8.10): lanes by repository, dependencies first and the newest further
    left; tsw places every card and routes every line for the choices made (T304), the script
    sets their positions; .out leaves a card out of the layout of the current choice. */
 .flow{display:grid;gap:8px}
-.flow-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:12px;color:var(--muted)}
-.flow-bar label{display:flex;align-items:center;gap:5px;color:var(--ink);font-size:13px}
-.flow-bar .shape{display:inline-flex;gap:10px}
-.zoom{min-width:3.5em}
-.legend{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 10px}
+.flow{position:relative}
+/* The toolbar is one row; when it does not fit it swipes (T353). */
+.flow-bar{display:flex;flex-wrap:nowrap;align-items:center;gap:8px;overflow-x:auto;scrollbar-width:thin;
+font-size:12px;color:var(--muted);padding-bottom:2px}
+.flow-bar>*{flex:0 0 auto}
+.flow-bar .ghost{font-size:12px;padding:2px 9px}
+.flow-bar .toggle{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:999px;
+padding:1px 10px;background:var(--panel);color:var(--ink);cursor:pointer}
+.flow-bar .toggle:has(input:checked){border-color:var(--link);color:var(--link);
+background:color-mix(in srgb,var(--link) 12%,var(--panel))}
+.seg{display:inline-flex}
+.seg label{position:relative;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:2px 10px;
+margin-left:-1px;cursor:pointer}
+.seg label:first-child{border-radius:7px 0 0 7px;margin-left:0}
+.seg label:last-child{border-radius:0 7px 7px 0}
+.seg input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
+.seg label:has(input:checked){background:color-mix(in srgb,var(--link) 14%,var(--panel));border-color:var(--link);
+color:var(--link);font-weight:600;z-index:1}
+.seg label:has(input:focus-visible){outline:2px solid var(--link);outline-offset:1px}
+.zoom-group{display:inline-flex;align-items:center;gap:3px}
+.zoom{min-width:3.2em;text-align:center}
+.legend{display:grid;gap:6px}
 .legend svg{vertical-align:middle}
 .legend .lg-rel,.legend .lg-item{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:var(--muted)}
 .legend .lg-rel{cursor:pointer}
@@ -227,7 +246,17 @@ padding:4px 8px;white-space:nowrap}
 .lg.ref{stroke:#a855f7;stroke-dasharray:1 3;stroke-linecap:round}
 .lg-h{fill:var(--muted)}.lg-h.fu{fill:#0891b2}.lg-h.ref{fill:#a855f7}
 .lg-ctx{display:inline-block;width:18px;height:11px;border:1px dashed var(--muted);border-radius:3px;opacity:.6}
-.flow-scroll{overflow:auto;max-height:78vh;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.flow-scroll{overflow:auto;overscroll-behavior-x:contain;border:1px solid var(--line);border-radius:12px;
+background:var(--panel)}
+/* The task flow fills the window (T353): its slot is a window tall and the last thing on the page,
+   and the area in it grows from the rest of the window to the whole of it as the page scrolls; the
+   script sets both heights. The mouse drags the view; touch scrolls it natively. */
+.flow-slot{min-width:0;height:100vh}
+.flow-scroll.drag{cursor:grab}
+.flow-scroll.dragging{cursor:grabbing;user-select:none}
+.flow-scroll.dragging .fnode{pointer-events:none}
+main:has(>.flow:not([hidden])){padding-bottom:0}
+.flow:not([hidden])~footer,.flow:not([hidden])~.empty{display:none}
 /* clip, not hidden: the lane names stick to the scrolling area, not to this box. */
 .flow-size{position:relative;overflow:clip}
 .flow-grid{position:relative;display:flex;align-items:flex-start;width:max-content;transform-origin:0 0;padding:0 12px 12px 0}
@@ -266,7 +295,7 @@ a.fnode:hover{border-color:var(--c)}
 .flow-grid.hl .edge.fu.on{--e:#0891b2}
 .flow-grid.hl .edge.ref.on{--e:#a855f7}
 .flow-grid.hl .edge.on .line{stroke-width:2.6}
-.tools[data-view=flow]{position:static}
+.tools[data-view=flow]{position:relative}
 /* T278: the index card on the task view, and the document dialog of the Dashboard app. */
 .note.warn{--n:#d97706}
 .panel>.note{margin:0 0 8px}
@@ -333,3 +362,69 @@ dialog.doc{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;
 .pref-form textarea{resize:vertical}
 .pref-buttons{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .act-replace{border-color:#2563eb;color:#2563eb;background:var(--card)}
+/* The board's header (T353): one row on a wide screen; on a narrow one the title and a 「⋯」 that
+   opens the ledger line and the page's buttons. */
+.board-hero{align-items:center;gap:6px 14px;margin-bottom:10px;position:relative}
+.hero-info{display:contents}
+.hero-info .meta{flex:1;min-width:240px;margin:0}
+.hero-buttons{display:flex;flex-wrap:wrap;gap:6px;flex:none}
+.board-hero .ghost{font-size:12px;padding:2px 9px;border-radius:7px;white-space:nowrap}
+#hero-more{font-size:18px;line-height:1;width:34px;height:30px;padding:0}
+@media (min-width:641px){#hero-more{display:none}}
+/* The filters (T353): the search, 「筛选」 and the view switch in one row; what is chosen below it,
+   each with its ×; the rest in the panel 「筛选」 opens (a bottom sheet on a narrow screen). */
+.tools{padding:8px 10px;gap:6px}
+.fbar{display:flex;align-items:center;gap:8px;min-width:0}
+.fbar #q{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:5px 9px;
+color:var(--ink)}
+.fbar .count{white-space:nowrap}
+.badge-n{display:inline-block;min-width:18px;margin-left:5px;padding:0 5px;border-radius:999px;background:var(--link);
+color:#fff;font-size:11px;line-height:18px;text-align:center}
+.badge-n:empty{display:none}
+.chosen{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chosen:empty{display:none}
+.chosen .chip-x{display:inline-flex;align-items:center;gap:2px;border:1px solid var(--line);border-radius:999px;
+background:var(--chip);padding:0 2px 0 10px;font-size:12px}
+.chosen .chip-x button{border:0;background:none;cursor:pointer;color:var(--muted);font-size:15px;line-height:1;
+padding:2px 6px;border-radius:999px}
+.chosen .chip-x button:hover{color:var(--ink)}
+.chosen .clear-all{border:1px dashed var(--line);border-radius:999px;background:none;color:var(--muted);
+padding:0 10px;font-size:12px;cursor:pointer}
+/* Open, the toolbar drops its blur, which would make it the box the fixed bottom sheet sits in. */
+.tools.open{backdrop-filter:none;background:var(--bg)}
+.pop{position:absolute;z-index:40;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+box-shadow:0 10px 32px #0003;padding:12px 14px;display:grid;gap:10px;color:var(--ink)}
+.pop[hidden]{display:none}
+.pop h5{margin:0 0 5px;font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.04em}
+.pop .picks{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}
+.pop label{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+.pop select{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px 8px;color:var(--ink)}
+.pop-foot{display:flex;align-items:center;gap:8px;border-top:1px solid var(--line);padding-top:8px}
+.filter-pop{top:48px;right:10px;width:min(640px,calc(100% - 20px));max-height:min(70vh,640px);overflow:auto}
+.legend-pop{top:34px;width:min(440px,calc(100vw - 24px))}
+.scrim{position:fixed;inset:0;z-index:39;background:#0f172a66}
+@media (min-width:641px){.scrim{display:none}}
+@media (max-width:640px){
+.board-hero{flex-wrap:nowrap;margin-bottom:8px}
+.board-hero .eyebrow{display:none}
+.board-hero>div:first-child{flex:1;min-width:0}
+.board-hero h1{font-size:19px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.board-hero:has(#hero-more:not([hidden])) .hero-info{display:none;position:absolute;right:0;top:100%;z-index:30;
+width:min(340px,calc(100vw - 20px));background:var(--panel);border:1px solid var(--line);border-radius:10px;
+padding:10px;box-shadow:0 8px 28px #0003;flex-direction:column;gap:8px}
+.board-hero.open .hero-info{display:flex!important}
+.hero-info .meta{min-width:0}
+.tiles{gap:8px;scrollbar-width:none;margin:2px 0 6px}
+.tiles .tile{min-width:0;padding:4px 10px;display:flex;align-items:baseline;gap:6px}
+.tiles .tile b{display:inline;font-size:18px}
+.tiles .tile span{white-space:nowrap}
+.dist{height:4px;margin-bottom:8px}
+.views .long{display:none}.views .short{display:inline}
+.views .ghost{padding:4px 9px}
+.fbar .count{display:none}
+.filter-pop{position:fixed;left:0;right:0;bottom:0;top:auto;width:auto;max-height:75vh;border-radius:16px 16px 0 0;
+padding-bottom:calc(14px + env(safe-area-inset-bottom))}
+.flow-bar{scrollbar-width:none}
+.zoom-group #zoom-reset{display:none}
+.flow-names{width:78px}
+.flow-names>.lane-name{padding:6px;font-size:11px}}
