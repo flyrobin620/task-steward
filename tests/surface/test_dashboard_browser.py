@@ -139,6 +139,8 @@ def test_the_page_in_a_browser_wide_and_narrow(h: Harness, tmp_path: Path) -> No
         "flow: up at the area's top scrolls the page",
         "flow: mouse drag pans the view",
         "flow: the click ending a drag opens nothing",
+        "flow: a press released outside does not pan later",
+        "flow: with a chip above, the area still ends at the window's lower edge",
         "board: footer back",
     ):
         assert name in names, name

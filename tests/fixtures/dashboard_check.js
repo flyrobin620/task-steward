@@ -50,7 +50,7 @@
     check("tile row swipes when it does not fit", row.scrollWidth <= row.clientWidth || getComputedStyle(row).overflowX === "auto");
     if (row.scrollWidth > row.clientWidth) {
       const from = row.scrollLeft;
-      const pointer = (type, x) => row.dispatchEvent(new PointerEvent(type, {bubbles: true, cancelable: true, pointerType: "mouse", pointerId: 7, button: 0, clientX: x, clientY: box(row).top + 10}));
+      const pointer = (type, x) => row.dispatchEvent(new PointerEvent(type, {bubbles: true, cancelable: true, pointerType: "mouse", pointerId: 7, button: 0, buttons: type === "pointerup" ? 0 : 1, clientX: x, clientY: box(row).top + 10}));
       pointer("pointerdown", 300); pointer("pointermove", 240); pointer("pointermove", 200); pointer("pointerup", 200);
       check("mouse drags the tile row", row.scrollLeft > from, `${from}->${row.scrollLeft}`);
       row.scrollLeft = 0;
@@ -141,13 +141,33 @@
     const node = scroller.querySelector(".fnode:not([hidden])");
     const at = box(node);
     const left = scroller.scrollLeft, topIn = scroller.scrollTop;
-    const pointer = (type, x, y2) => node.dispatchEvent(new PointerEvent(type, {bubbles: true, cancelable: true, pointerType: "mouse", pointerId: 9, button: 0, clientX: x, clientY: y2}));
+    const pointer = (type, x, y2, buttons = type === "pointerup" ? 0 : 1) => node.dispatchEvent(new PointerEvent(type, {bubbles: true, cancelable: true, pointerType: "mouse", pointerId: 9, button: 0, buttons, clientX: x, clientY: y2}));
     const x0 = at.left + 10, y0 = at.top + 10;
     pointer("pointerdown", x0, y0); pointer("pointermove", x0 - 40, y0 - 10); pointer("pointermove", x0 - 120, y0 - 30); pointer("pointerup", x0 - 120, y0 - 30);
     check("flow: mouse drag pans the view", scroller.scrollLeft > left, `${left}->${scroller.scrollLeft}/${topIn}->${scroller.scrollTop}`);
     const clickEnd = new MouseEvent("click", {bubbles: true, cancelable: true, view: window});
     node.dispatchEvent(clickEnd);
     check("flow: the click ending a drag opens nothing", clickEnd.defaultPrevented && location.hash.includes("view=flow"), location.hash);
+    // Pressed, then released outside before the drag began: moving back in moves nothing.
+    const still = [scroller.scrollLeft, scroller.scrollTop];
+    pointer("pointerdown", x0, y0);
+    window.dispatchEvent(new PointerEvent("pointerup", {pointerType: "mouse", pointerId: 9, button: 0, buttons: 0}));
+    pointer("pointermove", x0 - 80, y0 - 20, 0);
+    check("flow: a press released outside does not pan later", scroller.scrollLeft === still[0] && scroller.scrollTop === still[1],
+      `${still} -> ${scroller.scrollLeft},${scroller.scrollTop}`);
+    pointer("pointerdown", x0, y0);
+    pointer("pointermove", x0 - 80, y0 - 20, 0);
+    check("flow: moving with no button held does not pan", scroller.scrollLeft === still[0], `${still[0]} -> ${scroller.scrollLeft}`);
+    // A filter chosen in the task flow adds a chip above it; the area still ends at the window's edge.
+    window.scrollTo(0, 0);
+    click($("filter-open"));
+    click($("filter-pop").querySelector("[data-kind]:not([hidden])"));
+    click($("filter-done"));
+    const withChip = box(scroller);
+    check("flow: with a chip above, the area still ends at the window's lower edge", $("chosen").children.length > 0 && Math.abs(withChip.bottom - innerHeight) < 2,
+      `${$("chosen").children.length}/${Math.round(withChip.bottom)}/${innerHeight}`);
+    click($("chosen").querySelector(".chip-x button"));
+    check("flow: without it again, the same", Math.abs(box(scroller).bottom - innerHeight) < 2, Math.round(box(scroller).bottom));
     // The other views are as they were.
     click($("view-status"));
     check("board: the task flow's slot is gone", !shown(slot) && !shown($("flow")));

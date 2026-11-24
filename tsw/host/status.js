@@ -52,6 +52,8 @@
     });
     box.addEventListener("pointermove", event => {
       if (!from || event.pointerId !== from.id) return;
+      // Released outside the box before the drag began: nothing is held any more.
+      if (!(event.buttons & 1)) { end(); return; }
       const dx = event.clientX - from.x, dy = event.clientY - from.y;
       if (!moved) {
         if (Math.hypot(dx, dy) < 5) return;
@@ -63,7 +65,7 @@
       box.scrollLeft = from.left - dx;
       if (both) box.scrollTop = from.top - dy;
     });
-    const end = () => {
+    function end() {
       if (!from) return;
       from = null;
       box.classList.remove("dragging");
@@ -71,9 +73,12 @@
       const swallow = event => { event.preventDefault(); event.stopPropagation(); };
       box.addEventListener("click", swallow, {capture: true, once: true});
       setTimeout(() => box.removeEventListener("click", swallow, {capture: true}), 0);
-    };
+    }
     box.addEventListener("pointerup", end);
     box.addEventListener("pointercancel", end);
+    box.addEventListener("lostpointercapture", end);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("blur", end);
     box.addEventListener("dragstart", event => event.preventDefault());
   }
 
@@ -297,6 +302,8 @@
       repo.value = state.repo;
       flag.value = state.flag; sort.value = state.sort; group.value = state.group;
       chosen();
+      // The chips change the height above the task flow: size its area again.
+      if (flowing) flow.fit();
       save();
     }
     // What the filters choose, below the search, each with an × that drops it (T353).
