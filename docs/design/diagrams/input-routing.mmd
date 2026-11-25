@@ -2,7 +2,7 @@ flowchart TD
     Q1([任务内的事<br/>提问 · 评审预算用完 · 延后请求 · 评审器不可用]) --> ASK
     Q2([跨任务的事 · worker.question<br/>资源冲突 · 依赖调整 · 其他任务的范围]) --> J
     ASK[ask_user · T11 → waiting_user<br/>问题留在 worker 会话，不进主会话 inbox] --> U{超时前用户回复?}
-    U -- 回复 --> UA[hook 记录原话 · user_answer<br/>input.resolved · source=user]
+    U -- 回复 --> UA[hook 记录原话 · user_answer<br/>含 workdeck、Dashboard 投递的消息]
     U -- 无回复 --> HO[input.handed_off · by system<br/>例行表 handoff-scan 或 sync]
     HO --> J
     J{input.triage}
@@ -31,6 +31,5 @@ flowchart TD
     S2 --> V
     S3 --> V
     UA --> V
-    DB[Dashboard 中回答<br/>status-app · 例行项 answer-scan 转告 worker] --> V
     V --> RR[T12 回到 in_progress<br/>source=user 满足 G-USER]
     RR --> C[迟到的答复记为 input.late_response<br/>worker 会话中用户的话优先于主会话代答]

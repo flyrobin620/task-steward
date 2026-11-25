@@ -5,7 +5,7 @@
     "differences": []
   },
   "files": 8,
-  "total_edges": 213,
+  "total_edges": 212,
   "results": [
     {
       "file": "architecture.svg",
@@ -40,8 +40,8 @@
     {
       "file": "input-routing.svg",
       "xml": "PASS",
-      "nodes": 26,
-      "edges": 34,
+      "nodes": 25,
+      "edges": 33,
       "unique_transition_ids": 2,
       "visible_labels": "PASS",
       "ids_and_portability": "PASS",

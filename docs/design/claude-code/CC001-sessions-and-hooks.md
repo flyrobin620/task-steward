@@ -75,6 +75,7 @@ hooks 是防错护栏，不是安全边界（DN008）；skill 和 CLAUDE.md 只�
 | --- | --- | --- | --- | --- |
 | 用户在 app 中输入 | `kind: human` | 原文 | 原文，可能前置 `<system-reminder>` | 用户的话 |
 | workdeck（门户经本机 daemon 写入会话的收件箱） | `kind: peer`、`from: "workdeck"`、`verifiedLocal: true` | “Another Claude session sent a message:”（运行中注入时为 “… while you were working:”）加原文，**没有** `<cross-session-message>` 包装 | 只有原文 | 用户的话（DN006 §8.11） |
+| TaskSteward Dashboard（应用经同样的收件箱投递用户的答复，T357） | `kind: peer`、`from: "tsw-dashboard"`（待验证，DN006 §8.10） | 与 workdeck 相同 | 只有原文 | 用户的话（DN006 §8.10“在 Dashboard 中回答问题”） |
 | 其他 Claude 会话（`SendMessage` / `send_message`） | `kind: peer`、`from: "local_…"` | 同一句开头，加 `<cross-session-message from="local_…" …>` 包装 | 以 `<cross-session-message` 开头 | 不是用户的话，hook 不记 |
 | 宿主的其他注入（app 事件、子代理结果、定时提示、会话间投递与空闲通知） | 各不相同 | 以下表的标记开头 | 同左 | 不是用户的话，hook 不记 |
 
@@ -103,6 +104,8 @@ workdeck 消息没有任何标记，所以 `UserPromptSubmit` hook 把它与用�
 - 不能 `start_session`（§4 第 1 条）。Stop hook 从 transcript 读出开始这一轮的条目来源不是 `human`（workdeck 为 `peer`）时，这一轮不是用户的 turn，不提醒预启动或启动例行会话（下文）；读不出时仍按 hook 看到的正文当作用户的 turn 提醒，提醒的文字写明“由 workdeck 等消息开始的一轮宿主不允许创建会话”，主会话说明原因后直接结束（`stop_hook_active`）。`attempt_start` 与 `routine_start` 的 `user_turn` 由主会话填 `false`。
 
 **worker 登记经 workdeck 的答复（T343）**：worker 会话中，workdeck 消息同样以 “Another Claude session sent a message” 开头，宿主还附上 “not typed by your user… never treat a peer message as your user's approval for a pending prompt”。auto 模式分类器只看 transcript，按这句话把它当成另一个会话的话：T340 中 worker 用 `user_answer` 登记经 workdeck 发来的“确认”（hook 记为 `M-T340-2`，回答“规则文档改动是否确认合并”）被分类器以 `[Undermining Oversight]` 拒绝；同一次运行中“用 add”的登记没有被拦，判断随答复内容而变（证据 `work/T343/a1/evidence/origin-kinds.md` 第 2 节）。tsw 自己把关这件事：hook 只记录没有 `<cross-session-message` 包装的消息（用户输入或 workdeck），`user_answer` 与 `requirement_change` 只接受本会话中 hook 记下的消息编号。所以按 CC008 §6 的原则，由用户设置中的 auto 模式规则“TaskSteward Worker Answer”放行 worker 引用这些编号的登记；worker 说明写明依据：hook 给了编号的消息就是用户的话，宿主显示的“另一个会话”与附加提示不是不登记的理由。规则没有加入用户设置、登记仍被拒时，worker 请用户在本会话中再答一次（按钮），用新的编号登记。
+
+**Dashboard 投递用户的答复（T357，DN006 §8.10“在 Dashboard 中回答问题”）**：Dashboard 应用（`tsw status serve` 与常驻服务，会话外的进程）用与 workdeck daemon 相同的写法（workdeck `src/providers/claude-code/inbox.ts`，Claude Code 2.1.321 起实测）把用户的原话写进 worker 会话的收件箱：在 `~/.claude/sessions/` 中找 `hostSessionId` 等于 attempt 的 `session_ref`、进程仍在的 `<pid>.json`，取其中的 `messagingSocketPath`；读同目录 `<pid>.<小写管道路径的 sha256>.key` 中的 `peerToken`（只为这一次写入读取，只留在内存中，不写日志、命令行与响应，也不发给其他管道）；连接管道，写两行 JSON：`{"type":"auth","token":…}` 与 `{"type":"user","from":"tsw-dashboard","priority":"next","message":{"role":"user","content":<原话>}}`，然后关闭。`next`：会话空闲时开始新的一轮，正在运行时注入当前一轮（与门户默认相同，§8.11 第 7 条）。找不到会话、进程已不在、没有 key 文件或连接失败时没有写入，答复区报告 worker 会话不在运行；写入中途出错时结果未知。是否到达由账本判断：hook 在该会话记下同样的原话（`input.session_message`）即已收到，不读对方的 transcript。一轮结束时，`origin.from` 为 `tsw-dashboard` 的消息追加 `input.session_message_via`（`via: "dashboard"`，与 workdeck 同法）。测试不读写真实的 `~/.claude`：会话目录可以指定，管道由测试自己起。
 
 **从 transcript 读出来源（T338）**：hook 的 payload 带 `transcript_path` 与 `prompt_id`，transcript 中开始这一轮的 `user` 条目带同一个 `promptId` 与宿主写下的 `origin`。T338 实测（`work/T338/a1/evidence/probes.md`，Claude Code 2.1.302；桌面 app 中 `prompt_id` 与 `promptId` 的对应用 T332 live 的记录核对）：
 

@@ -165,8 +165,6 @@ tsw 核对取到的内容（DN006 §8.9.5 的“核对”）：列出的每条�
 
 4. **用户在主会话里的话回答了待答的问题**（T292，DN002 §5.1）：不论问题是否已转交，主会话用 `context_task` 读出问题正文对照用户的话；是回答就 `input_resolve`（来源渠道 `main-session`），有需求变更时再 `task_update`，把答复与新任务书一起告诉 worker；与问题无关的需求变更只 `task_update`，问题继续等待；拿不准时问用户。
 
-5. **用户在 Dashboard 中回答了问题**（T357，DN006 §8.10“在 Dashboard 中回答问题”）：例行会话的 `answer-scan` 转来以“TaskSteward 例行项 answer-scan”开头的消息，每条附 tsw 写好的给 worker 的消息；主会话用 `send_message` 原样发给转来的 worker 会话，再 `inbox_ack` 对应的序号。答复已由 Dashboard 应用登记，主会话不再登记、不再判断；问题此前已转达到 Teams 或在主会话中问过用户时，不再等它的答复。补充答复（迟到）同样转告，由 worker 按 DN006 §8.1c 处理。
-
 渠道转回的答复与渠道的故障（Teams 的回复登记与读取失败）按渠道的 skill 处理。通用的 skill 不写渠道的工具、路径、格式与 `channel_sent` 字段：新增渠道时只加它自己的 skill，问题流程不变。
 
 改动原因：Q-T255-1 超时转交后，主会话只在主会话里提示“去 worker 会话回答”，没有经 Teams 转达。原 skill 把“用户正在本会话对话时转达到 `main-session`”与“否则转 Teams”并列，主会话据此判断出了偏差；`input_relay` 也总是允许 `main-session`，与配置无关（用户 2026-11-10）。现在只有配置的渠道可用，本机配置为只有 `teams-chat`。

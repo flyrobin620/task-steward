@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="09a2b0e52a6c1f723dd0a1f308b973d8976f7451e98469185a1078e75735a1f2">
+<meta name="tsw-source-sha256" content="9da80738385c979e80e47a53909b222da641f5e536c3cc8ef65fa4bc8ff28a02">
 <title>CC006 Claude Code 插件</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -114,7 +114,6 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p><code>render_instructions</code> 在数据目录生成项目 skill <code>.claude/skills/handle-input/SKILL.md</code>（来源 <code>tsw/host/handle_input_skill.md</code>），写明 DN006 §8.1b 的三步（T256）：</p>
 <ol><li><strong>超时转交并通知主会话</strong>：例行会话的 <code>handoff-scan</code> 转交到期的问题，转来的消息列出问题、是否 <code>reserved</code>、worker 会话，以及配置的人类渠道与各自的做法（<code>plugins.human_channels</code> 加载、<code>input.channels</code> 选中的渠道；一个也没有时写明问题留在 worker 会话）。</li><li><strong>主会话判断</strong>：读问题与任务书，按 DN006 §8.2 的授权边界与因素判断。能代答时 <code>handoff_resolve</code>，再用 <code>send_message</code> 把决定告诉 worker，让它继续；<code>reserved</code> 或超出授权的交给用户。</li><li>**按 <code>plugins.human_channels</code> 交给用户**：配置的是什么就用什么，没有配置的方式不用。<code>in-session</code>：<code>input_relay</code>（<code>channel: in-session</code>）后在主会话中直接问，用户的答复用 <code>input_resolve</code> 登记（来源渠道 <code>main-session</code>）；<code>teams-chat</code>：<code>input_relay</code> 后按与渠道同名的 skill 发出（§7）。没有配置 <code>in-session</code> 时不在主会话里问用户（<code>input_relay</code> 也会拒绝），也不用“去 worker 会话回答”代替渠道。发送失败时问题保持待答，向用户说明，问题仍可在 worker 会话里回答。</li></ol>
 <ol><li><strong>用户在主会话里的话回答了待答的问题</strong>（T292，DN002 §5.1）：不论问题是否已转交，主会话用 <code>context_task</code> 读出问题正文对照用户的话；是回答就 <code>input_resolve</code>（来源渠道 <code>main-session</code>），有需求变更时再 <code>task_update</code>，把答复与新任务书一起告诉 worker；与问题无关的需求变更只 <code>task_update</code>，问题继续等待；拿不准时问用户。</li></ol>
-<ol><li><strong>用户在 Dashboard 中回答了问题</strong>（T357，DN006 §8.10“在 Dashboard 中回答问题”）：例行会话的 <code>answer-scan</code> 转来以“TaskSteward 例行项 answer-scan”开头的消息，每条附 tsw 写好的给 worker 的消息；主会话用 <code>send_message</code> 原样发给转来的 worker 会话，再 <code>inbox_ack</code> 对应的序号。答复已由 Dashboard 应用登记，主会话不再登记、不再判断；问题此前已转达到 Teams 或在主会话中问过用户时，不再等它的答复。补充答复（迟到）同样转告，由 worker 按 DN006 §8.1c 处理。</li></ol>
 <p>渠道转回的答复与渠道的故障（Teams 的回复登记与读取失败）按渠道的 skill 处理。通用的 skill 不写渠道的工具、路径、格式与 <code>channel_sent</code> 字段：新增渠道时只加它自己的 skill，问题流程不变。</p>
 <p>改动原因：Q-T255-1 超时转交后，主会话只在主会话里提示“去 worker 会话回答”，没有经 Teams 转达。原 skill 把“用户正在本会话对话时转达到 <code>main-session</code>”与“否则转 Teams”并列，主会话据此判断出了偏差；<code>input_relay</code> 也总是允许 <code>main-session</code>，与配置无关（用户 2026-11-10）。现在只有配置的渠道可用，本机配置为只有 <code>teams-chat</code>。</p>
 <h3 id="65-待验证t243t250-live">6.5 待验证（T243、T250 live）</h3>
