@@ -1,6 +1,6 @@
 # DN006 插件层：宿主集成、会话、人类渠道与数据存储
 
-- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/；T272 §8.9.4a 默认例行项 session-scan；T279 §6.3 claude-code 生成的 skill 清单，§8.1a 每一轮结束都 `wrap_up`；T282 §9.7 主会话自我更新：主会话可以运行 `host render`；T283 §9.8 按改动决定步骤的自我更新、§9.9 运行版本的记录、§8.10 Dashboard 常驻服务；T293 §8.9.5 读过正文、判定不转出的消息记在缓存中，之后不再读正文；T305 分发与安装移到 DN009：§6.2 宿主集成增加安装操作、§8.10 与 §9.7 安装脚本的会话例外、§9.1 安装脚本管理的检出、§9.8 `install` 与 `host_rules` 改为重跑安装；T309 §8.10 workdeck 插件 manifest 与会话链接的 `data-workdeck-session`；T332 §8.11 经 workdeck 发到会话的消息按用户本人的话处理，§8.5 `VerifiedSource.via`，§9.7 自我更新的确认；T334 §8.11 第 7 条运行中注入已在 Claude Code 上实测；T338 §8.11 一轮结束时从宿主记录读出 workdeck 来源：worker 会话的消息注明经由，workdeck 开始的一轮不提醒预启动；T343 §8.11 第 2 条以 hook 记录为准、宿主误拦按规则放行，第 4 条按开始这一轮的消息来源判断用户的 turn；T353 §8.10 看板的页面布局：窄屏页头、计数卡一行且只留状态、筛选面板、任务流工具栏一行、随页面展开的任务流区域与拖拽平移；T355 §8.10 添加到主屏幕：manifest、图标与访问权限）
+- 状态：设计草案（T233 r5，已按 PoC 结果修订；T243 增加 §8.9 例行会话，重写 §8.7；T250 例行会话启动后从主会话名下分离；T251 §9.1 仓库任务的 worktree 在执行目录下；T256 §8.1b 问题流程三步，§8.6 worker 提问不受 human_channels 控制、human_channels 决定主会话交给用户的方式与渠道命名，§8.7 Teams 卡片用富文本；T276 §6.2 worker 说明的单一来源与数据目录 roles/；T272 §8.9.4a 默认例行项 session-scan；T279 §6.3 claude-code 生成的 skill 清单，§8.1a 每一轮结束都 `wrap_up`；T282 §9.7 主会话自我更新：主会话可以运行 `host render`；T283 §9.8 按改动决定步骤的自我更新、§9.9 运行版本的记录、§8.10 Dashboard 常驻服务；T293 §8.9.5 读过正文、判定不转出的消息记在缓存中，之后不再读正文；T305 分发与安装移到 DN009：§6.2 宿主集成增加安装操作、§8.10 与 §9.7 安装脚本的会话例外、§9.1 安装脚本管理的检出、§9.8 `install` 与 `host_rules` 改为重跑安装；T309 §8.10 workdeck 插件 manifest 与会话链接的 `data-workdeck-session`；T332 §8.11 经 workdeck 发到会话的消息按用户本人的话处理，§8.5 `VerifiedSource.via`，§9.7 自我更新的确认；T334 §8.11 第 7 条运行中注入已在 Claude Code 上实测；T338 §8.11 一轮结束时从宿主记录读出 workdeck 来源：worker 会话的消息注明经由，workdeck 开始的一轮不提醒预启动；T343 §8.11 第 2 条以 hook 记录为准、宿主误拦按规则放行，第 4 条按开始这一轮的消息来源判断用户的 turn；T353 §8.10 看板的页面布局：窄屏页头、计数卡一行且只留状态、筛选面板、任务流工具栏一行、随页面展开的任务流区域与拖拽平移；T355 §8.10 添加到主屏幕：manifest、图标与访问权限；T357 §8.10 在 Dashboard 中回答问题、§8.9.4b 例行项 answer-scan、`ask_user` 的选项）
 - 日期：2026-11-05
 - 相关：[DN001 总体架构](DN001-architecture.md) · [DN002 任务状态机](DN002-task-state-machine.md) · [DN003 统一配置](DN003-unified-config.md) · [DN004 worker 自评审](DN004-worker-self-review.md) · [DN005 历史导入与 resume](DN005-history-import-and-resume.md) · [DN008 校验原则](DN008-guardrails.md) · [DN009 分发与安装](DN009-distribution-and-install.md) · 实现：[CC006 Claude Code 插件](claude-code/CC006-plugins.md)
 
@@ -280,7 +280,7 @@ interactive 动作（`create`、`deliver_brief`、`send`、`stop`、`observe`、
 
 用户回复了但还没有回答问题（例如“让我想想”）时，worker 在会话中继续与用户交流；问题不会因超时转交。
 
-在 Claude app 中，worker 提问后以 `wrap_up` 结束这一轮：问题写在 `ask`，每个选项一个按钮，`blocked: true` 让 app 把会话标为等待用户。用户点按钮等于在 worker 会话中发出按钮上的文字，经 `UserPromptSubmit` 记录，与打字回答相同；app 的选择卡片（AskUserQuestion）的回答是工具结果，不经过 hook，不能作为答复来源，所以不用。app 的提问框与等待标记一直保留到这个会话下一次 `wrap_up`：问题由主会话代答、经 Teams 等渠道答复或已被取代后，worker 在下一轮结束时调用 `wrap_up`（不带 `ask`、不设 `blocked`）替换它；worker 每一轮结束都调用 `wrap_up`，使 app 中的等待状态与账本一致（T279：Q-T279-2 经 Teams 答复后，worker 之后几轮没有调用 `wrap_up`，提问框一直挂着）。
+在 Claude app 中，worker 提问后以 `wrap_up` 结束这一轮：问题写在 `ask`，每个选项一个按钮，`blocked: true` 让 app 把会话标为等待用户。用户点按钮等于在 worker 会话中发出按钮上的文字，经 `UserPromptSubmit` 记录，与打字回答相同；app 的选择卡片（AskUserQuestion）的回答是工具结果，不经过 hook，不能作为答复来源，所以不用。app 的提问框与等待标记一直保留到这个会话下一次 `wrap_up`：问题由主会话代答、经 Teams 等渠道答复或已被取代后，worker 在下一轮结束时调用 `wrap_up`（不带 `ask`、不设 `blocked`）替换它；worker 每一轮结束都调用 `wrap_up`，使 app 中的等待状态与账本一致（T279：Q-T279-2 经 Teams 答复后，worker 之后几轮没有调用 `wrap_up`，提问框一直挂着）。worker 把同样的选项写进 `ask_user` 的 `options`，Dashboard 应用据此显示选项按钮；用户也可以在 Dashboard 应用中回答，答复由应用记录，主会话转告 worker（§8.10“在 Dashboard 中回答问题”）。
 
 ### 8.1b 超时转交主会话
 
@@ -312,6 +312,7 @@ interactive 动作（`create`、`deliver_brief`、`send`、`stop`、`observe`、
 | 已转交、主会话尚未决定时，用户在 worker 会话中回答 | 仍是有效答复：worker 经 `user_answer` 记录，T12 生效。主会话之后的 `handoff_resolve` 与经其他渠道收到的答复以 `request_not_pending` 拒绝或记为 `input.late_response`；已转达的渠道按 §8.6 撤回 |
 | 主会话已代答或其他渠道已答复之后，用户才在 worker 会话中回答 | hook 照常记录这条消息（该问题还没有来自 worker 会话的用户答复）；worker 经 `user_answer` 记为 `input.late_response`，标明它取代的答复（`supersedes`）。用户本人的话优先于主会话代答：worker 以用户的话为准继续，必要的返工是任务内的正常工作；超出任务范围时，worker 引用这条消息自己登记需求变更（`requirement_change`，DN002 §5.1a）。之前的答复也来自用户、两者冲突时，worker 再次 `ask_user` 确认 |
 | 其他渠道的答复晚于已生效的答复 | 记为 `input.late_response`（§8.6 多渠道规则） |
+| 问题已答复后，用户在 Dashboard 应用中回答 | 不记录，页面显示生效的答复；用户选择「仍记为补充答复」时记为 `input.late_response`，主会话经例行项 `answer-scan` 得知并转告 worker（§8.10“在 Dashboard 中回答问题”第 5、6 项） |
 
 超时本身不是答复；转交只改变谁来处理，不替用户作出决定。
 
@@ -424,7 +425,7 @@ T12 在同一事件中原子检查：请求为 `pending`，且上下文绑定与
 | `hub-portal` | request_response，notify（Portal 通知卡片），push，direct | tsw 把请求发布到 Hub 门户（问题卡片） | Portal 用户提交答复，经认证回调写回 tsw | Portal 的 owner 认证 + 请求 ID |
 | `email-draft` | notify_only | 在邮箱生成草稿（默认不发送，沿用邮件约定） | — | — |
 
-`user-cli` 与 `status-app` 不是请求与答复的渠道：它们记录用户在会话外主动做出的验收、退回与取消，以及长期偏好的记录与撤销（§8.10、DN007 §6.2）。
+`user-cli` 与 `status-app` 不是 P3 人类渠道：tsw 不向它们投递请求，它们记录用户在会话外主动做出的验收、退回与取消，以及长期偏好的记录与撤销（§8.10、DN007 §6.2）。`status-app` 另外记录用户在 Dashboard 应用中对待答问题的答复（T357，§8.10“在 Dashboard 中回答问题”）：与 worker 会话中的答复一样满足 G-USER，经 T12 生效。
 
 多渠道规则：
 
@@ -485,7 +486,7 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | `state` | 脚本自己的进度（例如已转发过的消息 ID），由脚本的结果事件记录（`channel.reply_seen`），下次运行时从账本读出 |
 | `enabled` | 停用的行不列出、不执行（例如 Teams 例行项的任务列表为空时） |
 
-默认例行项 `handoff-scan` 与 `session-scan`（§8.9.4a）内置在 tsw 中，始终在例行表里，不能删除，只能随 `routine.enabled` 一起停用。其他例行项由 tsw 的工具在需要时添加，例如主会话 `channel_sent` 登记第一张 Teams 卡片时加入 `teams-replies`。将来需要例行执行的事，也是新增一个内置脚本与添加它的规则。
+默认例行项 `handoff-scan`、`session-scan`（§8.9.4a）与 `answer-scan`（§8.9.4b）内置在 tsw 中，始终在例行表里，不能删除，只能随 `routine.enabled` 一起停用。其他例行项由 tsw 的工具在需要时添加，例如主会话 `channel_sent` 登记第一张 Teams 卡片时加入 `teams-replies`。将来需要例行执行的事，也是新增一个内置脚本与添加它的规则。
 
 #### 8.9.3 每次运行
 
@@ -522,6 +523,17 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | 转发 | `if_any`：“以下 worker 会话的标题或归档还没跟上任务状态，按 orchestrate skill 处理：…” |
 
 为什么不由例行会话自己改名（用户 2026-11-12 比较过）：tsw 用标题比较识别用户改过的标题（DN002 §5.8），万一漏判（用户改成的标题恰好与 tsw 记下的相同，或在读取与改名之间改名），宿主会弹出确认；Claude app 在定时触发的一轮中同样弹出并中断这一轮（T272 实测），没有人看着的例行会话就停在那里，之后的定时运行不再触发，问题转交与 Teams 答复回收随之停止。主会话中弹出的确认用户能看到。另外例行会话改名还要扩展用户设置中的 auto 模式规则，而派发去掉待命标记、在主会话中验收时本来就由主会话执行。代价是终端与 STATUS 的每次验收唤醒主会话一次。
+
+#### 8.9.4b 默认例行项：`answer-scan`
+
+用户 2026-11-25 要求在 Dashboard 中回答问题（T357，§8.10“在 Dashboard 中回答问题”）。答复由会话外的 Dashboard 应用记录，不经过任何会话，靠这一行在一个例行间隔内唤醒主会话，由主会话转告 worker。
+
+| 项目 | 内容 |
+| --- | --- |
+| 输入 | 无（读账本） |
+| 脚本 | 列出来源渠道为 `status-app`、主会话还没有 `inbox_ack` 的答复与补充答复，去掉本例行会话最近转发过的（与 `session-scan` 相同：在 `cache/routine.json` 中记下转发时间，过了 `routine.stale_after_intervals` 个间隔仍未确认时再转发一次；没有主会话可发时不记为已转发）。不记事件 |
+| 结果 | 新出现的答复：任务、问题编号、inbox 序号、worker 会话、用户原话、是否补充答复（及它取代的答复）、问题此前的去向（在 worker 会话中等待、已转交、已转达到哪个渠道） |
+| 转发 | `if_any`：“以下问题已由用户在 Dashboard 答复并已登记，按 handle-input skill 把每条给 worker 的消息原样发给它，再 inbox_ack：…”，每条附要发给 worker 的消息全文 |
 
 #### 8.9.5 Teams 例行项：`teams-replies`
 
@@ -573,6 +585,7 @@ Teams 工具只有宿主中的模型能调用（delegated），回收因此是 p
 | `tsw task accept <任务> [--note <原话>]`、`tsw task reject <任务> --reason <理由>`、`tsw task cancel <任务>` | `user-cli` | `principal`：本机用户名与机器名；`message_ref`：`cli:<时间>:<进程号>`；`text`：`--note` / `--reason`，没有时为命令行本身；`target`：任务、命令读到的 revision（`--revision` 可指定）、决定类别 |
 | `tsw preference record --scope <范围> --topic <主题> --text <原文> [--supersedes <P-n>]`、`tsw preference revoke <P-n> --reason <理由>`（长期偏好的管理，DN007 §6.2）；`tsw preference record --candidate <PC-n>`、`tsw preference dismiss <PC-n> --reason <理由>`（确认或拒绝偏好候选，DN007 §6.3） | `user-cli` | `principal`、`message_ref` 同上；`text`：偏好原文、撤销或拒绝的理由；`target`：`["preference", <范围>, "standing"]`、`["preference", <编号>, "revoke"]` 或 `["preference", <候选编号>, "dismiss"]` |
 | `tsw reviewer set [--reviewer <评审器>] [--model <模型>] [--effort <强度>]`（更换评审器、评审模型与推理强度，DN004 §3.4，T330） | `user-cli` | `principal`、`message_ref` 同上；`text`：命令行本身（含选择的值）；`target`：`["config", <修改前文件的 sha256>, "authorize"]`（DN003 §7.2） |
+| Dashboard 应用中卡片的答复区（回答待答问题，T357，见下方“在 Dashboard 中回答问题”） | `status-app` | `principal`、`message_ref` 同下一行；`text`：用户的原话（选项按钮的文字或输入框的内容）；`request_id`：问题编号；`target` 的 revision 取自页面上显示的 revision |
 | Dashboard 应用中卡片的「验收」「退回」「取消」按钮 | `status-app` | `principal` 同上；`message_ref`：`status-app:<服务实例>:<序号>`；`text`：页面、按钮与任务，退回时附用户填写的理由；`target` 的 revision 取自页面上显示的 revision，任务在此期间已变化时 G-USER 拒绝 |
 | Dashboard 应用「长期偏好」页的「记录」、条目的「替代」「撤销」（长期偏好的管理，DN007 §6.2，T290） | `status-app` | `principal`、`message_ref` 同上；`text`：用户在页面上填写的偏好原文或撤销理由；`target`：`["preference", <范围>, "standing"]` 或 `["preference", <编号>, "revoke"]` |
 
@@ -594,6 +607,25 @@ Dashboard 应用：
   5. **状态与版本**：`tsw dashboard status`（只读，任何会话都可运行）报告是否已安装、是否在运行、端口，以及服务载入的提交；服务提供不需要令牌的 `/healthz`，只返回这些信息（不含令牌与账本内容），`update-plan` 据此判断服务是否已是新版本。
   6. 在终端中运行的 `tsw dashboard`（`tsw status serve`）不变：每次新令牌、默认任选端口，适合临时使用或不托管的环境。
 - 按钮：`done`（待用户验收）的卡片有「验收」与「退回」（理由在卡片内展开的输入框中填写，用「发送退回」提交）；处于可取消状态、且没有活动 worker（没有 `starting`、`standby`、`live` 的 attempt，没有进行中的集成）的卡片有「取消」。有活动 worker 的任务须由主会话先停止 worker，所以不显示「取消」，卡片上写明原因。操作结果（成功，或被拒绝的原因）显示在卡片上，成功后页面重新载入。
+- 在 Dashboard 中回答问题（用户 2026-11-25 要求，T357；用户看过三个方案的可交互示例后选定“卡片内作答”，并要求去掉看板顶部的待答计数横幅、卡片中已显示的材料不在问题中重复列出，M-T357-1）：等待用户答复的问题可以直接在 Dashboard 应用中回答，与在 worker 会话中回答等效（满足 G-USER）。`status-app` 由此也记录答复，但它不是 P3 人类渠道：tsw 不向它投递请求，它只记录用户在页面上主动给出的答复（§8.6）。
+  1. 卡片：任务在等待用户、有待答问题（`input_requests` 为 `pending`，类别为会话内问题 `in_session` 或主会话交给用户的 `escalation`）时，卡片上的问题提示换成答复区。第一行是问题编号、提问时间与去向（“在 worker 会话中等待 · N 分钟后转交主会话”“已转交主会话”“已转交主会话 · 已发到 Teams”），worker 标为只能由用户决定（`reserved`）的加“🔒 只能由你回答”；其下是问题全文，超过 5 行时先显示开头，「展开全文」看全部；再下是本任务已登记、卡片上其他地方没有显示的产出（不含 PR 链接，任务书与 worker 会话链接在卡片下方本来就有，都不重复；这些产出也不再在「详情」的「其他产出」中重复）；最后是答复控件：worker 提问时给了选项的（第 8 项），每个选项一个按钮，按下等于说出按钮上的文字；一个输入框（有选项时提示“或用你自己的话回答…”，没有时为“用你自己的话回答…”）与「发送…」（Ctrl+Enter 相同）。宽屏（宽于 820px）上这张卡片占两列，窄屏照常一列，选项按钮各占半行。看板顶部不另设待答计数（用户 2026-11-25）：「等待用户」状态卡计数，筛选面板的「关注」只看待用户处理的任务。
+  2. 步骤：点选项或「发送…」后，答复控件换成确认条：“把下面这句话作为你的答复记入账本？”、原话、所答的问题编号与任务 revision、「确认发送」「返回修改」。确认后显示“正在记入账本…”，再显示结果（第 5 项）。从确认条出现到结果显示，页面不自动刷新。
+  3. 任务流与单任务视图：任务流中有待答问题的卡片右上角带“?”标记；Dashboard 应用中点它，在弹框中打开与看板卡片相同的答复区（宽屏与窄屏都是弹框）。单任务视图头部的问题提示也是同一个答复区。静态 `views/STATUS.html` 只显示问题与产出，没有答复控件，写明在 Dashboard 应用或 worker 会话中回答。
+  4. 接口：`POST /api/tasks/<任务>/answer`，请求体 `{"request_id", "revision", "text", "command_id", "late"}`：`revision` 是页面上显示的任务 revision；`text` 是用户的原话（选项按钮的文字或输入框的内容，原样记录，不改写，至多 4000 个字符）；`command_id` 由页面为每次确认生成，重试时不变；`late` 可选，见第 5 项。准入与「验收」按钮相同（见上方第 3 条：只监听回环地址、令牌 cookie、请求头中的页面令牌、`Host` 与 `Origin`），经 workdeck gateway 时同样：代理用插件登录换得的 cookie，页面照常带页面里的令牌。应用以 `user` 角色运行状态机工具 `user_input_answer`，来源由应用自己记录：`VerifiedSource` 的渠道为 `status-app`，`principal` 为本机用户名与机器名，`message_ref` 为 `status-app:<服务实例>:<序号>`（同一 `command_id` 的重试用同一个引用），`text` 为原话，`request_id` 为问题编号，`target` 为 `[任务, 页面上的 revision, "answer"]`。会话不能调用这个工具（`user` 角色只能从会话外的 tsw 进程取得，上方第 1、2 条）。
+  5. 记录与结果（工具在一次写入中核对）：
+
+     | 情形 | 记录 | 页面 |
+     | --- | --- | --- |
+     | 问题仍待答，页面上的 revision 与当前一致，问题绑定的 attempt 与代次与当前一致 | `input.resolved`（T12，`source_kind: user`，`answer` 就是原话），与 worker 会话中的答复相同：回到离开时的子状态；revision 在等待期间变过（与问题无关的需求变更，DN002 §5.1）时进入 `executing` 并开启新周期 | “✓ 已记入账本（序号 N）”与原话，以及“已通知主会话转告 worker 继续”；任务回到执行中，卡片上写“Q-… 已在 Dashboard 答复：「原话」· 等待主会话转告 worker”，直到主会话确认已转告（第 6 项） |
+     | 同一次答复的重试：同一 `command_id`，或服务重启后重试时问题已由同一原话经 `status-app` 答复 | 不再记录 | 与成功相同，注明“之前已记入” |
+     | 问题已由别处答复（worker 会话、主会话代答、Teams、另一个页面） | 不记录 | “这个问题已经有答复，你这次的话没有作为答复记录”，显示生效的答复（渠道、时间、原话或代答内容）；「仍记为补充答复」用 `late: true` 再发一次，记为 `input.late_response`（`supersedes` 为生效的答复），不改变状态，由主会话按 §8.1c 处理；「知道了」关闭 |
+     | 页面上的 revision 与当前不一致、问题已取消或过时、绑定的 attempt 或代次已变、任务不在等待用户 | 不记录（G-USER 或工具拒绝） | “没有记录：任务在你打开页面之后有变化”与原因，保留用户写的话以便复制，「刷新」 |
+     | 发出后没有收到回应（网络中断、服务重启） | 未知 | “结果未知”；「重试（同一请求）」用同一 `command_id`，已记入时得到第一次的结果，不会记两次；「刷新页面查看」 |
+
+  6. worker 怎样得知（tsw 进程不能唤醒 app 中的会话，§8.9）：来源渠道为 `status-app` 的答复与补充答复（`input.resolved`、`input.late_response`）总是进入主会话的 inbox，不受 `scheduling.wake.reportable_events` 影响（否则 worker 永远得不到答复）。例行表的默认例行项 `answer-scan`（§8.9.4b）在下一次运行时把它们转给主会话，转发中带要发给 worker 的消息全文；主会话按 handle-input skill 把这段消息原样发给 worker 会话，再 `inbox_ack`。消息写明问题已由用户在 Dashboard 答复并已登记、任务已回到执行中，以及用户原话：worker 不再 `user_answer`，按答复继续，下一轮结束时调用 `wrap_up` 不带 `ask`、不设 `blocked`，替换掉 app 中挂着的提问框（§8.1a）。补充答复的消息写明它是迟到答复与生效的答复：生效的是主会话代答时，worker 以用户的话为准继续；两者都来自用户且冲突时，worker 再次 `ask_user` 确认（§8.1c）。主会话 `inbox_ack` 之后，卡片上的“等待主会话转告 worker”消失。例行会话关闭（`routine.enabled=false`）或主会话不在时，答复照样在 inbox 中，主会话下次运行 `inbox`、`attention` 时看到，结束一轮前 Stop hook 也会提醒有未处理的回传。
+  7. 其他渠道的收尾：问题不再待答后，Teams 例行项把它的任务移出输入列表（§8.7 第 4 步），之后在 Teams 中的回复转出时标为迟到；本版本不在 Teams 中补发“已在其他渠道答复”。问题已转交主会话时，`answer-scan` 的转发写明它此前的去向（已转交、已在主会话中转达、已发 Teams 卡片）：主会话不再等待这个问题的答复，之后对它的 `handoff_resolve` 以 `request_not_pending` 拒绝，`input_resolve` 记为迟到答复。用户之后在 worker 会话中的回复照常由 hook 记录并对应到这个问题（它还没有来自 worker 会话的答复），worker 按 §8.1c 记为迟到答复。
+  8. 选项：worker 提问时可以在 `ask_user` 的可选字段 `options` 中给出选项（至多 6 项，每项 1–80 个字符、互不相同），与它在 app 提问框中给的按钮相同；tsw 把它记在 `input.escalated` 中。没有 `options` 的问题（包括本版本之前的问题与主会话交给用户的 `escalation`）只有输入框。
+  9. 并发：同一问题的几个答复（两个页面、页面与 worker 会话、页面与主会话）由账本的单写者顺序决定，先提交的生效，后到的按第 5 项的表处理。
 - 任务书：每张卡片（STATUS.html 与 Dashboard 应用都是）有可展开的当前 revision 的任务书（目标、验收，以及 worker 的 `brief.md` 链接）；Dashboard 应用还从账本列出可展开的历史任务书：之前每个 revision 的目标与验收，以及它从何而来（登记、需求变更附用户原话、退回附理由）。过长的问题与暂停说明在卡片内滚动，卡片不随之变长。
 - 单任务视图（用户 2026-11-11 要求，T266）：Dashboard 应用为每个任务提供一个只读的详细页，地址是应用根下的 `tasks/<任务 ID>`（任务 ID 按 URL 路径段编码，例如 `/tasks/T266`）。地址稳定，可以从其他页面或嵌入方直接链接。看板卡片上的「详情」进入，详细页顶部的「返回看板」回到看板并定位到这张卡片。已归档的任务不在看板上，但详细页仍可打开；不存在的任务返回 404，页面上给出返回看板的链接。详细页上的验收、退回、取消按钮与卡片相同，可用性判断与校验也相同。详细页依次展示：
   1. 头部：编号、标题、状态与子状态、类型、仓库，以及与卡片相同的提示（待答问题、待验收、暂停、stale、依赖失效）。
@@ -1057,4 +1089,7 @@ worker 用 direct 的 remote-hub 会话，主会话可以在任何宿主：
 | 任务流的布局与渲染（§8.10 任务流第 8 项，T303） | tsw 在 Python 中计算分层布局与路点，页面脚本只画线 | Mermaid、Graphviz dot、ELK layered（T303 第 3–6 节）：要几 MB 的前端库或运行时没有的程序，布局在浏览器中计算、不能单元测试，泳道变成各自的框且列不对齐 |
 | teams-replies 已判定消息的记录位置（§8.9.5，T293） | 例行会话缓存 `cache/routine.json` | 记账本事件：每条非回复消息一条事件，账本随自聊消息增长，而丢失的代价只是多读一次正文，不值得进账本；只缩短读取窗口：窗口起点由最早待答问题决定（用户 2026-11-09：问题之后的消息全部读取），不能前移 |
 | 已判定消息被编辑后（§8.9.5，T293） | 按列出时的最后修改时间重读 | 不处理编辑：把非回复消息改成以任务 ID 开头的答复会被漏掉，而此前每次都重读时能收到；按 `lastEditedDateTime`：只在编辑时变化，更准确，但从未编辑的消息为 null，与“列出结果没有这个字段”无法区分 |
+| 在 Dashboard 中回答问题的位置（§8.10“在 Dashboard 中回答问题”，T357） | 卡片内作答：问题、产出与答复控件在卡片里，等待中的卡片宽屏占两列；任务流中点卡片弹框回答 | 精简卡片＋答复面板：卡片只显示问题前两行、选项小按钮与「回答…」，点开右侧面板（窄屏全屏），面板中「‹ 1/3 ›」逐个回答所有待答问题；「待你答复」队列：看板上方固定一栏列出所有待答问题，点一行原地展开成对话，卡片上只留“去回答”，窄屏收成横幅。用户看过三个方案的示例后选定卡片内作答（M-T357-1），并去掉了示例中看板顶部的待答计数横幅 |
+| worker 得知 Dashboard 答复的方式（§8.10 同上第 6 项，T357） | 例行项 `answer-scan` 转给主会话，主会话把 tsw 写好的消息原样发给 worker | tsw 进程直接唤醒 worker：app 中的会话不能由外部进程唤醒（§8.9）；例行会话直接发给 worker：例行会话只向主会话转发，与 worker 通信的始终是主会话，唤醒目标也只有持租主会话（DN001 §6.4）；经 workdeck 把消息发到 worker 会话：只在经 gateway 打开时可用，本机 Dashboard 没有，而且把一个任务的流程绑在嵌入方上；worker 定时检查：定时提示与用户消息无法区分（T241） |
+| Dashboard 中再次回答已答复的问题（§8.10 同上第 5 项，T357） | 不记录，显示生效的答复，用户可选择记为补充答复 | 一律记为迟到答复（§8.1c 对渠道的做法）：页面上重复点击、两个页面同时作答都会留下没有意义的迟到答复，主会话还要逐条判断 |
 | Dashboard 提供 `work/` 下的文件（§8.10“执行目录中的产出”，T341） | 只提供已登记的产出，以及其所在目录与子目录中的样式、图片与字体；解析链接后不出该任务的 `work/<任务>/` 与产出目录 | 提供整个 attempt 执行目录：worktree 中有 `.git`、本机配置与可能的凭据，经 workdeck gateway 可以从别的设备读取，范围过大。登记时把文件复制到 `runs/`：worker 不能写 `runs/`，复本也会随执行目录中的修改过时。只提供登记的那个文件：页面引用的样式与图片失效。提供产出目录中的全部文件：同目录中未登记的页面、脚本与数据也被带出，与“未登记不提供”不符 |

@@ -31,5 +31,6 @@ flowchart TD
     S2 --> V
     S3 --> V
     UA --> V
+    DB[Dashboard 中回答<br/>status-app · 例行项 answer-scan 转告 worker] --> V
     V --> RR[T12 回到 in_progress<br/>source=user 满足 G-USER]
     RR --> C[迟到的答复记为 input.late_response<br/>worker 会话中用户的话优先于主会话代答]

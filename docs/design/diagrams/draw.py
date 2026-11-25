@@ -552,6 +552,7 @@ def input_routing():
     d.card('CH',820,1280,320,85,'teal')
     for key,y in [('S1',1450),('S2',1640),('S3',1830)]:
         d.card(key,850,y,270,115,'teal')
+    d.card('DB',850,1972,270,110,'green')
     d.card('V',820,2100,320,85,'teal')
     d.card('RR',820,2280,320,105,'green')
     d.card('C',820,2430,320,100,'slate')
@@ -586,7 +587,8 @@ def input_routing():
     d.route('CH','S3',[(820,1340),(775,1340),(775,1885),(850,1885)],color='teal')
     d.route('S1','V',[(1120,1505),(1165,1505),(1165,2120),(1140,2120)],color='teal')
     d.route('S2','V',[(1120,1695),(1150,1695),(1150,2140),(1140,2140)],color='teal')
-    d.route('S3','V',[(985,1945),(985,2100)],color='teal',main=True)
+    d.route('S3','V',[(1120,1900),(1132,1900),(1132,2100)],color='teal')
+    d.route('DB','V',[(985,2082),(985,2100)],color='green',main=True)
     d.route('UA','V',[(1140,940),(1190,940),(1190,2165),(1140,2165)],color='green',main=True)
     d.route('V','RR',color='green',main=True)
     d.route('RR','C',color='slate',main=True)
