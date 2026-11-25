@@ -14,6 +14,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, cast
 
+from tsw.machine.ask_user import collecting
 from tsw.machine.model import loads
 
 ANSWERABLE_KIND = "in_session"
@@ -27,6 +28,9 @@ CHANGED = {
     "not_waiting": "任务已不在等待用户",
     "attempt": "提问的 worker 会话已被替换",
     "not_live": "worker 会话不在运行",
+    "moved_on": (
+        "这个问题已不能在 worker 会话中再回答（之后有了新的问题，或你已在 worker 会话中答复过）"
+    ),
 }
 CHANNELS = {
     "in-session": "worker 会话",
@@ -77,7 +81,7 @@ def question(conn: sqlite3.Connection, task_id: str, request_id: str) -> Questio
     if status in ("cancelled", "superseded"):
         raise Refused("changed", CHANGED[status])
     task = conn.execute(
-        "SELECT status, current_attempt FROM tasks WHERE task_id = ?", (task_id,)
+        "SELECT status, revision, current_attempt FROM tasks WHERE task_id = ?", (task_id,)
     ).fetchone()
     attempt = conn.execute(
         "SELECT attempt, phase, generation, session_ref FROM attempts "
@@ -96,6 +100,10 @@ def question(conn: sqlite3.Connection, task_id: str, request_id: str) -> Questio
         raise Refused("changed", CHANGED["not_waiting"])
     if attempt["phase"] != "live":
         raise Refused("not_running", CHANGED["not_live"])
+    # The hook ties a message in the session to one question only (``collecting``): the words
+    # go out only when that is this question, so they never land on another one (review F1).
+    if collecting(conn, task_id, str(row["session_ref"]), int(task["revision"])) != request_id:
+        raise Refused("changed", CHANGED["moved_on"])
     return Question(
         task_id=task_id,
         request_id=request_id,

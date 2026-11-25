@@ -150,9 +150,28 @@ def test_a_retry_is_not_delivered_twice(
     )
     assert (status, result["duplicate"], result["state"]) == (HTTPStatus.OK, True, "received")
     assert len(inbox.messages()) == 1
+    # The page follows that answer by its own command_id too (review F5).
+    progress = app.answer_status("T001", f"request_id={request_id}&command_id=dashboard-answer-02")
+    assert progress["state"] == "received"
     # One command_id is one answer.
     status, result = answer(app, request_id, "改成 A")
     assert (status, result["code"]) == (HTTPStatus.CONFLICT, "command_reused")
+
+
+def handed_off_and_answered(h: Harness, request_id: str) -> None:
+    """The question times out, and the orchestrator answers it within its authority."""
+    h.clock.now = "2026-11-05T00:10:00Z"
+    h.run("sync")
+    h.run(
+        "handoff_resolve",
+        task_id="T001",
+        request_id=request_id,
+        decision="answer",
+        answer="用 A：与现有接口一致",
+        rationale="任务书要求兼容现有接口",
+        basis=["任务书 目标"],
+        confidence="high",
+    )
 
 
 @pytest.mark.transition("T12")
@@ -160,24 +179,62 @@ def test_a_question_answered_elsewhere_is_not_sent_unless_the_user_insists(
     h: Harness, worker: Caller, inbox: FakeInbox, app: StatusApp
 ) -> None:
     request_id = ask(h, worker)
-    say(h, worker, "A")
+    handed_off_and_answered(h, request_id)
+    status, result = answer(app, request_id, "还是 B 吧")
+    assert (status, result["code"]) == (HTTPStatus.CONFLICT, "answered")
+    assert result["effective"] == {"by": "主会话代答", "text": "用 A：与现有接口一致"}
+    assert inbox.messages() == []
+    # 「仍发给 worker」: delivered, and the hook ties it to this very question, so the worker
+    # records it as the late answer that prevails over the orchestrator's (DN006 §8.1c).
+    status, result = answer(app, request_id, "还是 B 吧", late=True)
+    assert (status, result["state"], result["late"]) == (HTTPStatus.OK, "sent", True)
+    assert [m["message"]["content"] for m in inbox.wait(1)] == ["还是 B 吧"]
+    say(h, worker, "还是 B 吧")
     message = last_message(h)
-    h.run(
+    assert message["request_id"] == request_id
+    out = h.run(
         "user_answer",
         worker,
         task_id="T001",
         request_id=request_id,
         message_id=message["message_id"],
+        answer="用 B",
+    )
+    assert out["events"][0]["type"] == "input.late_response"
+    progress = app.answer_status("T001", f"request_id={request_id}&command_id={COMMAND}")
+    assert (progress["state"], progress["late"]) == ("received", True)
+
+
+def test_a_late_answer_never_lands_on_another_question(
+    h: Harness, worker: Caller, inbox: FakeInbox, app: StatusApp
+) -> None:
+    # Answered in the worker's session already: a message there no longer belongs to it.
+    first = ask(h, worker)
+    say(h, worker, "A")
+    h.run(
+        "user_answer",
+        worker,
+        task_id="T001",
+        request_id=first,
+        message_id=last_message(h)["message_id"],
         answer="A",
     )
-    status, result = answer(app, request_id, "还是 B 吧")
-    assert (status, result["code"]) == (HTTPStatus.CONFLICT, "answered")
-    assert result["effective"] == {"by": "worker 会话", "text": "A", "message_ref": "M-T001-1"}
+    status, result = answer(app, first, "B", late=True)
+    assert (status, result["code"]) == (HTTPStatus.CONFLICT, "changed")
+    # Answered by the orchestrator, then the worker asked again: the words for the first
+    # question would land on the second, so they do not go out (review F1).
+    second = ask(h, worker)
+    handed_off_and_answered(h, second)
+    third = ask(h, worker)
+    status, result = app.answer(
+        "T001",
+        {"request_id": second, "text": "B", "command_id": "dashboard-answer-03", "late": True},
+    )
+    assert (status, result["code"]) == (HTTPStatus.CONFLICT, "changed")
     assert inbox.messages() == []
-    # 「仍发给 worker」: delivered; the worker handles it as a late answer (DN006 §8.1c).
-    status, result = answer(app, request_id, "还是 B 吧", late=True)
-    assert (status, result["state"], result["late"]) == (HTTPStatus.OK, "sent", True)
-    assert [m["message"]["content"] for m in inbox.wait(1)] == ["还是 B 吧"]
+    assert h.query("SELECT status FROM input_requests WHERE request_id = ?", third) == [
+        {"status": "pending"}
+    ]
 
 
 def test_no_running_session_means_nothing_is_sent(
@@ -243,11 +300,17 @@ def test_an_error_while_writing_is_unknown_and_the_retry_checks_first(
     status, result = answer(app, request_id, "A")
     assert (status, result["code"]) == (HTTPStatus.BAD_GATEWAY, "unknown")
     monkeypatch.setattr(session_inbox, "_write", real)
-    # It did arrive: the retry finds the words recorded in the session and sends nothing.
-    inbox.wait(1)
+    # It did arrive, but the hook has not recorded it yet: the retry writes nothing (review F2).
+    assert len(inbox.wait(1)) == 1
+    status, result = answer(app, request_id, "A")
+    assert (status, result["duplicate"], result["unconfirmed"]) == (HTTPStatus.OK, True, True)
+    assert result["state"] == "sent"
+    assert len(inbox.wait(2, timeout=0.5)) == 1
+    # Once the hook ran, the same retry shows it received.
     say(h, worker, "A")
     status, result = answer(app, request_id, "A")
-    assert (status, result["duplicate"]) == (HTTPStatus.OK, True)
+    assert (status, result["duplicate"], result["state"]) == (HTTPStatus.OK, True, "received")
+    assert "unconfirmed" not in result
     assert len(inbox.messages()) == 1
 
 

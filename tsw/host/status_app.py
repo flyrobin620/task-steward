@@ -443,10 +443,20 @@ class StatusApp:
                         **refused.details,
                     }
                 already = answering.received(conn, found, text)
-                if (seen is not None and seen["state"] == "sent") or already is not None:
-                    # A retry, or these words already reached the session: never twice.
+                if seen is not None or already is not None:
+                    # A retry, or these words already reached the session: never twice. After an
+                    # unknown write the same answer is not written again either: the ledger only
+                    # shows it once the hook ran, so its absence proves nothing (review F2); the
+                    # user sends again as a new answer if the session never got it.
+                    self._remember(command_id, task_id, request_id, text)
                     state = answering.progress(conn, task_id, request_id, text)
-                    return HTTPStatus.OK, {"ok": True, "duplicate": True, **state}
+                    unconfirmed = seen is not None and seen["state"] == "unknown"
+                    return HTTPStatus.OK, {
+                        "ok": True,
+                        "duplicate": True,
+                        **({"unconfirmed": True} if unconfirmed and already is None else {}),
+                        **state,
+                    }
                 if found.status != "pending" and not late:
                     return HTTPStatus.CONFLICT, {
                         "ok": False,
@@ -456,20 +466,27 @@ class StatusApp:
                     }
             outcome = session_inbox.deliver(found.session_ref, text, self.sessions_dir)
             if outcome.state in ("written", "unknown"):
-                if len(self._answers) >= REMEMBERED_COMMANDS:
-                    self._answers.pop(next(iter(self._answers)))
-                self._answers[command_id] = {
-                    "task_id": task_id,
-                    "request_id": request_id,
-                    "text": text,
-                    # An unknown write is not "sent": a retry checks the ledger, then delivers.
-                    "state": "sent" if outcome.state == "written" else "unknown",
-                }
+                self._remember(command_id, task_id, request_id, text, outcome.state)
         if outcome.state == "written":
             print(f"tsw status: 已把 {request_id} 的答复发到 {task_id} 的 worker 会话", flush=True)
             return HTTPStatus.OK, {"ok": True, "state": "sent", "late": found.status != "pending"}
         status = HTTPStatus.BAD_GATEWAY if outcome.state == "unknown" else HTTPStatus.CONFLICT
         return status, {"ok": False, "code": outcome.state, "message": outcome.detail}
+
+    def _remember(
+        self, command_id: str, task_id: str, request_id: str, text: str, state: str = "sent"
+    ) -> None:
+        """What the page sent under this command_id, so a retry is never written again and the
+        page can follow it; an earlier ``unknown`` stays unknown."""
+        known = self._answers.get(command_id)
+        if known is None and len(self._answers) >= REMEMBERED_COMMANDS:
+            self._answers.pop(next(iter(self._answers)))
+        self._answers[command_id] = {
+            "task_id": task_id,
+            "request_id": request_id,
+            "text": text,
+            "state": known["state"] if known is not None else state,
+        }
 
     def answer_status(self, task_id: str, query: str) -> dict[str, Any]:
         """How far a delivered answer has come (``GET /api/tasks/<task>/answer``), read from the

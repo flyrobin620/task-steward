@@ -153,6 +153,13 @@
     function follow(qa, body, since) {
       const s = state.get(qa);
       const {task} = info(qa);
+      // Sent: the words are in the result now, not a draft that holds the refresh (review F4).
+      const draft = qa.querySelector(".qa-free textarea");
+      if (draft && draft.value.trim() === s.words.trim()) {
+        draft.value = "";
+        draft.style.height = "";
+        qa.querySelector(".qa-send").disabled = true;
+      }
       const lines = el("ul", "qa-progress");
       const box = step(
         qa, "done",
@@ -175,10 +182,20 @@
         if (progress.state === "registered") text = "worker 已按你的答复继续；app 中的提问框会在它这一轮结束时换掉。";
         else if (progress.late) text = "问题此前已有答复：worker 会按迟到答复处理（你的话优先于主会话代答）。";
         else if (progress.state === "answered") text = "问题已由别处答复，worker 会按迟到答复处理。";
-        else if (progress.state === "sent" && Date.now() - since > QUIET_MS) {
-          text = "已写入，worker 会话还没有收到：它可能在等待其他确认。不会自动重发，可以打开 worker 会话查看。";
+        else if (progress.state === "sent" && (body.unconfirmed || Date.now() - since > QUIET_MS)) {
+          text = body.unconfirmed
+            ? "上次发送时出错，还没看到 worker 会话收到。为免重复，不会再发同一次答复；打开 worker 会话查看，确实没收到时可以「重新发送」。"
+            : "已写入，worker 会话还没有收到：它可能在等待其他确认。不会自动重发，可以打开 worker 会话查看。";
         }
         if (text) box.append(el("div", "qa-fine", text));
+        const again = box.querySelector('button[data-qa="resend"]');
+        if (progress.state === "sent" && body.unconfirmed && !again) {
+          const row = el("div", "qa-btns");
+          row.append(button("重新发送", "resend", true));
+          box.append(row);
+        } else if (progress.state !== "sent" && again) {
+          again.parentElement.remove();
+        }
       };
       render(body);
       busy(qa, true);
@@ -270,6 +287,11 @@
       } else if (b.dataset.qa === "go") deliver(qa, false);
       else if (b.dataset.qa === "late") deliver(qa, true);
       else if (b.dataset.qa === "retry") deliver(qa, false);
+      else if (b.dataset.qa === "resend") {
+        // A new answer with the same words: the user saw that the session never got them.
+        const s = state.get(qa);
+        if (s) { if (s.timer) window.clearTimeout(s.timer); s.command = commandId(); deliver(qa, s.late); }
+      }
       else if (b.dataset.qa === "back") back(qa);
       else if (b.dataset.qa === "reload") window.location.reload();
     });
@@ -299,8 +321,12 @@
       close.addEventListener("click", () => dialog.close());
       bar.append(link, el("b", "", title ? title.textContent : ""), close);
       const body = el("div", "qa-dlg-body");
-      const copy = source.cloneNode(true);
-      body.append(copy);
+      // The panel itself moves into the dialog and back when it closes: a copy would show its
+      // state without it (review F3).
+      const place = document.createComment("qa");
+      source.replaceWith(place);
+      body.append(source);
+      dialog.addEventListener("close", () => { place.replaceWith(source); }, {once: true});
       dialog.replaceChildren(bar, body);
       document.documentElement.dataset.docOpen = "";
       hold();

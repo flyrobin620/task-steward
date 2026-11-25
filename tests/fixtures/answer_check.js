@@ -59,6 +59,9 @@
   }
 
   async function flow() {
+    // Start confirming on the board, then go on in the task flow's dialog (review F3).
+    const card = document.querySelector(".card.qa-card");
+    click(card.querySelector(".qa-opt"));
     document.getElementById("view-flow").click();
     await pause(100);
     const node = document.querySelector('.fnode[data-flags~="asking"]');
@@ -69,9 +72,35 @@
     if (dialog) {
       const inside = box(dialog);
       check("flow: the dialog fits the window", inside.left >= 0 && inside.right <= innerWidth + 1, `${Math.round(inside.left)}..${Math.round(inside.right)} / ${innerWidth}`);
+      const step = dialog.querySelector(".qa-step");
+      check("flow: the confirmation started on the board goes on in the dialog", shown(step) && step.textContent.includes("确认发送"));
+      click([...step.querySelectorAll("button")].find(b => b.textContent === "返回修改"));
+      check("flow: its buttons work there", shown(dialog.querySelector(".qa-ans")) && !shown(step));
       click(dialog.querySelector(".qa-x"));
       check("flow: ✕ closes the dialog", !dialog.open);
+      check("flow: the panel is back on its card", card.querySelector(".qa") && !dialog.querySelector(".qa"));
     }
+    document.getElementById("view-status").click();
+    await pause(50);
+  }
+
+  async function success() {
+    // The server's two replies come from this check (the page is a file); the server itself is
+    // tested in tests/component/test_dashboard_answer.py and the surface test (review F4).
+    const replies = {post: {ok: true, state: "sent"}, get: {ok: true, state: "registered", message_id: "M-T001-1"}};
+    window.fetch = async (url, init) => new Response(JSON.stringify(init && init.method === "POST" ? replies.post : replies.get), {status: 200, headers: {"Content-Type": "application/json"}});
+    const qa = document.querySelector(".card.qa-card .qa");
+    const area = qa.querySelector(".qa-free textarea");
+    area.value = "就用方案 A";
+    area.dispatchEvent(new Event("input", {bubbles: true}));
+    click(qa.querySelector(".qa-send"));
+    click([...qa.querySelectorAll(".qa-step button")].find(b => b.textContent === "确认发送"));
+    const step = qa.querySelector(".qa-step");
+    const done = await until(() => step.textContent.includes("已登记答复") && step.querySelector("li.on:nth-child(3)"), 4000);
+    check("success: sent, then registered", done, step.textContent.slice(0, 120));
+    check("success: the sent words are no draft any more", area.value === "");
+    const released = await until(() => document.documentElement.dataset.holdRefresh === undefined, 1000);
+    check("success: auto-refresh is no longer held", released);
   }
 
   async function run() {
@@ -80,6 +109,7 @@
       check(`mode ${mode} matches the window`, (mode === "narrow") === matchMedia("(max-width:640px)").matches, innerWidth);
       await board();
       await flow();
+      await success();
     } catch (error) {
       check("no error", false, `${error && error.stack || error}`);
     }

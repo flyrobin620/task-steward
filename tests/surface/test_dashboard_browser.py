@@ -95,7 +95,13 @@ def with_check(page: str, check: Path = CHECK) -> str:
 
 
 def look(
-    page: Path, tmp: Path, mode: str, size: tuple[int, int], check: Path = CHECK
+    page: Path,
+    tmp: Path,
+    mode: str,
+    size: tuple[int, int],
+    *,
+    check: Path = CHECK,
+    budget: int = 4000,
 ) -> dict[str, Any]:
     target = tmp / f"page-{mode}-{check.stem}.html"
     target.write_text(with_check(page.read_text(encoding="utf-8"), check), encoding="utf-8")
@@ -110,7 +116,7 @@ def look(
             "--disable-extensions",
             f"--user-data-dir={profile}",
             f"--window-size={size[0]},{size[1]}",
-            "--virtual-time-budget=4000",
+            f"--virtual-time-budget={budget}",
             "--dump-dom",
             f"{target.as_uri()}?mode={mode}",
         ],
@@ -196,7 +202,7 @@ def waiting(h: Harness, tmp: Path) -> Path:
 def test_the_answer_panel_in_a_browser_wide_and_narrow(h: Harness, tmp_path: Path) -> None:
     page = waiting(h, tmp_path)
     for mode, size in (("wide", (1400, 900)), ("narrow", (390, 844))):
-        result = look(page, tmp_path, mode, size, ANSWER_CHECK)
+        result = look(page, tmp_path, mode, size, check=ANSWER_CHECK, budget=15000)
         assert not failed(result), (mode, failed(result))
         names = {c["name"] for c in result["checks"]}
         for name in (
@@ -205,5 +211,7 @@ def test_the_answer_panel_in_a_browser_wide_and_narrow(h: Harness, tmp_path: Pat
             "send: a lost connection is an unknown result",
             "flow: the card opens the panel in a dialog",
             "flow: ✕ closes the dialog",
+            "flow: the confirmation started on the board goes on in the dialog",
+            "success: auto-refresh is no longer held",
         ):
             assert name in names, (mode, name)
