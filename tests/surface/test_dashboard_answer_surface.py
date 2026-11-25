@@ -68,7 +68,8 @@ def test_the_page_answers_through_its_own_server_into_the_worker_session(
         assert (status, result["state"]) == (200, "sent")
         assert TOKEN not in json.dumps(result)
         [sent] = inbox.wait(1)
-        assert (sent["from"], sent["message"]["content"]) == ("tsw-dashboard", "方案 B")
+        content = f"[TaskSteward Dashboard 答复 {request_id}]\n方案 B"
+        assert (sent["from"], sent["message"]["content"]) == ("tsw-dashboard", content)
         status, _, raw = app.request(
             "GET", f"/api/tasks/T001/answer?request_id={request_id}&command_id=dashboard-answer-s1"
         )

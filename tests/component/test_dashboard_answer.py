@@ -27,6 +27,7 @@ from tsw.host.guard import Guard
 from tsw.host.session_inbox import key_file
 from tsw.host.status import AppView, render
 from tsw.host.status_app import StatusApp
+from tsw.machine.ask_user import dashboard_tagged
 from tsw.machine.base import Caller
 
 pytestmark = pytest.mark.use_case("UC-DIRECT-013")
@@ -82,6 +83,11 @@ def say(h: Harness, worker: Caller, prompt: str) -> None:
     Guard(h.home, env, payload).run("UserPromptSubmit")
 
 
+def arrive(h: Harness, worker: Caller, inbox: FakeInbox, index: int = -1) -> None:
+    """The session reads a delivered message: the hook gets exactly what the inbox got."""
+    say(h, worker, inbox.wait(1)[index]["message"]["content"])
+
+
 def last_message(h: Harness) -> dict[str, Any]:
     return h.query("SELECT * FROM session_messages ORDER BY sequence DESC LIMIT 1")[0]
 
@@ -107,7 +113,7 @@ def test_an_option_goes_to_the_worker_session_and_the_worker_registers_it(
     # Delivered as the user's message, the way workdeck does: the words only, as confirmed.
     [sent] = inbox.wait(1)
     assert sent["from"] == session_inbox.SENDER and sent["priority"] == "next"
-    assert sent["message"] == {"role": "user", "content": "方案 A"}
+    assert sent["message"] == {"role": "user", "content": dashboard_tagged(request_id, "方案 A")}
     assert sent["token"] == TOKEN
     # The app recorded nothing itself.
     assert h.ledger.storage.tail().sequence == sequence
@@ -115,7 +121,7 @@ def test_an_option_goes_to_the_worker_session_and_the_worker_registers_it(
         "sent"
     )
 
-    say(h, worker, "方案 A")
+    arrive(h, worker, inbox)
     message = last_message(h)
     assert (message["request_id"], message["text"]) == (request_id, "方案 A")
     progress = app.answer_status("T001", f"request_id={request_id}&command_id={COMMAND}")
@@ -143,7 +149,7 @@ def test_a_retry_is_not_delivered_twice(
     assert again[0] == HTTPStatus.OK and again[1]["duplicate"] is True
     assert len(inbox.wait(1)) == 1
     # Another command_id with the words already in the session (a retry after a restart).
-    say(h, worker, "用 B，理由见设计")
+    arrive(h, worker, inbox)
     status, result = app.answer(
         "T001",
         {"request_id": request_id, "text": "用 B，理由见设计", "command_id": "dashboard-answer-02"},
@@ -188,8 +194,10 @@ def test_a_question_answered_elsewhere_is_not_sent_unless_the_user_insists(
     # records it as the late answer that prevails over the orchestrator's (DN006 §8.1c).
     status, result = answer(app, request_id, "还是 B 吧", late=True)
     assert (status, result["state"], result["late"]) == (HTTPStatus.OK, "sent", True)
-    assert [m["message"]["content"] for m in inbox.wait(1)] == ["还是 B 吧"]
-    say(h, worker, "还是 B 吧")
+    assert [m["message"]["content"] for m in inbox.wait(1)] == [
+        dashboard_tagged(request_id, "还是 B 吧")
+    ]
+    arrive(h, worker, inbox)
     message = last_message(h)
     assert message["request_id"] == request_id
     out = h.run(
@@ -307,7 +315,7 @@ def test_an_error_while_writing_is_unknown_and_the_retry_checks_first(
     assert result["state"] == "sent"
     assert len(inbox.wait(2, timeout=0.5)) == 1
     # Once the hook ran, the same retry shows it received.
-    say(h, worker, "A")
+    arrive(h, worker, inbox)
     status, result = answer(app, request_id, "A")
     assert (status, result["duplicate"], result["state"]) == (HTTPStatus.OK, True, "received")
     assert "unconfirmed" not in result
@@ -363,7 +371,7 @@ def test_words_delivered_for_a_question_that_moved_on_answer_no_other(
     inbox.wait(1)
     handed_off_and_answered(h, first)
     second = ask(h, worker)
-    say(h, worker, "A")  # the session reads the message only now
+    arrive(h, worker, inbox)  # the session reads the message only now
     assert last_message(h)["request_id"] == ""
     assert h.query("SELECT status FROM input_requests WHERE request_id = ?", second) == [
         {"status": "pending"}
@@ -388,7 +396,7 @@ def test_a_retry_after_the_answer_was_registered_says_so(
     request_id = ask(h, worker)
     assert answer(app, request_id, "A")[0] == HTTPStatus.OK
     inbox.wait(1)
-    say(h, worker, "A")
+    arrive(h, worker, inbox)
     h.run(
         "user_answer",
         worker,
@@ -407,3 +415,33 @@ def test_a_retry_after_the_answer_was_registered_says_so(
     assert (status, result["code"]) == (HTTPStatus.CONFLICT, "answered")
     assert result["effective"]["text"] == "A"
     assert len(inbox.messages()) == 1
+
+
+def test_the_same_words_for_two_questions_each_answer_their_own(
+    h: Harness, worker: Caller, inbox: FakeInbox, app: StatusApp
+) -> None:
+    """Review r3 F9: "A" for the first question, then "A" for the next one, both read late."""
+    first = ask(h, worker, options=["A", "B"])
+    assert answer(app, first, "A")[0] == HTTPStatus.OK
+    inbox.wait(1)
+    handed_off_and_answered(h, first)
+    second = ask(h, worker, options=["A", "B"])
+    status, _ = app.answer(
+        "T001", {"request_id": second, "text": "A", "command_id": "dashboard-answer-05"}
+    )
+    assert status == HTTPStatus.OK
+    assert len(inbox.wait(2)) == 2
+    arrive(h, worker, inbox, 0)  # the answer to the first question: no question takes it
+    assert (last_message(h)["request_id"], last_message(h)["text"]) == ("", "A")
+    arrive(h, worker, inbox, 1)  # the answer to the second one
+    assert (last_message(h)["request_id"], last_message(h)["text"]) == (second, "A")
+
+
+def test_the_tag_is_not_part_of_the_words_and_names_the_question(
+    h: Harness, worker: Caller
+) -> None:
+    request_id = ask(h, worker)
+    say(h, worker, dashboard_tagged("Q-T001-9", "A"))  # a tag naming another question
+    assert (last_message(h)["request_id"], last_message(h)["text"]) == ("", "A")
+    say(h, worker, dashboard_tagged(request_id, "B\n多一行"))
+    assert (last_message(h)["request_id"], last_message(h)["text"]) == (request_id, "B\n多一行")

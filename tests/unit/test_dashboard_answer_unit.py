@@ -10,7 +10,7 @@ import pytest
 
 from tsw.errors import TswError
 from tsw.host import answer, session_inbox, transcript
-from tsw.machine.ask_user import MESSAGE_VIA, options
+from tsw.machine.ask_user import MESSAGE_VIA, dashboard_answer, dashboard_tagged, options
 
 pytestmark = pytest.mark.use_case("UC-DIRECT-013")
 
@@ -102,3 +102,16 @@ def test_options_are_at_most_six_distinct_short_texts() -> None:
     for bad in (["A", "A"], [str(i) for i in range(7)], ["x" * 81], [""], ["A", 1], "A"):
         with pytest.raises(TswError):
             options({"options": bad})
+
+
+def test_the_dashboard_tag_round_trips_and_nothing_else_is_taken_for_it() -> None:
+    tagged = dashboard_tagged("Q-T357-2", "方案 A\n第二行")
+    assert tagged == "[TaskSteward Dashboard 答复 Q-T357-2]\n方案 A\n第二行"
+    assert dashboard_answer(tagged) == ("Q-T357-2", "方案 A\n第二行")
+    for plain in (
+        "方案 A",
+        " [TaskSteward Dashboard 答复 Q-T1-1]\nA",
+        "[TaskSteward Dashboard 答复 Q-T1-1] A",
+        "[TaskSteward Dashboard 答复 T1]\nA",
+    ):
+        assert dashboard_answer(plain) == (None, plain)

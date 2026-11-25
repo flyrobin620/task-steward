@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Mapping
 from datetime import timedelta
@@ -173,6 +174,24 @@ def is_automated(prompt: str) -> bool:
 CLOSED = ("accepted", "cancelled", "archived")
 
 
+# The tag the Dashboard puts before the words it delivers to a worker's session (DN006 §8.10,
+# T357): the question they answer. The hook records the words after it; the tag only narrows
+# which question they may answer, so a user typing it gains nothing over typing the words.
+DASHBOARD_TAG = "[TaskSteward Dashboard 答复 {request_id}]\n"
+_DASHBOARD_TAG = re.compile(r"\A\[TaskSteward Dashboard 答复 (Q-[A-Za-z0-9_-]+)\]\n")
+
+
+def dashboard_tagged(request_id: str, words: str) -> str:
+    """What the Dashboard writes into the session: the tag, then the user's words."""
+    return DASHBOARD_TAG.format(request_id=request_id) + words
+
+
+def dashboard_answer(text: str) -> tuple[str | None, str]:
+    """The question a delivered answer names and the user's words; (None, text) untagged."""
+    found = _DASHBOARD_TAG.match(text)
+    return (found.group(1), text[found.end() :]) if found else (None, text)
+
+
 def collecting(
     conn: sqlite3.Connection, task_id: str, session_ref: str, revision: int
 ) -> str | None:
@@ -219,8 +238,6 @@ def session_message(
     prompt: str,
     *,
     prompt_id: str | None = None,
-    intended: str | None = None,
-    noted: bool = False,
 ) -> EventDraft | None:
     """What the ``UserPromptSubmit`` hook records: every message the user types in the worker's
     session while the task is still open (not accepted, cancelled or archived). Injected messages
@@ -232,8 +249,9 @@ def session_message(
     Any other message is recorded without a question: the worker may cite it as the source of a
     requirement change (``requirement_change``, DN002 §5.1a).
 
-    ``noted`` with ``intended``: the Dashboard delivered these words as the answer to that
-    question (DN006 §8.10, T357); they answer it only while it still takes answers here.
+    A message the Dashboard delivered starts with its tag (:func:`dashboard_answer`): the
+    words after it are recorded, and they answer the question the tag names only while that
+    question still takes answers here, never another one (DN006 §8.10, T357).
 
     ``prompt_id`` is the host's id of the turn the message started (Claude Code's hook payload):
     with it the end of the turn finds the message's source (``session_message_via``, T338).
@@ -244,16 +262,19 @@ def session_message(
     revision = int(row["revision"])
     message_id = next_item_id(conn, "session_messages", "message_id", "M", task_id)
     request_id = collecting(conn, task_id, session_ref, revision)
-    if noted and request_id != intended:
-        # The Dashboard delivered these words for another question, which no longer takes
-        # answers here: they answer no question rather than the newer one (DN006 §8.10, T357).
+    intended, words = dashboard_answer(user_words(prompt))
+    if intended is not None and request_id != intended:
+        # Delivered for a question that no longer takes answers here (answered elsewhere, a new
+        # one asked since): the words answer no question rather than the newer one.
         request_id = None
     data: dict[str, Any] = {
         "message_id": message_id,
         "request_id": request_id,
         "session_ref": session_ref,
-        "text": user_words(prompt),
+        "text": words,
     }
+    if intended is not None:
+        data["dashboard_request"] = intended  # optional (T357): the question it was sent for
     if prompt_id:
         data["prompt_id"] = prompt_id
     return EventDraft(type="input.session_message", task_id=task_id, revision=revision, data=data)

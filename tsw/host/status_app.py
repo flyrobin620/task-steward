@@ -60,6 +60,7 @@ from tsw.host.status import AppView, Revision, render, work_parts
 from tsw.host.task_view import card_state, not_found, render_task, timeline
 from tsw.host.version import REPO_ROOT
 from tsw.ledger import Ledger
+from tsw.machine.ask_user import dashboard_tagged
 from tsw.storage.fs import FsStorage
 
 HEALTH_PATH = "/healthz"
@@ -475,13 +476,13 @@ class StatusApp:
                         "message": refused.message,
                         **refused.details,
                     }
-            now = utc_now()
-            answering.note(self.home, found.session_ref, request_id, text, now)
-            outcome = session_inbox.deliver(found.session_ref, text, self.sessions_dir)
+            # The tag names the question, so the hook never ties the words to another one,
+            # however the question moves on before the session reads them (review r2–r3 F1).
+            outcome = session_inbox.deliver(
+                found.session_ref, dashboard_tagged(request_id, text), self.sessions_dir
+            )
             if outcome.state in ("written", "unknown"):
                 self._remember(command_id, task_id, request_id, text, outcome.state)
-            else:
-                answering.unnote(self.home, found.session_ref, text, now)
         if outcome.state == "written":
             print(f"tsw status: 已把 {request_id} 的答复发到 {task_id} 的 worker 会话", flush=True)
             return HTTPStatus.OK, {"ok": True, "state": "sent", "late": found.status != "pending"}
