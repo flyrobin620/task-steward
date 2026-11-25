@@ -511,7 +511,11 @@
       document.addEventListener("click", event => {
         if (!legendPop.hidden && !legendPop.contains(event.target) && !legendButton.contains(event.target)) legend(false);
       });
-      document.addEventListener("keydown", event => { if (event.key === "Escape" && !legendPop.hidden) legend(false); });
+      document.addEventListener("keydown", event => {
+        if (event.key !== "Escape" || legendPop.hidden) return;
+        legend(false);
+        legendButton.focus();
+      });
       // The lines of the current choice: with the references shown, the routes in the widened
       // gaps; with a card hovered and the references not shown, the routes with the references in
       // the same gaps, showing only that card's references.
@@ -785,15 +789,30 @@
     heroMore.addEventListener("click", () => heroOpen(!hero.classList.contains("open")));
     // The filters other than the search open in a panel (a bottom sheet on a narrow screen).
     const filterPop = $("filter-pop"), filterOpen = $("filter-open"), scrim = $("filter-scrim");
-    function panel(open) {
+    // Opening moves the focus into the panel; on a narrow screen Tab stays in the sheet; 「完成」
+    // and Esc give the focus back to 「筛选」.
+    const narrow = window.matchMedia("(max-width:640px)");
+    const focusable = () => Array.from(filterPop.querySelectorAll("button, select, input"))
+      .filter(el => !el.hidden && !el.disabled && el.getClientRects().length > 0);
+    function panel(open, back) {
       filterPop.hidden = !open;
       scrim.hidden = !open;
       tools.classList.toggle("open", open);
       filterOpen.setAttribute("aria-expanded", String(open));
+      if (open) focusable()[0]?.focus();
+      else if (back) filterOpen.focus();
     }
-    filterOpen.addEventListener("click", () => panel(filterPop.hidden));
-    $("filter-done").addEventListener("click", () => panel(false));
-    scrim.addEventListener("click", () => panel(false));
+    filterOpen.addEventListener("click", () => panel(filterPop.hidden, true));
+    $("filter-done").addEventListener("click", () => panel(false, true));
+    scrim.addEventListener("click", () => panel(false, true));
+    filterPop.addEventListener("keydown", event => {
+      if (event.key !== "Tab" || !narrow.matches) return;
+      const list = focusable();
+      if (!list.length) return;
+      const first = list[0], last = list[list.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    });
     document.addEventListener("click", event => {
       const target = event.target;
       if (!filterPop.hidden && target.isConnected && !filterPop.contains(target) && !filterOpen.contains(target)) panel(false);
@@ -852,7 +871,7 @@
     document.addEventListener("keydown", event => {
       const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName);
       if (event.key === "/" && !typing) { event.preventDefault(); q.focus(); q.select(); }
-      else if (event.key === "Escape" && !filterPop.hidden) { panel(false); filterOpen.focus(); }
+      else if (event.key === "Escape" && !filterPop.hidden) panel(false, true);
       else if (event.key === "Escape" && hero.classList.contains("open")) { heroOpen(false); heroMore.focus(); }
       else if (event.key === "Escape" && document.activeElement === q) { state.q = ""; render(); q.blur(); }
     });

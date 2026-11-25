@@ -68,11 +68,19 @@
     check("filters: the panel is in the window", r.top >= 0 && r.bottom <= innerHeight + 1 && r.left >= 0 && r.right <= innerWidth + 1,
       [r.top, r.bottom, innerHeight].map(Math.round).join(","));
     check("filters: nothing covers the panel", inside(pop, r.left + r.width / 2, r.top + 30) && inside(pop, r.left + r.width / 2, r.bottom - 20));
+    check("filters: opening moves the focus into the panel", pop.contains(document.activeElement), document.activeElement && document.activeElement.id);
     if (mode === "narrow") {
       const wide = document.documentElement.clientWidth;
       check("narrow: the panel is a bottom sheet", Math.abs(r.bottom - innerHeight) < 2 && r.width >= wide - 2,
         [r.bottom, r.width, wide].map(Math.round).join(","));
       check("narrow: a scrim behind the sheet", shown($("filter-scrim")));
+      const live = $("count");
+      check("narrow: the live count stays in the accessibility tree", getComputedStyle(live).display !== "none" && live.getAttribute("role") === "status");
+      // Tab from the last control comes back to the first: the sheet keeps the focus.
+      const controls = Array.from(pop.querySelectorAll("button, select, input")).filter(el => !el.hidden && el.getClientRects().length > 0);
+      controls[controls.length - 1].focus();
+      pop.dispatchEvent(new KeyboardEvent("keydown", {key: "Tab", bubbles: true, cancelable: true}));
+      check("narrow: Tab stays in the sheet", document.activeElement === controls[0], document.activeElement && (document.activeElement.id || document.activeElement.textContent));
     }
     const pick = pop.querySelector("[data-st]:not([hidden])");
     click(pick);
@@ -84,6 +92,7 @@
     check("filters: two chips and 「清除全部」", chips().length === 2 && !!$("chosen").querySelector(".clear-all"));
     document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
     check("filters: Esc closes the panel", !shown(pop));
+    check("filters: Esc gives the focus back to 「筛选」", document.activeElement === open);
     click(chips()[0].querySelector("button"));
     check("filters: × drops a chip", chips().length === 1 && !location.hash.includes("st="), location.hash);
     click($("chosen").querySelector(".chip-x button"));
@@ -102,6 +111,10 @@
     const lp = box($("legend-pop"));
     check("flow: 「图例与关系」 opens the legend", shown($("legend-pop")) && $("legend-pop").contains($("flow-legend")));
     check("flow: nothing covers the legend", inside($("legend-pop"), lp.left + 20, lp.top + 20));
+    $("flow-legend").querySelector("input").focus();
+    document.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+    check("flow: Esc folds the legend and focuses its button", !shown($("legend-pop")) && document.activeElement === $("legend-open"));
+    click($("legend-open"));
     click(document.body);
     check("flow: a click elsewhere folds the legend", !shown($("legend-pop")));
     check("flow: footer hidden in the task flow", !shown(document.querySelector("footer")));
