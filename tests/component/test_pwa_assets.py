@@ -1,4 +1,4 @@
-"""The Dashboard serves its home-screen manifest and icons on a real socket (UC-DIRECT-011,
+"""The Dashboard serves its home-screen manifest and icons on a real socket (UC-DIRECT-012,
 DN006 §8.10, T355): without the token, under the ``Host`` check, and the pages link them."""
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from tsw.host import pwa
 from tsw.host.status_app import COOKIE, StatusApp, make_server
 
 mark = pytest.mark
-UC = "UC-DIRECT-011"
+UC = "UC-DIRECT-012"
 
 
 @pytest.fixture

@@ -141,7 +141,9 @@ def test_the_dashboard_name_and_the_three_views(conn: sqlite3.Connection) -> Non
         ("timeline", "按时间顺序"),
         ("view-flow", "任务流"),
     ):
-        assert re.search(rf'<button[^>]*id="{view}"[^>]*>{label}</button>', tools), view
+        assert re.search(
+            rf'<button[^>]*id="{view}"[^>]*><span class="long">{label}</span>', tools
+        ), view
     # The task flow is a view of the page's state: it is kept with the filters.
     assert 'p.set("view", s.view)' in SCRIPT and 'p.set("arch", "1")' in SCRIPT
 
@@ -164,10 +166,11 @@ def test_tiles_show_only_nonzero_counts_and_every_status_on_the_board(
     assert ("1", "完成·待用户验收") in shown and ("1", "已归档") in shown
     for absent in ("运行中", "占用名额", "待启动", "待判断", "待用户答复", "follow-up", "暂停"):
         assert absent not in tiles, absent
-    # Running tasks and tasks with open follow-ups are short picks after the kinds (revision 3).
-    picks = page.split('<span class="lbl">类型</span>')[1].split("</div>")[0]
+    # Running tasks and tasks with open follow-ups are quick picks (revision 3), in the
+    # filter panel's 「快捷」 after 「只看待用户处理」 (T353).
+    picks = page.split("<h5>快捷</h5>")[1].split("</div>")[0]
     assert re.search(
-        r'<span class="lbl">快捷</span><button[^>]*data-quick="running" data-n="1" '
+        r'id="mine"[^>]*>只看待用户处理</button><button[^>]*data-quick="running" data-n="1" '
         r'aria-pressed="false"[^>]*>运行中<small>1</small>',
         picks,
     )
@@ -270,3 +273,56 @@ def test_the_layout_data_cannot_end_its_block(conn: sqlite3.Connection) -> None:
     block = page.split('id="flow-layouts">')[1].split("</script>")[0]
     assert "<" not in block and ">" not in block
     assert list(flow_layouts(page)["live:dep,fu,ref"]["lanes"]) == ["</script><b>x</b>"]
+
+
+@mark.use_case("UC-DIRECT-011")
+def test_the_page_layout_header_filters_and_flow_toolbar(conn: sqlite3.Connection) -> None:
+    _board(conn)
+    page = render(conn, AppView(token="t", actions={}))
+    # The header: the ledger line and the buttons in one block that 「⋯」 opens on a narrow
+    # screen; 「⋯」 needs the script, so it starts hidden.
+    hero = page.split('<header class="hero board-hero" id="hero">')[1].split("</header>")[0]
+    assert re.search(r'id="hero-more" hidden aria-expanded="false" aria-controls="hero-info"', hero)
+    info = hero.split('id="hero-info">')[1]
+    assert "账本序号" in info and 'id="prefs"' in info and 'id="theme"' in info
+    # The filters: one row (search, 「筛选」, views, count), the chosen chips, the panel.
+    tools = page.split('id="tools"')[1].split("</section>")[0]
+    bar = tools.split('<div class="fbar">')[1].split("</div>")[0]
+    for control in ('id="q"', 'id="filter-open"', 'id="view-flow"', 'id="count"'):
+        assert control in bar, control
+    assert '<div class="chosen" id="chosen"' in tools
+    panel = tools.split('id="filter-pop" role="dialog" aria-label="筛选" hidden>')[1]
+    for control in (
+        'id="mine"',
+        'data-quick="running"',
+        "data-st=",
+        "data-kind=",
+        'id="repo"',
+        'id="flag"',
+        'id="sort"',
+        'id="group"',
+        'id="clear"',
+        'id="filter-done"',
+    ):
+        assert control in panel, control
+    assert '<div class="sec board-only"><h5>看板显示</h5>' in panel
+    # The flow toolbar: one row; the legend and the relation choices in their pop-up.
+    flow_bar = page.split('<div class="flow-bar" id="flow-bar">')[1].split("</div>")[0]
+    for control in (
+        'id="flow-archived"',
+        'name="flow-shape"',
+        'id="zoom-out"',
+        'id="zoom-fit"',
+        'id="legend-open"',
+    ):
+        assert control in flow_bar, control
+    assert 'id="flow-legend"' not in flow_bar
+    legend = page.split('id="legend-pop" role="dialog" aria-label="图例与关系" hidden>')[1]
+    assert legend.startswith('<span class="legend" id="flow-legend">')
+    # The task flow's area sits in its slot; the script sizes both.
+    assert (
+        '<div class="flow-slot" id="flow-slot"><div class="flow-scroll" id="flow-scroll">' in page
+    )
+    assert ".flow-slot{min-width:0;height:100vh}" in CSS and "max-height:78vh" not in CSS
+    assert "function fit()" in SCRIPT and "draggable(scroller, true)" in SCRIPT
+    assert 'tools.classList.contains("open")' in SCRIPT  # the open panel holds the refresh

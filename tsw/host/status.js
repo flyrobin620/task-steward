@@ -39,6 +39,49 @@
   }
   style(store.get("style") || "plain");
 
+  // Mouse drag scrolls a box (touch scrolls it natively, T353): past a few pixels the drag
+  // moves the box, and the click that ends it neither opens a card nor presses a tile.
+  function draggable(box, both) {
+    let from = null, moved = false;
+    box.classList.add("drag");
+    box.addEventListener("pointerdown", event => {
+      if (event.pointerType !== "mouse" || event.button !== 0) return;
+      if (event.target.closest("input, select, textarea, label")) return;
+      from = {x: event.clientX, y: event.clientY, left: box.scrollLeft, top: box.scrollTop, id: event.pointerId};
+      moved = false;
+    });
+    box.addEventListener("pointermove", event => {
+      if (!from || event.pointerId !== from.id) return;
+      // Released outside the box before the drag began: nothing is held any more.
+      if (!(event.buttons & 1)) { end(); return; }
+      const dx = event.clientX - from.x, dy = event.clientY - from.y;
+      if (!moved) {
+        if (Math.hypot(dx, dy) < 5) return;
+        moved = true;
+        box.classList.add("dragging");
+        try { box.setPointerCapture(event.pointerId); } catch (_) { /* released already */ }
+        window.getSelection()?.removeAllRanges();
+      }
+      box.scrollLeft = from.left - dx;
+      if (both) box.scrollTop = from.top - dy;
+    });
+    function end() {
+      if (!from) return;
+      from = null;
+      box.classList.remove("dragging");
+      if (!moved) return;
+      const swallow = event => { event.preventDefault(); event.stopPropagation(); };
+      box.addEventListener("click", swallow, {capture: true, once: true});
+      setTimeout(() => box.removeEventListener("click", swallow, {capture: true}), 0);
+    }
+    box.addEventListener("pointerup", end);
+    box.addEventListener("pointercancel", end);
+    box.addEventListener("lostpointercapture", end);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("blur", end);
+    box.addEventListener("dragstart", event => event.preventDefault());
+  }
+
   function start() {
     const board = document.getElementById("board");
     const tools = document.getElementById("tools");
@@ -258,7 +301,54 @@
       if (q.value !== state.q) q.value = state.q;
       repo.value = state.repo;
       flag.value = state.flag; sort.value = state.sort; group.value = state.group;
+      chosen();
+      // The chips change the height above the task flow: size its area again.
+      if (flowing) flow.fit();
       save();
+    }
+    // What the filters choose, below the search, each with an × that drops it (T353).
+    const FLAG_LABELS = {user: "待用户处理", followups: "follow-up"};
+    function chosen() {
+      const chips = [];
+      if (running()) chips.push(["运行中", "running"]);
+      else for (const s of state.st) chips.push([statusLabels[s] || s, "st:" + s]);
+      for (const k of state.kind) chips.push([kindLabels[k] || k, "kind:" + k]);
+      if (state.flag) {
+        const option = Array.from(flag.options).find(o => o.value === state.flag);
+        chips.push([FLAG_LABELS[state.flag] || `关注：${option ? option.textContent : state.flag}`, "flag"]);
+      }
+      if (state.repo) chips.push([`仓库：${state.repo}`, "repo"]);
+      const box = $("chosen");
+      box.replaceChildren(...chips.map(([label, key]) => {
+        const chip = document.createElement("span");
+        chip.className = "chip-x";
+        const x = document.createElement("button");
+        x.type = "button";
+        x.dataset.unchoose = key;
+        x.title = `去掉「${label}」`;
+        x.setAttribute("aria-label", x.title);
+        x.textContent = "×";
+        chip.append(label, x);
+        return chip;
+      }));
+      if (chips.length > 1) {
+        const all = document.createElement("button");
+        all.type = "button";
+        all.className = "clear-all";
+        all.dataset.unchoose = "all";
+        all.textContent = "清除全部";
+        box.append(all);
+      }
+      $("filter-n").textContent = chips.length ? String(chips.length) : "";
+      $("count-pop").textContent = $("count").textContent;
+    }
+    function unchoose(key) {
+      if (key === "all") reset();
+      else if (key === "running") state.st = [];
+      else if (key === "flag") state.flag = "";
+      else if (key === "repo") state.repo = "";
+      else if (key.startsWith("st:")) state.st = state.st.filter(v => v !== key.slice(3));
+      else if (key.startsWith("kind:")) state.kind = state.kind.filter(v => v !== key.slice(5));
     }
     function toggle(list, value) {
       return list.includes(value) ? list.filter(v => v !== value) : [...list, value];
@@ -287,8 +377,8 @@
     const flow = (() => {
       const pane = $("flow"), grid = $("flow-grid"), canvas = $("flow-canvas"), svg = $("flow-edges");
       const names = $("flow-names"), data = $("flow-layouts");
-      const scroller = $("flow-scroll"), sizer = $("flow-size");
-      if (!pane || !grid || !canvas || !svg || !names || !scroller || !sizer || !data) return null;
+      const scroller = $("flow-scroll"), sizer = $("flow-size"), slot = $("flow-slot");
+      if (!pane || !grid || !canvas || !svg || !names || !scroller || !sizer || !data || !slot) return null;
       const SVG = "http://www.w3.org/2000/svg";
       const nodes = Array.from(canvas.querySelectorAll(".fnode"));
       const nodeById = new Map(nodes.map(n => [n.dataset.id, n]));
@@ -373,10 +463,59 @@
         $("count").textContent = `显示 ${matched.size} / ${pool} 个任务`
           + (context.size ? `（另有 ${context.size} 个相连任务淡色显示）` : "");
         $("flow-empty").hidden = matched.size !== 0;
+        slot.hidden = matched.size === 0;
         peek = "";
         draw();
         applyZoom();
+        fit();
       }
+      /* The area fills the window (T353): its slot is a window tall and ends the page, and the
+         area in it is as tall as the part of the slot in the window, so it starts above the
+         window's lower edge with its scrollbar in view and grows as the page scrolls, until the
+         slot reaches the top. The wheel over the area scrolls the page down until then, and up
+         again once the area is at its own top. */
+      const MIN_AREA = 240;
+      function fit() {
+        if (pane.hidden || slot.hidden) return;
+        slot.style.height = `${window.innerHeight}px`;
+        const top = slot.getBoundingClientRect().top;
+        scroller.style.height = `${Math.max(MIN_AREA, window.innerHeight - Math.max(0, top))}px`;
+      }
+      const pixels = event => event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1);
+      scroller.addEventListener("wheel", event => {
+        if (event.ctrlKey || event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+        const dy = pixels(event), top = slot.getBoundingClientRect().top;
+        if (dy > 0 && top > 0.5) {
+          event.preventDefault();
+          window.scrollBy(0, Math.min(dy, top));
+        } else if (dy < 0 && scroller.scrollTop <= 0 && window.scrollY > 0) {
+          event.preventDefault();
+          window.scrollBy(0, dy);
+        } else return;
+        fit();
+      }, {passive: false});
+      window.addEventListener("scroll", fit, {passive: true});
+      draggable(scroller, true);
+      // The legend and the relation choices open under their button (T353).
+      const legendButton = $("legend-open"), legendPop = $("legend-pop");
+      function legend(open) {
+        legendPop.hidden = !open;
+        legendButton.setAttribute("aria-expanded", String(open));
+        if (!open) return;
+        const bar = $("flow-bar");
+        const left = legendButton.offsetLeft - bar.scrollLeft;
+        legendPop.style.left = `${Math.max(0, Math.min(left, pane.clientWidth - legendPop.offsetWidth))}px`;
+        legendPop.style.top = `${bar.offsetTop + bar.offsetHeight + 4}px`;
+      }
+      legendButton.addEventListener("click", () => legend(legendPop.hidden));
+      document.addEventListener("click", event => {
+        if (!legendPop.hidden && !legendPop.contains(event.target) && !legendButton.contains(event.target)) legend(false);
+      });
+      document.addEventListener("keydown", event => {
+        if (event.key !== "Escape" || legendPop.hidden) return;
+        legend(false);
+        legendButton.focus();
+      });
       // The lines of the current choice: with the references shown, the routes in the widened
       // gaps; with a card hovered and the references not shown, the routes with the references in
       // the same gaps, showing only that card's references.
@@ -624,9 +763,10 @@
         renderAll();
       });
       // The page is at its size before the first draw (the cards measure nothing, but the zoom does).
-      window.addEventListener("resize", () => applyZoom());
+      window.addEventListener("resize", () => { applyZoom(); fit(); });
       return {
         render,
+        fit,
         scroll: () => `${scroller.scrollLeft},${scroller.scrollTop}`,
         restore(raw) {
           const [x, y] = (raw || "").split(",").map(Number);
@@ -639,11 +779,51 @@
     theme(store.get("theme") || "auto");
     style(store.get("style") || "plain");
     state = initial();
-    for (const id of ["tools", "refresh", "style", "theme"]) $(id).hidden = false;
+    for (const id of ["tools", "refresh", "style", "theme", "hero-more"]) $(id).hidden = false;
+    // On a narrow screen the ledger line and the page's buttons open from 「⋯」 (T353).
+    const hero = $("hero"), heroMore = $("hero-more");
+    function heroOpen(open) {
+      hero.classList.toggle("open", open);
+      heroMore.setAttribute("aria-expanded", String(open));
+    }
+    heroMore.addEventListener("click", () => heroOpen(!hero.classList.contains("open")));
+    // The filters other than the search open in a panel (a bottom sheet on a narrow screen).
+    const filterPop = $("filter-pop"), filterOpen = $("filter-open"), scrim = $("filter-scrim");
+    // Opening moves the focus into the panel; on a narrow screen Tab stays in the sheet; 「完成」
+    // and Esc give the focus back to 「筛选」.
+    const narrow = window.matchMedia("(max-width:640px)");
+    const focusable = () => Array.from(filterPop.querySelectorAll("button, select, input"))
+      .filter(el => !el.hidden && !el.disabled && el.getClientRects().length > 0);
+    function panel(open, back) {
+      filterPop.hidden = !open;
+      scrim.hidden = !open;
+      tools.classList.toggle("open", open);
+      filterOpen.setAttribute("aria-expanded", String(open));
+      if (open) focusable()[0]?.focus();
+      else if (back) filterOpen.focus();
+    }
+    filterOpen.addEventListener("click", () => panel(filterPop.hidden, true));
+    $("filter-done").addEventListener("click", () => panel(false, true));
+    scrim.addEventListener("click", () => panel(false, true));
+    filterPop.addEventListener("keydown", event => {
+      if (event.key !== "Tab" || !narrow.matches) return;
+      const list = focusable();
+      if (!list.length) return;
+      const first = list[0], last = list[list.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    });
+    document.addEventListener("click", event => {
+      const target = event.target;
+      if (!filterPop.hidden && target.isConnected && !filterPop.contains(target) && !filterOpen.contains(target)) panel(false);
+      if (hero.classList.contains("open") && !hero.contains(target)) heroOpen(false);
+    });
+    draggable(document.querySelector(".tiles"), false);
     tools.addEventListener("click", event => {
       const b = event.target.closest("button");
       if (!b) return;
-      if (b.dataset.st) state.st = toggle(state.st, b.dataset.st);
+      if (b.dataset.unchoose) unchoose(b.dataset.unchoose);
+      else if (b.dataset.st) state.st = toggle(state.st, b.dataset.st);
       else if (b.dataset.quick === "running") state.st = running() ? [] : [...RUNNING];
       else if (b.dataset.quick) state.flag = state.flag === b.dataset.quick ? "" : b.dataset.quick;
       else if (b.dataset.kind) state.kind = toggle(state.kind, b.dataset.kind);
@@ -691,6 +871,8 @@
     document.addEventListener("keydown", event => {
       const typing = ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName);
       if (event.key === "/" && !typing) { event.preventDefault(); q.focus(); q.select(); }
+      else if (event.key === "Escape" && !filterPop.hidden) panel(false, true);
+      else if (event.key === "Escape" && hero.classList.contains("open")) { heroOpen(false); heroMore.focus(); }
       else if (event.key === "Escape" && document.activeElement === q) { state.q = ""; render(); q.blur(); }
     });
     window.addEventListener("hashchange", () => {
@@ -720,7 +902,7 @@
       if (on) timer = setInterval(() => {
         // [data-hold-refresh] on the root: the Dashboard app has an unsent reason or a request.
         const busy = document.activeElement === q || !(window.getSelection()?.isCollapsed ?? true)
-          || document.querySelector("[data-hold-refresh]") !== null;
+          || document.querySelector("[data-hold-refresh]") !== null || tools.classList.contains("open");
         if (busy || document.hidden) return;
         session.set("reload", "1");
         location.reload();
@@ -740,6 +922,7 @@
     if (reloaded) {
       if (flow && state.view === "flow") flow.restore(flowAt);
       if (y > 0) window.scrollTo(0, y);
+      if (flow) flow.fit();
     } else if (anchor) reveal(anchor);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);

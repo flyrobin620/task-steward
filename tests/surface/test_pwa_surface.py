@@ -1,4 +1,4 @@
-"""The running Dashboard is installable to the home screen (UC-DIRECT-011, DN006 §8.10, T355):
+"""The running Dashboard is installable to the home screen (UC-DIRECT-012, DN006 §8.10, T355):
 ``tsw dashboard`` in its own process serves the manifest and icons its pages link."""
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from tsw.home import Home
 from tsw.host import pwa
 
 mark = pytest.mark
-UC = "UC-DIRECT-011"
+UC = "UC-DIRECT-012"
 
 
 @pytest.fixture

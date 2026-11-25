@@ -1,4 +1,4 @@
-"""The Dashboard as a home-screen web app: manifest, icons and the page's links (UC-DIRECT-011,
+"""The Dashboard as a home-screen web app: manifest, icons and the page's links (UC-DIRECT-012,
 DN006 §8.10, T355)."""
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from tsw.host.task_view import not_found
 from tsw.projection import SCHEMA_SQL
 
 mark = pytest.mark
-UC = "UC-DIRECT-011"
+UC = "UC-DIRECT-012"
 # The Dashboard behind the workdeck gateway (T341, T354) and on its own.
 MOUNT = "https://gateway.example/d/DEVICE/plugins/tsw/"
 LOCAL = "http://127.0.0.1:47800/"
