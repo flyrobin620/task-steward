@@ -31,9 +31,9 @@ MANIFEST = "manifest.webmanifest"
 NAME = "TaskSteward Dashboard"
 SHORT_NAME = "TaskSteward"
 DESCRIPTION = "TaskSteward 的任务看板：任务、attempt 与会话，验收、退回与取消"
-# The icon's own background, for the splash screen; the page's backgrounds (status.css) for the
+# The middle of the icon's background gradient, for the splash screen; the page's backgrounds (status.css) for the
 # browser's bar in the light and dark schemes.
-BACKGROUND = "#131b2c"
+BACKGROUND = "#7c3aed"
 THEME_COLORS = (("light", "#f3f5fa"), ("dark", "#0e131d"))
 
 

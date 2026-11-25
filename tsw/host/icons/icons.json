@@ -1,31 +1,31 @@
 {
   "source": "icon.svg",
-  "sha256": "e02e49edc97251e4b2c3505abb35172b8606f244da38d1dd90e8f3325254b655",
+  "sha256": "f6cee4fffbc119de6200044b2e37c30690918ed7db11317f64f5d7684dc948e5",
   "files": {
     "apple-touch-icon.png": {
       "size": 180,
       "variant": "full",
-      "sha256": "3d0f5008f854460e7276cdf14703a09fa56c56529ac2847aef4363351a93ecc1"
+      "sha256": "dfe59d93e119639a88bedfbe075553c875a5771dbe8e988ee9d0eab44929438f"
     },
     "icon-192.png": {
       "size": 192,
       "variant": "any",
-      "sha256": "4a33414afc52840b3afc62a79989c20b5b49c99e6e751b423ab4fa3532bf2625"
+      "sha256": "9d0e69115a04622efcc651061b5a457dd090f4073e8c93cfb9aab54e449d513c"
     },
     "icon-512.png": {
       "size": 512,
       "variant": "any",
-      "sha256": "8d37b1aabf0cf9ae7c3074d887776b90fa5d74badd10bb751cddf3c053913fb3"
+      "sha256": "0b770c826b1e80fc4a9b95f15010c7c2fbf0fbb2a316bd4380f2c204a619220c"
     },
     "icon-maskable-192.png": {
       "size": 192,
       "variant": "full",
-      "sha256": "54a74b65850a6e4619c10457d5960971811b63945d2543489650d185cfd10a61"
+      "sha256": "2db9aaf3d21910e050a408f11618d07bbb6fd738ceab2e951ea0a17e1ea5d6e7"
     },
     "icon-maskable-512.png": {
       "size": 512,
       "variant": "full",
-      "sha256": "a259d16bbf7d9785c8ccc7006b145ac8e7d0127454b5c54a8db8ab21fc947939"
+      "sha256": "b9cb20d2781723ab5cebb294b4ae3db1fc9fa12f23c64bc91c0131c438a2dcd4"
     }
   }
 }
