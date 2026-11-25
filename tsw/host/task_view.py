@@ -863,7 +863,7 @@ def render_task(
     )
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
-{page_head(f"{task_id} · {TITLE}", app)}
+{page_head(f"{task_id} · {TITLE}", app, "../")}
 <body><main class="task-view" data-tsw-task="{escape(task_id)}">
 <nav class="crumbs"><a class="back" href="{escape(back)}">← 返回看板</a></nav>
 <header class="{classes}"><div class="top"><span class="tid">{escape(task_id)}</span>
@@ -886,7 +886,7 @@ def not_found(task_id: str, app: AppView) -> str:
     """The page for a task the projection does not have, with the way back to the board."""
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
-{page_head(f"没有这个任务 · {TITLE}", app)}
+{page_head(f"没有这个任务 · {TITLE}", app, "../")}
 <body><main class="task-view">
 <nav class="crumbs"><a class="back" href="../">← 返回看板</a></nav>
 <p class="empty">没有任务 {escape(task_id)}。</p>

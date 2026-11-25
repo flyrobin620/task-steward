@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.gate import _shards
+from tools.gate import _alone, _shards
 
 
 def _write(path: Path, size: int) -> Path:
@@ -49,3 +49,31 @@ def test_a_tier_without_test_files_runs_the_directory(tmp_path: Path) -> None:
     tier.mkdir()
 
     assert _shards(tier, 4) == [[tier]]
+
+
+def test_a_file_marked_alone_is_in_no_shard_and_runs_on_its_own(tmp_path: Path) -> None:
+    tier = tmp_path / "surface"
+    _write(tier / "test_a.py", 10)
+    _write(tier / "test_b.py", 20)
+    browser = tier / "test_browser.py"
+    browser.write_text("import pytest\n\npytestmark = pytest.mark.alone\n", encoding="utf-8")
+    # Only a module-level pytestmark counts: a test that mentions the mark is still parallel.
+    mention = tier / "test_mention.py"
+    mention.write_text("def test_x():\n    pytestmark = pytest.mark.alone\n", encoding="utf-8")
+
+    shards = _shards(tier, 8)
+
+    assert sorted(path for shard in shards for path in shard) == sorted(
+        [tier / "test_a.py", tier / "test_b.py", mention]
+    )
+    assert _alone(tier) == [browser]
+
+
+def test_a_tier_of_files_that_run_alone_has_no_parallel_shard(tmp_path: Path) -> None:
+    tier = tmp_path / "surface"
+    only = tier / "test_only.py"
+    only.parent.mkdir(parents=True)
+    only.write_text("import pytest\npytestmark = pytest.mark.alone\n", encoding="utf-8")
+
+    assert _shards(tier, 4) == []
+    assert _alone(tier) == [only]

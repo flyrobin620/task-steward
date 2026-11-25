@@ -60,7 +60,10 @@ live 层级不在 CI 中运行：它需要用户本机的 Claude app、登录状
 - `tools/gate.py` 把每个测试层级的测试文件分给 `--jobs` 个并行的 pytest 进程（默认为 CPU 数，
   至多 8；`--jobs 1` 不并行），每个进程有自己的结果文件、覆盖数据与临时目录，结束后合并为该层级的
   结果文件。测试本来就不共享进程级环境、锁文件或数据目录（[test-environments.md](test-environments.md)），
-  并行运行不需要另加隔离；某个测试只在并行时失败，说明它违反了这条约定。
+  并行运行不需要另加隔离；某个测试只在并行时失败，说明它违反了这条约定。例外是驱动外部程序、
+  而该程序有时限的测试（如 `tests/surface/test_dashboard_browser.py` 中的无界面浏览器）：所有核都被
+  其他进程占满时它会超时（T355）。这样的测试文件在模块级写 `pytestmark = pytest.mark.alone`，门禁
+  不把它分进并行进程，而在该层级的并行进程全部结束后，每个文件单独一个进程依次运行。
 - 固定所有影响输出的工具版本：Actions 用完整提交 SHA，Python 开发依赖用确切版本
   （[code-quality.md](code-quality.md)）。升级版本与重新生成输出放在同一个 PR。
 - Dependabot 覆盖 `github-actions` 与 `pip`，更新 PR 与普通改动一样评审。
