@@ -602,7 +602,7 @@ Dashboard 应用：
   3. 任务流与单任务视图：任务流中有待答问题的卡片右上角带“?”标记；Dashboard 应用中点它，在弹框中打开与看板卡片相同的答复区（宽屏与窄屏都是弹框）。单任务视图头部的问题提示也是同一个答复区。静态 `views/STATUS.html` 只显示问题与产出，没有答复控件，写明在 Dashboard 应用或 worker 会话中回答。
   4. 投递（用户 2026-11-25 要求，M-T357-2：“为什么不和现在直接在workdeck里面发送message给worker session一样？…能不能用一段code？”）：Dashboard 应用不记账，而是把用户确认的原话作为用户的消息投递到问题所在的 worker 会话，与用户经 workdeck 门户发来的消息相同（§8.11）：宿主集成照常把它记为 `input.session_message`（消息编号 `M-…`）并告诉 worker，worker 用 `user_answer` 登记，经 T12 生效。所以答复的来源、G-USER、迟到答复（§8.1c）、主会话与 Teams 的收尾都与用户在 worker 会话中回答完全相同，不另设渠道、事件、工具或例行项。投递由宿主集成实现（Claude Code 用会话的 inbox，与 workdeck daemon 相同的写法，见 [CC001 §6.1](claude-code/CC001-sessions-and-hooks.md)）；宿主集成不能投递时（宿主没有这种能力、worker 会话不在运行），答复区写明原因，用户在 worker 会话或主会话中回答。
      - 只投递到问题绑定的会话：问题为会话内问题（`in_session`），仍为 `pending`，它的会话就是任务当前 attempt 绑定的会话，且该 attempt 正在运行（`live`）。主会话交给用户的 `escalation` 问题本版本只显示，写明在主会话中回答。
-     - 待验证（实现前用不绑定任务的临时会话探测，结果写进 CC001 §6.1）：宿主接受 `from` 不是 `workdeck` 的发送者，hook 照常触发、transcript 的来源写下这个发送者。不成立时停下来问用户，不冒用 `workdeck` 的名字。
+     - 发送者名称：投递用自己的名字（Claude Code 上为 `tsw-dashboard`），不冒用 `workdeck`。实现前用不绑定任务的临时会话探测过：宿主接受这个名字，空闲的会话开始新的一轮，transcript 的来源写下这个名字（CC001 §6.1）。
      - 只投递用户在页面上确认的原话：选项按钮的文字或输入框的内容，原样，不加前缀或说明（hook 记下的就是用户的话），至多 4000 个字符。
      - 接口：`POST /api/tasks/<任务>/answer`，请求体 `{"request_id", "text", "command_id", "late"}`。准入与「验收」按钮相同（见上方第 3 条：只监听回环地址、令牌 cookie、请求头中的页面令牌、`Host` 与 `Origin`）；经 workdeck gateway 打开的页面同样，投递在 Dashboard 所在的本机进行。只有会话外、持有 Dashboard 令牌的请求能触发投递，会话不能（上方第 2 条）。
      - 来源的注明：宿主集成在一轮结束时读出这条消息由 Dashboard 投递时，追加 `input.session_message_via`（`via: "dashboard"`，与 §8.11 第 6 条的 `workdeck` 相同的观察事件），任务详情在这条消息旁注明“经 Dashboard”；读不出时不注明，不影响登记。

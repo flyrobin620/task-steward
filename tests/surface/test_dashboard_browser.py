@@ -32,6 +32,8 @@ mark = pytest.mark
 pytestmark = pytest.mark.alone
 
 CHECK = Path(__file__).resolve().parents[1] / "fixtures" / "dashboard_check.js"
+# The answer panel of the Dashboard app's page (DN006 §8.10, T357).
+ANSWER_CHECK = CHECK.with_name("answer_check.js")
 # Windows runners (CI and the developers' machines) have Edge; Chrome or Chromium also work.
 # The test environment points ProgramFiles at the test directory, so the folders are literal.
 BROWSERS = (
@@ -79,9 +81,9 @@ def board(h: Harness) -> Path:
     return h.home.root / "views" / "STATUS.html"
 
 
-def with_check(page: str) -> str:
+def with_check(page: str, check: Path = CHECK) -> str:
     """The page with the check after its own script, and the check's hash in its policy."""
-    script = CHECK.read_text(encoding="utf-8")
+    script = check.read_text(encoding="utf-8")
     assert "</" not in script
     digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode()
     policy = re.search(r"script-src ([^;]*);", html.unescape(page))
@@ -92,10 +94,12 @@ def with_check(page: str) -> str:
     return page.replace("</body>", f"<script>{script}</script></body>", 1)
 
 
-def look(page: Path, tmp: Path, mode: str, size: tuple[int, int]) -> dict[str, Any]:
-    target = tmp / f"page-{mode}.html"
-    target.write_text(with_check(page.read_text(encoding="utf-8")), encoding="utf-8")
-    profile = tmp / f"browser-{mode}"
+def look(
+    page: Path, tmp: Path, mode: str, size: tuple[int, int], check: Path = CHECK
+) -> dict[str, Any]:
+    target = tmp / f"page-{mode}-{check.stem}.html"
+    target.write_text(with_check(page.read_text(encoding="utf-8"), check), encoding="utf-8")
+    profile = tmp / f"browser-{mode}-{check.stem}"
     done = subprocess.run(
         [
             browser(),
@@ -161,3 +165,45 @@ def test_the_page_in_a_browser_wide_and_narrow(h: Harness, tmp_path: Path) -> No
         assert name in names, name
     sizes = narrow["sizes"]
     assert sizes["header"] <= 44 and sizes["filters"] <= 60 and sizes["flow_bar"] <= 40, sizes
+
+
+def waiting(h: Harness, tmp: Path) -> Path:
+    """The Dashboard app's page with a task waiting on a question with options and an output."""
+    from tsw.host.status_app import StatusApp  # noqa: PLC0415
+
+    h.register("T001", repo=REPOS[0], title="等待回答的任务")
+    h.register("T002", repo=REPOS[0], title="另一个任务")
+    h.plan("T001")
+    worker = h.dispatch("T001")
+    h.run(
+        "output_link",
+        worker,
+        task_id="T001",
+        output_id="design",
+        type="files",
+        ref="work/T001/a1/design.html",
+        role="设计草稿",
+        evidence=["e"],
+    )
+    question = "调研结论见产出 design。\n方案 A：…\n方案 B：…\n选哪个？"
+    h.run("ask_user", worker, task_id="T001", question=question, options=["方案 A", "方案 B"])
+    page = tmp / "app.html"
+    page.write_text(StatusApp(h.home, token="t" * 32).page(), encoding="utf-8")
+    return page
+
+
+@mark.use_case("UC-DIRECT-013")
+def test_the_answer_panel_in_a_browser_wide_and_narrow(h: Harness, tmp_path: Path) -> None:
+    page = waiting(h, tmp_path)
+    for mode, size in (("wide", (1400, 900)), ("narrow", (390, 844))):
+        result = look(page, tmp_path, mode, size, ANSWER_CHECK)
+        assert not failed(result), (mode, failed(result))
+        names = {c["name"] for c in result["checks"]}
+        for name in (
+            "panel: the options are buttons",
+            "option: the confirmation shows the words",
+            "send: a lost connection is an unknown result",
+            "flow: the card opens the panel in a dialog",
+            "flow: ✕ closes the dialog",
+        ):
+            assert name in names, (mode, name)

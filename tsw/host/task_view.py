@@ -30,11 +30,13 @@ from tsw.host.status import (
     AppView,
     Revision,
     actions_html,
+    ask_panel,
     brief_html,
     card_notes,
     escape,
     follow_up_anchor,
     link_for,
+    outputs_by_task,
     page_head,
     pending_asks,
     repo_hue,
@@ -630,6 +632,10 @@ def _follow_ups(conn: sqlite3.Connection, task_id: str) -> tuple[str, int, int]:
     return origin + table, len(found), pending
 
 
+# How the source of a message is named on the page (DN006 §8.10, §8.11).
+VIA_LABELS = {"workdeck": "workdeck", "dashboard": "Dashboard"}
+
+
 def _answer(resolution: str | None, vias: Mapping[str, str] | None = None) -> str:
     """The answer and where it came from: a verified source, or the system it was imported from.
     Words that reached a session through workdeck say so (DN006 §8.11): the source's own ``via``
@@ -647,7 +653,7 @@ def _answer(resolution: str | None, vias: Mapping[str, str] | None = None) -> st
             refs = [r for r in str(verified.get("message_ref") or "").split(",") if r]
             via = verified.get("via") or next((vias[r] for r in refs if vias and r in vias), None)
             if via:
-                channel += f"（经 {escape(via)}）"
+                channel += f"（经 {escape(VIA_LABELS.get(str(via), str(via)))}）"
             parts.append(f"<small>{channel} · 原话：{escape(words)}</small>")
     elif source:
         parts.append(f"<small>来自 {escape(source)}</small>")
@@ -816,6 +822,10 @@ def render_task(
         + "</div>"
         for cls, head, text in card.notes
     )
+    if card.ask is not None:
+        # The same answer panel as the board's card (DN006 §8.10, T357).
+        mine = [o for o in outputs_by_task(conn).get(task_id, []) if o.kind not in PR_TYPES]
+        notes += ask_panel(task_id, card.ask, mine, "../", app=app, attempt=current)
     imported = conn.execute("SELECT * FROM imported_tasks WHERE task_id = ?", (task_id,)).fetchone()
     times = {s.sequence: s.time for s in steps}
     past = app.history.get(task_id, [])

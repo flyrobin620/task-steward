@@ -201,6 +201,7 @@ class Output:
     label: str
     ref: str
     delivery: str | None
+    role: str | None = None  # what the output is, as registered (shown in the answer panel)
 
     def html(self, cls: str, up: str = "../") -> str:
         href = link_for(self.ref, up)
@@ -229,6 +230,8 @@ class Card:
     # Open follow-ups of the task, and the follow-ups it was made from (DN002 §5.7).
     follow_ups: int = 0
     follow_up_of: list[tuple[str, str]] = field(default_factory=_no_sources)
+    # The pending question asked in the worker's session, shown as the answer panel (T357).
+    ask: dict[str, Any] | None = None
 
 
 ACTION_LABELS = {"accept": "验收", "reject": "退回", "cancel": "取消"}
@@ -326,7 +329,7 @@ def outputs_by_task(conn: sqlite3.Connection) -> dict[str, list[Output]]:
     """PR links and registered outputs per task, PRs first."""
     out: dict[str, list[Output]] = {}
     for r in conn.execute(
-        "SELECT task_id, output_id, type, ref, delivery FROM outputs "
+        "SELECT task_id, output_id, type, ref, delivery, role FROM outputs "
         "ORDER BY task_id, type NOT IN ('pr', 'pull_request'), output_id"
     ):
         ref = str(r["ref"])
@@ -334,7 +337,7 @@ def outputs_by_task(conn: sqlite3.Connection) -> dict[str, list[Output]]:
         label = ref.rsplit("/", 2)[-1] if is_pr and "/pull/" in ref else str(r["output_id"])
         label = f"PR #{label}" if is_pr and label.isdigit() else label
         out.setdefault(str(r["task_id"]), []).append(
-            Output(str(r["type"]), label, ref, r["delivery"])
+            Output(str(r["type"]), label, ref, r["delivery"], r["role"])
         )
     return out
 
@@ -349,6 +352,94 @@ def _ask_note(ask: dict[str, Any]) -> str:
     if ask["handoff_after"]:
         return f"请在 worker 会话中回答；{ask['handoff_after']} 前无回复则转交主会话"
     return "请在主会话中回答"
+
+
+# A question longer than this starts folded in the app (DN006 §8.10 item 1: more than 5 lines).
+LONG_LINES = 5
+LONG_CHARS = 320
+
+
+def _ask_state(ask: dict[str, Any]) -> tuple[str, str]:
+    """Where the question stands, for the panel's first line (DN006 §8.10 item 1)."""
+    if ask["relayed_to"]:
+        return "relay", f"已转交主会话 · 已转达到 {ask['relayed_to']}"
+    if ask["handed_off_at"]:
+        return "handed", "已转交主会话"
+    if ask["responded_at"]:
+        return "wait", "你已在 worker 会话中回复"
+    return "wait", f"在 worker 会话中等待 · {ask['handoff_after']} 前无回复则转交主会话"
+
+
+def ask_panel(
+    task_id: str,
+    ask: dict[str, Any],
+    outputs: list[Output],
+    up: str,
+    *,
+    app: AppView | None,
+    attempt: dict[str, Any] | None,
+) -> str:
+    """The answer panel of a task waiting on a question asked in its worker's session (DN006
+    §8.10 "在 Dashboard 中回答问题", T357): the question, the registered outputs the card does not
+    show elsewhere, and in the Dashboard app the options and a text box. The page's script sends
+    the answer to the worker's session; the static page has no controls."""
+    key, state = _ask_state(ask)
+    lock = (
+        '<span class="qa-lock" title="worker 标为只能由你本人决定：主会话不能代答">🔒 只能由你回答</span>'
+        if ask["reserved"]
+        else ""
+    )
+    head = (
+        f'<div class="qa-head"><span class="qa-id">{_e(ask["request_id"])}</span>'
+        f'<span class="qa-age">提问 <time datetime="{_e(ask["asked_at"])}">{_e(ask["asked_at"])}'
+        f'</time></span><span class="qa-st st-{key}">{_e(state)}</span>{lock}</div>'
+    )
+    question = f'<div class="qa-q">{_e(ask["question"])}</div>'
+    text = str(ask["question"])
+    long = app is not None and (text.count("\n") >= LONG_LINES or len(text) > LONG_CHARS)
+    if long:
+        # The app shows the first lines; 「展开全文」 shows the rest (DN006 §8.10 item 1).
+        question += '<button type="button" class="qa-more">展开全文</button>'
+    ctx = (
+        '<div class="qa-ctx">'
+        + "".join(
+            o.html("qa-out", up).replace(
+                "</span>", f'<span class="role">{_e(o.role)}</span></span>' if o.role else "</span>"
+            )
+            for o in outputs
+        )
+        + "</div>"
+        if outputs
+        else ""
+    )
+    if app is None:
+        controls = '<p class="qa-hint">在 Dashboard 应用或 worker 会话中回答</p>'
+    elif not attempt or attempt.get("phase") != "live":
+        controls = (
+            '<p class="qa-hint">worker 会话不在运行：打开 worker 会话后在这里或会话中回答，'
+            "也可以在主会话中回答</p>"
+        )
+    else:
+        choices: list[str] = loads(ask.get("options"), None) or []
+        opts = "".join(f'<button type="button" class="qa-opt">{_e(o)}</button>' for o in choices)
+        hint = "或用你自己的话回答…" if choices else "用你自己的话回答…"
+        controls = (
+            '<div class="qa-ans">'
+            + (
+                f'<div class="qa-opts"><span class="lbl">worker 给的选项</span>{opts}</div>'
+                if opts
+                else ""
+            )
+            + f'<div class="qa-free"><textarea rows="1" maxlength="4000" placeholder="{hint}" '
+            f'aria-label="答复 {_e(ask["request_id"])}"></textarea>'
+            '<button type="button" class="qa-send" disabled>发送…</button></div></div>'
+            '<div class="qa-step" hidden role="status" aria-live="polite"></div>'
+        )
+    return (
+        f'<div class="qa{" clipped" if long else ""}" data-task="{_e(task_id)}" '
+        f'data-request="{_e(ask["request_id"])}">'
+        f"{head}{question}{ctx}{controls}</div>"
+    )
 
 
 def _card(
@@ -379,6 +470,11 @@ def _card(
     face = [o for o in others if o.kind == "report"][:2]
     links += [o.html("rep", up) for o in face]
     rest = [o for o in others if o not in face]
+    panel = ""
+    if card.ask is not None:
+        # The panel lists the outputs the card shows nowhere else (M-T357-1).
+        panel = ask_panel(task_id, card.ask, rest, up, app=app, attempt=attempt)
+        rest = []
 
     sub = f" <small>· {_e(row['substate'])}</small>" if row["substate"] else ""
     flag = '<span class="flag">待用户处理</span>' if "user" in card.flags else ""
@@ -432,7 +528,11 @@ def _card(
         if body
         else ""
     )
-    classes = f"card st-{_e(status)} k-{_e(kind)}" + (" user" if "user" in card.flags else "")
+    classes = (
+        f"card st-{_e(status)} k-{_e(kind)}"
+        + (" user" if "user" in card.flags else "")
+        + (" qa-card" if card.ask is not None else "")
+    )
     return (
         f'<article class="{classes}" id="task-{_e(task_id)}" data-status="{_e(status)}" '
         f'data-repo="{_e(row["repo"])}" data-kind="{_e(kind)}" data-seq="{_e(row["registered_seq"])}" '
@@ -446,6 +546,7 @@ def _card(
         + "</div>"
         f"<h3>{_e(row['title'])}</h3>"
         + (f'<div class="notes">{notes}</div>' if notes else "")
+        + panel
         + '<dl class="facts">'
         + "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in facts)
         + "</dl>"
@@ -477,7 +578,11 @@ def card_notes(
     if row["status"] == "ready" and phase in (None, "planned", "replaced", "closed"):
         card.notes.append(("start", "待启动", ""))
         card.flags.add("tostart")
-    if ask is not None:
+    if ask is not None and ask.get("kind") == "in_session" and ask.get("asked_at"):
+        # Answered on the card itself (DN006 §8.10 "在 Dashboard 中回答问题", T357).
+        card.ask = ask
+        card.flags |= {"asking", "user"}
+    elif ask is not None:
         # The page is for the user: the question itself is shown so it can be answered.
         card.notes.append(
             (
@@ -595,9 +700,11 @@ def pending_asks(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
     return {
         str(r["task_id"]): dict(r)
         for r in conn.execute(
-            "SELECT r.task_id, r.request_id, r.question, s.handoff_after, s.handed_off_at, "
-            "s.relayed_to, s.responded_at FROM input_requests r "
+            "SELECT r.task_id, r.request_id, r.kind, r.question, s.asked_at, s.handoff_after, "
+            "s.handed_off_at, s.relayed_to, s.responded_at, s.reserved, s.session_ref, "
+            "o.options FROM input_requests r "
             "LEFT JOIN in_session_requests s ON s.request_id = r.request_id "
+            "LEFT JOIN input_options o ON o.request_id = r.request_id "
             "WHERE r.status = 'pending' ORDER BY r.request_id"
         )
     }

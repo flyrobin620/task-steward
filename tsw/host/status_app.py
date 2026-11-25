@@ -51,7 +51,8 @@ from tsw.context.index import index_path, read_card
 from tsw.errors import TswError, rejected
 from tsw.events import Event, utc_now
 from tsw.home import Home
-from tsw.host import pwa, workdeck
+from tsw.host import answer as answering
+from tsw.host import pwa, session_inbox, workdeck
 from tsw.host.markdown import MAX_SOURCE_CHARS, render_markdown
 from tsw.host.preference_view import parse_filter, render_preferences
 from tsw.host.session_labels import LABELS_PATH, MAX_LABELS_BODY, answer, requested_ids
@@ -173,6 +174,12 @@ class StatusApp:
         # The message reference given to each command_id the preference page sent, so a retry
         # carries the same source and the ledger returns the first result (PR #53 review).
         self._refs: dict[str, str] = {}
+        # Answers delivered to workers' sessions, by command_id (DN006 §8.10, T357): a retry of
+        # the same answer is not delivered again, and the page follows it by its command_id.
+        self._answers: dict[str, dict[str, Any]] = {}
+        self._deliver_lock = threading.Lock()
+        # Where running sessions publish their inboxes; tests point it at their own folder.
+        self.sessions_dir: Path | None = None
 
     def workdeck_manifest(self) -> dict[str, Any]:
         """This Dashboard's workdeck plugin manifest: its own interpreter, product checkout and
@@ -394,6 +401,88 @@ class StatusApp:
             reason=reason,
         )
 
+    def answer(self, task_id: str, body: Mapping[str, Any]) -> tuple[HTTPStatus, dict[str, Any]]:
+        """Deliver the user's answer to the worker's session (DN006 §8.10 item 4): nothing is
+        recorded here; the hook records the words in that session and the worker registers them."""
+        request_id, text = body.get("request_id"), body.get("text")
+        command_id, late = body.get("command_id"), body.get("late", False)
+        if not isinstance(request_id, str) or not request_id:
+            return HTTPStatus.BAD_REQUEST, {"ok": False, "message": "缺少问题编号"}
+        if not isinstance(text, str) or not text.strip():
+            return HTTPStatus.BAD_REQUEST, {"ok": False, "message": "答复为空"}
+        if len(text) > session_inbox.MAX_CHARS:
+            return HTTPStatus.BAD_REQUEST, {
+                "ok": False,
+                "message": f"答复过长（至多 {session_inbox.MAX_CHARS} 个字符）",
+            }
+        if not isinstance(command_id, str) or not COMMAND_ID.fullmatch(command_id):
+            return HTTPStatus.BAD_REQUEST, {"ok": False, "message": "缺少或无效的 command_id"}
+        if not isinstance(late, bool):
+            return HTTPStatus.BAD_REQUEST, {"ok": False, "message": "late 应为布尔值"}
+        with self._deliver_lock:
+            seen = self._answers.get(command_id)
+            if seen is not None and (seen["task_id"], seen["request_id"], seen["text"]) != (
+                task_id,
+                request_id,
+                text,
+            ):
+                return HTTPStatus.CONFLICT, {
+                    "ok": False,
+                    "code": "command_reused",
+                    "message": "同一个 command_id 已用于另一次答复",
+                }
+            ledger, _ = self.ledger()
+            with ledger.view() as conn:
+                try:
+                    found = answering.question(conn, task_id, request_id)
+                except answering.Refused as refused:
+                    return HTTPStatus.CONFLICT, {
+                        "ok": False,
+                        "code": refused.code,
+                        "message": refused.message,
+                        **refused.details,
+                    }
+                already = answering.received(conn, found, text)
+                if (seen is not None and seen["state"] == "sent") or already is not None:
+                    # A retry, or these words already reached the session: never twice.
+                    state = answering.progress(conn, task_id, request_id, text)
+                    return HTTPStatus.OK, {"ok": True, "duplicate": True, **state}
+                if found.status != "pending" and not late:
+                    return HTTPStatus.CONFLICT, {
+                        "ok": False,
+                        "code": "answered",
+                        "message": "这个问题已经有答复",
+                        "effective": answering.effective(found.resolution),
+                    }
+            outcome = session_inbox.deliver(found.session_ref, text, self.sessions_dir)
+            if outcome.state in ("written", "unknown"):
+                if len(self._answers) >= REMEMBERED_COMMANDS:
+                    self._answers.pop(next(iter(self._answers)))
+                self._answers[command_id] = {
+                    "task_id": task_id,
+                    "request_id": request_id,
+                    "text": text,
+                    # An unknown write is not "sent": a retry checks the ledger, then delivers.
+                    "state": "sent" if outcome.state == "written" else "unknown",
+                }
+        if outcome.state == "written":
+            print(f"tsw status: 已把 {request_id} 的答复发到 {task_id} 的 worker 会话", flush=True)
+            return HTTPStatus.OK, {"ok": True, "state": "sent", "late": found.status != "pending"}
+        status = HTTPStatus.BAD_GATEWAY if outcome.state == "unknown" else HTTPStatus.CONFLICT
+        return status, {"ok": False, "code": outcome.state, "message": outcome.detail}
+
+    def answer_status(self, task_id: str, query: str) -> dict[str, Any]:
+        """How far a delivered answer has come (``GET /api/tasks/<task>/answer``), read from the
+        ledger: sent, received by the worker's session, registered."""
+        params = parse_qs(query)
+        request_id = params.get("request_id", [""])[0]
+        seen = self._answers.get(params.get("command_id", [""])[0])
+        if seen is None or (seen["task_id"], seen["request_id"]) != (task_id, request_id):
+            return {"ok": False, "state": "unknown_command", "message": "没有这次答复的记录"}
+        ledger, _ = self.ledger()
+        with ledger.view() as conn:
+            return {"ok": True, **answering.progress(conn, task_id, request_id, seen["text"])}
+
 
 _REFUSED = object()  # a request body that was not read: the response is already sent
 
@@ -519,6 +608,18 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 )
                 return
             parts = url.path.split("/")
+            if len(parts) == 5 and parts[1:3] == ["api", "tasks"] and parts[4] == "answer":
+                # Read-only: the cookie and Host admit it, like the page itself (T357).
+                try:
+                    state = app.answer_status(unquote(parts[3]), url.query)
+                except (TswError, sqlite3.Error, OSError) as exc:
+                    self._json(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        {"ok": False, "message": f"无法读取账本（{type(exc).__name__}）"},
+                    )
+                    return
+                self._json(HTTPStatus.OK, state)
+                return
             if len(parts) == 3 and parts[1] == "tasks" and parts[2]:
                 self._serve_task(unquote(parts[2]), token)
                 return
@@ -606,12 +707,13 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 return
             parts = [p for p in urlsplit(self.path).path.split("/") if p]
             task = len(parts) == 4 and parts[:2] == ["api", "tasks"] and parts[3] in direct.ACTIONS
+            reply = len(parts) == 4 and parts[:2] == ["api", "tasks"] and parts[3] == "answer"
             # /api/preferences/record and /api/preferences/<ref>/revoke (DN006 §8.10, T290)
             record = parts == ["api", "preferences", "record"]
             revoke = (
                 len(parts) == 4 and parts[:2] == ["api", "preferences"] and parts[3] == "revoke"
             )
-            if not (task or record or revoke):
+            if not (task or reply or record or revoke):
                 self._json(HTTPStatus.NOT_FOUND, {"ok": False, "message": "没有这个操作"})
                 return
             body = self._json_body(MAX_BODY)
@@ -619,6 +721,14 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 return
             if not isinstance(body, dict):
                 self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": "请求体应为 JSON 对象"})
+                return
+            if reply:
+                try:
+                    status, result = app.answer(unquote(parts[2]), body)  # pyright: ignore[reportUnknownArgumentType]
+                except (TswError, sqlite3.Error, OSError) as exc:
+                    status = HTTPStatus.SERVICE_UNAVAILABLE
+                    result = {"ok": False, "message": f"无法读取账本（{type(exc).__name__}）"}
+                self._json(status, result)
                 return
             if not task:
                 self._preference(

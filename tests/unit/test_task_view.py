@@ -349,7 +349,9 @@ def test_the_task_view_shows_more_than_the_card(conn: sqlite3.Connection) -> Non
     head = page.split("</header>")[0]
     assert 'class="sess">会话：<a class="session" data-tsw-session="local_new"' in head
     assert '<div class="acts" data-task="T005" data-revision="2">' in head
-    assert 'data-act="accept"' in head and "待用户处理" in head and "等待用户（Q-T005-2" in head
+    assert 'data-act="accept"' in head and "待用户处理" in head
+    # The pending question is the same answer panel as the card's (DN006 §8.10, T357).
+    assert '<div class="qa" data-task="T005" data-request="Q-T005-2">' in head
     # Requirement with its revisions.
     requirement = _section(page, "requirement")
     assert '<details class="brief" open>' in requirement and "把详细页做出来" in requirement

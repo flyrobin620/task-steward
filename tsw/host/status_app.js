@@ -11,8 +11,10 @@
      status.js skips reloads. */
   function hold() {
     for (const box of pending) {
-      const text = box.querySelector(".reason textarea");
-      if (!sending.has(box) && !(text && text.value.trim())) pending.delete(box);
+      // A rejection's reason, or an answer being written, confirmed or followed (T357).
+      const text = box.querySelector(".reason textarea, .qa-free textarea");
+      const busy = box.dataset.qaBusy !== undefined;
+      if (!sending.has(box) && !busy && !(text && text.value.trim())) pending.delete(box);
     }
     const open = document.documentElement.dataset.docOpen !== undefined;
     if (pending.size || open) document.documentElement.dataset.holdRefresh = "";
@@ -25,6 +27,7 @@
     const token = meta.content;
     documents();
     preferenceForms(token);
+    answers(token);
     document.addEventListener("input", event => {
       const box = event.target instanceof Element ? event.target.closest(".acts") : null;
       if (box && event.target.matches(".reason textarea")) { pending.add(box); hold(); }
@@ -39,6 +42,269 @@
       else if (button.dataset.act) confirmAndSend(box, button.dataset.act, token);
       else if (button.dataset.reject === "send") sendReason(box, token);
       else if (button.dataset.reject === "close") toggleReason(box, false);
+    });
+  }
+
+  /* Answering a worker's question on its card (DN006 §8.10 "在 Dashboard 中回答问题", T357):
+     pick an option or write, confirm, and the app delivers the words to the worker's session,
+     where the hook records them and the worker registers the answer. The app records nothing
+     itself; the progress after sending is read from the ledger. */
+  function answers(token) {
+    const state = new WeakMap();  // .qa -> {words, command, late, timer}
+    const POLL_MS = 2000, QUIET_MS = 30000, STOP_MS = 120000;
+
+    function commandId() {
+      const random = window.crypto && window.crypto.randomUUID
+        ? window.crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      return `dashboard-answer-${random}`;
+    }
+    function el(tag, cls, text) {
+      const node = document.createElement(tag);
+      if (cls) node.className = cls;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+    function button(label, action, primary) {
+      const b = el("button", primary ? "qa-go" : "qa-back", label);
+      b.type = "button";
+      b.dataset.qa = action;
+      return b;
+    }
+    function quote(words, cls) {
+      return el("blockquote", cls || "", words);
+    }
+    function info(qa) {
+      return {task: qa.dataset.task, request: qa.dataset.request};
+    }
+    function busy(qa, on) {
+      if (on) qa.dataset.qaBusy = ""; else delete qa.dataset.qaBusy;
+      pending.add(qa);
+      hold();
+    }
+    function step(qa, cls, ...nodes) {
+      const ans = qa.querySelector(".qa-ans");
+      const box = qa.querySelector(".qa-step");
+      if (!box) return null;
+      if (ans) ans.hidden = true;
+      box.hidden = false;
+      box.className = `qa-step ${cls}`;
+      box.replaceChildren(...nodes);
+      return box;
+    }
+    function back(qa) {
+      const s = state.get(qa);
+      if (s && s.timer) window.clearTimeout(s.timer);
+      state.delete(qa);
+      const ans = qa.querySelector(".qa-ans");
+      const box = qa.querySelector(".qa-step");
+      if (box) { box.hidden = true; box.replaceChildren(); }
+      if (ans) ans.hidden = false;
+      busy(qa, false);
+    }
+    function confirmStep(qa, words) {
+      if (!words) return;
+      const {task, request} = info(qa);
+      state.set(qa, {words, command: commandId(), late: false});
+      busy(qa, true);
+      const box = step(
+        qa, "confirm",
+        el("div", "qa-confirm-t", `把下面这句话发给 ${task} 的 worker，作为你的答复？`),
+        quote(words),
+        el("div", "qa-fine", `回答 ${request} · 原话发到 worker 会话，与你在那里输入的相同，由 worker 登记`),
+        Object.assign(el("div", "qa-btns"), {}),
+      );
+      const row = box.querySelector(".qa-btns");
+      row.append(button("确认发送", "go", true), button("返回修改", "back"));
+      row.querySelector("button").focus();
+    }
+    async function deliver(qa, late) {
+      const s = state.get(qa);
+      if (!s) return;
+      if (late) s.late = true;
+      const {task, request} = info(qa);
+      step(qa, "sending", Object.assign(el("div", "qa-spin"), {}), quote(s.words));
+      qa.querySelector(".qa-spin").append(el("i"), document.createTextNode("正在发送…"));
+      let response = null, body = {};
+      try {
+        response = await fetch(`/api/tasks/${encodeURIComponent(task)}/answer`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json", "X-TSW-Token": token},
+          body: JSON.stringify({request_id: request, text: s.words, command_id: s.command, late: s.late}),
+          credentials: "same-origin",
+          referrerPolicy: "same-origin",
+        });
+        body = await response.json().catch(() => ({}));
+      } catch (_) {
+        response = null;
+      }
+      if (response && response.ok && body.ok) return follow(qa, body, Date.now());
+      const code = body.code || (response ? `http_${response.status}` : "network");
+      if (code === "answered") return answered(qa, body.effective || {});
+      if (code === "changed" || code === "command_reused") {
+        return refused(qa, "没有发出：任务在你打开页面之后有变化", body.message, true);
+      }
+      if (code === "not_running" || code === "failed") {
+        return refused(qa, "没有发出：worker 会话不在运行", `${body.message || ""}。可以在 worker 会话中回答，或在主会话中回答。`, false);
+      }
+      if (code === "unknown" || code === "network" || (response && response.status >= 500)) return unknown(qa);
+      return refused(qa, "没有发出", body.message || `HTTP ${response ? response.status : ""}`, true);
+    }
+    function follow(qa, body, since) {
+      const s = state.get(qa);
+      const {task} = info(qa);
+      const lines = el("ul", "qa-progress");
+      const box = step(
+        qa, "done",
+        el("div", "qa-res ok", body.duplicate ? `✓ 之前已发到 ${task} 的 worker 会话` : `✓ 已发到 ${task} 的 worker 会话`),
+        quote(s.words),
+        lines,
+      );
+      if (!box) return;
+      const render = (progress) => {
+        const items = [["sent", "已发出"], ["received", "worker 已收到"], ["registered", "已登记答复"]];
+        const reached = {sent: 0, received: 1, registered: 2}[progress.state];
+        lines.replaceChildren(...items.map(([key, label], i) => {
+          const li = el("li", reached !== undefined && i <= reached ? "on" : "", label);
+          if (key === "received" && progress.message_id && i <= reached) li.textContent += `（${progress.message_id}）`;
+          return li;
+        }));
+        const note = box.querySelector(".qa-fine");
+        if (note) note.remove();
+        let text = "";
+        if (progress.state === "registered") text = "worker 已按你的答复继续；app 中的提问框会在它这一轮结束时换掉。";
+        else if (progress.late) text = "问题此前已有答复：worker 会按迟到答复处理（你的话优先于主会话代答）。";
+        else if (progress.state === "answered") text = "问题已由别处答复，worker 会按迟到答复处理。";
+        else if (progress.state === "sent" && Date.now() - since > QUIET_MS) {
+          text = "已写入，worker 会话还没有收到：它可能在等待其他确认。不会自动重发，可以打开 worker 会话查看。";
+        }
+        if (text) box.append(el("div", "qa-fine", text));
+      };
+      render(body);
+      busy(qa, true);
+      const poll = async () => {
+        let progress = null;
+        try {
+          const {request} = info(qa);
+          const query = `request_id=${encodeURIComponent(request)}&command_id=${encodeURIComponent(s.command)}`;
+          const r = await fetch(`/api/tasks/${encodeURIComponent(task)}/answer?${query}`, {
+            credentials: "same-origin",
+            referrerPolicy: "same-origin",
+          });
+          progress = await r.json();
+        } catch (_) { progress = null; }
+        if (progress && progress.ok) render(progress);
+        const done = progress && (progress.state === "registered" || progress.late || progress.state === "answered");
+        if (done || Date.now() - since > STOP_MS || !progress || !progress.ok) {
+          busy(qa, false);  // auto-refresh may show the new state from here on
+          return;
+        }
+        s.timer = window.setTimeout(poll, POLL_MS);
+      };
+      s.timer = window.setTimeout(poll, POLL_MS);
+    }
+    function answered(qa, effective) {
+      const s = state.get(qa);
+      const box = step(
+        qa, "warn",
+        el("div", "qa-res warn", "这个问题已经有答复，你这次的话没有发出"),
+        el("div", "qa-prev", `生效的答复（${effective.by || "其他渠道"}）：${effective.text || "—"}`),
+        quote(`你刚写的：${s.words}`, "mine"),
+        el("div", "qa-btns"),
+        el("div", "qa-fine", "「仍发给 worker」把你的话发到 worker 会话，由它按迟到答复处理：你的话优先于主会话代答，与你此前的答复冲突时它会再问你。"),
+      );
+      box.querySelector(".qa-btns").append(button("仍发给 worker", "late", true), button("知道了", "back"));
+    }
+    function refused(qa, head, why, reload) {
+      const s = state.get(qa);
+      const box = step(
+        qa, "unknown",
+        el("div", "qa-res err", `✗ ${head}`),
+        el("div", "qa-fine", why || ""),
+        quote(`你写的（没有发出，可复制）：${s.words}`, "mine"),
+        el("div", "qa-btns"),
+      );
+      const row = box.querySelector(".qa-btns");
+      if (reload) row.append(button("刷新", "reload", true));
+      row.append(button("返回", "back"));
+    }
+    function unknown(qa) {
+      const s = state.get(qa);
+      const box = step(
+        qa, "unknown",
+        el("div", "qa-res err", "⚠ 结果未知：发送时出错，不知道 worker 会话是否收到"),
+        quote(s.words),
+        el("div", "qa-fine", "重试会先按账本核对 worker 会话是否已收到同样的话，收到了就不再发。"),
+        el("div", "qa-btns"),
+      );
+      box.querySelector(".qa-btns").append(button("重试", "retry", true), button("刷新页面查看", "reload"));
+    }
+
+    document.addEventListener("input", event => {
+      const area = event.target instanceof Element ? event.target.closest(".qa-free textarea") : null;
+      if (!area) return;
+      const qa = area.closest(".qa");
+      qa.querySelector(".qa-send").disabled = !area.value.trim();
+      area.style.height = "auto";
+      area.style.height = `${Math.min(area.scrollHeight, 200)}px`;
+      pending.add(qa);
+      hold();
+    });
+    document.addEventListener("keydown", event => {
+      const area = event.target instanceof Element ? event.target.closest(".qa-free textarea") : null;
+      if (area && event.key === "Enter" && (event.ctrlKey || event.metaKey) && area.value.trim()) {
+        event.preventDefault();
+        confirmStep(area.closest(".qa"), area.value.trim());
+      }
+    });
+    document.addEventListener("click", event => {
+      const target = event.target instanceof Element ? event.target : null;
+      const b = target ? target.closest(".qa button") : null;
+      if (!b || b.disabled) return;
+      const qa = b.closest(".qa");
+      if (b.classList.contains("qa-opt")) confirmStep(qa, b.textContent);
+      else if (b.classList.contains("qa-send")) confirmStep(qa, qa.querySelector(".qa-free textarea").value.trim());
+      else if (b.classList.contains("qa-more")) {
+        qa.classList.toggle("open");
+        b.textContent = qa.classList.contains("open") ? "收起" : "展开全文";
+      } else if (b.dataset.qa === "go") deliver(qa, false);
+      else if (b.dataset.qa === "late") deliver(qa, true);
+      else if (b.dataset.qa === "retry") deliver(qa, false);
+      else if (b.dataset.qa === "back") back(qa);
+      else if (b.dataset.qa === "reload") window.location.reload();
+    });
+
+    /* The task flow: a card waiting on a question opens the same panel in a dialog. */
+    let dialog = null;
+    document.addEventListener("click", event => {
+      const target = event.target instanceof Element ? event.target : null;
+      const node = target ? target.closest('.fnode[data-flags~="asking"]') : null;
+      if (!node || event.defaultPrevented) return;
+      const source = document.querySelector(`#task-${CSS.escape(node.dataset.id)} .qa`);
+      if (!source) return;
+      event.preventDefault();
+      if (!dialog) {
+        dialog = el("dialog", "qa-dlg");
+        dialog.addEventListener("click", e => { if (e.target === dialog) dialog.close(); });
+        dialog.addEventListener("close", () => { delete document.documentElement.dataset.docOpen; hold(); });
+        document.body.append(dialog);
+      }
+      const bar = el("div", "qa-dlg-bar");
+      const link = el("a", "tid", node.dataset.id);
+      link.href = `tasks/${encodeURIComponent(node.dataset.id)}`;
+      const title = source.closest(".card") ? source.closest(".card").querySelector("h3") : null;
+      const close = button("✕", "close");
+      close.className = "qa-x";
+      close.setAttribute("aria-label", "关闭");
+      close.addEventListener("click", () => dialog.close());
+      bar.append(link, el("b", "", title ? title.textContent : ""), close);
+      const body = el("div", "qa-dlg-body");
+      const copy = source.cloneNode(true);
+      body.append(copy);
+      dialog.replaceChildren(bar, body);
+      document.documentElement.dataset.docOpen = "";
+      hold();
+      dialog.showModal();
     });
   }
 

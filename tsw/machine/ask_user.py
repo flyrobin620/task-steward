@@ -89,6 +89,26 @@ def _cmd(env: ToolEnv, op: str, inp: Mapping[str, Any], build: Any) -> Command:
     )
 
 
+# The options a question may offer (DN006 §8.10 item 8): the same as the buttons of the app's
+# question box, shown as buttons on the Dashboard.
+MAX_OPTIONS = 6
+MAX_OPTION_CHARS = 80
+
+
+def options(inp: Mapping[str, Any]) -> list[str]:
+    """The question's options, checked: at most six distinct texts of 1 to 80 characters."""
+    found = strings(items(inp, "options", required=False), "options")
+    if len(found) > MAX_OPTIONS:
+        raise rejected(f"选项至多 {MAX_OPTIONS} 项", reason="invalid_input", field="options")
+    if any(len(o) > MAX_OPTION_CHARS for o in found):
+        raise rejected(
+            f"每个选项至多 {MAX_OPTION_CHARS} 个字符", reason="invalid_input", field="options"
+        )
+    if len(set(found)) != len(found):
+        raise rejected("选项不能重复", reason="invalid_input", field="options")
+    return found
+
+
 def timeout_minutes(config: EffectiveConfig) -> int:
     return int(config.get("input.in_session_timeout_minutes"))
 
@@ -220,7 +240,7 @@ def session_message(
 
 
 # The entries the host can name for a message's way into the session (DN006 §8.11).
-MESSAGE_VIA = ("workdeck",)
+MESSAGE_VIA = ("workdeck", "dashboard")
 
 
 def session_message_via(
@@ -406,6 +426,7 @@ def ask_user(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     question = text(inp, "question")
     item_ids = strings(items(inp, "items", required=False) or [], "items")
     reserved = flag(inp, "reserved")
+    choices = options(inp)
 
     def build(ctx: CommitContext) -> list[EventDraft]:
         row, current = task_and_attempt(ctx.conn, env, task_id)
@@ -451,6 +472,8 @@ def ask_user(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                         "judgments": item_ids,
                     },
                     "resolves": item_ids,
+                    # Optional (T357): absent when the question offers none, as before.
+                    **({"options": choices} if choices else {}),
                 },
             )
         ]

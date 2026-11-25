@@ -23,6 +23,9 @@ from typing import Any, cast
 from tsw.machine.ask_user import user_words
 
 WORKDECK = "workdeck"
+# The Dashboard delivers answers the same way under its own name (DN006 §8.10, T357).
+DASHBOARD_SENDER = "tsw-dashboard"
+DASHBOARD = "dashboard"
 HUMAN = "human"
 # A turn's own entries are near the end; a turn with a lot of tool output pushes them back.
 # Reading stops here rather than walk a long session's whole transcript at every turn's end.
@@ -125,11 +128,14 @@ def typed_by_user(origin: dict[str, Any] | None) -> bool | None:
 
 def via(origin: dict[str, Any] | None) -> str | None:
     """``workdeck`` when the host recorded the message as delivered by the workdeck daemon
-    (``origin.kind: peer``, ``origin.from: workdeck``; CC001 §6.1); None otherwise."""
+    (``origin.kind: peer``, ``origin.from: workdeck``; CC001 §6.1), ``dashboard`` when the
+    TaskSteward Dashboard delivered it (``origin.from: tsw-dashboard``, T357); None otherwise."""
     if origin is None:
         return None
     if origin.get("kind") == "peer" and origin.get("from") == WORKDECK:
         return WORKDECK
+    if origin.get("kind") == "peer" and origin.get("from") == DASHBOARD_SENDER:
+        return DASHBOARD
     return None
 
 

@@ -1477,6 +1477,29 @@
       }
     },
     {
+      "id": "UC-DIRECT-013",
+      "title": "在 Dashboard 中回答 worker 的提问：答复作为用户的消息投递到 worker 会话（T357，DN006 §8.10）",
+      "actor": "用户 / 本机或经 workdeck gateway 访问 Dashboard 的浏览器 / worker",
+      "acceptance": "等待用户、有待答会话内问题的卡片（看板、任务流弹框、单任务视图）显示答复区：问题编号、提问时间、去向、reserved 时“只能由你回答”、问题全文（长问题可展开）、卡片上其他地方没有显示的已登记产出（不再列在「详情」），Dashboard 应用中另有 worker 给的选项按钮（ask_user 的 options：至多 6 项、每项 1–80 个字符、互不相同，记在 input.escalated 与投影 input_options）与输入框；静态 STATUS.html 没有答复控件。确认后 POST /api/tasks/<任务>/answer（与验收按钮相同的准入）把原话写进问题所在 worker 会话的收件箱（$CLAUDE_CONFIG_DIR/sessions 中按 hostSessionId 找到会话，auth 与 user 两行，from 为 tsw-dashboard，令牌不出现在响应中），应用不写账本；hook 照常记为 input.session_message，worker 用 user_answer 登记后 T12。GET 同一路径按账本给出进度 sent / received（M-…）/ registered；同一 command_id 或会话已收到同样原话时不再投递；问题已由别处答复时 409 answered 并给出生效的答复，late 为 true 时仍投递；问题不存在、已取消或过时、attempt 已变、任务不在等待时 409 changed；没有运行中的会话或缺 key 文件时 409 not_running / failed，写入中途出错时 502 unknown，重试先核对账本；Stop hook 把 origin.from 为 tsw-dashboard 的消息记为 input.session_message_via（via: dashboard），任务详情注明“经 Dashboard”",
+      "surfaces": [
+        "cli",
+        "hook",
+        "mcp"
+      ],
+      "claims": [],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口",
+        "live": "调用真实宿主的投递由任务报告中的本机运行记录（T357：临时会话探针，本机与经 workdeck gateway 的 Dashboard 各一次真实回答）"
+      }
+    },
+    {
       "id": "UC-SETUP-001",
       "title": "安装脚本 tsw setup 与两条安装路径的入口（T308，DN009，CC009）",
       "actor": "用户 / 终端入口 setup.ps1 / 会话入口 setup skill",

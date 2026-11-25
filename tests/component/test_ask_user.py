@@ -415,7 +415,8 @@ def test_review_escalations_are_asked_in_the_session_too(home: Home) -> None:
     assert reportable(h) == []  # no longer the orchestrator's by default
     request_id = ask(h, w, items=[item])
     status = home.path("views/STATUS.html").read_text(encoding="utf-8")
-    assert "请在 worker 会话中回答" in status and "用方案 A 还是 B？" in status
+    # The static page shows the question in its answer panel, without controls (T357).
+    assert "在 worker 会话中等待" in status and "用方案 A 还是 B？" in status
     say(h, w, "再给两轮")
     h.run(
         "user_answer",

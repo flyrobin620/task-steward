@@ -347,6 +347,12 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         question={**S, "description": "问题全文；随后在本会话的回复里原样写给用户"},
         items={**STRS, "description": "同时交给用户的待处理事项（review_exhausted 等记录的编号）"},
         reserved={**B, "description": "只有用户本人能决定（凭据、验收等）：转交后主会话也不能代答"},
+        options={
+            **STRS,
+            "description": "可选：问题的选项（至多 6 项，每项 1–80 个字符、互不相同），"
+            "与 app 提问框（wrap_up 的 actions）中的按钮相同；Dashboard 据此显示选项按钮"
+            "（DN006 §8.10）",
+        },
     ),
     "user_answer": schema(
         ["task_id", "request_id", "message_id", "answer"],

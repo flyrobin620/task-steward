@@ -206,6 +206,12 @@ CREATE TABLE IF NOT EXISTS in_session_requests(
     handed_off_at TEXT,
     relayed_to TEXT
 );
+-- The options a question offers (DN006 §8.10, T357). Only input.escalated with options writes it,
+-- so a projection made before it stays valid.
+CREATE TABLE IF NOT EXISTS input_options(
+    request_id TEXT PRIMARY KEY,
+    options TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS session_messages(
     message_id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL,

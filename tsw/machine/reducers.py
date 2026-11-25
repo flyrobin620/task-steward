@@ -235,6 +235,11 @@ def input_escalated(conn: sqlite3.Connection, event: Event) -> None:
         )
     for item in event.data.get("resolves", []):
         conn.execute("UPDATE judgments SET status = 'escalated' WHERE item_id = ?", (item,))
+    if event.data.get("options"):
+        conn.execute(
+            "INSERT OR REPLACE INTO input_options(request_id, options) VALUES(?, ?)",
+            (event.data["request_id"], dumps(event.data["options"])),
+        )
 
 
 def input_resolved(conn: sqlite3.Connection, event: Event) -> None:
