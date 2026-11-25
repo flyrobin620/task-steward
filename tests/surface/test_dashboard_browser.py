@@ -27,6 +27,9 @@ from tests.machine_harness import Harness
 from tsw.home import Home
 
 mark = pytest.mark
+# The browser has a time limit; with every core busy with the tier's other processes it was not
+# met (T355), so the gate runs this file after them, on its own (docs/development/ci.md).
+pytestmark = pytest.mark.alone
 
 CHECK = Path(__file__).resolve().parents[1] / "fixtures" / "dashboard_check.js"
 # Windows runners (CI and the developers' machines) have Edge; Chrome or Chromium also work.

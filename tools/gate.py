@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -55,6 +56,10 @@ STAGE_JOBS = {stage: stage for stage in SCOPE_STAGES}
 assert set(STAGE_STEPS) == set(SCOPE_STAGES), "tools/scope.py STAGES and STAGE_STEPS disagree"
 CI_TIERS = ("unit", "component", "surface", "conformance")
 MAX_JOBS = 8
+# A test file that marks itself ``pytestmark = pytest.mark.alone`` runs in a process of its own
+# after the tier's parallel processes: it drives an outside program (a browser) whose time limit
+# is not met while every core is busy (T355).
+ALONE = re.compile(r"^pytestmark\s*=.*\bmark\.alone\b", re.M)
 
 
 def _tool(name: str) -> str:
@@ -74,19 +79,36 @@ def default_jobs() -> int:
     return max(1, min(os.cpu_count() or 1, MAX_JOBS))
 
 
+def _test_files(tier_dir: Path) -> list[Path]:
+    """A tier's test files, found the way pytest finds them under a directory."""
+    return sorted({*tier_dir.rglob("test_*.py"), *tier_dir.rglob("*_test.py")})
+
+
+def _runs_alone(path: Path) -> bool:
+    return ALONE.search(path.read_text(encoding="utf-8", errors="replace")) is not None
+
+
+def _alone(tier_dir: Path) -> list[Path]:
+    """The tier's test files that run alone (:data:`ALONE`), each in a process of its own."""
+    return [path for path in _test_files(tier_dir) if _runs_alone(path)]
+
+
 def _shards(tier_dir: Path, jobs: int) -> list[list[Path]]:
-    """Split a tier's test files into at most ``jobs`` sets of similar size.
+    """Split a tier's test files, but those that run alone, into at most ``jobs`` sets of similar
+    size.
 
     Test files are found the way pytest finds them under a directory, subdirectories included.
     A file's size in bytes stands in for its run time: the largest file goes to the lightest
-    set first. Every test file is in exactly one set; the split depends only on the files.
+    set first. Every test file is in exactly one set or runs alone; the split depends only on the
+    files.
     """
+    found = _test_files(tier_dir)
     files = sorted(
-        {*tier_dir.rglob("test_*.py"), *tier_dir.rglob("*_test.py")},
+        (path for path in found if not _runs_alone(path)),
         key=lambda path: (-path.stat().st_size, path.as_posix()),
     )
     if not files:
-        return [[tier_dir]]
+        return [] if found else [[tier_dir]]
     shards: list[list[Path]] = [[] for _ in range(min(jobs, len(files)))]
     loads = [0] * len(shards)
     for path in files:
@@ -173,7 +195,8 @@ class Gate:
         for pattern in (f"{tier}.*", f".coverage.{tier}*"):
             for stale in self.results_dir.glob(pattern):
                 stale.unlink()
-        shards = _shards(ROOT / "tests" / tier, jobs)
+        parallel = _shards(ROOT / "tests" / tier, jobs)
+        shards = parallel + [[path] for path in _alone(ROOT / "tests" / tier)]
         env = dict(os.environ)
         env["PYTHONPATH"] = str(ROOT)
         env["PYTHONUTF8"] = "1"
@@ -181,6 +204,10 @@ class Gate:
         procs: list[tuple[int, subprocess.Popen[str], Path]] = []
         self.coverage_files[tier] = []
         for index, files in enumerate(shards, start=1):
+            if index > len(parallel):
+                # Alone: after every parallel process, and one at a time.
+                for _, running, _ in procs:
+                    running.wait()
             shard_env = dict(env)
             shard_env["TSW_RESULTS_FILE"] = str(self.results_dir / f"{tier}.{index}.json")
             log = self.results_dir / f"{tier}.{index}.out"
