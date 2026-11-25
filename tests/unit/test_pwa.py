@@ -52,7 +52,14 @@ def test_the_manifest_names_the_app_and_keeps_every_address_relative() -> None:
     value = pwa.manifest()
     assert value["name"] == "TaskSteward Dashboard" and value["short_name"] == "TaskSteward"
     assert value["display"] == "standalone"
-    assert value["start_url"] == value["scope"] == value["id"] == "./"
+    assert value["start_url"] == value["scope"] == "./"
+    # No id: it would resolve against the origin alone, giving every device behind one gateway
+    # the same app; the default is the resolved start_url, which differs per device.
+    assert "id" not in value
+    other = MOUNT.replace("DEVICE", "OTHER")
+    assert urljoin(urljoin(MOUNT, pwa.MANIFEST), value["start_url"]) != urljoin(
+        urljoin(other, pwa.MANIFEST), value["start_url"]
+    )
     for color in (value["background_color"], value["theme_color"]):
         assert re.fullmatch(r"#[0-9a-f]{6}", color)
     for root in (MOUNT, LOCAL):

@@ -7,8 +7,10 @@ and ``apple-mobile-web-app-title``. The Dashboard app serves the manifest and th
 data and nothing about the installation (like ``/healthz`` and the workdeck manifest).
 
 Every address here is relative: the page links ``manifest.webmanifest`` from the root (``./``) or a
-task view (``../``), and the manifest's ``start_url``, ``scope``, ``id`` and icons resolve against
-the manifest's own address. So behind a proxy's path prefix (workdeck: ``/d/<device>/plugins/tsw/``)
+task view (``../``), and the manifest's ``start_url``, ``scope`` and icons resolve against the
+manifest's own address. The manifest has no ``id``: an ``id`` resolves against the origin alone, so
+``"./"`` would give every device's Dashboard behind one gateway the same identity; without it the
+identity is the resolved ``start_url``, the Dashboard's own address. So behind a proxy's path prefix (workdeck: ``/d/<device>/plugins/tsw/``)
 the installed app starts at the Dashboard, not at the proxy's root, and the proxy rewrites nothing.
 
 The icons are drawn once in ``icons/icon.svg`` (a rounded square, transparent corners: favicon and
@@ -79,7 +81,6 @@ def manifest() -> dict[str, Any]:
         "short_name": SHORT_NAME,
         "description": DESCRIPTION,
         "lang": "zh-CN",
-        "id": "./",
         "start_url": "./",
         "scope": "./",
         "display": "standalone",
