@@ -8,10 +8,11 @@ data and nothing about the installation (like ``/healthz`` and the workdeck mani
 
 Every address here is relative: the page links ``manifest.webmanifest`` from the root (``./``) or a
 task view (``../``), and the manifest's ``start_url``, ``scope`` and icons resolve against the
-manifest's own address. The manifest has no ``id``: an ``id`` resolves against the origin alone, so
-``"./"`` would give every device's Dashboard behind one gateway the same identity; without it the
-identity is the resolved ``start_url``, the Dashboard's own address. So behind a proxy's path prefix (workdeck: ``/d/<device>/plugins/tsw/``)
+manifest's own address. So behind a proxy's path prefix (workdeck: ``/d/<device>/plugins/tsw/``)
 the installed app starts at the Dashboard, not at the proxy's root, and the proxy rewrites nothing.
+The manifest has no ``id``: an ``id`` resolves against the origin alone, so ``"./"`` would give
+every device's Dashboard behind one gateway the same identity; without it the identity is the
+resolved ``start_url``, the Dashboard's own address.
 
 The icons are drawn once in ``icons/icon.svg`` (a rounded square, transparent corners: favicon and
 the manifest's ``any`` icons); ``tools/icons.py render`` rasterizes the PNGs below from it, the
@@ -33,8 +34,8 @@ MANIFEST = "manifest.webmanifest"
 NAME = "TaskSteward Dashboard"
 SHORT_NAME = "TaskSteward"
 DESCRIPTION = "TaskSteward 的任务看板：任务、attempt 与会话，验收、退回与取消"
-# The middle of the icon's background gradient, for the splash screen; the page's backgrounds (status.css) for the
-# browser's bar in the light and dark schemes.
+# The middle of the icon's background gradient, for the splash screen; the page's backgrounds
+# (status.css) for the browser's bar in the light and dark schemes.
 BACKGROUND = "#7c3aed"
 THEME_COLORS = (("light", "#f3f5fa"), ("dark", "#0e131d"))
 
