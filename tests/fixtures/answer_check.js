@@ -78,7 +78,9 @@
       check("flow: its buttons work there", shown(dialog.querySelector(".qa-ans")) && !shown(step));
       click(dialog.querySelector(".qa-x"));
       check("flow: ✕ closes the dialog", !dialog.open);
-      check("flow: the panel is back on its card", card.querySelector(".qa") && !dialog.querySelector(".qa"));
+      // The panel goes back in the dialog's close event, which comes after close() (review r2 F7).
+      const back = await until(() => card.querySelector(".qa") && !dialog.querySelector(".qa"), 1000);
+      check("flow: the panel is back on its card", back);
     }
     document.getElementById("view-status").click();
     await pause(50);

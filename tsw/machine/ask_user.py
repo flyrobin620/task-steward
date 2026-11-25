@@ -219,6 +219,8 @@ def session_message(
     prompt: str,
     *,
     prompt_id: str | None = None,
+    intended: str | None = None,
+    noted: bool = False,
 ) -> EventDraft | None:
     """What the ``UserPromptSubmit`` hook records: every message the user types in the worker's
     session while the task is still open (not accepted, cancelled or archived). Injected messages
@@ -230,6 +232,9 @@ def session_message(
     Any other message is recorded without a question: the worker may cite it as the source of a
     requirement change (``requirement_change``, DN002 §5.1a).
 
+    ``noted`` with ``intended``: the Dashboard delivered these words as the answer to that
+    question (DN006 §8.10, T357); they answer it only while it still takes answers here.
+
     ``prompt_id`` is the host's id of the turn the message started (Claude Code's hook payload):
     with it the end of the turn finds the message's source (``session_message_via``, T338).
     """
@@ -238,9 +243,14 @@ def session_message(
         return None
     revision = int(row["revision"])
     message_id = next_item_id(conn, "session_messages", "message_id", "M", task_id)
+    request_id = collecting(conn, task_id, session_ref, revision)
+    if noted and request_id != intended:
+        # The Dashboard delivered these words for another question, which no longer takes
+        # answers here: they answer no question rather than the newer one (DN006 §8.10, T357).
+        request_id = None
     data: dict[str, Any] = {
         "message_id": message_id,
-        "request_id": collecting(conn, task_id, session_ref, revision),
+        "request_id": request_id,
         "session_ref": session_ref,
         "text": user_words(prompt),
     }

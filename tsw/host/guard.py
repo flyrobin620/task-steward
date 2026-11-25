@@ -24,6 +24,7 @@ from tsw.commands import Command, CommitContext
 from tsw.config import EffectiveConfig, lease_minutes, load_config, resolve_repository
 from tsw.events import EventDraft, utc_now
 from tsw.home import Home
+from tsw.host import answer as answering
 from tsw.host import inbox as inbox_mod
 from tsw.host import shell
 from tsw.host.dashboard_service import SECRET_DIR
@@ -888,9 +889,20 @@ class Guard:
         out: dict[str, Any] = {}
 
         prompt_id = self._prompt_id()
+        # A message the Dashboard delivered answers the question it was delivered for (T357).
+        intended = answering.take(self.home, session_id, user_words(prompt), utc_now())
+        noted = intended is not answering.NOT_NOTED
 
         def build(ctx: CommitContext) -> list[EventDraft]:
-            draft = session_message(ctx.conn, task_id, session_id, prompt, prompt_id=prompt_id)
+            draft = session_message(
+                ctx.conn,
+                task_id,
+                session_id,
+                prompt,
+                prompt_id=prompt_id,
+                intended=str(intended) if noted else None,
+                noted=noted,
+            )
             if draft is not None:
                 out.update(draft.data)
             return [] if draft is None else [draft]

@@ -434,6 +434,8 @@ class StatusApp:
             ledger, _ = self.ledger()
             with ledger.view() as conn:
                 try:
+                    # The question as it stands; whether the words may go out is asked last, so
+                    # a retry or an answer given elsewhere is told as such (review r2 F6).
                     found = answering.question(conn, task_id, request_id)
                 except answering.Refused as refused:
                     return HTTPStatus.CONFLICT, {
@@ -464,9 +466,22 @@ class StatusApp:
                         "message": "这个问题已经有答复",
                         "effective": answering.effective(found.resolution),
                     }
+                try:
+                    found = answering.deliverable(conn, task_id, request_id)
+                except answering.Refused as refused:
+                    return HTTPStatus.CONFLICT, {
+                        "ok": False,
+                        "code": refused.code,
+                        "message": refused.message,
+                        **refused.details,
+                    }
+            now = utc_now()
+            answering.note(self.home, found.session_ref, request_id, text, now)
             outcome = session_inbox.deliver(found.session_ref, text, self.sessions_dir)
             if outcome.state in ("written", "unknown"):
                 self._remember(command_id, task_id, request_id, text, outcome.state)
+            else:
+                answering.unnote(self.home, found.session_ref, text, now)
         if outcome.state == "written":
             print(f"tsw status: 已把 {request_id} 的答复发到 {task_id} 的 worker 会话", flush=True)
             return HTTPStatus.OK, {"ok": True, "state": "sent", "late": found.status != "pending"}

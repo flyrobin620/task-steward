@@ -10,12 +10,17 @@ registered (the question was answered by that message).
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any, cast
 
+from tsw.home import Home
+from tsw.lease import parse_time
 from tsw.machine.ask_user import collecting
 from tsw.machine.model import loads
+from tsw.storage.fs import atomic_write
 
 ANSWERABLE_KIND = "in_session"
 
@@ -62,7 +67,33 @@ class Refused(Exception):
 
 
 def question(conn: sqlite3.Connection, task_id: str, request_id: str) -> Question:
-    """The question, when the page may deliver an answer to it; Refused otherwise.
+    """The question the page answers; Refused when there is none to answer any more (no such
+    question, one for the main session, cancelled or superseded). Whether its answer may go out
+    now is :func:`deliverable`'s to say: a retry or an answer given elsewhere is told first."""
+    row = conn.execute(
+        "SELECT r.request_id, r.kind, r.status, r.resolution, s.session_ref "
+        "FROM input_requests r LEFT JOIN in_session_requests s ON s.request_id = r.request_id "
+        "WHERE r.request_id = ? AND r.task_id = ?",
+        (request_id, task_id),
+    ).fetchone()
+    if row is None:
+        raise Refused("changed", CHANGED["no_question"])
+    if row["kind"] != ANSWERABLE_KIND or not row["session_ref"]:
+        raise Refused("changed", CHANGED["kind"])
+    status = str(row["status"])
+    if status in ("cancelled", "superseded"):
+        raise Refused("changed", CHANGED[status])
+    return Question(
+        task_id=task_id,
+        request_id=request_id,
+        status=status,
+        session_ref=str(row["session_ref"]),
+        resolution=loads(row["resolution"], None),
+    )
+
+
+def deliverable(conn: sqlite3.Connection, task_id: str, request_id: str) -> Question:
+    """The question, when the page may deliver an answer to it now; Refused otherwise.
 
     A pending question goes to the session it was asked in, which must be the task's current
     attempt's, live, with the task waiting on the user. An answered question is returned too: the
@@ -176,3 +207,70 @@ def progress(conn: sqlite3.Connection, task_id: str, request_id: str, text: str)
     if message_id is not None:
         return {"state": "received", "message_id": message_id}
     return {"state": "sent"}
+
+
+# ---------------------------------------------------------------------- delivery notes
+# Which question each delivered answer is for (review r2 F1): the hook records a message in the
+# worker's session when the session reads it, and the question may have moved on by then (answered
+# elsewhere, a new one asked). The note ties the words to the question they answer; the hook then
+# links the message to that question or, when it no longer takes answers there, to none. The
+# notes are a cache next to the routine's, not the ledger: losing them only falls back to the
+# session's latest question, as for any message the user writes there.
+NOTES = "dashboard-answers.json"
+NOTES_KEPT = 50
+NOTE_TTL = timedelta(hours=1)
+NOT_NOTED = object()  # the words are not a delivery the Dashboard noted
+
+
+def _notes(home: Home, now: str) -> list[dict[str, Any]]:
+    try:
+        raw: Any = json.loads((home.cache_dir / NOTES).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    items = cast("list[Any]", raw) if isinstance(raw, list) else []
+    fresh: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        entry = cast("dict[str, Any]", item)
+        try:
+            if parse_time(now) - parse_time(str(entry.get("at"))) <= NOTE_TTL:
+                fresh.append(entry)
+        except ValueError:
+            continue
+    return fresh[-NOTES_KEPT:]
+
+
+def _save(home: Home, items: list[dict[str, Any]]) -> None:
+    home.cache_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write(home.cache_dir / NOTES, json.dumps(items, ensure_ascii=False).encode("utf-8"))
+
+
+def note(home: Home, session_ref: str, request_id: str, text: str, now: str) -> None:
+    """Before writing into the session: these words are the answer to this question."""
+    items = _notes(home, now)
+    items.append({"session": session_ref, "request_id": request_id, "text": text, "at": now})
+    _save(home, items[-NOTES_KEPT:])
+
+
+def unnote(home: Home, session_ref: str, text: str, now: str) -> None:
+    """Nothing was written after all: the note must not catch the user's own words later."""
+    items = _notes(home, now)
+    for i in range(len(items) - 1, -1, -1):
+        if items[i].get("session") == session_ref and _same(str(items[i].get("text")), text):
+            del items[i]
+            _save(home, items)
+            return
+
+
+def take(home: Home, session_ref: str, text: str, now: str) -> object:
+    """For the hook: the question the Dashboard delivered these words for (and the note is used
+    up), or ``NOT_NOTED``."""
+    items = _notes(home, now)
+    for i in range(len(items) - 1, -1, -1):
+        if items[i].get("session") == session_ref and _same(str(items[i].get("text")), text):
+            found = str(items[i].get("request_id"))
+            del items[i]
+            _save(home, items)
+            return found
+    return NOT_NOTED

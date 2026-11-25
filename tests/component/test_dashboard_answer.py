@@ -351,3 +351,59 @@ def test_the_card_shows_the_question_options_and_outputs_and_the_static_page_no_
     still = static[static.index('id="task-T001"') :]
     still = still[: still.index("</article>")]
     assert "<textarea" not in still and "在 Dashboard 应用或 worker 会话中回答" in still
+
+
+def test_words_delivered_for_a_question_that_moved_on_answer_no_other(
+    h: Harness, worker: Caller, inbox: FakeInbox, app: StatusApp
+) -> None:
+    """The question moves on between the delivery and the hook (review r2 F1): answered
+    elsewhere and a new one asked. The delivered words then answer no question at all."""
+    first = ask(h, worker)
+    assert answer(app, first, "A")[0] == HTTPStatus.OK
+    inbox.wait(1)
+    handed_off_and_answered(h, first)
+    second = ask(h, worker)
+    say(h, worker, "A")  # the session reads the message only now
+    assert last_message(h)["request_id"] == ""
+    assert h.query("SELECT status FROM input_requests WHERE request_id = ?", second) == [
+        {"status": "pending"}
+    ]
+    # The note is used up: the user's own "A" typed later answers the open question as usual.
+    say(h, worker, "A")
+    assert last_message(h)["request_id"] == second
+
+
+def test_a_delivery_that_did_not_go_out_leaves_the_users_own_words_alone(
+    h: Harness, worker: Caller, app: StatusApp
+) -> None:
+    first = ask(h, worker)
+    assert answer(app, first, "A")[1]["code"] == "not_running"
+    say(h, worker, "A")
+    assert last_message(h)["request_id"] == first
+
+
+def test_a_retry_after_the_answer_was_registered_says_so(
+    h: Harness, worker: Caller, inbox: FakeInbox, app: StatusApp
+) -> None:
+    request_id = ask(h, worker)
+    assert answer(app, request_id, "A")[0] == HTTPStatus.OK
+    inbox.wait(1)
+    say(h, worker, "A")
+    h.run(
+        "user_answer",
+        worker,
+        task_id="T001",
+        request_id=request_id,
+        message_id=last_message(h)["message_id"],
+        answer="A",
+    )
+    # The response was lost, the page retries the same answer (review r2 F6).
+    status, result = answer(app, request_id, "A")
+    assert (status, result["duplicate"], result["state"]) == (HTTPStatus.OK, True, "registered")
+    # An older page still showing the question learns the answer, not "nothing sent".
+    status, result = app.answer(
+        "T001", {"request_id": request_id, "text": "B", "command_id": "dashboard-answer-04"}
+    )
+    assert (status, result["code"]) == (HTTPStatus.CONFLICT, "answered")
+    assert result["effective"]["text"] == "A"
+    assert len(inbox.messages()) == 1
