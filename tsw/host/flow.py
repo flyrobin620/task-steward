@@ -1035,9 +1035,9 @@ def render_flow(
         '<span class="lg-item"><i class="lg-ctx"></i>与筛选结果直接相连的上下文</span></span>'
     )
     shape = (
-        '<span class="shape" role="radiogroup" aria-label="连线形状">'
-        '<label><input type="radio" name="flow-shape" value="poly" checked> 折线</label>'
-        '<label><input type="radio" name="flow-shape" value="curve"> 曲线</label></span>'
+        '<span class="shape seg" role="radiogroup" aria-label="连线形状">'
+        '<label><input type="radio" name="flow-shape" value="poly" checked>折线</label>'
+        '<label><input type="radio" name="flow-shape" value="curve">曲线</label></span>'
     )
     # The data block is never run; "<", ">" and "&" are escaped so no text can end it.
     payload = (
@@ -1048,25 +1048,32 @@ def render_flow(
     )
     return (
         '<section class="flow" id="flow" hidden aria-label="任务流">'
-        '<div class="flow-bar">'
-        '<label><input type="checkbox" id="flow-archived"> 含已归档</label>'
-        '<span class="sep"></span>'
+        # One row (T353): the legend and the relation choices open from 「图例与关系」.
+        '<div class="flow-bar" id="flow-bar">'
+        '<label class="toggle"><input type="checkbox" id="flow-archived">含已归档</label>'
         f"{shape}"
-        '<span class="sep"></span>'
-        '<button type="button" class="ghost" id="zoom-out" title="缩小">缩小</button>'
-        '<button type="button" class="ghost" id="zoom-in" title="放大">放大</button>'
+        '<span class="zoom-group" role="group" aria-label="缩放">'
+        '<button type="button" class="ghost" id="zoom-out" title="缩小" aria-label="缩小">'
+        "−</button>"
+        '<span class="zoom" id="zoom-level"></span>'
+        '<button type="button" class="ghost" id="zoom-in" title="放大" aria-label="放大">+</button>'
         '<button type="button" class="ghost" id="zoom-reset">100%</button>'
         '<button type="button" class="ghost" id="zoom-fit" title="缩放到区域宽度">适应宽度</button>'
-        '<span class="zoom" id="zoom-level"></span>'
+        "</span>"
+        '<button type="button" class="ghost" id="legend-open" aria-haspopup="dialog" '
+        'aria-expanded="false" aria-controls="legend-pop">图例与关系 ▾</button></div>'
+        '<div class="pop legend-pop" id="legend-pop" role="dialog" aria-label="图例与关系" hidden>'
         f"{legend}</div>"
+        '<p class="empty" id="flow-empty" hidden>没有符合筛选条件的任务。</p>'
         f'<script type="application/json" id="flow-layouts">{payload}</script>'
+        # The slot is a window tall; the area in it grows as the page scrolls (T353).
+        '<div class="flow-slot" id="flow-slot">'
         '<div class="flow-scroll" id="flow-scroll"><div class="flow-size" id="flow-size">'
         '<div class="flow-grid" id="flow-grid">'
         f'<div class="flow-names" id="flow-names">{"".join(names)}</div>'
         '<div class="flow-canvas" id="flow-canvas">'
         f"{''.join(bands)}"
         '<svg class="flow-edges" id="flow-edges" aria-hidden="true"></svg>'
-        f"{''.join(nodes)}</div></div></div></div>"
-        '<p class="empty" id="flow-empty" hidden>没有符合筛选条件的任务。</p>'
+        f"{''.join(nodes)}</div></div></div></div></div>"
         "</section>"
     )

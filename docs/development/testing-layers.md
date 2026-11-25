@@ -9,7 +9,7 @@
 | --- | --- | --- | --- | --- |
 | `unit` | 纯逻辑：状态迁移与守卫、归约、配置校验、评审预算、模型 ID 规范化等 | 进程内调用，不碰文件系统以外的资源 | 真实 | 本地门禁、CI |
 | `component` | 真实文件系统、SQLite、git 与子进程上的行为：账本提交锁、检查点与投影、`rebuild`、备份恢复、写入闸门、worktree 创建；崩溃恢复与并发 | 临时数据目录与临时 git 仓库；多进程用确定性屏障；故障注入点 | 真实；故障注入单独标注 | 本地门禁、CI |
-| `surface` | 对外表面：`tsw` CLI、stdio MCP server、hooks、插件包结构 | CLI 作为独立进程运行，分别断言退出码、stdout、stderr；MCP 经真实 stdio 与 JSON-RPC 序列化；hooks 以独立进程读取录制的真实 payload | 真实（payload 为录制样本） | 本地门禁、CI |
+| `surface` | 对外表面：`tsw` CLI、stdio MCP server、hooks、插件包结构、Dashboard 页面 | CLI 作为独立进程运行，分别断言退出码、stdout、stderr；MCP 经真实 stdio 与 JSON-RPC 序列化；hooks 以独立进程读取录制的真实 payload；tsw 生成的 Dashboard 页面在无界面的 Edge 或 Chrome 中打开，由页面内的检查脚本操作与测量（`tests/surface/test_dashboard_browser.py`，没有浏览器时失败，`TSW_TEST_BROWSER` 可指定） | 真实（payload 为录制样本；浏览器中的输入事件由脚本发出） | 本地门禁、CI |
 | `conformance` | 每类插件接口的一致性套件（DN006 §5.2）：幂等、结果未知时对账、错误码、能力声明 | 对每个插件实现运行同一套件；本仓库之外的平台用 stub 或录制回放替代 | 模拟（stub / 录制回放） | 本地门禁、CI |
 | `live` | 真实宿主与真实评审器：Claude 桌面 app 中的主会话与 worker 全流程、`codex app-server`、Copilot CLI 与 `claude -p` 的只读评审 | 本机真实 app、真实 CLI 与模型；隔离的临时数据目录与临时仓库 | 真实 | 只在本机，绝不在 CI |
 
