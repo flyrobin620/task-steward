@@ -355,6 +355,18 @@ def spare_claim(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         raise rejected("需要来源", reason="invalid_input", field="user_source")
 
     def build(ctx: CommitContext) -> list[EventDraft]:
+        if page_command:
+            # Checked under the ledger's commit lock: two Dashboards handling the same submission
+            # claim one spare between them, never two (review r4 F7).
+            earlier = claimed_by_page(ctx.conn, page_command)
+            if earlier is not None:
+                raise rejected(
+                    "这次提交已认领了备用会话",
+                    reason="page_command_claimed",
+                    spare_id=earlier["spare_id"],
+                    session_ref=earlier["session_ref"],
+                    text=earlier["claim_text"],
+                )
         row = get(ctx.conn, sid)
         if row["status"] != "available":
             raise rejected("这个备用会话已不可用", reason="spare_unavailable", status=row["status"])

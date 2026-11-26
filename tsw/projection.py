@@ -267,6 +267,7 @@ CREATE TABLE IF NOT EXISTS spares(
     claimed_attempt TEXT,
     claim_via TEXT,
     claim_command TEXT,
+    claim_text TEXT,
     claimed_at TEXT,
     target TEXT,
     target_branch TEXT,

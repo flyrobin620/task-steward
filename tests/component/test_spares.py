@@ -697,5 +697,56 @@ def test_dashboard_retry_after_a_restart_and_a_race(
     restarted = StatusApp(home, token="u" * 32)
     restarted.sessions_dir = session_inbox.sessions_dir()
     status, again = restarted.new_session({"text": "看日志", "command_id": "new-session-race1"})
-    assert status == 200 and again["duplicate"] is True and again["spare_id"] == "S1"
+    # Found, never delivered again, and not reported as delivered: this process did not see it.
+    assert status == 502 and again["state"] == "unknown" and again["spare_id"] == "S1"
+    assert again["duplicate"] is True and again["href"] == "claude://claude.ai/epitaxy/s-1"
     assert len(one.wait(2, timeout=1)) == 1
+    # The same command_id with other words is refused (review r4 F6).
+    status, other = restarted.new_session({"text": "别的", "command_id": "new-session-race1"})
+    assert status == 409 and other["code"] == "command_reused"
+
+
+@pytest.mark.use_case(CHAT)
+def test_two_dashboards_claim_one_spare_per_submission(
+    home: Home, inboxes: Callable[[str], FakeInbox], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review r4 F7: the submission's claim is checked inside the claim's own commit, so a second
+    Dashboard handling the same submission takes no second spare and writes nothing."""
+    h = Harness(home, YOUNG)
+    spare(h, "s-1")
+    spare(h, "s-2")
+    one, two = inboxes("s-1"), inboxes("s-2")
+    first = StatusApp(home, token="t" * 32)
+    second = StatusApp(home, token="u" * 32)
+    for app in (first, second):
+        app.sessions_dir = session_inbox.sessions_dir()
+    body = {"text": "开始", "command_id": "new-session-twice"}
+    status, out = first.new_session(body)
+    assert status == 200 and out["spare_id"] == "S2"
+    # The second one looked before the first had claimed (its lookup found nothing).
+    real = spares_mod.claimed_by_page
+    calls: list[str] = []
+
+    def missed_once(conn: Any, page_command: str) -> Any:
+        calls.append(page_command)
+        return None if len(calls) == 1 else real(conn, page_command)
+
+    monkeypatch.setattr(spares_mod, "claimed_by_page", missed_once)
+    status, again = second.new_session(body)
+    assert status == 502 and again["state"] == "unknown" and again["spare_id"] == "S2"
+    statuses = {r["spare_id"]: r["status"] for r in h.query("SELECT spare_id, status FROM spares")}
+    assert statuses == {"S1": "available", "S2": "claimed"}
+    assert len(two.wait(1)) == 1 and not one.received
+    with pytest.raises(TswError) as refused:
+        user = Caller(role="user", session_id=None, machine=MACHINE)
+        source = {
+            "channel": "status-app",
+            "principal": "me",
+            "message_ref": "status-app:x:9",
+            "text": "开始",
+            "target": ["spare", "S1", "chat"],
+        }
+        h.run(
+            "spare_claim", user, spare_id="S1", user_source=source, page_command="new-session-twice"
+        )
+    assert refused.value.details.get("reason") == "page_command_claimed"

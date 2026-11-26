@@ -1008,10 +1008,12 @@ def spare_not_created(conn: sqlite3.Connection, event: Event) -> None:
 
 def spare_claimed(conn: sqlite3.Connection, event: Event) -> None:
     data = event.data
+    raw: Any = data.get("source")
+    source: dict[str, Any] = raw if isinstance(raw, dict) else {}  # pyright: ignore[reportUnknownVariableType]
     conn.execute(
         "UPDATE spares SET status = 'claimed', claimed_as = ?, claimed_task = ?, "
         "claimed_attempt = ?, claim_via = ?, claimed_at = ?, target = ?, target_branch = ?, "
-        "claim_command = ? WHERE spare_id = ?",
+        "claim_command = ?, claim_text = ? WHERE spare_id = ?",
         (
             data["as"],
             data.get("task_id"),
@@ -1021,6 +1023,7 @@ def spare_claimed(conn: sqlite3.Connection, event: Event) -> None:
             data.get("target"),
             data.get("target_branch"),
             data.get("page_command"),
+            source.get("text"),
             data["spare_id"],
         ),
     )

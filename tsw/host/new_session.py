@@ -95,15 +95,12 @@ class Starter:
                 with ledger.view() as conn:
                     earlier = spares_mod.claimed_by_page(conn, command_id)
                 if earlier is not None:
-                    session = str(earlier["session_ref"])
-                    return 200, {
-                        "ok": True,
-                        "duplicate": True,
-                        "state": "claimed",
-                        "spare_id": earlier["spare_id"],
-                        "session_id": session,
-                        "href": session_href("claude-app", session),
-                    }
+                    return _claimed_before(
+                        str(earlier["spare_id"]),
+                        str(earlier["session_ref"]),
+                        earlier["claim_text"],
+                        text,
+                    )
             if seen is not None:
                 if seen["text"] != text:
                     return 409, {
@@ -157,10 +154,19 @@ class Starter:
             try:
                 self._claim(ledger, config, sid, text, command_id)
             except TswError as exc:
+                reason = exc.details.get("reason")
                 # Taken meanwhile (the orchestrator, another page): nothing was written; the
-                # next one is tried. Anything else is answered as it is (PR #95).
-                if exc.details.get("reason") in ("spare_unavailable", "spare_expired"):
+                # next one is tried (PR #95).
+                if reason in ("spare_unavailable", "spare_expired"):
                     continue
+                # Another Dashboard claimed for this very submission (review r4 F7).
+                if reason == "page_command_claimed":
+                    return _claimed_before(
+                        str(exc.details.get("spare_id")),
+                        str(exc.details.get("session_ref")),
+                        exc.details.get("text"),
+                        text,
+                    )
                 raise
             outcome = session_inbox.deliver(session, text, sessions_dir)
             if outcome.state == "written":
@@ -198,6 +204,31 @@ class Starter:
         caller = Caller(role="user", session_id=None, machine=lease.this_machine())
         request = {"spare_id": sid, "user_source": source, "page_command": command_id}
         run_tool(ledger, config, caller, "spare_claim", request)
+
+
+def _claimed_before(
+    sid: str, session: str, claimed_text: Any, text: str
+) -> tuple[int, dict[str, Any]]:
+    """A submission the ledger says was claimed already, but whose delivery this process did not
+    see (restarted, or another Dashboard handled it): never delivered again, and not reported as
+    delivered either (review r4 F6)."""
+    if isinstance(claimed_text, str) and claimed_text != text:
+        return 409, {
+            "ok": False,
+            "code": "command_reused",
+            "message": "同一个 command_id 已用于另一条消息",
+        }
+    return 502, {
+        "ok": False,
+        "state": "unknown",
+        "code": "unknown",
+        "duplicate": True,
+        "spare_id": sid,
+        "session_id": session,
+        "href": session_href("claude-app", session),
+        "message": f"这次提交已认领备用会话 {sid}，消息是否送达不知道（Dashboard 重启过，"
+        "或另一个页面处理了它）；不会自动重发，请打开会话查看",
+    }
 
 
 def _lost(ledger: Ledger, sid: str, why: str) -> None:
