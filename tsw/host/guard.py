@@ -41,6 +41,7 @@ from tsw.host.transcript import via as origin_via
 from tsw.ledger import Ledger
 from tsw.machine import routine as routine_mod
 from tsw.machine import session_titles as session_titles_mod
+from tsw.machine import spares as spares_mod
 from tsw.machine.ask_user import (
     handoff_due,
     is_automated,
@@ -73,6 +74,13 @@ TURNS_DIR = "turns"
 # sent through workdeck looks like one the user typed in the app; only the latter may create
 # sessions (CC001 §6.1). Said only then: a turn the transcript shows the user typed needs no such
 # warning.
+# Why a spare session is to be retired (DN002 §5.9), as the Stop reminder says it.
+SPARE_REASONS = {
+    "not_running": "不在运行",
+    "age": "建立超过 scheduling.spare.max_age_hours",
+    "surplus": "超出 scheduling.spare.count",
+    "disabled": "备用会话池已关闭",
+}
 WORKDECK_TURN = (
     "这一轮若由 workdeck 发来的消息开始（没有 <cross-session-message> 包装的会话间消息），"
     "宿主不允许创建会话：不要调用 start_session，说明原因后直接结束，"
@@ -558,6 +566,8 @@ class Guard:
 
     def run(self, event: str) -> dict[str, Any] | None:
         who = self.identity()
+        if who.role == "spare" or (who.pending and who.pending_role == "spare"):
+            return self._spare(event, who)
         if who.role == "none":
             if who.pending and who.pending_role == "routine":
                 if event == "SessionStart":
@@ -595,6 +605,69 @@ class Guard:
             return None
         handler = getattr(self, f"on_{event}", None)
         return None if handler is None else handler(who)
+
+    def _spare(self, event: str, who: Identity) -> dict[str, Any] | None:
+        """A session of the spare pool before it is claimed (DN002 §5.9, CC001 §3.1)."""
+        if event == "SessionStart":
+            return context(
+                "SessionStart",
+                f"你是 TaskSteward 的备用会话 {who.spare_id}，不绑定任何任务：现在只回复“备用会话"
+                "就绪”后结束这一轮。之后的第一条消息决定用途（见本会话的提示语）。",
+            )
+        if event == "PreToolUse":
+            tool = str(self.payload.get("tool_name") or "")
+            if tool in WRITE_TOOLS or tool in ("Bash", "PowerShell", START_SESSION):
+                # CC-B10: nothing is done before the session is claimed.
+                return deny(
+                    "PreToolUse",
+                    "CC-B10 备用会话还没有被认领：现在只回复“备用会话就绪”，等第一条消息",
+                )
+            return None
+        if event == "UserPromptSubmit" and not who.pending and who.session_id:
+            prompt = str(self.payload.get("prompt") or "")
+            if is_automated(prompt):
+                return None  # its first prompt, or another session's message: not the user's
+            session_id = who.session_id
+
+            def build(ctx: CommitContext) -> list[EventDraft]:
+                return spares_mod.direct_claim(ctx.conn, session_id)
+
+            try:
+                self.ledger.commit(
+                    Command(
+                        actor={"role": "user", "session_id": session_id, "via": event},
+                        input={"op": "spare_direct_claim"},
+                        build=build,
+                    )
+                )
+            except Exception as exc:  # recording must never block the user's message
+                print(f"tsw guard: spare claim not recorded: {exc}", file=sys.stderr)
+            return context(
+                "UserPromptSubmit",
+                "这条消息是用户发来的（不是主会话的派发）：本会话从现在起是用户的普通对话，不是 "
+                "TaskSteward 的 worker。按会话提示语先用 mcp__ccd_session_mgmt__set_session_title "
+                f"（session_id 为 {session_id}）把标题改成这条消息的简短概括，再照常回答。",
+            )
+        return None
+
+    def _moved_notice(self, who: Identity) -> str | None:
+        """A claimed spare session's message that came before its move took effect (§5.9)."""
+        if not who.spare_id or not who.task_id or not who.attempt:
+            return None
+        try:
+            with self.ledger.view() as conn:
+                row = spares_mod.claimed_for(conn, who.task_id, who.attempt)
+        except Exception:  # a hint never blocks the session
+            return None
+        if row is None or row["move_outcome"] != "moved" or not row["moved_to"]:
+            return None
+        if within(self.cwd, Path(str(row["moved_to"]))):
+            return None
+        return (
+            f"目录还没移到 {row['moved_to']}（移动在上一轮结束、会话空闲后才生效）：这一轮不要开始"
+            "工作，直接再调用 spare_moved（outcome: moved），按返回的 wake 通知主会话，然后结束"
+            "这一轮；主会话会再发开始的消息。"
+        )
 
     # ------------------------------------------------------------------ events
 
@@ -774,15 +847,22 @@ class Guard:
                     (name,),
                 ).fetchone()
                 newest = routine_mod.latest(conn)
+                # A spare session spare_start recorded and not made yet (DN002 §5.9).
+                spare = conn.execute(
+                    "SELECT 1 FROM spares WHERE status = 'starting' AND session_ref IS NULL "
+                    "AND session_name = ?",
+                    (name,),
+                ).fetchone()
             routine = (
                 newest is not None
                 and newest["status"] == "starting"
                 and newest["session_name"] == name
             )
-            if row is None and not routine:
+            if row is None and not routine and spare is None:
                 return deny(
                     "PreToolUse",
-                    "先用 attempt_start（例行会话用 routine_start）落账再创建会话；"
+                    "先用 attempt_start（例行会话用 routine_start，备用会话用 spare_start）落账"
+                    "再创建会话；"
                     "会话名必须是当前有效代次的名称",
                 )
         return None
@@ -837,6 +917,9 @@ class Guard:
         reread = self._instructions_notice(who)
         if reread:
             notes.append(reread)
+        moved = self._moved_notice(who) if spares_mod.START_TAG in prompt else None
+        if moved:
+            notes.append(moved)
         # Only the user asks for a report: an injected message (another session, the worker's own
         # first prompt, which quotes the instructions about ``[report]``) never does.
         if "[report]" in prompt and not is_automated(prompt):
@@ -932,6 +1015,10 @@ class Guard:
                 )
                 # Renaming and archiving create no session: any turn of the lease holder can.
                 sessions = session_titles_mod.pending(conn, self.config) if may_dispatch else []
+                # The spare pool (DN002 §5.9): retiring archives (any turn); adding creates
+                # sessions (the user's turn only).
+                pool = inbox_mod.spare_attention(conn, self.config) if may_dispatch else []
+                in_use = inbox_mod.working(conn) or spares_mod.ever(conn)
                 routine = (
                     inbox_mod.routine_attention(
                         conn, self.config, routine_mod.load_cache(self.home)
@@ -1019,7 +1106,30 @@ class Guard:
                     "（purpose: prestart，user_turn: true）→ start_session → attempt_reconcile。"
                     "确实不该现在预启动时（例如用户要求先不开始），说明原因后直接结束。"
                 )
-            if (prestart or (state == "missing" and user_turn)) and known is None:
+            spare = pool[0] if pool else {}
+            if spare.get("retire"):
+                names = "、".join(
+                    f"{item['spare_id']}（{SPARE_REASONS.get(item['reason'], item['reason'])}）"
+                    for item in spare["retire"]
+                )
+                reasons.append(
+                    f"有备用会话要退役（attention 的 spares.retire）：{names}。逐个调用 "
+                    "mcp__ccd_session_mgmt__archive_session(session_id, reason=备用会话退役)，"
+                    "再 spare_close（outcome：archived；会话已不存在或已归档为 missing；被拒为 "
+                    "failed，result 为返回原文）。"
+                )
+            # Only once tsw is in use (a task has a session, or the pool had one): a fresh
+            # install's first turns are not held up for spares nobody asked for yet.
+            needs = int(spare.get("needs") or 0) if user_turn and in_use else 0
+            if needs:
+                reasons.append(
+                    f"这是用户的 turn，结束后就不能再创建会话：备用会话池还差 {needs} 个"
+                    "（attention "
+                    "的 spares.needs）。按 orchestrate skill 补充：spare_start（user_turn: true）→ "
+                    "start_session → spare_reconcile，逐个进行。用户关闭了备用会话池时说明原因后"
+                    "直接结束。"
+                )
+            if (prestart or needs or (state == "missing" and user_turn)) and known is None:
                 reasons.append(WORKDECK_TURN)
             return {"decision": "block", "reason": "".join(reasons)} if reasons else None
         if who.role == "routine":

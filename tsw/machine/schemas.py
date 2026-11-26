@@ -120,6 +120,11 @@ SCHEMAS: dict[str, dict[str, Any]] = {
             "description": "推荐读取集合：任务 ID；也可以是受理后才出现的适用偏好编号 P-…"
             "（DN007 §6.1，须现行并能到达本任务，写进任务书）",
         },
+        spare={
+            **B,
+            "description": "不能新建会话的一轮（user_turn: false）中派发给备用会话（DN002 §5.9）："
+            "随后 attempt_start 带 spare",
+        },
     ),
     "attempt_start": schema(
         ["task_id", "purpose", "user_turn"],
@@ -131,6 +136,12 @@ SCHEMAS: dict[str, dict[str, Any]] = {
             **S,
             "description": "会话的简短基准标题（不给时为“<任务> <任务标题>”）；结果中的 "
             "session_title 原样作为 start_session 的 title（DN002 §5.8）",
+        },
+        spare={
+            **S,
+            "description": "只用于不能新建会话的一轮（user_turn: false，purpose: dispatch）："
+            "认领一个备用会话代替新建（DN002 §5.9）；auto 或 attention.spares 中的编号（S<n>）。"
+            "结果给出会话 ID 与认领消息：先 attempt_reconcile 绑定，再把认领消息原样发给它",
         },
     ),
     "attempt_reconcile": schema(
@@ -469,6 +480,42 @@ SCHEMAS: dict[str, dict[str, Any]] = {
             "旧名 main-session）或 teams-chat 等",
         },
         note=S,
+    ),
+    "spare_start": schema(
+        ["user_turn"],
+        user_turn={**B, "description": "这一轮是不是用户本人的 turn（只有它能创建会话）"},
+    ),
+    "spare_reconcile": schema(
+        ["spare_id", "outcome"],
+        spare_id={**S, "description": "spare_start 返回的编号（S<n>）"},
+        outcome={"enum": ["created", "not_created"]},
+        session_ref={**S, "description": "start_session 返回的会话 ID（created 时必填）"},
+    ),
+    "spare_close": schema(
+        ["spare_id", "outcome"],
+        spare_id={**S, "description": "attention.spares.retire 中的编号"},
+        outcome={
+            "enum": ["archived", "missing", "failed"],
+            "description": "archive_session 成功为 archived；会话已不存在或已归档为 missing；"
+            "宿主拒绝归档为 failed（之后不再认领它）",
+        },
+        reason={**S, "description": "退役原因：attention.spares.retire 给出的 reason"},
+        result={**S, "description": "archive_session 返回的原文"},
+    ),
+    "spare_claim": schema(
+        ["spare_id", "user_source"],
+        spare_id=S,
+        user_source={**OBJ, "description": "Dashboard 记录的来源（渠道 status-app）"},
+        page_command={**S, "description": "页面这次提交的 command_id（重试时找回同一次认领）"},
+    ),
+    "spare_moved": schema(
+        ["outcome"],
+        task_id=S,
+        outcome={
+            "enum": ["moved", "failed"],
+            "description": "moved：认领消息的第 1、2 步都成功；failed：其中一步失败或被拒",
+        },
+        detail={**S, "description": "failed 时的结果原文"},
     ),
     "routine_start": schema(
         ["user_turn"],

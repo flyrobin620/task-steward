@@ -248,6 +248,36 @@ CREATE TABLE IF NOT EXISTS routine_detached(
     detached_at TEXT NOT NULL,
     note TEXT
 );
+-- The spare-session pool (DN002 §5.9, T363). Only spare.* events write it, so a projection made
+-- before it stays valid.
+CREATE TABLE IF NOT EXISTS spares(
+    spare_id TEXT PRIMARY KEY,
+    number INTEGER NOT NULL,
+    session_name TEXT NOT NULL,
+    workdir TEXT NOT NULL,
+    title TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    controller TEXT,
+    status TEXT NOT NULL,
+    session_ref TEXT,
+    requested_at TEXT NOT NULL,
+    created_at TEXT,
+    claimed_as TEXT,
+    claimed_task TEXT,
+    claimed_attempt TEXT,
+    claim_via TEXT,
+    claim_command TEXT,
+    claim_text TEXT,
+    claimed_at TEXT,
+    target TEXT,
+    target_branch TEXT,
+    moved_to TEXT,
+    move_outcome TEXT,
+    moved_at TEXT,
+    closed_at TEXT,
+    close_reason TEXT,
+    close_outcome TEXT
+);
 CREATE TABLE IF NOT EXISTS routine_jobs(
     job_id TEXT PRIMARY KEY,
     script TEXT NOT NULL,

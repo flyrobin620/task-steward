@@ -970,6 +970,91 @@ def routine_archived(conn: sqlite3.Connection, event: Event) -> None:
     )
 
 
+# ---------------------------------------------------------------------- spares (DN002 §5.9)
+
+
+def spare_start_requested(conn: sqlite3.Connection, event: Event) -> None:
+    data = event.data
+    conn.execute(
+        "INSERT INTO spares(spare_id, number, session_name, workdir, title, prompt, controller, "
+        "status, requested_at) VALUES(?, ?, ?, ?, ?, ?, ?, 'starting', ?)",
+        (
+            data["spare_id"],
+            int(data["number"]),
+            data["session_name"],
+            data["workdir"],
+            data["title"],
+            data["prompt"],
+            data.get("controller"),
+            event.time,
+        ),
+    )
+
+
+def spare_created(conn: sqlite3.Connection, event: Event) -> None:
+    conn.execute(
+        "UPDATE spares SET status = 'available', session_ref = ?, created_at = ? "
+        "WHERE spare_id = ?",
+        (event.data["session_ref"], event.time, event.data["spare_id"]),
+    )
+
+
+def spare_not_created(conn: sqlite3.Connection, event: Event) -> None:
+    conn.execute(
+        "UPDATE spares SET status = 'not_created', closed_at = ? WHERE spare_id = ?",
+        (event.time, event.data["spare_id"]),
+    )
+
+
+def spare_claimed(conn: sqlite3.Connection, event: Event) -> None:
+    data = event.data
+    raw: Any = data.get("source")
+    source: dict[str, Any] = raw if isinstance(raw, dict) else {}  # pyright: ignore[reportUnknownVariableType]
+    conn.execute(
+        "UPDATE spares SET status = 'claimed', claimed_as = ?, claimed_task = ?, "
+        "claimed_attempt = ?, claim_via = ?, claimed_at = ?, target = ?, target_branch = ?, "
+        "claim_command = ?, claim_text = ? WHERE spare_id = ?",
+        (
+            data["as"],
+            data.get("task_id"),
+            data.get("attempt"),
+            data.get("via"),
+            event.time,
+            data.get("target"),
+            data.get("target_branch"),
+            data.get("page_command"),
+            source.get("text"),
+            data["spare_id"],
+        ),
+    )
+
+
+def spare_moved(conn: sqlite3.Connection, event: Event) -> None:
+    data = event.data
+    conn.execute(
+        "UPDATE spares SET moved_to = ?, move_outcome = ?, moved_at = ? WHERE spare_id = ?",
+        (data.get("path"), data["outcome"], event.time, data["spare_id"]),
+    )
+
+
+def spare_lost(conn: sqlite3.Connection, event: Event) -> None:
+    conn.execute(
+        "UPDATE spares SET status = 'lost', closed_at = ?, close_reason = ? WHERE spare_id = ?",
+        (event.time, event.data.get("reason"), event.data["spare_id"]),
+    )
+
+
+def spare_closed(conn: sqlite3.Connection, event: Event) -> None:
+    data = event.data
+    # A failed archive keeps the session out of the pool without calling it closed (§5.9).
+    status = "retire_failed" if data["outcome"] == "failed" else "closed"
+    conn.execute(
+        "UPDATE spares SET status = ?, closed_at = ?, close_reason = ?, close_outcome = ? "
+        "WHERE spare_id = ?",
+        (status, event.time, data.get("reason"), data["outcome"], data["spare_id"]),
+    )
+
+
 def routine_job_added(conn: sqlite3.Connection, event: Event) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO routine_jobs(job_id, script, input, added_seq) VALUES(?, ?, ?, ?)",
@@ -1173,6 +1258,13 @@ REDUCERS: dict[str, Reducer] = {
     "routine.detached": routine_detached,
     "routine.disarmed": routine_disarmed,
     "routine.archived": routine_archived,
+    "spare.start_requested": spare_start_requested,
+    "spare.created": spare_created,
+    "spare.not_created": spare_not_created,
+    "spare.claimed": spare_claimed,
+    "spare.moved": spare_moved,
+    "spare.lost": spare_lost,
+    "spare.closed": spare_closed,
     "routine.job_added": routine_job_added,
     "routine.job_updated": routine_job_updated,
     "routine.job_removed": routine_job_removed,

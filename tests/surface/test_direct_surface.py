@@ -396,13 +396,14 @@ def test_the_dashboard_lets_its_own_requests_carry_a_referer(h: Harness, dashboa
     status, sent, raw = dashboard.request("POST", "/api/tasks/T001/accept", {"revision": 1}, button)
     assert (status, sent["Referrer-Policy"], json.loads(raw)["ok"]) == (200, "same-origin", True)
     assert h.status("T001") == "accepted"
-    # The task buttons, the preference page's forms and the answer panel (T357: its answer and
-    # the poll of its progress) all send with fetch and set the policy.
+    # The task buttons, the preference page's forms, the answer panel (T357: its answer and
+    # the poll of its progress) and 「新建会话」 (T363: the pool and the new session) all send
+    # with fetch and set the policy.
     calls = [call.split("});")[0] for call in APP_SCRIPT.split("await fetch(")[1:]]
     posts = [call for call in calls if 'method: "POST"' in call]
-    assert len(calls) == 5 and len(posts) == 3, calls
+    assert len(calls) == 7 and len(posts) == 4, calls
     assert all('referrerPolicy: "same-origin"' in post for post in posts), posts
-    assert sum('referrerPolicy: "same-origin"' in call for call in calls) == 4, calls
+    assert sum('referrerPolicy: "same-origin"' in call for call in calls) == 6, calls
     assert "no-referrer" not in APP_SCRIPT
 
 

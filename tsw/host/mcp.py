@@ -28,12 +28,13 @@ from tsw.events import utc_now
 from tsw.home import Home, open_home, workdir_path
 from tsw.host import inbox as inbox_mod
 from tsw.host.claude_code import clear_worker_settings
-from tsw.host.identity import Identity, resolve, within
+from tsw.host.identity import SESSION_ENV, Identity, resolve, within
 from tsw.host.maintenance import Maintenance
 from tsw.host.version import runtime as runtime_info
 from tsw.ledger import Ledger
 from tsw.machine import candidates as candidates_mod
 from tsw.machine import routine as routine_mod
+from tsw.machine import spares as spares_mod
 from tsw.machine.ask_user import user_channels
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.config_tools import CONFIG_TOOLS
@@ -62,7 +63,7 @@ INTERNAL_ERROR = -32603
 # registry. Keys are tool names, values (roles, description, input schema).
 HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
     "whoami": (
-        ("orchestrator", "worker", "routine", "revoked", "none"),
+        ("orchestrator", "worker", "routine", "spare", "revoked", "none"),
         "调用者的角色、任务、attempt 与可写路径",
         EMPTY,
     ),
@@ -317,6 +318,44 @@ HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
 }
 
 
+# What a retried call (the same command_id) gives back: the ledger returns the first call's events,
+# not what the tool built around them, so the parts the caller acts on are read from the events
+# (DN002 §5.9, PR #95).
+RESTORED = {
+    "spare_start": (
+        "spare_id",
+        "session_name",
+        "title",
+        "prompt",
+        "background",
+        "model",
+        "effort",
+        "permission_mode",
+    ),
+    "spare_moved": ("start_message",),
+}
+
+
+def _restore_output(name: str, out: dict[str, Any]) -> None:
+    events: list[dict[str, Any]] = list(out.get("events") or [])
+    if not events:
+        return
+    data: dict[str, Any] = dict(events[0].get("data") or {})
+    for key in RESTORED.get(name, ()):
+        if key in data:
+            out.setdefault(key, data[key])
+    if name == "attempt_start" and data.get("spare"):
+        out.setdefault("spare_id", data["spare"])
+        out.setdefault("session_id", data.get("spare_session"))
+        out.setdefault("generation", data.get("generation"))
+        out.setdefault("claim_message", data.get("claim_message"))
+        out.setdefault("target", data.get("spare_target"))
+        out.setdefault("title_base", data.get("title_base"))
+    elif name == "attempt_start" and events[0].get("type") == "attempt.dispatch_abandoned":
+        out.setdefault("abandoned", True)
+        out.setdefault("reason", data.get("reason"))
+
+
 class Server:
     def __init__(self, home: Home, env: Mapping[str, str], cwd: Path) -> None:
         self.home = home
@@ -391,6 +430,12 @@ class Server:
                 # Where a worker or the routine session sends its wake-up message (DN001 §6.3).
                 target = lease.orchestrator_session(conn)
             return {**who.to_dict(), "orchestrator_session": target, "runtime": self.runtime}
+        if who.pending and who.pending_role == "spare":
+            raise rejected(
+                "备用会话还没有对账：等主会话 spare_reconcile 后再调用",
+                reason="not_bound",
+                spare_id=who.spare_id,
+            )
         if who.pending and who.pending_role == "routine":
             raise rejected(
                 "例行会话还没有绑定：等主会话完成绑定（routine_bind）后再调用",
@@ -447,15 +492,35 @@ class Server:
             and args.get("job_id") == routine_mod.TEAMS_REPLIES
         ):
             args, teams_read = self._teams_read(args, ledger)
-        out = run_tool(ledger, usable, caller, name, dict(args))
+        # Which spare sessions the host runs (DN002 §5.9): read here, where the host's session
+        # registry is, and handed to the state machine without changing the request, so a retry
+        # of the same command_id is answered from the ledger first (review r2 F5).
+        hint = (
+            spares_mod.HOST_RUNNING.set(self._running_spares(ledger, usable))
+            if name in ("task_dispatch", "attempt_start") and args.get("spare")
+            else None
+        )
+        try:
+            out = run_tool(ledger, usable, caller, name, dict(args))
+        finally:
+            if hint is not None:
+                spares_mod.HOST_RUNNING.reset(hint)
+        if out.get("duplicate"):
+            _restore_output(name, out)
         if who.role == "worker":
             wake = self._wake(out, ledger, usable)
+            if name == "spare_moved" and out.get("events"):
+                wake = self._moved_wake(out, ledger)
             if wake is not None:
                 out["wake"] = wake
         if name == "task_dispatch":
             self._prepare_workdir(out)
-        if name == "attempt_start":
+        if name == "attempt_start" and not args.get("spare"):
             self._session_dir(out, ledger)
+        if name == "spare_start" and out.get("events"):
+            # The app refuses a cwd spelled differently from the folder on disk.
+            folder = out["events"][0]["data"]["workdir"]
+            out["cwd"] = os.path.realpath(self.home.root / str(folder))
         if name == "routine_start" and out.get("events"):
             # The app refuses a cwd spelled differently from the folder on disk.
             out["cwd"] = os.path.realpath(self.home.root / routine_mod.WORKDIR)
@@ -510,6 +575,46 @@ class Server:
             "session_id": target,
             "message": f"TaskSteward 回传：{items}。调用 inbox 处理。",
         }
+
+    @staticmethod
+    def _running_spares(ledger: Ledger, config: EffectiveConfig) -> frozenset[str]:
+        """The spare sessions the host still runs and attention keeps (not too old, within the
+        target)."""
+        with ledger.view() as conn:
+            found = inbox_mod.spare_attention(conn, config)
+        kept: list[dict[str, Any]] = list(found[0]["available"]) if found else []
+        return frozenset(str(k["spare_id"]) for k in kept)
+
+    def _moved_wake(self, out: Mapping[str, Any], ledger: Ledger) -> dict[str, Any]:
+        """After a claimed spare session asked to move (DN002 §5.9 step 4): the orchestrator
+        sends the start message once the move took effect."""
+        event = next(e for e in out["events"] if e.get("type") == "spare.moved")
+        data = event.get("data") or {}
+        with ledger.view() as conn:
+            target = lease.orchestrator_session(conn)
+        if target is None:
+            return {
+                "send": False,
+                "note": "没有主会话持有调度租约：登记已在账本中，下一个主会话领取租约后处理",
+            }
+        task_id, attempt_id = data.get("task_id"), data.get("attempt")
+        spare, session = data.get("spare_id"), self.env.get(SESSION_ENV)
+        if data.get("outcome") == "moved":
+            body = (
+                f"TaskSteward：{task_id} {attempt_id} 的备用会话 {spare} 已建好目录并"
+                f"请求移到 {data.get('path')}（这一轮结束后生效）。等它这一轮结束后，"
+                f"用 SendMessage 把下面这条消息原样发给它（会话 {session}）："
+                f"\n{data.get('start_message')}\n发送后 inbox_ack 这条 spare.moved（事件 "
+                f"{event.get('sequence')}）。"
+            )
+        else:
+            body = (
+                f"TaskSteward：{task_id} {attempt_id} 的备用会话 {spare} 没能建好目录或移动："
+                f"{data.get('detail') or '（没有原文）'}。按 orchestrate skill 处理：停止使用"
+                "它，任务按 T15 处理后留在待启动；处理后 inbox_ack 这条 spare.moved（事件 "
+                f"{event.get('sequence')}）。"
+            )
+        return {"send": True, "session_id": target, "message": body}
 
     def _teams_read(
         self, args: Mapping[str, Any], ledger: Ledger

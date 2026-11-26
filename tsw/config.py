@@ -151,6 +151,9 @@ DEFAULTS: dict[str, Any] = {
         "max_workers": 5,
         "lease_minutes": 120,
         "prestart": {"enabled": True, "max_standby": 10},
+        # The spare-session pool (DN002 §5.9, T363): sessions bound to no task, made in the
+        # user's turns and claimed where no session can be created.
+        "spare": {"enabled": True, "count": 2, "max_age_hours": 24},
         "wake": {
             "worker_message_parent": True,
             "reportable_events": [
@@ -171,6 +174,8 @@ DEFAULTS: dict[str, Any] = {
         # Prefixes of a worker session's title while it is on standby and once its task is
         # accepted / cancelled (DN002 §5.8); an empty string adds none.
         "title_on_standby": "[待命]",
+        # A spare session's title is "<prefix> S<n>" (DN002 §5.9).
+        "title_on_spare": "[备用]",
         "title_on_accept": "[已验收]",
         "title_on_cancel": "[已取消]",
     },
@@ -301,6 +306,7 @@ SCHEMA: dict[str, Any] = _obj(
         max_workers=_int(1),
         lease_minutes=_int(1),
         prestart=_obj(enabled=B, max_standby=_int(0)),
+        spare=_obj(enabled=B, count=_int(0), max_age_hours=_int(1)),
         wake=_obj(worker_message_parent=B, reportable_events=STRS),
     ),
     sessions=_obj(
@@ -308,6 +314,7 @@ SCHEMA: dict[str, Any] = _obj(
         archive_on_accept=B,
         archive_on_archive=B,
         title_on_standby=S,
+        title_on_spare=S,
         title_on_accept=S,
         title_on_cancel=S,
     ),

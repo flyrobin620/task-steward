@@ -28,6 +28,7 @@
     documents();
     preferenceForms(token);
     answers(token);
+    newSession(token);
     document.addEventListener("input", event => {
       const box = event.target instanceof Element ? event.target.closest(".acts") : null;
       if (box && event.target.matches(".reason textarea")) { pending.add(box); hold(); }
@@ -298,6 +299,16 @@
 
     /* The task flow: a card waiting on a question opens the same panel in a dialog. */
     let dialog = null;
+    // Puts the panel shown in the dialog back on its card and lets the page refresh again; called
+    // by every way of closing (the close event alone was not always delivered in a headless
+    // browser, T363). Doing it twice does nothing more.
+    let restore = () => {};
+    const closed = () => {
+      if (dialog && dialog.open) return;  // a late close event after the dialog opened again
+      restore();
+      delete document.documentElement.dataset.docOpen;
+      hold();
+    };
     document.addEventListener("click", event => {
       const target = event.target instanceof Element ? event.target : null;
       const node = target ? target.closest('.fnode[data-flags~="asking"]') : null;
@@ -307,8 +318,8 @@
       event.preventDefault();
       if (!dialog) {
         dialog = el("dialog", "qa-dlg");
-        dialog.addEventListener("click", e => { if (e.target === dialog) dialog.close(); });
-        dialog.addEventListener("close", () => { delete document.documentElement.dataset.docOpen; hold(); });
+        dialog.addEventListener("click", e => { if (e.target === dialog) { dialog.close(); closed(); } });
+        dialog.addEventListener("close", closed);
         document.body.append(dialog);
       }
       const bar = el("div", "qa-dlg-bar");
@@ -318,7 +329,7 @@
       const close = button("✕", "close");
       close.className = "qa-x";
       close.setAttribute("aria-label", "关闭");
-      close.addEventListener("click", () => dialog.close());
+      close.addEventListener("click", () => { dialog.close(); closed(); });
       bar.append(link, el("b", "", title ? title.textContent : ""), close);
       const body = el("div", "qa-dlg-body");
       // The panel itself moves into the dialog and back when it closes: a copy would show its
@@ -326,7 +337,7 @@
       const place = document.createComment("qa");
       source.replaceWith(place);
       body.append(source);
-      dialog.addEventListener("close", () => { place.replaceWith(source); }, {once: true});
+      restore = () => { if (place.parentNode) place.replaceWith(source); };
       dialog.replaceChildren(bar, body);
       document.documentElement.dataset.docOpen = "";
       hold();
@@ -687,6 +698,202 @@
       if (!url) return;
       event.preventDefault();
       open(url);
+    });
+  }
+
+  /* 「新建会话」 (DN006 §8.10, DN002 §5.9, T363): claim a spare session for a new conversation. */
+  function newSession(token) {
+    const button = document.getElementById("new-session");
+    if (!button) return;
+    let dialog = null;
+    let body = null;
+    let state = null;
+    const el = (tag, cls, text) => {
+      const node = document.createElement(tag);
+      if (cls) node.className = cls;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    };
+    function shut() {
+      // Not while a request is in flight: its answer belongs to this opening (PR #95).
+      if (state && state.sending) return;
+      if (dialog && dialog.open) dialog.close();
+    }
+    function build() {
+      dialog = el("dialog", "doc ns");
+      dialog.id = "new-session-dialog";
+      dialog.setAttribute("aria-labelledby", "ns-title");
+      const bar = el("div", "doc-bar");
+      const title = el("h2", "", "新建会话");
+      title.id = "ns-title";
+      const close = el("button", "ghost doc-close", "关闭");
+      close.type = "button";
+      close.addEventListener("click", shut);
+      bar.append(title, close);
+      body = el("div", "doc-body ns-body");
+      dialog.append(bar, body);
+      dialog.addEventListener("close", () => {
+        delete document.documentElement.dataset.docOpen;
+        hold();
+      });
+      // Esc while sending would close it under the request (PR #95).
+      dialog.addEventListener("cancel", event => {
+        if (state && state.sending) event.preventDefault();
+      });
+      dialog.addEventListener("click", event => {
+        if (event.target !== dialog) return;
+        const box = dialog.getBoundingClientRect();
+        const inside = event.clientX >= box.left && event.clientX <= box.right
+          && event.clientY >= box.top && event.clientY <= box.bottom;
+        if (!inside && !(state && state.sending)) shut();
+      });
+      document.body.append(dialog);
+    }
+    function pool(info) {
+      const box = el("div", "ns-pool");
+      const free = info.available || [];
+      box.append(el("b", "", `备用会话：可用 ${free.length} / 目标 ${info.target}`));
+      if (free.length) {
+        const list = el("ul");
+        for (const s of free) list.append(el("li", "", `${s.spare_id} · 建于 ${s.created_at || "—"}`));
+        box.append(list);
+      }
+      return box;
+    }
+    function write(info, words) {
+      const free = (info.available || []).length;
+      const area = el("textarea");
+      area.id = "ns-text";
+      area.rows = 4;
+      area.maxLength = 4000;
+      area.placeholder = free ? "第一条消息…（Ctrl+Enter 发送）" : "没有可用的备用会话";
+      area.value = words || "";
+      area.disabled = !free;
+      const hint = el("p", "note", "新对话在自己的空目录中开始；要它在某个仓库中工作时告诉它，它会自己建 worktree 并移过去。");
+      const parts = [el("label", "", "第一条消息"), area, hint, pool(info)];
+      if (!free) {
+        const off = info.enabled === false;
+        parts.push(el("p", "note warn", off ? "备用会话池已关闭（scheduling.spare.enabled）。" : "没有可用的备用会话。"));
+        if (!off) parts.push(el("p", "note", info.hint || ""));
+      }
+      const go = el("button", "", "发送并开始");
+      go.type = "button";
+      go.disabled = !free;
+      const cancel = el("button", "ghost", "取消");
+      cancel.type = "button";
+      cancel.addEventListener("click", shut);
+      const next = () => {
+        if (!area.value.trim()) { area.focus(); return; }
+        confirm(info, area.value);
+      };
+      go.addEventListener("click", next);
+      area.addEventListener("keydown", event => {
+        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); next(); }
+      });
+      const row = el("div", "ns-actions");
+      row.append(cancel, go);
+      body.replaceChildren(...parts, row);
+      if (free) area.focus();
+    }
+    function confirm(info, words) {
+      const back = el("button", "ghost", "返回修改");
+      back.type = "button";
+      back.addEventListener("click", () => write(info, words));
+      const send = el("button", "", "确认发送");
+      send.type = "button";
+      send.addEventListener("click", () => post(info, words));
+      const row = el("div", "ns-actions");
+      row.append(back, send);
+      body.replaceChildren(el("p", "", "把这句话发给一个备用会话，开始一个新对话？"), el("div", "ns-quote", words), row);
+      send.focus();
+    }
+    function link(result) {
+      const a = el("a", "session", `打开会话 ${result.spare_id}`);
+      if (result.href) a.href = result.href;
+      a.dataset.workdeckSession = result.session_id;
+      a.dataset.tswSession = result.session_id;
+      return a;
+    }
+    function commandId() {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+      return `ns-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+    async function post(info, words) {
+      const mine = state;
+      if (!mine.command) mine.command = commandId();
+      mine.sending = true;
+      body.replaceChildren(el("p", "", "正在发送…"));
+      let result;
+      try {
+        const response = await fetch("/api/sessions/new", {
+          method: "POST",
+          credentials: "same-origin",
+          referrerPolicy: "same-origin",
+          headers: {"Content-Type": "application/json", "X-TSW-Token": token},
+          body: JSON.stringify({text: words, command_id: mine.command}),
+        });
+        result = await response.json();
+      } catch (error) {
+        result = {ok: false, state: "unknown", message: String((error && error.message) || error)};
+      }
+      mine.sending = false;
+      if (state !== mine) return;  // the dialog was opened again since: not this answer's
+      const close = el("button", "", "关闭");
+      close.type = "button";
+      close.addEventListener("click", shut);
+      const row = el("div", "ns-actions");
+      row.append(close);
+      if (result.ok) {
+        const again = result.duplicate ? "（之前已发出）" : "";
+        const where = el("p", "");
+        where.append(link(result), document.createTextNode("（经 workdeck 时在门户中打开；会话随后按第一条消息改标题）"));
+        body.replaceChildren(el("p", "ok", `✓ 已在 ${result.spare_id} 开始新对话${again}`), where, row);
+        return;
+      }
+      if (result.state === "unknown") {
+        const where = el("p", "");
+        if (result.session_id) where.append(link(result), document.createTextNode(" 看看是否已开始；不会自动重试。"));
+        body.replaceChildren(el("p", "note warn", `结果未知：${result.message || ""}`), where, row);
+        return;
+      }
+      mine.command = null;
+      if (result.code === "no_spare" || result.code === "spare_disabled") {
+        const fresh = await load();
+        if (state !== mine) return;
+        write({...fresh, hint: result.hint || fresh.hint}, words);
+        body.prepend(el("p", "note warn", result.message || "没有可用的备用会话"));
+        return;
+      }
+      const back = el("button", "ghost", "返回修改");
+      back.type = "button";
+      back.addEventListener("click", () => write(info, words));
+      row.prepend(back);
+      body.replaceChildren(el("p", "note warn", `没有发出：${result.message || "出错了"}`), el("div", "ns-quote", words), row);
+    }
+    async function load() {
+      try {
+        const response = await fetch("/api/spares", {credentials: "same-origin", referrerPolicy: "same-origin"});
+        const info = await response.json();
+        if (!response.ok) throw new Error(info.message || `HTTP ${response.status}`);
+        return info;
+      } catch (error) {
+        return {available: [], target: 0, hint: `无法读取备用会话池（${error.message || error}）`};
+      }
+    }
+    button.addEventListener("click", async () => {
+      if (!dialog) build();
+      if (state && state.sending) { if (!dialog.open) dialog.showModal(); return; }
+      const mine = {command: null, sending: false};
+      state = mine;
+      body.replaceChildren(el("p", "", "正在读取备用会话池…"));
+      if (!dialog.open) dialog.showModal();
+      document.documentElement.dataset.docOpen = "";
+      document.documentElement.dataset.holdRefresh = "";
+      const info = await load();
+      if (state !== mine) return;
+      const count = button.querySelector(".n");
+      if (count) count.textContent = String((info.available || []).length);
+      write(info, "");
     });
   }
 

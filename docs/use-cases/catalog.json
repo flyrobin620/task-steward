@@ -1632,6 +1632,81 @@
         "conformance": "不经过插件接口",
         "live": "需要用户从 workdeck 门户配合给会话发消息；在隔离的会话中实测并作为任务证据记录，不是可重复的 live 场景"
       }
+    },
+    {
+      "id": "UC-SPARE-001",
+      "title": "备用会话池：在用户的 turn 中补充，按运行状态、年龄与目标退役（DN002 §5.9，T363）",
+      "actor": "主会话 / 备用会话 / tsw",
+      "acceptance": "spare_start 只在用户本人的 turn（g_window）、池开启（spare_disabled）且未满 scheduling.spare.count（spare_pool_full）时记录 spare.start_requested（编号 S<n>、会话名 spare-s<n>、空目录 spares/S<n>、标题“[备用] S<n>”、prompt），返回 start_session 的 cwd、name、title、prompt、background、model、effort 与宿主权限模式；建立中的会话 whoami 为 pending（pending_role spare）；spare_reconcile 记 spare.created（会话已绑定其他角色时 session_in_use）或 spare.not_created（删除空目录）；之后 whoami 为 spare，MCP 只列 whoami，hooks 提示等待并拦下编辑、命令与建会话（CC-B10）；attention.spares 给出目标、在运行的可用会话、要补充的个数（needs）与要退役的会话（retire：not_running / age / surplus / disabled）；主会话 Stop hook 在用户的 turn 提醒补充、在任何一轮提醒退役；spare_close 记 spare.closed（archived / missing 删除空目录，failed 为 retire_failed，不再提醒、不再认领）",
+      "surfaces": [
+        "mcp",
+        "hook"
+      ],
+      "claims": [
+        "tool:spare_start",
+        "tool:spare_reconcile",
+        "tool:spare_close"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-SPARE-002",
+      "title": "不能新建会话的一轮中把任务派给备用会话：会话自己建 worktree 并移过去（DN002 §5.9，T363）",
+      "actor": "主会话 / 备用会话（worker）/ tsw",
+      "acceptance": "task_dispatch 带 spare（user_turn false）在池开启且有可用备用会话时不受 G-WINDOW 约束（用户的 turn 为 spare_in_user_turn，没有为 no_spare）；attempt_start 带 spare（auto 由 MCP 选在运行的、最新的）记录 attempt.start_requested（spare、spare_target、worktree.by_session、创建时标题为备用会话的标题）与 spare.claimed（as task、target、target_branch），不建 worktree，返回会话 ID、认领消息（git worktree add 或 mkdir、change_directory、spare_moved）与基准标题，并改写任务书（由备用会话认领）；接手原 worktree 时 spare_dir_exists；attempt_reconcile 只接受该备用会话（spare_session_mismatch），not_created 时同时记 spare.lost；绑定后 whoami 为 worker，会话目录仍在备用目录也算一致、可写路径不含它；spare_moved 核对目录（worktree 在任务分支上）后记 spare.moved，结果的 wake 把开始消息交给持租主会话；开始消息在移动生效前到达时 hook 提示结束这一轮再登记；§5.8 随后列出从“[备用] S<n>”改为基准标题",
+      "surfaces": [
+        "mcp",
+        "hook"
+      ],
+      "claims": [
+        "tool:spare_moved"
+      ],
+      "component": "machine",
+      "status": "active",
+      "requiredTiers": [
+        "unit",
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "conformance": "不经过插件接口"
+      }
+    },
+    {
+      "id": "UC-SPARE-003",
+      "title": "用户的新对话：Dashboard「新建会话」或直接给备用会话发消息（DN006 §8.10、DN002 §5.9，T363）",
+      "actor": "用户 / 本机或经 workdeck gateway 访问 Dashboard 的浏览器 / 备用会话",
+      "acceptance": "Dashboard 应用页头有「新建会话 N」；GET /api/spares 给出池的状态（只读）；POST /api/sessions/new（与验收按钮相同的准入，text 1–4000 字符，command_id）以 user 调用者 spare_claim 记录 spare.claimed（as chat，渠道 status-app，来源为首条消息原文），再把原话写进该会话的收件箱（from tsw-dashboard），返回会话链接；没有可用的为 409 no_spare（附在 app 中补充的提示）；写入没开始就失败的记 spare.lost 并换下一个；写入中途出错为 502 unknown，不重试；同一 command_id 的重试不再认领、不再写入；未认领的备用会话收到不是其他会话转来、不是建立时 prompt 的消息时，UserPromptSubmit hook 记 spare.claimed（via direct）并提示先改标题；之后它是 none 角色（claimed_as chat），hooks 不再限制；会话标签端点给出 spare S<n> 与 chat S<n>",
+      "surfaces": [
+        "cli",
+        "hook",
+        "mcp"
+      ],
+      "claims": [
+        "tool:spare_claim"
+      ],
+      "component": "host",
+      "status": "active",
+      "requiredTiers": [
+        "component",
+        "surface",
+        "live"
+      ],
+      "omittedTiers": {
+        "unit": "由 component 与 surface 层级覆盖：逻辑都在 Dashboard 应用与账本的组合上",
+        "conformance": "不经过插件接口"
+      }
     }
   ]
 }

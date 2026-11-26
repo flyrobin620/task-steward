@@ -23,6 +23,7 @@ whatever is uncommitted: nothing is fetched, switched or cleaned (CC006 §8.3, T
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -236,6 +237,46 @@ def ensure(ws: Workspace) -> dict[str, Any]:
     return _record(ws, base=base, created=True, fetched=fetched)
 
 
+def spare_command(ws: Workspace) -> tuple[str, dict[str, Any]]:
+    """The ``git worktree add`` a claimed spare session runs itself (DN002 §5.9, T363).
+
+    The host lets a session move only into a folder it made, so tsw plans the worktree (fetch,
+    branch, base) exactly as :func:`ensure` would but leaves creating it to the session. Nothing
+    may be at the path yet: a worktree that is already there (an attempt taken over) was not made
+    by the session, which could then not move into it.
+    """
+    assert ws.checkout is not None and ws.worktree is not None and ws.branch is not None
+    path, branch = ws.worktree, ws.branch
+    if path.exists() or path.is_symlink():
+        raise rejected(
+            "worktree 路径已存在：备用会话只能移到自己建的目录",
+            reason="spare_dir_exists",
+            path=str(path),
+        )
+    fetched = _git(ws.checkout, "fetch", "--quiet", ws.remote)[0] == 0
+    has_branch = (
+        _git(ws.checkout, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")[0] == 0
+    )
+    checkout = shlex.quote(_slashes(ws.checkout))
+    target = shlex.quote(_slashes(path))
+    if has_branch:
+        base = None
+        command = f"git -C {checkout} worktree add {target} {shlex.quote(branch)}"
+    else:
+        base = _base(ws)
+        command = (
+            f"git -C {checkout} worktree add -b {shlex.quote(branch)} {target} {shlex.quote(base)}"
+        )
+    record = _record(ws, base=base, created=False, fetched=fetched)
+    record["by_session"] = True
+    return command, record
+
+
+def _slashes(path: Path) -> str:
+    """A path as the session's shell (Git Bash on Windows) takes it."""
+    return str(path).replace("\\", "/")
+
+
 def _record(ws: Workspace, *, base: str | None, created: bool, fetched: bool) -> dict[str, Any]:
     assert ws.worktree is not None
     return {
@@ -343,11 +384,28 @@ def brief_section(
     workdir: str,
     *,
     gh_skill: Path | None = None,
+    spare: tuple[str, str] | None = None,
 ) -> str:
-    """The brief's "仓库与 worktree" section; ``gh_skill`` is the rendered gh-account skill."""
+    """The brief's "仓库与 worktree" section; ``gh_skill`` is the rendered gh-account skill;
+    ``spare`` the spare session claimed for the task and the folder it moves to (DN002 §5.9)."""
     files = "、".join(f"`{p}`" for p in ws.instructions)
     lines = ["## 仓库与 worktree", ""]
-    if ws.worktree is not None and ws.taken_over:
+    if ws.worktree is not None and spare is not None:
+        lines += [
+            f"- 会话目录：`{ws.worktree}`，是仓库 {ws.repo_id} 的 git worktree，"
+            f"分支 `{ws.branch}`：本任务由备用会话 {spare[0]} 认领，"
+            "会话自己用 `git worktree add` 建好它并移到这里"
+            "（DN002 §5.9），之后宿主按仓库自己的配置加载它的 skill、`.mcp.json`、项目插件、hooks"
+            " 与设置、CLAUDE.md。需要时自己与主分支同步。不要另建 worktree 或 clone。",
+            f"- 报告草稿与其他非仓库产物写在执行目录 `{workdir}`（会话目录的上级），不要写进仓库。",
+        ]
+    elif spare is not None:
+        lines += [
+            f"- tsw 没有为仓库 {ws.repo_id} 创建 worktree：{ws.missing}。本任务由备用会话 "
+            f"{spare[0]} 认领，会话目录是它自己建的 `{spare[1]}`（执行目录之下）；需要仓库时在"
+            "执行目录下建 worktree。",
+        ]
+    elif ws.worktree is not None and ws.taken_over:
         lines += [
             f"- 会话目录：`{ws.worktree}`，是仓库 {ws.repo_id} 的 git worktree，"
             f"分支 `{ws.branch}`：本 attempt 接手 {ws.taken_over} 的执行目录（DN002 §5.5），"

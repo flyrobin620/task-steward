@@ -78,7 +78,8 @@
       check("flow: its buttons work there", shown(dialog.querySelector(".qa-ans")) && !shown(step));
       click(dialog.querySelector(".qa-x"));
       check("flow: ✕ closes the dialog", !dialog.open);
-      // The panel goes back in the dialog's close event, which comes after close() (review r2 F7).
+      // The panel goes back when the dialog closes (review r2 F7); ✕ puts it back at once, not
+      // only in the close event, which a headless browser did not always deliver (T363).
       const back = await until(() => card.querySelector(".qa") && !dialog.querySelector(".qa"), 1000);
       check("flow: the panel is back on its card", back);
     }
@@ -92,6 +93,8 @@
     const replies = {post: {ok: true, state: "sent"}, get: {ok: true, state: "registered", message_id: "M-T001-1"}};
     window.fetch = async (url, init) => new Response(JSON.stringify(init && init.method === "POST" ? replies.post : replies.get), {status: 200, headers: {"Content-Type": "application/json"}});
     const qa = document.querySelector(".card.qa-card .qa");
+    check("success: the panel is on its card", qa);
+    if (!qa) return;  // reported above, not as a TypeError
     const area = qa.querySelector(".qa-free textarea");
     area.value = "就用方案 A";
     area.dispatchEvent(new Event("input", {bubbles: true}));

@@ -15,14 +15,19 @@ from tsw.machine import candidates as candidates_mod
 from tsw.machine import follow_up as follow_up_mod
 from tsw.machine import routine as routine_mod
 from tsw.machine import session_titles as session_titles_mod
+from tsw.machine import spares as spares_mod
 from tsw.machine.ask_user import handoff_due
 from tsw.machine.guards import dependency_problems, invalidated, topological
 from tsw.machine.model import OCCUPYING, loads
 from tsw.storage.base import StorageBackend
 
+# Always the orchestrator's to act on, whatever the configuration lists: a spare session that
+# moved waits for the start message (DN002 §5.9), also when no one held the lease to be woken.
+ALWAYS_REPORTABLE = frozenset({"spare.moved"})
+
 
 def reportable(config: EffectiveConfig) -> set[str]:
-    return set(config.get("scheduling.wake.reportable_events") or [])
+    return set(config.get("scheduling.wake.reportable_events") or []) | ALWAYS_REPORTABLE
 
 
 def is_reportable(event: Event, kinds: set[str]) -> bool:
@@ -169,6 +174,8 @@ def attention(
         "routine": routine_attention(conn, config, routine_cache or {}, now),
         # Worker sessions whose title or archive has not caught up with the task (DN002 §5.8).
         "sessions": session_titles_mod.due(conn, config),
+        # The spare-session pool (DN002 §5.9): what to add in the user's turn, what to retire.
+        "spares": spare_attention(conn, config, now),
     }
     invalid = invalidated(conn)
     for row in conn.execute("SELECT task_id, status FROM tasks"):
@@ -182,6 +189,72 @@ def attention(
         if current is None or current["phase"] in ("planned", "replaced", "closed"):
             items["to_start"].append({"task_id": row["task_id"]})
     return items
+
+
+def spare_running(session_ref: str | None, directory: Any = None) -> bool:
+    """Whether the host still runs this session: its registry names it with an inbox (Claude
+    Code: ``~/.claude/sessions``, CC001 §3.1). Read-only."""
+    if not session_ref:
+        return False
+    from tsw.host import session_inbox  # noqa: PLC0415 - host specific, read only here
+
+    return bool(session_inbox.targets(session_ref, directory))
+
+
+def spare_attention(
+    conn: sqlite3.Connection,
+    config: EffectiveConfig,
+    now: str | None = None,
+    directory: Any = None,
+) -> list[dict[str, Any]]:
+    """The spare pool when there is one or one is wanted (DN002 §5.9): its target size, the
+    sessions waiting (with whether the host runs them), how many to add in the user's turn
+    (``needs``) and which to retire (``retire``: not running, too old, surplus, pool off)."""
+    enabled = bool(config.get("scheduling.spare.enabled"))
+    target = int(config.get("scheduling.spare.count")) if enabled else 0
+    when = now or utc_now()
+    waiting: list[dict[str, Any]] = []
+    retire: list[dict[str, Any]] = []
+    starting = 0
+    kept = 0
+    for row in spares_mod.pool(conn):  # the newest first: the oldest are the surplus
+        if row["status"] == "starting":
+            starting += 1
+            continue
+        running = spare_running(row["session_ref"], directory)
+        item = {
+            "spare_id": row["spare_id"],
+            "session_id": row["session_ref"],
+            "created_at": row["created_at"],
+            "running": running,
+        }
+        reason = None
+        if not enabled:
+            reason = "disabled"
+        elif not running:
+            reason = "not_running"
+        elif spares_mod.expired(row, config, when):
+            reason = "age"
+        elif kept + starting >= target:
+            reason = "surplus"
+        if reason is None:
+            kept += 1
+            waiting.append(item)
+        else:
+            retire.append({**item, "reason": reason})
+    needs = max(0, target - kept - starting)
+    if not (waiting or retire or needs or starting):
+        return []
+    return [
+        {
+            "target": target,
+            "enabled": enabled,
+            "available": waiting,
+            "starting": starting,
+            "needs": needs,
+            "retire": retire,
+        }
+    ]
 
 
 def routine_attention(
