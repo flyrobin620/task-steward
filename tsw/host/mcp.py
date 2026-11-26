@@ -34,6 +34,7 @@ from tsw.host.version import runtime as runtime_info
 from tsw.ledger import Ledger
 from tsw.machine import candidates as candidates_mod
 from tsw.machine import routine as routine_mod
+from tsw.machine import spares as spares_mod
 from tsw.machine.ask_user import user_channels
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.config_tools import CONFIG_TOOLS
@@ -443,19 +444,6 @@ class Server:
                 raise rejected(
                     "worker 只能操作自己的任务", reason="task_scope", task_id=args["task_id"]
                 )
-        if name == "attempt_start" and args.get("spare") == "auto":
-            # Of the spare sessions, one the host still runs (DN002 §5.9): read here, where the
-            # host's session registry is, rather than in the state machine.
-            args = {**args, "spare": self._running_spare(ledger, config.require_valid())}
-        if (
-            name == "task_dispatch"
-            and args.get("spare")
-            and self._running_spare(ledger, config.require_valid()) == "none"
-        ):
-            # Nothing is recorded: the task stays ready, listed to start (DN002 §5.9).
-            raise rejected(
-                "没有在运行的可用备用会话（attention.spares）：任务留在待启动", reason="no_spare"
-            )
         caller = Caller(role=who.role, session_id=who.session_id, machine=self.machine)
         # Configuration tools must be able to repair an invalid configuration (DN003 §7.1).
         usable = config if name in CONFIG_TOOLS else config.require_valid()
@@ -466,7 +454,19 @@ class Server:
             and args.get("job_id") == routine_mod.TEAMS_REPLIES
         ):
             args, teams_read = self._teams_read(args, ledger)
-        out = run_tool(ledger, usable, caller, name, dict(args))
+        # Which spare sessions the host runs (DN002 §5.9): read here, where the host's session
+        # registry is, and handed to the state machine without changing the request, so a retry
+        # of the same command_id is answered from the ledger first (review r2 F5).
+        hint = (
+            spares_mod.HOST_RUNNING.set(self._running_spares(ledger, usable))
+            if name in ("task_dispatch", "attempt_start") and args.get("spare")
+            else None
+        )
+        try:
+            out = run_tool(ledger, usable, caller, name, dict(args))
+        finally:
+            if hint is not None:
+                spares_mod.HOST_RUNNING.reset(hint)
         if who.role == "worker":
             wake = self._wake(out, ledger, usable)
             if name == "spare_moved" and out.get("events"):
@@ -536,13 +536,14 @@ class Server:
             "message": f"TaskSteward 回传：{items}。调用 inbox 处理。",
         }
 
-    def _running_spare(self, ledger: Ledger, config: EffectiveConfig) -> str:
-        """The newest spare session the host still runs, not too old (the ones attention keeps);
-        ``none`` when there is none: the state machine then abandons the dispatch."""
+    @staticmethod
+    def _running_spares(ledger: Ledger, config: EffectiveConfig) -> frozenset[str]:
+        """The spare sessions the host still runs and attention keeps (not too old, within the
+        target)."""
         with ledger.view() as conn:
             found = inbox_mod.spare_attention(conn, config)
         kept: list[dict[str, Any]] = list(found[0]["available"]) if found else []
-        return str(kept[0]["spare_id"]) if kept else "none"
+        return frozenset(str(k["spare_id"]) for k in kept)
 
     def _moved_wake(self, out: Mapping[str, Any], ledger: Ledger) -> dict[str, Any]:
         """After a claimed spare session asked to move (DN002 §5.9 step 4): the orchestrator

@@ -1114,12 +1114,15 @@ def _claim(  # noqa: PLR0917 - a claim is made of exactly these
     # copy must be there and current, as for a created session (DN006 §6.2).
     _, digest = worker_instructions(ctx.home.root)
     sid = spare
-    if sid in ("auto", "none"):
-        # "none": the MCP server found no spare the host runs (DN002 §5.9).
-        free = [] if sid == "none" else _spares.usable(ctx.conn, env.config, ctx.now)
+    if sid == "auto":
+        free = _spares.usable(ctx.conn, env.config, ctx.now)
         if not free:
             raise rejected("没有可用的备用会话", reason="no_spare")
         sid = str(free[0]["spare_id"])
+    else:
+        running = _spares.HOST_RUNNING.get()
+        if running is not None and sid not in running:
+            raise rejected("宿主已不运行这个备用会话", reason="no_spare", spare_id=sid)
     workdir = str(current["workdir"] or f"work/{task_id}/{attempt_id}")
     base_dir = workdir_path(ctx.home, workdir)
     if not _within_work(ctx.home, base_dir):

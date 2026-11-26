@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import sqlite3
 from collections.abc import Mapping
+from contextvars import ContextVar
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -102,10 +103,21 @@ def available(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [r for r in pool(conn) if r["status"] == "available"]
 
 
+# The spare sessions the host says it runs (the MCP server reads its session registry and sets
+# this around the call, DN002 §5.9). Read inside the command's build, after the ledger has
+# answered a retried command_id from its record (review r2 F5); None: the host said nothing.
+HOST_RUNNING: ContextVar[frozenset[str] | None] = ContextVar("tsw_spares_running", default=None)
+
+
 def usable(conn: sqlite3.Connection, config: EffectiveConfig, now: str) -> list[dict[str, Any]]:
-    """Available spare sessions not yet too old (``scheduling.spare.max_age_hours``), the
-    newest first: the ones a claim may take (whether the host runs them is the host's to say)."""
-    return [r for r in available(conn) if not expired(r, config, now)]
+    """Available spare sessions not yet too old (``scheduling.spare.max_age_hours``) and, when
+    the host said which run, running; the newest first: the ones a claim may take."""
+    running = HOST_RUNNING.get()
+    return [
+        r
+        for r in available(conn)
+        if not expired(r, config, now) and (running is None or r["spare_id"] in running)
+    ]
 
 
 def ever(conn: sqlite3.Connection) -> bool:

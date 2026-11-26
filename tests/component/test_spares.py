@@ -390,10 +390,16 @@ def test_a_claim_that_fails_after_the_dispatch_is_abandoned(home: Home) -> None:
     h.clock.now = "2026-11-07T00:00:00Z"
     out = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=False, spare="S2")
     assert out["reason"] == "spare_expired" and h.status("T001") == "ready"
-    # None that the host runs (the MCP server passes "none"): abandoned as well.
+    # None that the host runs (the MCP server says so): abandoned as well.
     h.clock.now = "2026-11-05T00:00:00Z"
     h.run("task_dispatch", task_id="T001", user_turn=False, spare=True)
-    out = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=False, spare="none")
+    token = spares_mod.HOST_RUNNING.set(frozenset())
+    try:
+        out = h.run(
+            "attempt_start", task_id="T001", purpose="dispatch", user_turn=False, spare="auto"
+        )
+    finally:
+        spares_mod.HOST_RUNNING.reset(token)
     assert out["reason"] == "no_spare" and h.status("T001") == "ready"
     # The slot was freed each time: another task can be dispatched in the user's turn.
     h.register("T002")
@@ -570,3 +576,32 @@ def test_spare_claim_tool_is_the_users(home: Home) -> None:
     )
     with h.ledger.view() as conn:
         assert spares_mod.available(conn) == []
+
+
+@pytest.mark.use_case(TASK)
+def test_a_retried_dispatch_is_answered_from_the_ledger(
+    home: Home, inboxes: Callable[[str], FakeInbox]
+) -> None:
+    """Review r2 F5: the host's answer is read after the ledger answered a retry, so the same
+    command_id returns its first result even once the pool has changed."""
+    h = Harness(home, YOUNG)
+    spare(h, "s-1")
+    h.register("T001")
+    h.plan("T001")
+    running = inboxes("s-1")
+    server = Server(home, {SESSION_ENV: "orch-1"}, home.root)
+    request = {"task_id": "T001", "user_turn": False, "spare": True, "command_id": "dispatch-k1"}
+    first = server.call("task_dispatch", request)
+    assert first["duplicate"] is False and h.status("T001") == "dispatching"
+    running.close()
+    for found in session_inbox.sessions_dir().glob("*.json"):
+        found.unlink()  # the host no longer runs S1
+    again = server.call("task_dispatch", request)
+    assert again["duplicate"] is True
+    assert [e["sequence"] for e in again["events"]] == [e["sequence"] for e in first["events"]]
+    # Without the host running a spare, a new dispatch is refused before anything is recorded.
+    h.register("T002")
+    h.plan("T002")
+    with pytest.raises(TswError) as refused:
+        server.call("task_dispatch", {"task_id": "T002", "user_turn": False, "spare": True})
+    assert refused.value.details.get("reason") == "no_spare" and h.status("T002") == "ready"
