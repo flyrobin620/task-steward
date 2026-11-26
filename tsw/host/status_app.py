@@ -52,7 +52,7 @@ from tsw.errors import TswError, rejected
 from tsw.events import Event, utc_now
 from tsw.home import Home
 from tsw.host import answer as answering
-from tsw.host import pwa, session_inbox, workdeck
+from tsw.host import new_session, pwa, session_inbox, workdeck
 from tsw.host.markdown import MAX_SOURCE_CHARS, render_markdown
 from tsw.host.preference_view import parse_filter, render_preferences
 from tsw.host.session_labels import LABELS_PATH, MAX_LABELS_BODY, answer, requested_ids
@@ -181,6 +181,8 @@ class StatusApp:
         self._deliver_lock = threading.Lock()
         # Where running sessions publish their inboxes; tests point it at their own folder.
         self.sessions_dir: Path | None = None
+        # 「新建会话」: spare sessions claimed for the user's conversations (DN006 §8.10, T363).
+        self.starter = new_session.Starter(self.next_ref)
 
     def workdeck_manifest(self) -> dict[str, Any]:
         """This Dashboard's workdeck plugin manifest: its own interpreter, product checkout and
@@ -504,6 +506,17 @@ class StatusApp:
             "state": known["state"] if known is not None else state,
         }
 
+    def spares(self) -> dict[str, Any]:
+        """``GET /api/spares``: the spare pool as the 「新建会话」 dialog shows it (read-only)."""
+        ledger, config = self.ledger()
+        return {"ok": True, **new_session.pool_status(ledger, config, self.sessions_dir)}
+
+    def new_session(self, body: Mapping[str, Any]) -> tuple[HTTPStatus, dict[str, Any]]:
+        """``POST /api/sessions/new``: claim a spare session and send it the user's words."""
+        ledger, config = self.ledger()
+        status, result = self.starter.start(ledger, config, body, self.sessions_dir)
+        return HTTPStatus(status), result
+
     def answer_status(self, task_id: str, query: str) -> dict[str, Any]:
         """How far a delivered answer has come (``GET /api/tasks/<task>/answer``), read from the
         ledger: sent, received by the worker's session, registered."""
@@ -641,6 +654,18 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 )
                 return
             parts = url.path.split("/")
+            if url.path == "/api/spares":
+                # Read-only, like the page (DN006 §8.10「新建会话」).
+                try:
+                    pool = app.spares()
+                except (TswError, sqlite3.Error, OSError) as exc:
+                    self._json(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        {"ok": False, "message": f"无法读取账本（{type(exc).__name__}）"},
+                    )
+                    return
+                self._json(HTTPStatus.OK, pool)
+                return
             if len(parts) == 5 and parts[1:3] == ["api", "tasks"] and parts[4] == "answer":
                 # Read-only: the cookie and Host admit it, like the page itself (T357).
                 try:
@@ -746,7 +771,8 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
             revoke = (
                 len(parts) == 4 and parts[:2] == ["api", "preferences"] and parts[3] == "revoke"
             )
-            if not (task or reply or record or revoke):
+            started = parts == ["api", "sessions", "new"]
+            if not (task or reply or record or revoke or started):
                 self._json(HTTPStatus.NOT_FOUND, {"ok": False, "message": "没有这个操作"})
                 return
             body = self._json_body(MAX_BODY)
@@ -754,6 +780,17 @@ def _handler(app: StatusApp) -> type[BaseHTTPRequestHandler]:
                 return
             if not isinstance(body, dict):
                 self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "message": "请求体应为 JSON 对象"})
+                return
+            if started:
+                try:
+                    status, result = app.new_session(body)  # pyright: ignore[reportUnknownArgumentType]
+                except TswError as exc:
+                    status = HTTPStatus.CONFLICT
+                    result = {"ok": False, "code": exc.code.value, "message": exc.message}
+                except (sqlite3.Error, OSError) as exc:
+                    status = HTTPStatus.SERVICE_UNAVAILABLE
+                    result = {"ok": False, "message": f"无法读取账本（{type(exc).__name__}）"}
+                self._json(status, result)
                 return
             if reply:
                 try:

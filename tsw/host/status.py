@@ -116,6 +116,15 @@ SESSION_URLS = {"claude-app": "claude://claude.ai/epitaxy/{ref}"}
 DEFAULT_ADAPTER = "claude-app"
 
 
+def _spare_count(conn: sqlite3.Connection) -> int:
+    """Spare sessions waiting to be claimed (DN002 §5.9); 0 for a projection without the pool."""
+    try:
+        row = conn.execute("SELECT COUNT(*) AS n FROM spares WHERE status = 'available'").fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return int(row["n"])
+
+
 def session_href(adapter: str | None, session_ref: str) -> str | None:
     """The host's address of a session, or None when its adapter has none (CC006 §3)."""
     template = SESSION_URLS.get(adapter or DEFAULT_ADAPTER)
@@ -901,6 +910,10 @@ def render(conn: sqlite3.Connection, app: AppView | None = None) -> str:
         prefs_link = (
             '<a class="ghost" id="prefs" href="preferences" title="查看与管理长期偏好">'
             f"长期偏好 {in_force}</a>\n"
+            # A new conversation in a spare session (DN006 §8.10, T363).
+            '<button type="button" class="ghost" id="new-session" '
+            'title="开始一个新的对话会话（认领一个备用会话）">新建会话'
+            f'<span class="n">{_spare_count(conn)}</span></button>\n'
         )
     else:
         prefs_link = ""

@@ -187,18 +187,21 @@ def attention(
     return items
 
 
-def spare_running(session_ref: str | None) -> bool:
+def spare_running(session_ref: str | None, directory: Any = None) -> bool:
     """Whether the host still runs this session: its registry names it with an inbox (Claude
     Code: ``~/.claude/sessions``, CC001 §3.1). Read-only."""
     if not session_ref:
         return False
     from tsw.host import session_inbox  # noqa: PLC0415 - host specific, read only here
 
-    return bool(session_inbox.targets(session_ref))
+    return bool(session_inbox.targets(session_ref, directory))
 
 
 def spare_attention(
-    conn: sqlite3.Connection, config: EffectiveConfig, now: str | None = None
+    conn: sqlite3.Connection,
+    config: EffectiveConfig,
+    now: str | None = None,
+    directory: Any = None,
 ) -> list[dict[str, Any]]:
     """The spare pool when there is one or one is wanted (DN002 §5.9): its target size, the
     sessions waiting (with whether the host runs them), how many to add in the user's turn
@@ -214,7 +217,7 @@ def spare_attention(
         if row["status"] == "starting":
             starting += 1
             continue
-        running = spare_running(row["session_ref"])
+        running = spare_running(row["session_ref"], directory)
         item = {
             "spare_id": row["spare_id"],
             "session_id": row["session_ref"],
