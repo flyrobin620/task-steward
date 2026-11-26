@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="tsw-source-sha256" content="17d232ff7af1abbbb842789587330f03cd617961c21cf7f08c9b25d344471755">
+<meta name="tsw-source-sha256" content="b974c75334a0a8001a1300a6d893b7640abf431a26f606e720147af370dc1eb3">
 <title>DN002 任务状态机</title>
 <style>
 :root{--fg:#1f2430;--muted:#5b6475;--line:#d9dee8;--accent:#3b5bdb;--bg-soft:#f6f8fc;--code:#f3f4f8}
@@ -177,6 +177,7 @@ footer{margin-top:48px;color:var(--muted);font-size:12px;border-top:1px solid va
 <p><strong>认领后的身份与可写路径</strong></p>
 <table><thead><tr><th>阶段</th><th><code>whoami</code> 的角色</th><th>可写路径</th><th>hooks</th></tr></thead><tbody><tr><td>建立中</td><td><code>none</code>，<code>pending: true</code>，<code>pending_role: spare</code></td><td>无</td><td>不注入</td></tr><tr><td>未认领</td><td><code>spare</code>（附编号）</td><td>无：编辑类工具与命令被拒绝，只能 <code>whoami</code> 与只读</td><td>SessionStart 提示“备用会话，等第一条消息”</td></tr><tr><td>派给任务</td><td><code>worker</code>（该 attempt）</td><td>与新建会话的 worker 相同：执行目录（含 worktree）与 <code>work/&lt;任务&gt;/&lt;attempt&gt;</code></td><td>照常。tsw 的 MCP server 不随移动重启，它的目录仍是 <code>spares/S&lt;n&gt;</code>（T363 实测）：身份按会话 ID 识别，不受影响；目录一致性（<code>cwd_consistent</code>）对这样的 attempt 也接受它的备用目录。移动之前的第一轮里会话还在备用目录，写入照样只限可写路径</td></tr><tr><td>用户的对话</td><td><code>none</code>（附编号与 <code>claimed_as: chat</code>）</td><td>tsw 不限制（与用户自己打开的会话相同；<code>ledger/</code> 等 tsw 管理的目录照旧拒绝）</td><td>不记录消息，不按角色注入</td></tr></tbody></table>
 <p>一个备用会话只认领一次：派给任务后按 attempt 的规则（§5.5、§5.8）走到底；作为对话之后就是用户的普通会话，tsw 不再派它做任务，也不归档它。</p>
+<p><strong>主会话的子会话</strong>（用户 2026-11-26 确认设计时的条件：“确认这个会话被使用以后，可以正常的成为（或者本来就是）orchestrator的子会话就可以”，M-T363-6）：备用会话由主会话在用户的 turn 中用 <code>start_session</code> 建立，本来就是主会话的子会话：在它的 <code>list_sessions {linked: true}</code> 中，侧栏挂在它名下。派给任务后与新建的 worker 完全相同（唤醒主会话、续用、停止、改名与归档）；作为对话时也仍是它的子会话，它结束一轮时宿主给主会话的通知不需要处理（主会话按会话 ID 认出它是对话，不回复、不转达）。与 worker 一样，主会话交接（DN001 §6.4）后它们仍挂在原主会话名下，由新的持租主会话按会话 ID 联系。</p>
 <p><strong>补充：只在用户亲手输入的一轮</strong></p>
 <ul><li>池的目标大小 <code>scheduling.spare.count</code>（默认 2）。<code>scheduling.spare.enabled</code>（默认 <code>true</code>）为 <code>false</code> 时不补充，可用的备用会话随即退役（见下文“过期与回收”）。</li><li><code>attention</code> 的 <code>spares</code> 给出：目标大小、可用的备用会话（编号、会话、建立时间、是否在运行）、要补充的个数（<code>needs</code>）与要退役的会话（<code>retire</code>）。</li><li>每个用户的 turn 结束前，主会话在预启动之后补到目标大小：<code>spare_start</code>（<code>user_turn: true</code>）创建空目录 <code>spares/S&lt;n&gt;</code>，记录 <code>spare.start_requested</code>（编号 <code>S&lt;n&gt;</code> 递增，会话名 <code>spare-s&lt;n&gt;</code>，目录，标题，prompt），再 <code>start_session</code>（<code>roles.worker</code> 的模型、强度与权限模式，<code>cwd</code> 为该目录，<code>use_worktree: false</code>，<code>name</code> 与 <code>title</code> 用返回值），之后 <code>spare_reconcile</code>（<code>created</code> 与会话 ID，或 <code>not_created</code>）。结果未知时按会话名对账，不再次创建（与 §5.4 相同）。主会话的 Stop hook 在用户的 turn 结束前 <code>needs</code> 不为 0 时提醒一次（与 <code>needs_prestart</code> 合在同一条提示里）；非用户的一轮不提醒。</li><li>备用会话的 prompt 由 tsw 生成：它是 TaskSteward 的备用会话 S&lt;n&gt;；现在只回复“备用会话就绪”，然后结束这一轮；之后的第一条消息决定用途：主会话发来的、以 <code>[TaskSteward 派发]</code> 开头的消息派它做任务，照消息做；其他消息就是用户要和它对话：先用 <code>set_session_title</code> 把本会话的标题改成这条消息的简短概括（至多 30 字），再照常回答（会话给自己改标题已实测可行）。worker 说明不放进备用会话的 prompt（会话可能永远不当 worker）；派发后 worker 的 hook 发现会话没有附上说明，照常提示完整重读副本（CC001 §6）。</li></ul>
 <p><strong>何时使用：只在不能新建会话的一轮与 Dashboard</strong></p>
