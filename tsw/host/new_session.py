@@ -116,9 +116,11 @@ class Starter:
         while True:
             with ledger.view() as conn:
                 waiting = [r for r in spares_mod.available(conn) if r["spare_id"] not in tried]
-            running = [
-                r for r in waiting if inbox_mod.spare_running(r["session_ref"], sessions_dir)
-            ]
+                # The ones attention keeps (running, not too old, within the target), as the
+                # dialog lists them; the others are the orchestrator's to retire.
+                found = inbox_mod.spare_attention(conn, config, directory=sessions_dir)
+            kept = {a["spare_id"] for a in (found[0]["available"] if found else [])}
+            running = [r for r in waiting if r["spare_id"] in kept]
             if not running:
                 gone = "备用会话都不在运行（app 可能重启过）。" if waiting or tried else ""
                 return 409, {

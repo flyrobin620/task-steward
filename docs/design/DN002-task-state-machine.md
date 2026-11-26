@@ -472,7 +472,7 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 **目录：在空目录中等待，认领时移过去**
 
 - 等待：每个备用会话建在数据目录下自己的空目录 `spares/S<n>/` 中（`spare_start` 创建）。一个会话一个目录：app 不移动与另一个会话共用目录的会话（T360 静态分析）。`spares/` 在已信任的数据目录之下、不是 git 仓库，建会话时不弹信任确认（CC001 §3）。
-- 移动：app 的 `change_directory` 能把已有的会话移到另一个目录。移过去后，那个目录的项目设置（权限规则、hooks）、项目 MCP、项目 skill 与 `CLAUDE.md`、`CLAUDE.local.md` 都从新目录读取，与在那里新建的会话相同（T363 实测，CC001 §3.1）。在非用户的一轮中，auto 模式只放行移到**本会话自己**用 `git worktree add` 或 `mkdir` 建出的目录，移到别人建的目录被拒（T363 实测；T360 E-C3）。所以派给任务时，由备用会话自己建任务的 worktree（仓库任务）或执行目录（其他任务），再移过去；tsw 给出要运行的命令与路径，不预先建这个目录。不需要改用户设置。
+- 移动：app 的 `change_directory` 能把已有的会话移到另一个目录。移过去后，那个目录的项目设置（权限规则、hooks）、项目 MCP、项目 skill 与 `CLAUDE.md`、`CLAUDE.local.md` 都从新目录读取，与在那里新建的会话相同（T363 实测，CC001 §3.1）。在非用户的一轮中，auto 模式只放行移到**本会话自己**用 `git worktree add` 或 `mkdir` 建出的目录，移到别人建的目录被拒（T363 实测；T360 E-C3）。所以派给任务时，由备用会话自己建任务的 worktree（仓库任务，`<执行目录>/<仓库 id>`）或会话目录（其他任务：执行目录下以它的编号命名的子目录 `<执行目录>/S<n>`；执行目录本身在派发时已由 tsw 建好，不是会话建的），再移过去；tsw 给出要运行的命令与路径，不预先建这个目录。不需要改用户设置。
 - 生效时机：移动在这一轮结束、会话空闲（没有排队的消息）之后才生效，紧跟着排队的消息仍在原目录运行（T363 实测）。所以派给任务分两轮：第一轮建目录、移动并通知主会话；第二轮由主会话的“开始”消息开始，这时会话已在任务目录中，与新建的 worker 会话没有区别。
 - 执行目录照旧：执行目录（`work/<任务>/<attempt>`）、worktree 的分支与基线、任务书、报告草稿与可写路径都与新建会话时相同（CC006 §8.3）。
 - 不能用备用会话的情形：要进入的目录已经存在（接手原 attempt 的执行目录，§5.5；或主会话给出的 `workdir` 已存在），会话不能移到不是它自己建的目录（拒绝，`spare_dir_exists`）。这时任务留在“待启动”，等用户的 turn 新建会话，或主会话给出新的执行目录（不接手原现场）。
@@ -487,7 +487,7 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 | 建立中 | `none`，`pending: true`，`pending_role: spare` | 无 | 不注入 |
 | 未认领 | `spare`（附编号） | 无：编辑类工具与命令被拒绝，只能 `whoami` 与只读 | SessionStart 提示“备用会话，等第一条消息” |
 | 派给任务 | `worker`（该 attempt） | 与新建会话的 worker 相同：执行目录（含 worktree）与 `work/<任务>/<attempt>` | 照常。tsw 的 MCP server 不随移动重启，它的目录仍是 `spares/S<n>`（T363 实测）：身份按会话 ID 识别，不受影响；目录一致性（`cwd_consistent`）对这样的 attempt 也接受它的备用目录。移动之前的第一轮里会话还在备用目录，写入照样只限可写路径 |
-| 用户的对话 | `none`（附编号与 `claimed_as: chat`） | tsw 不限制（与用户自己打开的会话相同；`ledger/` 等 tsw 管理的目录照旧拒绝） | 不记录消息，不按角色注入 |
+| 用户的对话 | `none`（附编号与 `claimed_as: chat`） | tsw 不限制，与用户自己打开的、不属于 tsw 的会话相同 | 不记录消息，不按角色注入 |
 
 一个备用会话只认领一次：派给任务后按 attempt 的规则（§5.5、§5.8）走到底；作为对话之后就是用户的普通会话，tsw 不再派它做任务，也不归档它。
 
@@ -516,7 +516,7 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 3. 主会话 `attempt_reconcile`（`outcome: created`，`session_ref` 为该会话，`brief_delivered: true`）完成绑定（T08），再用 `SendMessage` 发认领消息（tsw 生成，原样发送）：“[TaskSteward 派发] 你是任务 <任务> 的 worker（attempt <attempt>）。这一轮只做三步：① 运行 `git -C <检出> worktree add <路径> -b <分支> <基线>`（其他任务为 `mkdir -p <执行目录>`）；② 调用 `change_directory` 移到 <路径>；③ 调用 tsw 的 `spare_moved`，按返回的 `wake` 给主会话发消息，然后结束这一轮。下一条消息开始时你已在任务目录中：先完整阅读 <数据目录>/roles/worker.md，再调用 whoami，按任务书 runs/<任务>/<attempt>/brief.md 执行。”先绑定再发消息，所以会话收到消息时 `whoami` 已是 worker。
 4. `spare_moved`（worker）核对目录已建好（仓库任务：是所配置仓库的 worktree、在给定的分支上），记录 `spare.moved`，返回唤醒主会话的 `wake`；第 ① 或 ② 步失败或被拒时带 `outcome: failed` 与原文，同样唤醒主会话。
 5. 主会话收到后发“开始”消息：“[TaskSteward] 开始：按任务书 runs/<任务>/<attempt>/brief.md 执行。”。这时会话已空闲、移动已生效。万一消息在移动生效之前到达（会话目录仍是备用目录），worker 的 UserPromptSubmit hook 提示“目录还没移过去：直接结束这一轮，再调用 `spare_moved`”，主会话收到后再发一次。
-6. 失败：第 ①、② 步失败或会话已不在（发送失败）时，按 §9“worker 子会话被归档或删除”处理（T15），同时记 `spare.lost`（会话不在时）；已建出的 worktree 留在执行目录中，之后的 attempt 按 §5.5 接手（由用户的 turn 新建会话）。
+6. 失败：第 ①、② 步失败或会话已不在（发送失败）时，主会话按 §9“worker 子会话被归档或删除”处理（`attempt_update` 记 `lost`，T15）；已建出的 worktree 留在执行目录中，之后的 attempt 按 §5.5 接手（由用户的 turn 新建会话）。绑定之前发现会话已不在时，`attempt_reconcile`（`not_created`）同时记 `spare.lost`。
 7. 标题：`attempt.start_requested` 记下的创建时标题是备用会话的标题 `[备用] S<n>`，应有的标题是基准标题，§5.8 的 `attention.sessions` 随即列出改名，主会话同一轮执行（用户改过备用会话标题的照旧不动）。
 
 作为用户的对话（Dashboard「新建会话」，界面见 DN006 §8.10）：

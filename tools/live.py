@@ -9,6 +9,8 @@
                                                     one orchestrator hands over to another
     python tools/live.py title-e2e prepare | verify RUN_ID [--observed yes|no]
                                                     worker session titles (DN002 §5.8)
+    python tools/live.py spare-e2e prepare | verify RUN_ID [--observed yes|no]
+                                                    the spare-session pool (DN002 §5.9)
     python tools/live.py setup-e2e run --path terminal|session      both install paths (T308)
     python tools/live.py <scenario> open RUN_ID LINK                open a session by deep link
     python tools/live.py <scenario> drive RUN_ID                    send the user's messages
@@ -1643,6 +1645,136 @@ def unwatched(cid: str, title: str, seen: str | None, good: str) -> dict[str, An
     return check(cid, title, seen == good, {"observed": seen, "evidence": "操作者在 app 中的观察"})
 
 
+def spare_prepare(args: argparse.Namespace) -> int:
+    return prepare("spare-e2e", args)
+
+
+def spare_verify(args: argparse.Namespace) -> int:
+    """The spare-session pool (DN002 §5.9, T363): spares made in the user's turn while T002 gets
+    a new session; T001 dispatched from a workdeck message to a spare that makes its worktree,
+    moves there and starts; a new conversation from the Dashboard."""
+    run = Run.open(args.run_id)
+    evs = events(run)
+    marker = json.loads((run.home / "tsw-home.json").read_text(encoding="utf-8"))
+    orch = [
+        e for e in evs if e["actor"].get("role") == "orchestrator" and e["actor"].get("session_id")
+    ]
+    for sid in sorted({str(e["actor"]["session_id"]) for e in orch}):
+        run.bind_main(sid)
+    reconcile_sessions(run, evs)
+    checks = [
+        check(
+            "H1",
+            "隔离：数据目录与产品仓库指向本运行，主会话在其中操作",
+            Path(marker.get("product_repo", "")).resolve() == ROOT.resolve() and bool(orch),
+            f"product_repo=<repo>; 主会话事件 {len(orch)} 条",
+        ),
+        *spare_checks(run, evs, drive_log(run)),
+        unwatched(
+            "O",
+            "操作者观察：T001 的会话由“[备用] S…”改为任务标题，Dashboard 开始的会话改了标题并回答",
+            args.observed,
+            "yes",
+        ),
+    ]
+    notes = [
+        hook_summary(run),
+        "备用会话由真实 app 建立，T001 的移动由真实 app 的 change_directory 完成；"
+        "「新建会话」由用户在"
+        "本运行的 Dashboard 中点击；drive 经本机 workdeck 替用户发“派发 T001”",
+    ]
+    return 0 if write_results(run, "spare-e2e", checks, notes) else 1
+
+
+def spare_checks(
+    run: Run, evs: list[dict[str, Any]], log: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Checks P, N, W, M and D of ``spare-e2e``."""
+    sent = next(
+        (r for r in log if r.get("rule") == "dispatch-T001" and r.get("state") == "delivered"),
+        None,
+    )
+    sent_at = str(sent["time"]) if sent else None
+    before = [e for e in evs if sent_at is None or str(e["time"]) <= sent_at]
+    after = [e for e in evs if sent_at is not None and str(e["time"]) > sent_at]
+    made = [e for e in before if e["type"] == "spare.start_requested"]
+    created = [e for e in before if e["type"] == "spare.created"]
+    t2 = first(evs, "attempt.start_requested", "T002")
+    claims_before = [e for e in before if e["type"] == "spare.claimed"]
+    t1 = first(after, "attempt.start_requested", "T001")
+    claim = next(
+        (e for e in after if e["type"] == "spare.claimed" and e["data"].get("as") == "task"), None
+    )
+    bound = first(after, "attempt.bound", "T001")
+    spare_session = claim["data"].get("session_ref") if claim else None
+    moved = next((e for e in after if e["type"] == "spare.moved"), None)
+    worktree = str(run.home / "work" / "T001" / "a1" / "live-repo")
+    progress = [
+        e
+        for e in after
+        if e["type"] == "worker.progress"
+        and e["task_id"] == "T001"
+        and (moved is None or e["sequence"] > moved["sequence"])
+    ]
+    said = " ".join(str(e["data"].get("text") or "") for e in progress)
+    norm = said.replace("\\", "/").lower()
+    place = worktree.replace("\\", "/").lower()
+    chat = [
+        e
+        for e in evs
+        if e["type"] == "spare.claimed"
+        and e["data"].get("as") == "chat"
+        and e["data"].get("via") == "status-app"
+    ]
+    words = ((chat[0]["data"].get("source") or {}).get("text") if chat else None) or ""
+    return [
+        check(
+            "P",
+            "补充：用户亲手输入的一轮中记录 spare.start_requested 与 spare.created 各 2 次",
+            sent_at is not None and len(made) >= 2 and len(created) >= 2,
+            {"drive": sent_at, "start_requested": len(made), "created": len(created)},
+        ),
+        check(
+            "N",
+            "平时不用：T002 的 attempt.start_requested 不带 spare，drive 之前没有 spare.claimed",
+            t2 is not None and not t2["data"].get("spare") and not claims_before,
+            {"t002_spare": t2 and t2["data"].get("spare"), "claimed_before": len(claims_before)},
+        ),
+        check(
+            "W",
+            "由 workdeck 开始的一轮派给备用会话：T001 带 spare，spare.claimed（task），"
+            "绑定的就是它",
+            t1 is not None
+            and bool(t1["data"].get("spare"))
+            and claim is not None
+            and bound is not None
+            and bound["data"].get("session_ref") == spare_session,
+            {
+                "spare": t1 and t1["data"].get("spare"),
+                "claimed": claim and claim["sequence"],
+                "bound": bound and bound["data"].get("session_ref") == spare_session,
+            },
+        ),
+        check(
+            "M",
+            "移动：spare.moved（moved，T001 的 worktree），之后 worker.progress 记下的目录与分支",
+            moved is not None
+            and moved["data"].get("outcome") == "moved"
+            and str(moved["data"].get("path") or "").replace("\\", "/").lower() == place
+            and place in norm
+            and "tsw/t001-a1" in said,
+            {"moved": moved and moved["data"].get("outcome"), "progress": scrub(said[:300], run)},
+        ),
+        check(
+            "D",
+            "Dashboard：spare.claimed（as chat，渠道 status-app），"
+            "首条消息为“列出当前目录中的文件”",
+            bool(chat) and "列出当前目录中的文件" in words,
+            {"claims": len(chat), "text": words[:80]},
+        ),
+    ]
+
+
 def handoff_prepare(args: argparse.Namespace) -> int:
     return prepare("handoff-e2e", args)
 
@@ -3130,6 +3262,22 @@ def main(argv: list[str] | None = None) -> int:
         "归档 T002 后它的会话被归档",
     )
     titled_ver.set_defaults(handler=title_verify)
+    spared = sub.add_parser(
+        "spare-e2e",
+        help="备用会话池：用户的 turn 中补充、workdeck 开始的一轮派给备用会话、Dashboard 新建会话"
+        "（需要用户在场）",
+    )
+    spared_steps = spared.add_subparsers(dest="step", required=True)
+    operator_commands(spared_steps)
+    spared_steps.add_parser("prepare").set_defaults(handler=spare_prepare)
+    spared_ver = spared_steps.add_parser("verify")
+    spared_ver.add_argument("run_id")
+    spared_ver.add_argument(
+        "--observed",
+        choices=("yes", "no"),
+        help="操作者观察：T001 的会话改为任务标题，Dashboard 开始的会话改了标题并回答",
+    )
+    spared_ver.set_defaults(handler=spare_verify)
     setup = sub.add_parser("setup-e2e", help="两条安装路径在干净的用户环境中从零安装（无人值守）")
     setup_steps = setup.add_subparsers(dest="step", required=True)
     setup_run = setup_steps.add_parser("run")

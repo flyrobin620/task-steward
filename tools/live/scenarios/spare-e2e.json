@@ -1,0 +1,146 @@
+{
+  "id": "spare-e2e",
+  "title": "Claude 桌面 app 中的备用会话池：用户的 turn 中补充备用会话、平时 app 中的一轮照旧新建会话；由 workdeck 消息开始的一轮把任务派给备用会话，它自己建 worktree、移过去并开始工作；从 Dashboard 新建会话",
+  "useCases": [
+    "UC-SPARE-001",
+    "UC-SPARE-002",
+    "UC-SPARE-003"
+  ],
+  "modelCalls": {
+    "sessions": "主会话 1 个、备用会话 2 个（其中 1 个派给 T001、1 个由 Dashboard 开始对话）、T002 的 worker 1 个",
+    "reviewer": "不评审：两个任务都只登记进展记录，不提交"
+  },
+  "repository": "live/live-repo",
+  "config": {
+    "input": {
+      "in_session_timeout_minutes": 10
+    },
+    "routine": {
+      "enabled": false
+    },
+    "scheduling": {
+      "spare": {
+        "enabled": true,
+        "count": 2,
+        "max_age_hours": 24
+      }
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "T001",
+      "title": "live：由备用会话执行（经 workdeck 派发）",
+      "kind": "research",
+      "goal": "本任务用于验证备用会话：开始工作后，在会话目录运行 pwd 与 git branch --show-current，用 progress_note 原样记录两条命令的输出（以“会话目录：”开头），然后结束这一轮，等待主会话的消息，不做其他工作，不提交。",
+      "acceptance": [
+        "progress_note 记下会话目录与分支"
+      ]
+    },
+    {
+      "task_id": "T002",
+      "title": "live：在用户的 turn 中照旧新建会话",
+      "kind": "research",
+      "goal": "本任务用于验证用户在 app 中的一轮不消耗备用会话：开始工作后调用 progress_note 记录“就绪”，然后结束这一轮，等待主会话的消息，不做其他工作，不提交。",
+      "acceptance": [
+        "progress_note 记下“就绪”"
+      ]
+    }
+  ],
+  "links": {
+    "trust": {
+      "folder": "repo",
+      "q": "只为信任这个文件夹：回复“好”即可，不做其他事。"
+    },
+    "main": {
+      "folder": "home",
+      "q": "派发并执行 T002，再把备用会话补足（T001 先不要派发，等我说）"
+    }
+  },
+  "operator": [
+    {
+      "who": "session",
+      "text": "运行 python tools/live.py spare-e2e open {run_id} trust，在 app 中打开以 repo/ 为文件夹、消息已填好的新会话。"
+    },
+    {
+      "who": "user",
+      "link": "trust",
+      "text": "在弹出的 repo/ 会话中点发送，在信任确认中选择信任。",
+      "why": "信任文件夹是宿主要求用户本人确认的动作；备用会话之后在 repo 的 worktree 中工作，worktree 沿用主检出的信任，所以先信任本运行的 repo/。"
+    },
+    {
+      "who": "session",
+      "text": "运行 python tools/live.py spare-e2e sessions {run_id}，看到 repo/ 会话（repo-trust）后运行 python tools/live.py spare-e2e open {run_id} main。"
+    },
+    {
+      "who": "user",
+      "link": "main",
+      "text": "在弹出的 home/ 会话中（消息“派发并执行 T002，再把备用会话补足（T001 先不要派发，等我说）”已填好）点发送，首次打开时信任该文件夹。这一轮由你亲手输入：主会话为 T002 直接新建 worker 会话（不用备用会话），并建好 2 个备用会话（侧栏中“[备用] S1”“[备用] S2”）。",
+      "why": "只有用户本人的 turn 能新建会话（G-WINDOW）：备用会话只能在这里补充；deeplink 只预填消息，必须由用户点发送。"
+    },
+    {
+      "who": "session",
+      "text": "主会话开始后，在后台运行 python tools/live.py spare-e2e drive {run_id}：2 个备用会话建好、T002 的 worker 已绑定后，它经本机 workdeck 替你在主会话中说“派发 T001”（这一轮由 workdeck 消息开始，不能新建会话），主会话把 T001 派给一个备用会话。"
+    },
+    {
+      "who": "user",
+      "text": "T001 开始之后（侧栏中一个备用会话改名为 T001 的标题），在 Claude 之外的终端运行 {tsw_cmd} status serve，在打开的 Dashboard 中点页头「新建会话」，写“列出当前目录中的文件”，确认发送；页面显示“已在 S… 开始新对话”后，点会话链接看它是否改了标题并回答。然后在终端按 Ctrl+C 停止 Dashboard。",
+      "why": "「新建会话」是用户在 Dashboard 页面上的操作，经用户本人的浏览器与令牌（会话中不能启动 Dashboard，DN006 §8.10 第 2 条）；这一步验证的就是页面上的入口。"
+    },
+    {
+      "who": "user",
+      "optional": true,
+      "text": "（可选）在场时看侧栏：T002 的会话不是备用会话；T001 的会话由“[备用] S…”改为任务标题，在 worktree 中工作；Dashboard 开始的会话改了标题。告诉运行 live 的会话，verify 时用 --observed 记下。",
+      "why": "标题与会话目录只显示在 app 界面上；live 工具不读会话记录。"
+    },
+    {
+      "who": "session",
+      "text": "drive 结束、Dashboard 的会话回答之后运行 python tools/live.py spare-e2e verify {run_id}（没有人观察时不带 --observed，检查 O 记为未验证）。"
+    },
+    {
+      "who": "session",
+      "text": "最后运行 python tools/live.py spare-e2e sessions {run_id}，对列出的每个未归档会话 archive_session，用 get_session 读回后运行 python tools/live.py cleanup {run_id} --archived <会话 ID>…。"
+    }
+  ],
+  "drive": [
+    {
+      "id": "dispatch-T001",
+      "to": "main",
+      "text": "派发 T001",
+      "tasks": [
+        "T001"
+      ],
+      "after": [
+        {
+          "event": "spare.created",
+          "min": 2
+        },
+        {
+          "event": "attempt.bound",
+          "task": "T002"
+        }
+      ]
+    }
+  ],
+  "done": [
+    {
+      "event": "worker.progress",
+      "task": "T001",
+      "since": {
+        "event": "spare.moved"
+      }
+    }
+  ],
+  "checks": [
+    "H1 隔离：数据目录与产品仓库指向本运行，主会话在其中操作",
+    "P 补充：用户亲手输入的一轮中记录 spare.start_requested 与 spare.created 各 2 次（drive 发消息之前）",
+    "N 平时不用：T002 的 attempt.start_requested 不带 spare，drive 之前没有 spare.claimed",
+    "W 由 workdeck 开始的一轮派给备用会话：drive 之后 T001 的 attempt.start_requested 带 spare，spare.claimed（as task），attempt.bound 的会话就是那个备用会话",
+    "M 移动：spare.moved（outcome moved，path 为 T001 的 worktree），之后 T001 的 worker.progress 记下的会话目录是这个 worktree、分支为 tsw/t001-a1",
+    "D Dashboard：spare.claimed（as chat，渠道 status-app），首条消息为“列出当前目录中的文件”",
+    "O 操作者观察：T001 的会话由“[备用] S…”改为任务标题，Dashboard 开始的会话改了标题并回答（verify 的 --observed yes）"
+  ],
+  "prerequisites": [
+    "已安装插件所用的运行时（真实数据目录 tsw-home.json 的 product_repo 指向的检出）已更新到含备用会话池（T363）的 main；prepare 会检查 claim_sessions。",
+    "本机装有 workdeck（PATH 中的 workdeck，或用 TSW_LIVE_WORKDECK 指向它的 cli.js），用户设置中 crossSessionInbound 为 accept：drive 用它替你发消息。"
+  ]
+}
