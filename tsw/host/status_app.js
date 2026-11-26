@@ -299,9 +299,16 @@
 
     /* The task flow: a card waiting on a question opens the same panel in a dialog. */
     let dialog = null;
-    // Puts the panel shown in the dialog back on its card; called by every way of closing (the
-    // close event alone was not always delivered in a headless browser, T363).
+    // Puts the panel shown in the dialog back on its card and lets the page refresh again; called
+    // by every way of closing (the close event alone was not always delivered in a headless
+    // browser, T363). Doing it twice does nothing more.
     let restore = () => {};
+    const closed = () => {
+      if (dialog && dialog.open) return;  // a late close event after the dialog opened again
+      restore();
+      delete document.documentElement.dataset.docOpen;
+      hold();
+    };
     document.addEventListener("click", event => {
       const target = event.target instanceof Element ? event.target : null;
       const node = target ? target.closest('.fnode[data-flags~="asking"]') : null;
@@ -311,8 +318,8 @@
       event.preventDefault();
       if (!dialog) {
         dialog = el("dialog", "qa-dlg");
-        dialog.addEventListener("click", e => { if (e.target === dialog) { dialog.close(); restore(); } });
-        dialog.addEventListener("close", () => { delete document.documentElement.dataset.docOpen; hold(); });
+        dialog.addEventListener("click", e => { if (e.target === dialog) { dialog.close(); closed(); } });
+        dialog.addEventListener("close", closed);
         document.body.append(dialog);
       }
       const bar = el("div", "qa-dlg-bar");
@@ -322,7 +329,7 @@
       const close = button("✕", "close");
       close.className = "qa-x";
       close.setAttribute("aria-label", "关闭");
-      close.addEventListener("click", () => { dialog.close(); restore(); });
+      close.addEventListener("click", () => { dialog.close(); closed(); });
       bar.append(link, el("b", "", title ? title.textContent : ""), close);
       const body = el("div", "qa-dlg-body");
       // The panel itself moves into the dialog and back when it closes: a copy would show its
@@ -331,7 +338,6 @@
       source.replaceWith(place);
       body.append(source);
       restore = () => { if (place.parentNode) place.replaceWith(source); };
-      dialog.addEventListener("close", restore, {once: true});
       dialog.replaceChildren(bar, body);
       document.documentElement.dataset.docOpen = "";
       hold();
