@@ -102,6 +102,11 @@ def available(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [r for r in pool(conn) if r["status"] == "available"]
 
 
+def ever(conn: sqlite3.Connection) -> bool:
+    """Whether the pool ever had a session (a spare was asked for at least once)."""
+    return conn.execute("SELECT 1 FROM spares LIMIT 1").fetchone() is not None
+
+
 def claimed_for(conn: sqlite3.Connection, task_id: str, attempt_id: str) -> dict[str, Any] | None:
     """The spare session claimed for this attempt, if it was one."""
     return row_dict(

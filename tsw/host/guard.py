@@ -1011,6 +1011,7 @@ class Guard:
                 # The spare pool (DN002 §5.9): retiring archives (any turn); adding creates
                 # sessions (the user's turn only).
                 pool = inbox_mod.spare_attention(conn, self.config) if may_dispatch else []
+                in_use = inbox_mod.working(conn) or spares_mod.ever(conn)
                 routine = (
                     inbox_mod.routine_attention(
                         conn, self.config, routine_mod.load_cache(self.home)
@@ -1110,7 +1111,9 @@ class Guard:
                     "再 spare_close（outcome：archived；会话已不存在或已归档为 missing；被拒为 "
                     "failed，result 为返回原文）。"
                 )
-            needs = int(spare.get("needs") or 0) if user_turn else 0
+            # Only once tsw is in use (a task has a session, or the pool had one): a fresh
+            # install's first turns are not held up for spares nobody asked for yet.
+            needs = int(spare.get("needs") or 0) if user_turn and in_use else 0
             if needs:
                 reasons.append(
                     f"这是用户的 turn，结束后就不能再创建会话：备用会话池还差 {needs} 个"

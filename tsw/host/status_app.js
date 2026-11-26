@@ -853,7 +853,7 @@
     }
     async function load() {
       try {
-        const response = await fetch("/api/spares", {credentials: "same-origin"});
+        const response = await fetch("/api/spares", {credentials: "same-origin", referrerPolicy: "same-origin"});
         const info = await response.json();
         if (!response.ok) throw new Error(info.message || `HTTP ${response.status}`);
         return info;

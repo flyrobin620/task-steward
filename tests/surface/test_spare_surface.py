@@ -131,3 +131,74 @@ def test_dashboard_new_session_over_http(home: Home, app: App) -> None:
         inbox.close()
     rows = h.query("SELECT status, claimed_as, claim_via FROM spares")
     assert rows == [{"status": "claimed", "claimed_as": "chat", "claim_via": "status-app"}]
+
+
+@pytest.mark.use_case("UC-SPARE-002")
+def test_a_task_claims_a_spare_over_stdio(home: Home) -> None:
+    h = Harness(home, YOUNG)  # the harness's repository has no checkout: a plain folder
+    h.register("T001")
+    h.plan("T001")
+    h.run("spare_start", user_turn=True)
+    h.run("spare_reconcile", spare_id="S1", outcome="created", session_ref="s-1")
+    handed_back(h)
+    root = home.root
+    orch = by_id(
+        mcp(
+            root,
+            root,
+            "orch-1",
+            INIT,
+            NOTE,
+            call(1, "lease_acquire"),
+            call(2, "task_dispatch", task_id="T001", user_turn=False, spare=True),
+            call(
+                3,
+                "attempt_start",
+                task_id="T001",
+                purpose="dispatch",
+                user_turn=False,
+                spare="S1",
+            ),
+        )
+    )
+    started = payload(orch[3])
+    assert started["session_id"] == "s-1" and "[TaskSteward 派发]" in started["claim_message"]
+    target = Path(started["target"])
+    bound = by_id(
+        mcp(
+            root,
+            root,
+            "orch-1",
+            INIT,
+            NOTE,
+            call(
+                1,
+                "attempt_reconcile",
+                task_id="T001",
+                attempt="a1",
+                generation=started["generation"],
+                outcome="created",
+                session_ref="s-1",
+                brief_delivered=True,
+            ),
+        )
+    )
+    assert "error" not in bound[1]
+    # The session makes its folder (the claim message's step 1) and records the move.
+    target.mkdir(parents=True)
+    spare_dir = root / "spares" / "S1"
+    moved = by_id(
+        mcp(
+            root,
+            spare_dir,
+            "s-1",
+            INIT,
+            NOTE,
+            call(1, "whoami"),
+            call(2, "spare_moved", outcome="moved"),
+        )
+    )
+    assert payload(moved[1])["role"] == "worker" and payload(moved[1])["cwd_consistent"] is True
+    out = payload(moved[2])
+    assert out["events"][0]["type"] == "spare.moved"
+    assert out["wake"]["session_id"] == "orch-1" and "[TaskSteward 开始]" in out["wake"]["message"]

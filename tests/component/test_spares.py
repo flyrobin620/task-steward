@@ -173,7 +173,14 @@ def test_stop_hook_reminds_in_the_users_turn(
 ) -> None:
     h = Harness(home)
     prompt = {"prompt": "补充备用会话", "session_id": "orch-1"}
+    # A fresh install where nothing has asked for a session yet: no reminder.
     assert hook(h, "orch-1", "UserPromptSubmit", home.root, **prompt) is None
+    assert hook(h, "orch-1", "Stop", home.root) is None
+    # Once tsw is in use (here: a task has a session), the user's turn fills the pool.
+    h.register("T001")
+    h.plan("T001")
+    h.dispatch("T001")
+    hook(h, "orch-1", "UserPromptSubmit", home.root, **prompt)
     stop = hook(h, "orch-1", "Stop", home.root)
     assert stop["decision"] == "block" and "spare_start" in stop["reason"]
     # A turn begun by another session: no reminder to add (no session can be made then).
@@ -181,9 +188,11 @@ def test_stop_hook_reminds_in_the_users_turn(
     assert hook(h, "orch-1", "Stop", home.root) is None
     # Retiring archives: reminded in any turn.
     spare(h, "s-1")
+    hook(h, "orch-1", "UserPromptSubmit", home.root, prompt='<cross-session-message from="x">hi')
     stop = hook(h, "orch-1", "Stop", home.root)
     assert stop["decision"] == "block" and "spare_close" in stop["reason"]
-    assert "不在运行" in stop["reason"]
+    assert "不在运行" in stop["reason"] and "spare_start" not in stop["reason"]
+    del inboxes
 
 
 # ---------------------------------------------------------------------- claimed for a task
@@ -260,7 +269,10 @@ def test_a_spare_takes_a_repository_task(
     assert "由备用会话 S1 认领" in brief
     # Bound to the spare session, no other.
     common = {"task_id": "T001", "attempt": "a1", "generation": 1, "brief_delivered": True}
-    bind = lambda ref: h.run("attempt_reconcile", outcome="created", session_ref=ref, **common)  # noqa: E731
+
+    def bind(ref: str) -> None:
+        h.run("attempt_reconcile", outcome="created", session_ref=ref, **common)
+
     assert reason_of(lambda: bind("other")) == "spare_session_mismatch"
     bind("s-1")
     assert h.status("T001") == "in_progress"

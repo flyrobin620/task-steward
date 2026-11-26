@@ -31,6 +31,10 @@ from tsw.machine.base import Caller
 mark = pytest.mark
 
 
+# The spare pool off (DN002 §5.9): these tests are about prestarting only.
+NO_SPARES = {"spare": {"enabled": False, "count": 2, "max_age_hours": 24}}
+
+
 @pytest.fixture
 def h(home: Home) -> Harness:
     return Harness(home)
@@ -290,8 +294,9 @@ def prompt_then_stop(h: Harness, prompt: str | None, session: str = "orch-1") ->
 @mark.use_case("UC-HOST-002")
 @mark.use_case("UC-HOST-003")
 def test_a_user_turn_does_not_end_while_tasks_wait_for_a_session(home: Home) -> None:
-    # The routine session's own reminder is tested in test_routine.py.
-    h = Harness(home, {"routine": {"enabled": False}})
+    # The routine session's own reminder is tested in test_routine.py, the spare pool's in
+    # test_spares.py.
+    h = Harness(home, {"routine": {"enabled": False}, "scheduling": NO_SPARES})
     h.register("T001")
     h.register("T002")
     h.plan("T001")
@@ -341,7 +346,7 @@ def test_needs_prestart_respects_the_standby_limit(home: Home) -> None:
     h = Harness(
         home,
         {
-            "scheduling": {"prestart": {"enabled": True, "max_standby": 2}},
+            "scheduling": {"prestart": {"enabled": True, "max_standby": 2}, **NO_SPARES},
             "routine": {"enabled": False},
         },
     )

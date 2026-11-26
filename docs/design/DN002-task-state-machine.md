@@ -497,7 +497,7 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 
 - 池的目标大小 `scheduling.spare.count`（默认 2）。`scheduling.spare.enabled`（默认 `true`）为 `false` 时不补充，可用的备用会话随即退役（见下文“过期与回收”）。
 - `attention` 的 `spares` 给出：目标大小、可用的备用会话（编号、会话、建立时间、是否在运行）、要补充的个数（`needs`）与要退役的会话（`retire`）。
-- 每个用户的 turn 结束前，主会话在预启动之后补到目标大小：`spare_start`（`user_turn: true`）创建空目录 `spares/S<n>`，记录 `spare.start_requested`（编号 `S<n>` 递增，会话名 `spare-s<n>`，目录，标题，prompt），再 `start_session`（`roles.worker` 的模型、强度与权限模式，`cwd` 为该目录，`use_worktree: false`，`name` 与 `title` 用返回值），之后 `spare_reconcile`（`created` 与会话 ID，或 `not_created`）。结果未知时按会话名对账，不再次创建（与 §5.4 相同）。主会话的 Stop hook 在用户的 turn 结束前 `needs` 不为 0 时提醒一次（与 `needs_prestart` 合在同一条提示里）；非用户的一轮不提醒。
+- 每个用户的 turn 结束前，主会话在预启动之后补到目标大小：`spare_start`（`user_turn: true`）创建空目录 `spares/S<n>`，记录 `spare.start_requested`（编号 `S<n>` 递增，会话名 `spare-s<n>`，目录，标题，prompt），再 `start_session`（`roles.worker` 的模型、强度与权限模式，`cwd` 为该目录，`use_worktree: false`，`name` 与 `title` 用返回值），之后 `spare_reconcile`（`created` 与会话 ID，或 `not_created`）。结果未知时按会话名对账，不再次创建（与 §5.4 相同）。主会话的 Stop hook 在用户的 turn 结束前 `needs` 不为 0 时提醒一次（与 `needs_prestart` 合在同一条提示里）；非用户的一轮不提醒；刚安装、还没有任何任务有会话、池也从没有过会话时不提醒（不为还没用上 tsw 的用户建会话）。
 - 备用会话的 prompt 由 tsw 生成：它是 TaskSteward 的备用会话 S<n>；现在只回复“备用会话就绪”，然后结束这一轮；之后的第一条消息决定用途：主会话发来的、以 `[TaskSteward 派发]` 开头的消息派它做任务，照消息做；其他消息就是用户要和它对话：先用 `set_session_title` 把本会话的标题改成这条消息的简短概括（至多 30 字），再照常回答（会话给自己改标题已实测可行）。worker 说明不放进备用会话的 prompt（会话可能永远不当 worker）；派发后 worker 的 hook 发现会话没有附上说明，照常提示完整重读副本（CC001 §6）。
 
 **何时使用：只在不能新建会话的一轮与 Dashboard**
