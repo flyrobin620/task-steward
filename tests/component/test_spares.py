@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -288,7 +289,8 @@ def test_a_spare_takes_a_repository_task(
         == "spare_target_missing"
     )
     command = out["claim_message"].split("`")[1]
-    subprocess.run(command, shell=True, check=True, capture_output=True)
+    # The session's shell takes it as one POSIX command line (review r1 F4).
+    subprocess.run(shlex.split(command), check=True, capture_output=True)
     assert git(worktree, "rev-parse", "--abbrev-ref", "HEAD") == "tsw/t001-a1"
     del repo
     moved = Server(home, {SESSION_ENV: "s-1"}, spare_dir).call("spare_moved", {"outcome": "moved"})
@@ -335,21 +337,113 @@ def test_a_taken_over_worktree_cannot_take_a_spare(home: Home, tmp_path: Path) -
     h, _ = repo_harness(home, tmp_path)
     h.register("T001")
     h.plan("T001")
-    worker = h.dispatch("T001")  # a1 made its worktree in the user's turn
-    del worker
+    h.dispatch("T001")  # a1 made its worktree in the user's turn
     h.run("attempt_update", task_id="T001", attempt="a1", event="lost", evidence="会话不在了")
     spare(h, "s-1")
-    h.run("task_dispatch", task_id="T001", user_turn=False, spare=True, workdir="~/wt/T001")
-    assert reason_of(
-        lambda: h.run(
-            "attempt_start", task_id="T001", purpose="dispatch", user_turn=False, spare="S1"
-        )
-    ) in ("spare_dir_exists", "spare_dir_mismatch")
+    h.run("task_dispatch", task_id="T001", user_turn=False, spare=True)
+    out = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=False, spare="S1")
+    # The session could not move into a worktree it did not make: the dispatch is abandoned.
+    assert out["abandoned"] is True
+    # Its directory (given outside work/ by the harness) or its worktree: either way not one the
+    # session could make.
+    assert out["reason"] in ("spare_dir_exists", "spare_dir_mismatch")
+    assert [e["type"] for e in out["events"]] == ["attempt.dispatch_abandoned"]
+    assert h.status("T001") == "ready"
+    assert h.query("SELECT status FROM spares")[0]["status"] == "available"
+
+
+@pytest.mark.use_case(TASK)
+@pytest.mark.transition("T09")
+def test_a_claim_that_fails_after_the_dispatch_is_abandoned(home: Home) -> None:
+    """Review r1 F2/F3: taken meanwhile, too old, or none running: the task is ready again,
+    its slot free and listed to start, never left dispatching."""
+    h = Harness(home, {"scheduling": {"max_workers": 1}})
+    spare(h, "s-1")
+    h.register("T001")
+    h.plan("T001")
+    h.run("task_dispatch", task_id="T001", user_turn=False, spare=True)
+    # The Dashboard took S1 between the dispatch and the claim.
+    user = Caller(role="user", session_id=None, machine=MACHINE)
+    source = {
+        "channel": "status-app",
+        "principal": "me",
+        "message_ref": "status-app:x:1",
+        "text": "hi",
+        "target": ["spare", "S1", "chat"],
+    }
+    h.run("spare_claim", user, spare_id="S1", user_source=source)
+    out = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=False, spare="S1")
+    assert out["abandoned"] is True and out["reason"] == "spare_unavailable"
+    assert h.status("T001") == "ready"
+    with h.ledger.view() as conn:
+        listed = inbox_mod.attention(conn, h.ledger.storage, h.config, None, h.clock.now)
+    assert {"task_id": "T001"} in listed["to_start"]
+    # Too old: neither picked by auto nor taken by its number.
+    spare(h, "s-2")
+    h.clock.now = "2026-11-07T00:00:00Z"
+    assert (
+        reason_of(lambda: h.run("task_dispatch", task_id="T001", user_turn=False, spare=True))
+        == "no_spare"
+    )
+    h.clock.now = "2026-11-05T00:00:00Z"
+    h.run("task_dispatch", task_id="T001", user_turn=False, spare=True)
+    h.clock.now = "2026-11-07T00:00:00Z"
+    out = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=False, spare="S2")
+    assert out["reason"] == "spare_expired" and h.status("T001") == "ready"
+    # None that the host runs (the MCP server passes "none"): abandoned as well.
+    h.clock.now = "2026-11-05T00:00:00Z"
+    h.run("task_dispatch", task_id="T001", user_turn=False, spare=True)
+    out = h.run("attempt_start", task_id="T001", purpose="dispatch", user_turn=False, spare="none")
+    assert out["reason"] == "no_spare" and h.status("T001") == "ready"
+    # The slot was freed each time: another task can be dispatched in the user's turn.
+    h.register("T002")
+    h.plan("T002")
+    h.dispatch("T002")
+
+
+@pytest.mark.use_case(POOL)
+def test_the_main_session_may_create_a_recorded_spare(home: Home) -> None:
+    """Review r1 F1: CC-B9 lets start_session through for the spare spare_start recorded."""
+    h = Harness(home)
+    h.run("spare_start", user_turn=True)
+    tool = "mcp__ccd_session__start_session"
+    ok = hook(h, "orch-1", "PreToolUse", home.root, tool_name=tool, tool_input={"name": "spare-s1"})
+    assert ok is None
+    other = hook(
+        h, "orch-1", "PreToolUse", home.root, tool_name=tool, tool_input={"name": "spare-s9"}
+    )
+    assert other["hookSpecificOutput"]["permissionDecision"] == "deny"
+    h.run("spare_reconcile", spare_id="S1", outcome="created", session_ref="s-1")
+    again = hook(
+        h, "orch-1", "PreToolUse", home.root, tool_name=tool, tool_input={"name": "spare-s1"}
+    )
+    assert again["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.use_case(TASK)
+def test_the_command_quotes_every_argument(home: Home, tmp_path: Path) -> None:
+    """Review r1 F4: a legal branch name with shell characters stays one argument."""
+    repo = checkout(tmp_path)
+    h = Harness(
+        home,
+        {
+            "repositories": {"demo": {"path": str(repo), "aliases": ["d"]}},
+            "worktrees": {"branch_pattern": "tsw/{task_id_lower}-{attempt};x$y"},
+        },
+    )
+    spare(h, "s-1")
+    out = claim(h)
+    command = out["claim_message"].split("`")[1]
+    words = shlex.split(command)
+    assert words[:6] == ["git", "-C", str(repo).replace("\\", "/"), "worktree", "add", "-b"]
+    assert words[6] == "tsw/t001-a1;x$y"
+    subprocess.run(words, check=True, capture_output=True)
+    assert git(Path(out["target"]), "rev-parse", "--abbrev-ref", "HEAD") == "tsw/t001-a1;x$y"
 
 
 @pytest.mark.use_case(TASK)
 def test_auto_picks_a_running_spare(home: Home, inboxes: Callable[[str], FakeInbox]) -> None:
-    h = Harness(home)
+    h = Harness(home, YOUNG)  # the MCP server reads the real clock
     spare(h, "s-1")
     spare(h, "s-2")
     inboxes("s-1")  # the newer S2 is not running

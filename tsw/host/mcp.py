@@ -34,7 +34,6 @@ from tsw.host.version import runtime as runtime_info
 from tsw.ledger import Ledger
 from tsw.machine import candidates as candidates_mod
 from tsw.machine import routine as routine_mod
-from tsw.machine import spares as spares_mod
 from tsw.machine.ask_user import user_channels
 from tsw.machine.base import REGISTRY, Caller
 from tsw.machine.config_tools import CONFIG_TOOLS
@@ -447,7 +446,16 @@ class Server:
         if name == "attempt_start" and args.get("spare") == "auto":
             # Of the spare sessions, one the host still runs (DN002 §5.9): read here, where the
             # host's session registry is, rather than in the state machine.
-            args = {**args, "spare": self._running_spare(ledger)}
+            args = {**args, "spare": self._running_spare(ledger, config.require_valid())}
+        if (
+            name == "task_dispatch"
+            and args.get("spare")
+            and self._running_spare(ledger, config.require_valid()) == "none"
+        ):
+            # Nothing is recorded: the task stays ready, listed to start (DN002 §5.9).
+            raise rejected(
+                "没有在运行的可用备用会话（attention.spares）：任务留在待启动", reason="no_spare"
+            )
         caller = Caller(role=who.role, session_id=who.session_id, machine=self.machine)
         # Configuration tools must be able to repair an invalid configuration (DN003 §7.1).
         usable = config if name in CONFIG_TOOLS else config.require_valid()
@@ -528,22 +536,13 @@ class Server:
             "message": f"TaskSteward 回传：{items}。调用 inbox 处理。",
         }
 
-    def _running_spare(self, ledger: Ledger) -> str:
-        """The newest available spare session the host still runs; ``auto`` when none is known
-        to run (the state machine then refuses with ``no_spare`` if there is none at all)."""
+    def _running_spare(self, ledger: Ledger, config: EffectiveConfig) -> str:
+        """The newest spare session the host still runs, not too old (the ones attention keeps);
+        ``none`` when there is none: the state machine then abandons the dispatch."""
         with ledger.view() as conn:
-            free = spares_mod.available(conn)
-        for row in free:
-            if inbox_mod.spare_running(row.get("session_ref")):
-                return str(row["spare_id"])
-        if free:
-            raise rejected(
-                "备用会话都不在运行（app 可能重启过）：按 attention.spares.retire 退役它们，"
-                "任务留在待启动",
-                reason="no_spare",
-                spares=[str(r["spare_id"]) for r in free],
-            )
-        return "auto"
+            found = inbox_mod.spare_attention(conn, config)
+        kept: list[dict[str, Any]] = list(found[0]["available"]) if found else []
+        return str(kept[0]["spare_id"]) if kept else "none"
 
     def _moved_wake(self, out: Mapping[str, Any], ledger: Ledger) -> dict[str, Any]:
         """After a claimed spare session asked to move (DN002 §5.9 step 4): the orchestrator

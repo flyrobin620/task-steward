@@ -847,15 +847,22 @@ class Guard:
                     (name,),
                 ).fetchone()
                 newest = routine_mod.latest(conn)
+                # A spare session spare_start recorded and not made yet (DN002 §5.9).
+                spare = conn.execute(
+                    "SELECT 1 FROM spares WHERE status = 'starting' AND session_ref IS NULL "
+                    "AND session_name = ?",
+                    (name,),
+                ).fetchone()
             routine = (
                 newest is not None
                 and newest["status"] == "starting"
                 and newest["session_name"] == name
             )
-            if row is None and not routine:
+            if row is None and not routine and spare is None:
                 return deny(
                     "PreToolUse",
-                    "先用 attempt_start（例行会话用 routine_start）落账再创建会话；"
+                    "先用 attempt_start（例行会话用 routine_start，备用会话用 spare_start）落账"
+                    "再创建会话；"
                     "会话名必须是当前有效代次的名称",
                 )
         return None

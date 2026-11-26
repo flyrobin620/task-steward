@@ -102,6 +102,12 @@ def available(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [r for r in pool(conn) if r["status"] == "available"]
 
 
+def usable(conn: sqlite3.Connection, config: EffectiveConfig, now: str) -> list[dict[str, Any]]:
+    """Available spare sessions not yet too old (``scheduling.spare.max_age_hours``), the
+    newest first: the ones a claim may take (whether the host runs them is the host's to say)."""
+    return [r for r in available(conn) if not expired(r, config, now)]
+
+
 def ever(conn: sqlite3.Connection) -> bool:
     """Whether the pool ever had a session (a spare was asked for at least once)."""
     return conn.execute("SELECT 1 FROM spares LIMIT 1").fetchone() is not None
@@ -363,11 +369,15 @@ def task_claim(  # noqa: PLR0917 - a claim is made of exactly these
     attempt_id: str,
     target: Path,
     branch: str | None,
+    config: EffectiveConfig | None = None,
+    now: str | None = None,
 ) -> tuple[dict[str, Any], EventDraft]:
     """The spare session ``sid`` claimed for a task's attempt (``attempt_start`` with ``spare``)."""
     row = get(conn, sid)
     if row["status"] != "available":
         raise rejected("这个备用会话已不可用", reason="spare_unavailable", status=row["status"])
+    if now is not None and config is not None and expired(row, config, now):
+        raise rejected("这个备用会话已过期，等主会话退役它", reason="spare_expired", spare_id=sid)
     return row, EventDraft(
         type="spare.claimed",
         task_id=task_id,

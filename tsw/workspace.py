@@ -23,6 +23,7 @@ whatever is uncommitted: nothing is fetched, switched or cleaned (CC006 §8.3, T
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -256,14 +257,16 @@ def spare_command(ws: Workspace) -> tuple[str, dict[str, Any]]:
     has_branch = (
         _git(ws.checkout, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")[0] == 0
     )
-    checkout = _slashes(ws.checkout)
-    target = _slashes(path)
+    checkout = shlex.quote(_slashes(ws.checkout))
+    target = shlex.quote(_slashes(path))
     if has_branch:
         base = None
-        command = f'git -C "{checkout}" worktree add "{target}" {branch}'
+        command = f"git -C {checkout} worktree add {target} {shlex.quote(branch)}"
     else:
         base = _base(ws)
-        command = f'git -C "{checkout}" worktree add -b {branch} "{target}" {base}'
+        command = (
+            f"git -C {checkout} worktree add -b {shlex.quote(branch)} {target} {shlex.quote(base)}"
+        )
     record = _record(ws, base=base, created=False, fetched=fetched)
     record["by_session"] = True
     return command, record

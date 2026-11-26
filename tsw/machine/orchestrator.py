@@ -7,6 +7,7 @@ acceptance and cancellation (DN002 §3.2, §5; DN006 §8.3)."""
 from __future__ import annotations
 
 import os
+import shlex
 import sqlite3
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -14,7 +15,7 @@ from typing import Any
 
 from tsw.commands import Command, CommitContext
 from tsw.config import EffectiveConfig, language_shown, resolve_repository, self_review_mode
-from tsw.errors import rejected
+from tsw.errors import TswError, rejected
 from tsw.events import EventDraft, digest
 from tsw.home import Home, same_dir, workdir_path
 from tsw.importer.resume import resume_package
@@ -768,7 +769,7 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             raise rejected("未知的 attempt 阶段", reason="invalid_attempt", phase=previous["phase"])
         if mode in ("new", "reuse_planned"):
             if spare:
-                _spare_dispatch(ctx.conn, env.config, user_turn)
+                _spare_dispatch(ctx.conn, env.config, user_turn, ctx.now)
             else:
                 guards.g_window(env.config, user_turn)
         # Not given: the same attempt keeps the directory it recorded (standby, continued, a
@@ -820,14 +821,16 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return _cmd(env, "task_dispatch", inp, build)
 
 
-def _spare_dispatch(conn: sqlite3.Connection, config: EffectiveConfig, user_turn: bool) -> None:
+def _spare_dispatch(
+    conn: sqlite3.Connection, config: EffectiveConfig, user_turn: bool, now: str
+) -> None:
     """A dispatch to be given to a spare session (DN002 §5.9): only where no session can be
     created, with the pool on and a spare session waiting."""
     if user_turn:
         raise rejected("用户本人的 turn 中直接新建会话，不用备用会话", reason="spare_in_user_turn")
     if not config.get("scheduling.spare.enabled"):
         raise rejected("配置关闭了备用会话池（scheduling.spare.enabled）", reason="spare_disabled")
-    if not _spares.available(conn):
+    if not _spares.usable(conn, config, now):
         raise rejected("没有可用的备用会话", reason="no_spare")
 
 
@@ -1037,6 +1040,13 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return command
 
 
+# Why a claim cannot go ahead once the task is dispatching: the dispatch is abandoned (T09) so
+# the task is ready again, its slot and resources free, and listed to start (DN002 §5.9).
+SPARE_ABANDON = frozenset(
+    {"no_spare", "spare_unavailable", "spare_expired", "spare_dir_exists", "spare_dir_mismatch"}
+)
+
+
 def _claim_spare(  # noqa: PLR0917 - a claim is made of exactly these
     ctx: CommitContext,
     env: ToolEnv,
@@ -1051,25 +1061,62 @@ def _claim_spare(  # noqa: PLR0917 - a claim is made of exactly these
     No session is created, so the turn need not be the user's (G-WINDOW does not apply); in the
     user's own turn the orchestrator creates the session instead and a spare is refused. The
     worktree (or the session's folder) is planned but not made: the session makes it and moves
-    there, the only move the host allows outside the user's turn (T363 probes).
+    there, the only move the host allows outside the user's turn (T363 probes). When no spare
+    can take the task after all (taken meanwhile, gone, too old, a folder it could not make), the
+    dispatch is abandoned instead of left hanging.
     """
     task_id = str(row["task_id"])
     if user_turn:
         raise rejected("用户本人的 turn 中直接新建会话，不用备用会话", reason="spare_in_user_turn")
-    if not env.config.get("scheduling.spare.enabled"):
-        raise rejected("配置关闭了备用会话池（scheduling.spare.enabled）", reason="spare_disabled")
     require_status(row, "dispatching")
     current = current_attempt(ctx.conn, task_id)
     if current is None or current["phase"] != "planned":
         raise rejected("派发中的 attempt 必须处于 planned", reason="invalid_attempt")
+    try:
+        return _claim(ctx, env, row, current, spare, given_title, output)
+    except TswError as exc:
+        reason = str(exc.details.get("reason") or "")
+        if reason not in SPARE_ABANDON:
+            raise
+        output.clear()
+        output.update({"abandoned": True, "reason": reason, "message": exc.message, **exc.details})
+        return [
+            EventDraft(
+                type="attempt.dispatch_abandoned",
+                task_id=task_id,
+                revision=int(row["revision"]),
+                attempt=str(current["attempt"]),
+                data={
+                    "transition": "T09",
+                    "attempt": current["attempt"],
+                    "generation": int(current["generation"] or 0),
+                    "reason": reason,
+                },
+            )
+        ]
+
+
+def _claim(  # noqa: PLR0917 - a claim is made of exactly these
+    ctx: CommitContext,
+    env: ToolEnv,
+    row: dict[str, Any],
+    current: Mapping[str, Any],
+    spare: str,
+    given_title: str | None,
+    output: dict[str, Any],
+) -> list[EventDraft]:
+    task_id = str(row["task_id"])
+    if not env.config.get("scheduling.spare.enabled"):
+        raise rejected("配置关闭了备用会话池（scheduling.spare.enabled）", reason="no_spare")
     attempt_id = str(current["attempt"])
     guards.g_one_attempt(ctx.conn, task_id, allowed=None)
     # The claimed session gets the worker instructions from the copy (its prompt has none): the
     # copy must be there and current, as for a created session (DN006 §6.2).
     _, digest = worker_instructions(ctx.home.root)
     sid = spare
-    if sid == "auto":
-        free = _spares.available(ctx.conn)
+    if sid in ("auto", "none"):
+        # "none": the MCP server found no spare the host runs (DN002 §5.9).
+        free = [] if sid == "none" else _spares.usable(ctx.conn, env.config, ctx.now)
         if not free:
             raise rejected("没有可用的备用会话", reason="no_spare")
         sid = str(free[0]["spare_id"])
@@ -1102,8 +1149,10 @@ def _claim_spare(  # noqa: PLR0917 - a claim is made of exactly these
                 reason="spare_dir_exists",
                 path=str(target),
             )
-        command = 'mkdir -p "' + str(target).replace("\\", "/") + '"'
-    spare_row, claim = _spares.task_claim(ctx.conn, sid, task_id, attempt_id, target, branch)
+        command = "mkdir -p " + shlex.quote(str(target).replace("\\", "/"))
+    spare_row, claim = _spares.task_claim(
+        ctx.conn, sid, task_id, attempt_id, target, branch, env.config, ctx.now
+    )
     _sync_dispatched_brief(ctx, env.config, row, current, spare=(sid, str(target)))
     previous = attempt(ctx.conn, task_id, attempt_id)
     generation = (int(previous["generation"]) if previous else 0) + 1

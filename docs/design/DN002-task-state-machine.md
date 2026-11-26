@@ -79,7 +79,7 @@
 | T06 | ready | waiting_dependency | `dependency.invalidated` | S | 任一依赖不再满足 G-DEP | 无 |
 | T07 | ready | dispatching | `task.dispatch_started` | O | G-LEASE、G-SLOT、G-RES、G-DEP；按 R-ATTEMPT 需要新建会话时还须满足 G-WINDOW（续用或投递给待命会话不需要） | 原子占用名额与资源；创建或复用执行目录，生成 `brief.md`（绑定 revision）；按 R-ATTEMPT 选择投递给待命会话、续用原会话或新建；G-WINDOW 不满足且无可用会话时不迁移，任务保持 `ready` 并标记“待启动” |
 | T08 | dispatching | in_progress | `attempt.bound` / `attempt.brief_delivered` / `attempt.continued` | O / P | 新建：会话已创建且任务书已送达；待命会话：任务书已送达；续用：消息已送达原会话；G-ONE-ATTEMPT | 写入绑定，开启新的提交周期 |
-| T09 | dispatching | ready | `attempt.dispatch_abandoned` | O | 有证据确认会话未创建（`attempt.not_created`）；`starting` 阶段结果未知时不能走 T09，须先对账 | 当前创建代次标为失效；attempt 回到 `planned`（同一编号，未产生过会话）；释放名额与资源，保留执行目录 |
+| T09 | dispatching | ready | `attempt.dispatch_abandoned` | O | 有证据确认会话未创建（`attempt.not_created`）；`starting` 阶段结果未知时不能走 T09，须先对账；派给备用会话而认领在派发后失败时（还没有请求创建会话，attempt 仍为 `planned`，§5.9）同样经 T09 回到 `ready` | 当前创建代次标为失效；attempt 回到 `planned`（同一编号，未产生过会话）；释放名额与资源，保留执行目录 |
 | T10 | dispatching | paused | `task.paused` | O | 执行目录冲突（分支已存在且内容不明等）需要用户决定 | 类别 `workdir_conflict`；释放名额，保留现场 |
 | T11 | in_progress | waiting_user | `input.escalated` | W / O | worker 在本会话直接问用户（`ask_user`，DN006 §8.1a：任务内的提问、评审预算用完、阻断项延后请求、评审器不可用）；或主会话对跨任务事项判断后决定交给人类，或 `input.triage=human_direct` 时直接交给人类 | worker 提问：问题留在 worker 会话，记录转交时间，不进入主会话 inbox；主会话交给人类：生成 InputRequest（含主会话的分析），按 `input.channels` 投递人类渠道 |
 | T12 | waiting_user | in_progress | `input.resolved` | U / O | 第一个生效的答复：任一人类渠道中通过核实的用户答复（worker 会话中由宿主集成记录、worker 引用的原话，主会话消息、Teams 回复、Portal 提交），请求仍为 `pending` 且绑定的 attempt 与代次与当前一致（等待期间登记了需求变更、revision 已变时问题仍然有效，§5.1）；或问题已转交主会话（`input.handed_off`，DN006 §8.1b）且不属于保留事项时，主会话在授权边界内代答（`handoff_resolve`，不满足 G-USER）。超时不是答复；转交前主会话不能代答 | 等待期间 revision 未变：回到离开时的子状态，周期不变；revision 已变（等待期间主会话登记了与问题无关的需求变更，§5.1）：进入 `executing`，旧评审失效，开启新周期 |
@@ -511,8 +511,8 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 
 派给任务（主会话，在任何一轮都可以：不创建会话，所以不受 G-WINDOW 约束）：
 
-1. `task_dispatch` 照常（T07）。
-2. `attempt_start`（`purpose: dispatch`，`user_turn: false`，`spare: "auto"` 或指定编号）：tsw 选一个可用的备用会话（在运行的、最新建立的优先），核对要进入的目录还不存在，按 CC006 §8.3 算出 worktree 的路径、分支与基线（先 `git fetch`；不建 worktree，也不建执行目录），写任务书，在同一批事件中记录 `attempt.start_requested`（带 `spare`、会话名为该会话的会话名、要由会话建的目录与命令）与 `spare.claimed`（`as: task`，任务与 attempt）。返回该会话的 ID、认领消息与基准标题。没有可用的备用会话时拒绝（`no_spare`），不记录事件。
+1. `task_dispatch` 带 `spare: true`（T07）：不受 G-WINDOW 约束，但要有可用的备用会话（在运行、没有过期；没有时拒绝 `no_spare`，不记录事件，任务留在“待启动”）。
+2. `attempt_start`（`purpose: dispatch`，`user_turn: false`，`spare: "auto"` 或指定编号）：tsw 选一个可用的备用会话（在运行的、最新建立的优先），核对要进入的目录还不存在，按 CC006 §8.3 算出 worktree 的路径、分支与基线（先 `git fetch`；不建 worktree，也不建执行目录），写任务书，在同一批事件中记录 `attempt.start_requested`（带 `spare`、会话名为该会话的会话名、要由会话建的目录与命令）与 `spare.claimed`（`as: task`，任务与 attempt）。返回该会话的 ID、认领消息与基准标题。派发之后才发现不能认领时（这期间被 Dashboard 认领、过期、宿主已不运行它，或要进入的目录已存在），不拒绝，而是记录 `attempt.dispatch_abandoned`（T09，附原因）：任务回到 `ready`、释放名额与资源、列入“待启动”，结果写明 `abandoned` 与原因，不会停在 `dispatching`。
 3. 主会话 `attempt_reconcile`（`outcome: created`，`session_ref` 为该会话，`brief_delivered: true`）完成绑定（T08），再用 `SendMessage` 发认领消息（tsw 生成，原样发送）：“[TaskSteward 派发] 你是任务 <任务> 的 worker（attempt <attempt>）。这一轮只做三步：① 运行 `git -C <检出> worktree add <路径> -b <分支> <基线>`（其他任务为 `mkdir -p <执行目录>`）；② 调用 `change_directory` 移到 <路径>；③ 调用 tsw 的 `spare_moved`，按返回的 `wake` 给主会话发消息，然后结束这一轮。下一条消息开始时你已在任务目录中：先完整阅读 <数据目录>/roles/worker.md，再调用 whoami，按任务书 runs/<任务>/<attempt>/brief.md 执行。”先绑定再发消息，所以会话收到消息时 `whoami` 已是 worker。
 4. `spare_moved`（worker）核对目录已建好（仓库任务：是所配置仓库的 worktree、在给定的分支上），记录 `spare.moved`，返回唤醒主会话的 `wake`；第 ① 或 ② 步失败或被拒时带 `outcome: failed` 与原文，同样唤醒主会话。
 5. 主会话收到后发“开始”消息：“[TaskSteward] 开始：按任务书 runs/<任务>/<attempt>/brief.md 执行。”。这时会话已空闲、移动已生效。万一消息在移动生效之前到达（会话目录仍是备用目录），worker 的 UserPromptSubmit hook 提示“目录还没移过去：直接结束这一轮，再调用 `spare_moved`”，主会话收到后再发一次。

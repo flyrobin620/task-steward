@@ -142,7 +142,19 @@ def test_a_task_claims_a_spare_over_stdio(home: Home) -> None:
     h.run("spare_reconcile", spare_id="S1", outcome="created", session_ref="s-1")
     handed_back(h)
     root = home.root
-    orch = by_id(
+    # The spare session runs: the host's registry names it with an inbox.
+    running = FakeInbox(Path(os.environ["CLAUDE_CONFIG_DIR"]) / "sessions", "s-1")
+    try:
+        orch = _dispatch(root)
+    finally:
+        running.close()
+    started = payload(orch[3])
+    assert started["session_id"] == "s-1" and "[TaskSteward 派发]" in started["claim_message"]
+    _bind_and_move(root, started)
+
+
+def _dispatch(root: Path) -> dict[Any, dict[str, Any]]:
+    return by_id(
         mcp(
             root,
             root,
@@ -161,8 +173,9 @@ def test_a_task_claims_a_spare_over_stdio(home: Home) -> None:
             ),
         )
     )
-    started = payload(orch[3])
-    assert started["session_id"] == "s-1" and "[TaskSteward 派发]" in started["claim_message"]
+
+
+def _bind_and_move(root: Path, started: dict[str, Any]) -> None:
     target = Path(started["target"])
     bound = by_id(
         mcp(
