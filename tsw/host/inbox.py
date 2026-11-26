@@ -21,9 +21,13 @@ from tsw.machine.guards import dependency_problems, invalidated, topological
 from tsw.machine.model import OCCUPYING, loads
 from tsw.storage.base import StorageBackend
 
+# Always the orchestrator's to act on, whatever the configuration lists: a spare session that
+# moved waits for the start message (DN002 §5.9), also when no one held the lease to be woken.
+ALWAYS_REPORTABLE = frozenset({"spare.moved"})
+
 
 def reportable(config: EffectiveConfig) -> set[str]:
-    return set(config.get("scheduling.wake.reportable_events") or [])
+    return set(config.get("scheduling.wake.reportable_events") or []) | ALWAYS_REPORTABLE
 
 
 def is_reportable(event: Event, kinds: set[str]) -> bool:

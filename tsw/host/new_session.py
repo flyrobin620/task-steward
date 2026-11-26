@@ -25,6 +25,7 @@ from typing import Any
 from tsw import direct, lease
 from tsw.commands import Command, CommitContext
 from tsw.config import EffectiveConfig
+from tsw.errors import TswError
 from tsw.events import EventDraft
 from tsw.host import inbox as inbox_mod
 from tsw.host import session_inbox
@@ -88,6 +89,21 @@ class Starter:
         config.require_valid()
         with self._lock:
             seen = self._done.get(command_id)
+            if seen is None:
+                # Not in this process's memory (restarted, or long ago): the ledger keeps which
+                # spare this submission claimed; it is not claimed or written again (PR #95).
+                with ledger.view() as conn:
+                    earlier = spares_mod.claimed_by_page(conn, command_id)
+                if earlier is not None:
+                    session = str(earlier["session_ref"])
+                    return 200, {
+                        "ok": True,
+                        "duplicate": True,
+                        "state": "claimed",
+                        "spare_id": earlier["spare_id"],
+                        "session_id": session,
+                        "href": session_href("claude-app", session),
+                    }
             if seen is not None:
                 if seen["text"] != text:
                     return 409, {
@@ -96,7 +112,7 @@ class Starter:
                         "message": "同一个 command_id 已用于另一条消息",
                     }
                 return 200, {**seen["result"], "duplicate": True}
-            status, result = self._start(ledger, config, text, sessions_dir)
+            status, result = self._start(ledger, config, text, sessions_dir, command_id)
             if result.get("state") in ("sent", "unknown"):
                 if len(self._done) >= REMEMBERED:
                     self._done.pop(next(iter(self._done)))
@@ -104,7 +120,12 @@ class Starter:
             return status, result
 
     def _start(
-        self, ledger: Ledger, config: EffectiveConfig, text: str, sessions_dir: Path | None
+        self,
+        ledger: Ledger,
+        config: EffectiveConfig,
+        text: str,
+        sessions_dir: Path | None,
+        command_id: str,
     ) -> tuple[int, dict[str, Any]]:
         if not config.get("scheduling.spare.enabled"):
             return 409, {
@@ -133,7 +154,14 @@ class Starter:
             row = running[0]
             sid, session = str(row["spare_id"]), str(row["session_ref"])
             tried.append(sid)
-            self._claim(ledger, config, sid, text)
+            try:
+                self._claim(ledger, config, sid, text, command_id)
+            except TswError as exc:
+                # Taken meanwhile (the orchestrator, another page): nothing was written; the
+                # next one is tried. Anything else is answered as it is (PR #95).
+                if exc.details.get("reason") in ("spare_unavailable", "spare_expired"):
+                    continue
+                raise
             outcome = session_inbox.deliver(session, text, sessions_dir)
             if outcome.state == "written":
                 print(f"tsw status: 已在备用会话 {sid} 开始新对话", flush=True)
@@ -157,7 +185,9 @@ class Starter:
             # Nothing was written: the session is gone; it leaves the pool, try the next.
             _lost(ledger, sid, outcome.state)
 
-    def _claim(self, ledger: Ledger, config: EffectiveConfig, sid: str, text: str) -> None:
+    def _claim(
+        self, ledger: Ledger, config: EffectiveConfig, sid: str, text: str, command_id: str
+    ) -> None:
         source = {
             "channel": "status-app",
             "principal": direct.principal(),
@@ -166,7 +196,8 @@ class Starter:
             "target": ["spare", sid, "chat"],
         }
         caller = Caller(role="user", session_id=None, machine=lease.this_machine())
-        run_tool(ledger, config, caller, "spare_claim", {"spare_id": sid, "user_source": source})
+        request = {"spare_id": sid, "user_source": source, "page_command": command_id}
+        run_tool(ledger, config, caller, "spare_claim", request)
 
 
 def _lost(ledger: Ledger, sid: str, why: str) -> None:

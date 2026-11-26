@@ -125,6 +125,17 @@ def ever(conn: sqlite3.Connection) -> bool:
     return conn.execute("SELECT 1 FROM spares LIMIT 1").fetchone() is not None
 
 
+def claimed_by_page(conn: sqlite3.Connection, page_command: str) -> dict[str, Any] | None:
+    """The spare session a Dashboard submission claimed (its page command_id), if any."""
+    return row_dict(
+        conn.execute(
+            "SELECT * FROM spares WHERE status = 'claimed' AND claim_command = ? "
+            "ORDER BY number DESC LIMIT 1",
+            (page_command,),
+        ).fetchone()
+    )
+
+
 def claimed_for(conn: sqlite3.Connection, task_id: str, attempt_id: str) -> dict[str, Any] | None:
     """The spare session claimed for this attempt, if it was one."""
     return row_dict(
@@ -245,6 +256,11 @@ def spare_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     "prompt": output["prompt"],
                     "adapter": adapter,
                     "controller": env.caller.session_id,
+                    # What start_session takes, so a retried call gives the same back (PR #95).
+                    "background": BACKGROUND,
+                    "model": output["model"],
+                    "effort": output["effort"],
+                    "permission_mode": output["permission_mode"],
                 },
             )
         ]
@@ -329,8 +345,11 @@ def spare_close(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     description="认领一个备用会话作为用户的新对话（spare.claimed，Dashboard「新建会话」）",
 )
 def spare_claim(inp: Mapping[str, Any], env: ToolEnv) -> Command:
-    """The Dashboard claims a spare session for a conversation of the user's (DN006 §8.10)."""
+    """The Dashboard claims a spare session for a conversation of the user's (DN006 §8.10).
+    ``page_command`` is the page's own command_id for this submission: kept with the claim so a
+    retry, even after the Dashboard restarted, finds it instead of claiming another (PR #95)."""
     sid = text(inp, "spare_id")
+    page_command = opt_text(inp, "page_command")
     source = inp.get("user_source")
     if not isinstance(source, Mapping):
         raise rejected("需要来源", reason="invalid_input", field="user_source")
@@ -348,6 +367,7 @@ def spare_claim(inp: Mapping[str, Any], env: ToolEnv) -> Command:
                     "as": "chat",
                     "via": str(source.get("channel") or "status-app"),
                     "source": dict(source),
+                    **({"page_command": page_command} if page_command else {}),
                 },
             )
         ]
@@ -464,10 +484,12 @@ def spare_moved(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             "attempt": attempt_id,
             "outcome": outcome,
             "path": str(target) if target is not None else None,
+            # Kept with the event: the orchestrator may read it from its inbox later (PR #95).
+            "start_message": start_message(ctx.home, task_id, attempt_id),
         }
         if detail:
             data["detail"] = detail
-        output["start_message"] = start_message(ctx.home, task_id, attempt_id)
+        output["start_message"] = data["start_message"]
         return [EventDraft(type="spare.moved", task_id=task_id, attempt=attempt_id, data=data)]
 
     output: dict[str, Any] = {}

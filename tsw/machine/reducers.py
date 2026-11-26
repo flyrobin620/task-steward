@@ -1010,8 +1010,8 @@ def spare_claimed(conn: sqlite3.Connection, event: Event) -> None:
     data = event.data
     conn.execute(
         "UPDATE spares SET status = 'claimed', claimed_as = ?, claimed_task = ?, "
-        "claimed_attempt = ?, claim_via = ?, claimed_at = ?, target = ?, target_branch = ? "
-        "WHERE spare_id = ?",
+        "claimed_attempt = ?, claim_via = ?, claimed_at = ?, target = ?, target_branch = ?, "
+        "claim_command = ? WHERE spare_id = ?",
         (
             data["as"],
             data.get("task_id"),
@@ -1020,6 +1020,7 @@ def spare_claimed(conn: sqlite3.Connection, event: Event) -> None:
             event.time,
             data.get("target"),
             data.get("target_branch"),
+            data.get("page_command"),
             data["spare_id"],
         ),
     )

@@ -1169,6 +1169,9 @@ def _claim(  # noqa: PLR0917 - a claim is made of exactly these
         "adapter": str(env.config.get("roles.worker.session")),
         "spare": sid,
         "spare_target": str(target),
+        # What the orchestrator sends: kept with the event so a retried call gives it back.
+        "spare_session": spare_row["session_ref"],
+        "claim_message": _spares.claim_message(task_id, attempt_id, sid, command, target),
         **({"worktree": worktree} if worktree is not None else {}),
         "worker_instructions_sha256": digest,
         "title_base": base,
@@ -1180,7 +1183,7 @@ def _claim(  # noqa: PLR0917 - a claim is made of exactly these
             "spare_id": sid,
             "session_id": spare_row["session_ref"],
             "generation": generation,
-            "claim_message": _spares.claim_message(task_id, attempt_id, sid, command, target),
+            "claim_message": data["claim_message"],
             "target": str(target),
             "title_base": base,
         }

@@ -1719,6 +1719,8 @@ def spare_checks(
     said = " ".join(str(e["data"].get("text") or "") for e in progress)
     norm = said.replace("\\", "/").lower()
     place = worktree.replace("\\", "/").lower()
+    # The worker records Git Bash's pwd (/c/…) on Windows (PR #95).
+    bash_place = bash_path(Path(worktree)).lower()
     chat = [
         e
         for e in evs
@@ -1761,7 +1763,7 @@ def spare_checks(
             moved is not None
             and moved["data"].get("outcome") == "moved"
             and str(moved["data"].get("path") or "").replace("\\", "/").lower() == place
-            and place in norm
+            and (place in norm or bash_place in norm)
             and "tsw/t001-a1" in said,
             {"moved": moved and moved["data"].get("outcome"), "progress": scrub(said[:300], run)},
         ),

@@ -605,3 +605,97 @@ def test_a_retried_dispatch_is_answered_from_the_ledger(
     with pytest.raises(TswError) as refused:
         server.call("task_dispatch", {"task_id": "T002", "user_turn": False, "spare": True})
     assert refused.value.details.get("reason") == "no_spare" and h.status("T002") == "ready"
+
+
+@pytest.mark.use_case(TASK)
+def test_retried_calls_give_back_what_to_send(
+    home: Home, inboxes: Callable[[str], FakeInbox]
+) -> None:
+    """PR #95: a retried call (same command_id) returns the parts the orchestrator acts on, and
+    the move reaches the inbox even when no one was woken."""
+    h = Harness(home, YOUNG)
+    server = Server(home, {SESSION_ENV: "orch-1"}, home.root)
+    made = server.call("spare_start", {"user_turn": True, "command_id": "spare-start-k1"})
+    again = server.call("spare_start", {"user_turn": True, "command_id": "spare-start-k1"})
+    assert again["duplicate"] is True
+    for key in ("prompt", "title", "session_name", "background", "permission_mode", "cwd"):
+        assert again[key] == made[key], key
+    h.run("spare_reconcile", spare_id="S1", outcome="created", session_ref="s-1")
+    inboxes("s-1")
+    h.register("T001")
+    h.plan("T001")
+    server.call("task_dispatch", {"task_id": "T001", "user_turn": False, "spare": True})
+    request = {
+        "task_id": "T001",
+        "purpose": "dispatch",
+        "user_turn": False,
+        "spare": "auto",
+        "command_id": "claim-k1",
+    }
+    first = server.call("attempt_start", request)
+    second = server.call("attempt_start", request)
+    assert second["duplicate"] is True
+    for key in ("spare_id", "session_id", "generation", "claim_message", "target"):
+        assert second[key] == first[key], key
+    h.run(
+        "attempt_reconcile",
+        task_id="T001",
+        attempt="a1",
+        generation=first["generation"],
+        outcome="created",
+        session_ref="s-1",
+        brief_delivered=True,
+    )
+    Path(first["target"]).mkdir(parents=True)
+    worker = Server(home, {SESSION_ENV: "s-1"}, home.root / "spares" / "S1")
+    moved = worker.call("spare_moved", {"outcome": "moved", "command_id": "moved-k1"})
+    retried = worker.call("spare_moved", {"outcome": "moved", "command_id": "moved-k1"})
+    assert retried["duplicate"] is True and retried["start_message"] == moved["start_message"]
+    assert moved["start_message"] in retried["wake"]["message"]
+    # In the orchestrator's inbox until acknowledged, whatever the configuration lists.
+    with h.ledger.view() as conn:
+        listed = inbox_mod.inbox(conn, h.ledger.storage, h.config)
+    found = [i for i in listed if i["type"] == "spare.moved"]
+    assert found and found[0]["data"]["start_message"] == moved["start_message"]
+
+
+@pytest.mark.use_case(CHAT)
+def test_dashboard_retry_after_a_restart_and_a_race(
+    home: Home, inboxes: Callable[[str], FakeInbox], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #95: the submission's command_id is kept with the claim, so a restarted Dashboard does
+    not claim or write again; a spare taken between choosing and claiming is skipped."""
+    h = Harness(home, YOUNG)
+    spare(h, "s-1")
+    spare(h, "s-2")
+    one, two = inboxes("s-1"), inboxes("s-2")
+    app = StatusApp(home, token="t" * 32)
+    app.sessions_dir = session_inbox.sessions_dir()
+    real = app.starter._claim
+    taken: list[str] = []
+
+    def racing(*args: Any) -> None:
+        if not taken:
+            # The orchestrator takes S2 (the newest) just before the Dashboard's claim.
+            taken.append("S2")
+            user = Caller(role="user", session_id=None, machine=MACHINE)
+            source = {
+                "channel": "status-app",
+                "principal": "me",
+                "message_ref": "status-app:race:1",
+                "text": "x",
+                "target": ["spare", "S2", "chat"],
+            }
+            h.run("spare_claim", user, spare_id="S2", user_source=source)
+        real(*args)
+
+    monkeypatch.setattr(app.starter, "_claim", racing)
+    status, out = app.new_session({"text": "看日志", "command_id": "new-session-race1"})
+    assert status == 200 and out["spare_id"] == "S1"
+    assert len(one.wait(1)) == 1 and not two.received
+    # A new Dashboard process (restarted): the same submission is found in the ledger.
+    restarted = StatusApp(home, token="u" * 32)
+    restarted.sessions_dir = session_inbox.sessions_dir()
+    status, again = restarted.new_session({"text": "看日志", "command_id": "new-session-race1"})
+    assert status == 200 and again["duplicate"] is True and again["spare_id"] == "S1"
+    assert len(one.wait(2, timeout=1)) == 1

@@ -506,6 +506,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         ["spare_id", "user_source"],
         spare_id=S,
         user_source={**OBJ, "description": "Dashboard 记录的来源（渠道 status-app）"},
+        page_command={**S, "description": "页面这次提交的 command_id（重试时找回同一次认领）"},
     ),
     "spare_moved": schema(
         ["outcome"],

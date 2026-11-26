@@ -318,6 +318,44 @@ HOST_TOOLS: dict[str, tuple[tuple[str, ...], str, dict[str, Any]]] = {
 }
 
 
+# What a retried call (the same command_id) gives back: the ledger returns the first call's events,
+# not what the tool built around them, so the parts the caller acts on are read from the events
+# (DN002 §5.9, PR #95).
+RESTORED = {
+    "spare_start": (
+        "spare_id",
+        "session_name",
+        "title",
+        "prompt",
+        "background",
+        "model",
+        "effort",
+        "permission_mode",
+    ),
+    "spare_moved": ("start_message",),
+}
+
+
+def _restore_output(name: str, out: dict[str, Any]) -> None:
+    events: list[dict[str, Any]] = list(out.get("events") or [])
+    if not events:
+        return
+    data: dict[str, Any] = dict(events[0].get("data") or {})
+    for key in RESTORED.get(name, ()):
+        if key in data:
+            out.setdefault(key, data[key])
+    if name == "attempt_start" and data.get("spare"):
+        out.setdefault("spare_id", data["spare"])
+        out.setdefault("session_id", data.get("spare_session"))
+        out.setdefault("generation", data.get("generation"))
+        out.setdefault("claim_message", data.get("claim_message"))
+        out.setdefault("target", data.get("spare_target"))
+        out.setdefault("title_base", data.get("title_base"))
+    elif name == "attempt_start" and events[0].get("type") == "attempt.dispatch_abandoned":
+        out.setdefault("abandoned", True)
+        out.setdefault("reason", data.get("reason"))
+
+
 class Server:
     def __init__(self, home: Home, env: Mapping[str, str], cwd: Path) -> None:
         self.home = home
@@ -467,6 +505,8 @@ class Server:
         finally:
             if hint is not None:
                 spares_mod.HOST_RUNNING.reset(hint)
+        if out.get("duplicate"):
+            _restore_output(name, out)
         if who.role == "worker":
             wake = self._wake(out, ledger, usable)
             if name == "spare_moved" and out.get("events"):
@@ -564,13 +604,15 @@ class Server:
                 f"TaskSteward：{task_id} {attempt_id} 的备用会话 {spare} 已建好目录并"
                 f"请求移到 {data.get('path')}（这一轮结束后生效）。等它这一轮结束后，"
                 f"用 SendMessage 把下面这条消息原样发给它（会话 {session}）："
-                f"\n{out.get('start_message')}"
+                f"\n{data.get('start_message')}\n发送后 inbox_ack 这条 spare.moved（事件 "
+                f"{event.get('sequence')}）。"
             )
         else:
             body = (
                 f"TaskSteward：{task_id} {attempt_id} 的备用会话 {spare} 没能建好目录或移动："
                 f"{data.get('detail') or '（没有原文）'}。按 orchestrate skill 处理：停止使用"
-                "它，任务按 T15 处理后留在待启动。"
+                "它，任务按 T15 处理后留在待启动；处理后 inbox_ack 这条 spare.moved（事件 "
+                f"{event.get('sequence')}）。"
             )
         return {"send": True, "session_id": target, "message": body}
 

@@ -705,6 +705,8 @@
       return node;
     };
     function shut() {
+      // Not while a request is in flight: its answer belongs to this opening (PR #95).
+      if (state && state.sending) return;
       if (dialog && dialog.open) dialog.close();
     }
     function build() {
@@ -723,6 +725,10 @@
       dialog.addEventListener("close", () => {
         delete document.documentElement.dataset.docOpen;
         hold();
+      });
+      // Esc while sending would close it under the request (PR #95).
+      dialog.addEventListener("cancel", event => {
+        if (state && state.sending) event.preventDefault();
       });
       dialog.addEventListener("click", event => {
         if (event.target !== dialog) return;
@@ -803,8 +809,9 @@
       return `ns-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     }
     async function post(info, words) {
-      if (!state.command) state.command = commandId();
-      state.sending = true;
+      const mine = state;
+      if (!mine.command) mine.command = commandId();
+      mine.sending = true;
       body.replaceChildren(el("p", "", "正在发送…"));
       let result;
       try {
@@ -813,13 +820,14 @@
           credentials: "same-origin",
           referrerPolicy: "same-origin",
           headers: {"Content-Type": "application/json", "X-TSW-Token": token},
-          body: JSON.stringify({text: words, command_id: state.command}),
+          body: JSON.stringify({text: words, command_id: mine.command}),
         });
         result = await response.json();
       } catch (error) {
         result = {ok: false, state: "unknown", message: String((error && error.message) || error)};
       }
-      state.sending = false;
+      mine.sending = false;
+      if (state !== mine) return;  // the dialog was opened again since: not this answer's
       const close = el("button", "", "关闭");
       close.type = "button";
       close.addEventListener("click", shut);
@@ -838,9 +846,10 @@
         body.replaceChildren(el("p", "note warn", `结果未知：${result.message || ""}`), where, row);
         return;
       }
-      state.command = null;
+      mine.command = null;
       if (result.code === "no_spare" || result.code === "spare_disabled") {
         const fresh = await load();
+        if (state !== mine) return;
         write({...fresh, hint: result.hint || fresh.hint}, words);
         body.prepend(el("p", "note warn", result.message || "没有可用的备用会话"));
         return;
@@ -863,12 +872,15 @@
     }
     button.addEventListener("click", async () => {
       if (!dialog) build();
-      state = {command: null, sending: false};
+      if (state && state.sending) { if (!dialog.open) dialog.showModal(); return; }
+      const mine = {command: null, sending: false};
+      state = mine;
       body.replaceChildren(el("p", "", "正在读取备用会话池…"));
       if (!dialog.open) dialog.showModal();
       document.documentElement.dataset.docOpen = "";
       document.documentElement.dataset.holdRefresh = "";
       const info = await load();
+      if (state !== mine) return;
       const count = button.querySelector(".n");
       if (count) count.textContent = String((info.available || []).length);
       write(info, "");
