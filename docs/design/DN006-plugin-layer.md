@@ -650,7 +650,7 @@ Dashboard 应用：
      | 写入成功 | “✓ 已在 S8 开始新对话”与会话链接（带 `data-workdeck-session`，经 workdeck 时在门户中打开）；会话随后按首条消息改标题（会话给自己改标题已实测可行） |
      | 选中的会话不在运行 | 自动换下一个可用的（DN002 §5.9），全部不在运行时写明“备用会话都不在运行（app 可能重启过）”，与没有可用时相同的提示，保留原话 |
      | 写入时出错 | “结果未知：消息可能已经到达 S8”与会话链接；不自动重试 |
-     | 同一次提交的重试（同一 `command_id`） | 不再认领、不再投递，显示第一次的结果 |
+     | 同一次提交的重试（同一 `command_id`） | 不再认领、不再投递，显示第一次的结果；`command_id` 随认领记在账本中（`spare.claimed` 的 `page_command`），Dashboard 重启后的重试同样找回那次认领 |
 
   4. 接口：`GET /api/spares`（只读：目标大小、可用的备用会话、是否开启）与 `POST /api/sessions/new`（请求体 `{"text", "command_id"}`，`text` 1–4000 个字符）。准入与「验收」按钮相同（回环地址、令牌 cookie、请求头中的页面令牌、`Host` 与 `Origin`）。应用先以 `user` 调用者记录 `spare.claimed`（`as: chat`，渠道 `status-app`，来源 `principal`、`message_ref` 与按钮相同，`text` 为首条消息原文），再写 inbox（与“在 Dashboard 中回答问题”第 4 项同一实现，发送者 `tsw-dashboard`）。会话不能触发它（上方第 2 条）。workdeck 以后为 Claude Code 实现自己的“新建会话”时，经插件代理调用这个接口复用同一个池（DN002 §5.9）。
   5. 首条消息不带任何标记，原样投递：这个会话不是 worker，hook 不记录它的消息。会话的 prompt 要求它先按首条消息改标题再回答。
