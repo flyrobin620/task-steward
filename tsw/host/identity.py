@@ -7,7 +7,11 @@ it is. A session that was ever bound to an attempt keeps that binding: once the 
 replaced or closed the session is ``revoked`` (it may only ask who it is and read), and it never
 falls back to the orchestrator role even if it is opened in the data directory. The session
 bound to the newest routine generation is the routine session (DN006 §8.9); one bound to an older
-generation is revoked. The working directory is a consistency check, never the identity itself.
+generation is revoked. A session of the spare pool (DN002 §5.9) is ``spare`` until it is claimed:
+claimed for a task it is that attempt's worker (its MCP server keeps the spare's folder as its
+working directory after the session moves, so that folder counts as consistent); claimed as the
+user's conversation it is an unrelated session. The working directory is a consistency check,
+never the identity itself.
 """
 
 from __future__ import annotations
@@ -77,7 +81,7 @@ def within(path: Path, root: Path) -> bool:
 
 @dataclass(frozen=True)
 class Identity:
-    role: str  # orchestrator | worker | routine | revoked | none
+    role: str  # orchestrator | worker | routine | spare | revoked | none
     session_id: str | None
     cwd: Path
     task_id: str | None = None
@@ -89,6 +93,8 @@ class Identity:
     cwd_consistent: bool = True
     pending: bool = False  # not bound yet, but started in a starting attempt's directory
     pending_role: str | None = None  # the role a pending session is about to get
+    spare_id: str | None = None  # the spare session this was (DN002 §5.9)
+    claimed_as: str | None = None  # task | chat, once claimed
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -104,6 +110,8 @@ class Identity:
             "cwd_consistent": self.cwd_consistent,
             "pending": self.pending,
             **({"pending_role": self.pending_role} if self.pending_role else {}),
+            **({"spare_id": self.spare_id} if self.spare_id else {}),
+            **({"claimed_as": self.claimed_as} if self.claimed_as else {}),
         }
 
 
@@ -130,7 +138,13 @@ def resolve(conn: sqlite3.Connection, home: Home, env: Mapping[str, str], cwd: P
             roots = [home.root / "work" / str(row["task_id"]) / str(row["attempt"])]
             if row["workdir"]:
                 roots.insert(0, workdir_path(home, str(row["workdir"])))
-            consistent = any(within(cwd, root) for root in roots)
+            # A worker claimed from the spare pool starts in the spare's folder and its MCP
+            # server stays there after the session moves (T363 probes): consistent, not writable.
+            spare = _spare_of(conn, session)
+            places = [*roots]
+            if spare is not None and spare["claimed_as"] == "task":
+                places.append(home.root / str(spare["workdir"]))
+            consistent = any(within(cwd, root) for root in places)
             return Identity(
                 role="worker",
                 session_id=session,
@@ -142,6 +156,8 @@ def resolve(conn: sqlite3.Connection, home: Home, env: Mapping[str, str], cwd: P
                 brief_revision=row["brief_revision"],
                 writable_roots=tuple(roots),
                 cwd_consistent=consistent,
+                spare_id=str(spare["spare_id"]) if spare is not None else None,
+                claimed_as="task" if spare is not None else None,
             )
     if session:
         routine = row_dict(
@@ -170,6 +186,26 @@ def resolve(conn: sqlite3.Connection, home: Home, env: Mapping[str, str], cwd: P
                 phase="live",
                 cwd_consistent=within(cwd, home.root / str(routine["workdir"])),
             )
+    spare = _spare_of(conn, session) if session else None
+    if spare is not None:
+        if spare["status"] == "available":
+            return Identity(
+                role="spare",
+                session_id=session,
+                cwd=cwd,
+                attempt=str(spare["spare_id"]),
+                phase="available",
+                spare_id=str(spare["spare_id"]),
+            )
+        # Claimed as the user's conversation, or out of the pool: an unrelated session.
+        return Identity(
+            role="none",
+            session_id=session,
+            cwd=cwd,
+            phase=str(spare["status"]),
+            spare_id=str(spare["spare_id"]),
+            claimed_as=spare["claimed_as"],
+        )
     if session and _norm(cwd) == _norm(home.root):
         return Identity(role="orchestrator", session_id=session, cwd=cwd)
     starting = _awaiting_routine(conn, home, cwd) if session else None
@@ -182,6 +218,18 @@ def resolve(conn: sqlite3.Connection, home: Home, env: Mapping[str, str], cwd: P
             phase="starting",
             pending=True,
             pending_role="routine",
+        )
+    making = _awaiting_spare(conn, home, cwd) if session else None
+    if making is not None:
+        return Identity(
+            role="none",
+            session_id=session,
+            cwd=cwd,
+            attempt=str(making["spare_id"]),
+            phase="starting",
+            pending=True,
+            pending_role="spare",
+            spare_id=str(making["spare_id"]),
         )
     pending = _awaiting_session(conn, home, cwd) if session else None
     if pending is not None:
@@ -196,6 +244,32 @@ def resolve(conn: sqlite3.Connection, home: Home, env: Mapping[str, str], cwd: P
             pending_role="worker",
         )
     return Identity(role="none", session_id=session, cwd=cwd)
+
+
+def _spare_of(conn: sqlite3.Connection, session: str) -> dict[str, Any] | None:
+    """The spare-pool record of this session (DN002 §5.9), if it was one."""
+    try:
+        found = conn.execute(
+            "SELECT * FROM spares WHERE session_ref = ? ORDER BY number DESC LIMIT 1", (session,)
+        ).fetchone()
+    except sqlite3.OperationalError:  # a projection from before the pool
+        return None
+    return row_dict(found)
+
+
+def _awaiting_spare(conn: sqlite3.Connection, home: Home, cwd: Path) -> dict[str, Any] | None:
+    """The spare session being created in ``cwd`` (its own folder under ``spares/``)."""
+    try:
+        rows = conn.execute(
+            "SELECT * FROM spares WHERE status = 'starting' AND session_ref IS NULL"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return None
+    for row in rows:
+        found = row_dict(row)
+        if found is not None and within(cwd, home.root / str(found["workdir"])):
+            return found
+    return None
 
 
 def _awaiting_routine(conn: sqlite3.Connection, home: Home, cwd: Path) -> dict[str, Any] | None:

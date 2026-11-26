@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from tsw.commands import Command, CommitContext
@@ -19,6 +20,7 @@ from tsw.home import Home, same_dir, workdir_path
 from tsw.importer.resume import resume_package
 from tsw.machine import guards
 from tsw.machine import session_titles as _titles
+from tsw.machine import spares as _spares
 from tsw.machine.base import (
     ToolEnv,
     flag,
@@ -53,6 +55,7 @@ from tsw.workspace import (
     ensure,
     home_skills,
     plan,
+    spare_command,
 )
 
 
@@ -553,6 +556,7 @@ def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
     workdir: str,
     read_set: list[str],
     config: EffectiveConfig,
+    spare: tuple[str, str] | None = None,
 ) -> str:
     acceptance = "\n".join(f"- {item}" for item in loads(row["acceptance"], []))
     tasks = [name for name in read_set if not is_ref(name)]
@@ -565,10 +569,13 @@ def _brief(  # noqa: PLR0917 - the brief is rendered from exactly these inputs
             home_skills(ctx.home) if ws.worktree else [],
             workdir,
             gh_skill=gh_skill if gh_skill.is_file() else None,
+            spare=spare,
         )
         if ws
         else ""
     )
+    if spare is not None and not ws:
+        repository = _spare_section(spare)
     return (
         f"# 任务书 {row['task_id']} {attempt_id}\n\n"
         f"- 标题：{row['title']}\n- 仓库：{row['repo']}\n- revision：{row['revision']}\n"
@@ -837,8 +844,22 @@ def _ensure_dir(home: Home, recorded: str) -> None:
         ) from exc
 
 
+def _spare_section(spare: tuple[str, str]) -> str:
+    """The brief's line on where a claimed spare session works (DN002 §5.9), no repository."""
+    sid, target = spare
+    return (
+        "## 会话目录\n\n"
+        f"- 会话目录：`{target}`：本任务由备用会话 {sid} 认领，会话自己建好这个目录后移到这里"
+        "（DN002 §5.9）。报告草稿与其他产物写在执行目录（会话目录的上级）。\n\n"
+    )
+
+
 def _sync_dispatched_brief(
-    ctx: CommitContext, config: EffectiveConfig, row: Mapping[str, Any], current: Mapping[str, Any]
+    ctx: CommitContext,
+    config: EffectiveConfig,
+    row: Mapping[str, Any],
+    current: Mapping[str, Any],
+    spare: tuple[str, str] | None = None,
 ) -> None:
     """Bring the brief task_dispatch wrote up to the worktree the session is about to start in.
 
@@ -853,7 +874,7 @@ def _sync_dispatched_brief(
     attempt_id = str(current["attempt"])
     workdir = str(current["workdir"] or f"work/{row['task_id']}/{attempt_id}")
     read_set = [str(n) for n in loads(current["read_set"], [])]
-    brief = _brief(ctx, row, attempt_id, workdir, read_set, config)
+    brief = _brief(ctx, row, attempt_id, workdir, read_set, config, spare=spare)
     try:
         old = ctx.storage.read_artifact(str(path)).decode("utf-8")
     except OSError:
@@ -876,6 +897,7 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     user_turn = flag(inp, "user_turn")
     given_workdir = workdir_input(inp)  # where the session is created
     given_title = opt_text(inp, "session_title")  # the main session's short title (DN002 §5.8)
+    spare = opt_text(inp, "spare")  # claim this spare session instead of creating one (§5.9)
     if purpose not in ("dispatch", "prestart"):
         raise rejected(
             "purpose 必须是 dispatch 或 prestart", reason="invalid_input", field="purpose"
@@ -883,6 +905,8 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
 
     def build(ctx: CommitContext) -> list[EventDraft]:
         row = task(ctx.conn, task_id)
+        if spare:
+            return _claim_spare(ctx, env, row, spare, user_turn, given_title, output)
         guards.g_window(env.config, user_turn)
         current = current_attempt(ctx.conn, task_id)
         if purpose == "dispatch":
@@ -996,6 +1020,120 @@ def attempt_start(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     return command
 
 
+def _claim_spare(  # noqa: PLR0917 - a claim is made of exactly these
+    ctx: CommitContext,
+    env: ToolEnv,
+    row: dict[str, Any],
+    spare: str,
+    user_turn: bool,
+    given_title: str | None,
+    output: dict[str, Any],
+) -> list[EventDraft]:
+    """``attempt_start`` with ``spare``: a dispatch that claims a spare session (DN002 §5.9).
+
+    No session is created, so the turn need not be the user's (G-WINDOW does not apply); in the
+    user's own turn the orchestrator creates the session instead and a spare is refused. The
+    worktree (or the session's folder) is planned but not made: the session makes it and moves
+    there, the only move the host allows outside the user's turn (T363 probes).
+    """
+    task_id = str(row["task_id"])
+    if user_turn:
+        raise rejected("用户本人的 turn 中直接新建会话，不用备用会话", reason="spare_in_user_turn")
+    if not env.config.get("scheduling.spare.enabled"):
+        raise rejected("配置关闭了备用会话池（scheduling.spare.enabled）", reason="spare_disabled")
+    require_status(row, "dispatching")
+    current = current_attempt(ctx.conn, task_id)
+    if current is None or current["phase"] != "planned":
+        raise rejected("派发中的 attempt 必须处于 planned", reason="invalid_attempt")
+    attempt_id = str(current["attempt"])
+    guards.g_one_attempt(ctx.conn, task_id, allowed=None)
+    # The claimed session gets the worker instructions from the copy (its prompt has none): the
+    # copy must be there and current, as for a created session (DN006 §6.2).
+    _, digest = worker_instructions(ctx.home.root)
+    sid = spare
+    if sid == "auto":
+        free = _spares.available(ctx.conn)
+        if not free:
+            raise rejected("没有可用的备用会话", reason="no_spare")
+        sid = str(free[0]["spare_id"])
+    workdir = str(current["workdir"] or f"work/{task_id}/{attempt_id}")
+    base_dir = workdir_path(ctx.home, workdir)
+    if not _within_work(ctx.home, base_dir):
+        raise rejected(
+            "执行目录不在数据目录的 work/ 之下，不能用备用会话",
+            reason="spare_dir_mismatch",
+            workdir=workdir,
+        )
+    ws = _plan(ctx, env.config, row, attempt_id, workdir)
+    if ws is not None and ws.taken_over:
+        raise rejected(
+            "接手原执行目录的 worktree 不能用备用会话（会话只能移到自己建的目录）",
+            reason="spare_dir_exists",
+            taken_over=ws.taken_over,
+        )
+    branch: str | None = None
+    worktree: dict[str, Any] | None = None
+    if ws is not None and ws.worktree is not None:
+        command, worktree = spare_command(ws)
+        target = ws.worktree
+        branch = ws.branch
+    else:
+        target = base_dir / sid
+        if target.exists():
+            raise rejected(
+                "会话目录已存在：备用会话只能移到自己建的目录",
+                reason="spare_dir_exists",
+                path=str(target),
+            )
+        command = 'mkdir -p "' + str(target).replace("\\", "/") + '"'
+    spare_row, claim = _spares.task_claim(ctx.conn, sid, task_id, attempt_id, target, branch)
+    _sync_dispatched_brief(ctx, env.config, row, current, spare=(sid, str(target)))
+    previous = attempt(ctx.conn, task_id, attempt_id)
+    generation = (int(previous["generation"]) if previous else 0) + 1
+    base = _titles.base_title(task_id, str(row["title"]), given_title)
+    data: dict[str, Any] = {
+        "attempt": attempt_id,
+        "generation": generation,
+        "session_name": spare_row["session_name"],
+        "purpose": "dispatch",
+        "controller": env.caller.session_id,
+        "adapter": str(env.config.get("roles.worker.session")),
+        "spare": sid,
+        "spare_target": str(target),
+        **({"worktree": worktree} if worktree is not None else {}),
+        "worker_instructions_sha256": digest,
+        "title_base": base,
+        # The session keeps the spare's title until the main session renames it (§5.8).
+        "session_title": spare_row["title"],
+    }
+    output.update(
+        {
+            "spare_id": sid,
+            "session_id": spare_row["session_ref"],
+            "generation": generation,
+            "claim_message": _spares.claim_message(task_id, attempt_id, sid, command, target),
+            "target": str(target),
+            "title_base": base,
+        }
+    )
+    return [
+        EventDraft(
+            type="attempt.start_requested",
+            task_id=task_id,
+            revision=int(row["revision"]),
+            attempt=attempt_id,
+            data=data,
+        ),
+        claim,
+    ]
+
+
+def _within_work(home: Home, path: Path) -> bool:
+    root = os.path.normcase(os.path.realpath(home.root / "work"))
+    here = os.path.normcase(os.path.realpath(path))
+    return here == root or here.startswith(root.rstrip("\\/") + os.sep)
+
+
 @tool("attempt_reconcile", "orchestrator", description="会话创建结果对账（T08 / T09 / 迟到会话）")
 def attempt_reconcile(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     task_id = text(inp, "task_id")
@@ -1038,8 +1176,25 @@ def attempt_reconcile(inp: Mapping[str, Any], env: ToolEnv) -> Command:
             ]
         if found["phase"] != "starting" or not current_gen:
             raise rejected("只能对当前有效代次的 starting 阶段对账", reason="invalid_attempt")
+        # An attempt claiming a spare session binds that session and no other (DN002 §5.9).
+        claimed = _spares.claimed_for(ctx.conn, task_id, attempt_id)
+        if claimed is not None and outcome == "created" and session_ref != claimed["session_ref"]:
+            raise rejected(
+                "认领的是备用会话：session_ref 必须是它的会话 ID",
+                reason="spare_session_mismatch",
+                session_ref=claimed["session_ref"],
+            )
         if outcome == "not_created":
-            drafts = [
+            drafts = []
+            if claimed is not None and claimed["status"] == "claimed":
+                # The spare session could not be reached: it leaves the pool (§5.9 step 6).
+                drafts.append(
+                    EventDraft(
+                        type="spare.lost",
+                        data={"spare_id": claimed["spare_id"], "reason": "not_reached"},
+                    )
+                )
+            drafts += [
                 EventDraft(
                     type="attempt.not_created",
                     task_id=task_id,

@@ -14,7 +14,12 @@ session                        text                       link
 ``leases.holder_session``      ``orchestrator``           ``/`` (the board)
 ``routine_sessions.session_    ``routine g<generation>``  none
 ref``
+``spares.session_ref``         ``spare S<n>`` (waiting)   none
+                               or ``chat S<n>``
 =============================  =========================  ===================
+
+The spare pool's sessions (DN002 §5.9, T363) are labelled while they wait and once the user
+claimed one as a conversation; one claimed for a task is labelled as that attempt's worker.
 
 ``title`` is what the portal showed as the annotator label's tooltip: its ``detail``, one
 ``key: value`` per line. Reading is all this does; nothing is written to the ledger.
@@ -110,6 +115,17 @@ def all_labels(conn: sqlite3.Connection) -> dict[str, list[Label]]:
         generation = row["generation"]
         detail = (("role", "routine"), ("generation", generation), ("phase", row["status"]))
         add(row["session_ref"], _label(f"routine g{generation}", _title(detail), None))
+    for row in conn.execute(
+        "SELECT spare_id, status, claimed_as, session_ref FROM spares "
+        "WHERE session_ref IS NOT NULL AND (status = 'available' OR claimed_as = 'chat') "
+        "ORDER BY number"
+    ):
+        sid = str(row["spare_id"])
+        chat = row["claimed_as"] == "chat"
+        detail = (("role", "chat" if chat else "spare"), ("spare", sid), ("state", row["status"]))
+        add(
+            row["session_ref"], _label(f"{'chat' if chat else 'spare'} {sid}", _title(detail), None)
+        )
     return out
 
 
