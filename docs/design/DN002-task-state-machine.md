@@ -457,27 +457,28 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 
 用户 2026-11-26 要求（T363）：“tsw准备空session备用，dashboard可以起新session，workdeck进来的对话如果要起新session就用这些备用session，平时app里对话不用”；目标工作流是“workdeck可以创建session，可以跟session对话，全程不需要我登录devbox”（M-T360-9）。
 
-起因：Claude 桌面 app 只在用户亲手输入的一轮中允许 `start_session`（G-WINDOW，CC001 §4）。由 workdeck 消息开始的一轮里 `start_session` 与 `change_directory` 都被拒绝（T360 E-C3、E-C4），所以用户只在手机上经 workdeck 与主会话对话时，需要新会话的任务停在“待启动”（§9）。预启动（§5.6）只为已登记的任务备好会话。**备用会话**不绑定任务：在用户亲手输入的一轮中预先建好，之后在不能新建会话的场合被认领，派给一个任务当 worker，或作为用户的新对话。
+起因：Claude 桌面 app 只在用户亲手输入的一轮中允许 `start_session`（G-WINDOW，CC001 §4），由 workdeck 消息开始的一轮里 `start_session` 被拒绝（T360 E-C4），所以用户只在手机上经 workdeck 与主会话对话时，需要新会话的任务停在“待启动”（§9）。预启动（§5.6）只为已登记的任务备好会话。**备用会话**不绑定任务：在用户亲手输入的一轮中预先建好，在自己的空目录中等待；之后在不能新建会话的场合被认领，移到任务的目录当 worker，或作为用户的新对话。
 
 **备用会话与待命会话**
 
 | | 待命会话（§5.6） | 备用会话（本节） |
 | --- | --- | --- |
 | 绑定 | 建时绑定一个任务的 attempt | 不绑定，认领时才决定用途 |
-| 会话目录 | 该 attempt 的执行目录或仓库 worktree | 执行目录的根 `work/`（见下文“目录”） |
+| 会话目录 | 该 attempt 的执行目录或仓库 worktree | 等待时为自己的空目录 `spares/S<n>`；派给任务时由它自己建好任务的 worktree 或执行目录，再移过去 |
 | 补充 | 用户的 turn 中，为 `needs_prestart` 中的任务 | 用户的 turn 中，补到 `scheduling.spare.count` 个 |
 | 使用 | 派发时投递任务书 | 不能新建会话的一轮中派发任务；Dashboard「新建会话」；用户在 workdeck 中直接给它发消息 |
 | 标题 | `[待命] <基准>` | `[备用] S<n>` |
 
-**目录：执行目录的根**
+**目录：在空目录中等待，认领时移过去**
 
-备用会话建在执行目录的根：`worktrees.work_dir` 模式中第一个占位符之前的目录（默认模式 `work/{task_id}/{attempt}`，根为数据目录的 `work/`）。
+- 等待：每个备用会话建在数据目录下自己的空目录 `spares/S<n>/` 中（`spare_start` 创建）。一个会话一个目录：app 不移动与另一个会话共用目录的会话（T360 静态分析）。`spares/` 在已信任的数据目录之下、不是 git 仓库，建会话时不弹信任确认（CC001 §3）。
+- 移动：app 的 `change_directory` 能把已有的会话移到另一个目录。移过去后，那个目录的项目设置（权限规则、hooks）、项目 MCP、项目 skill 与 `CLAUDE.md`、`CLAUDE.local.md` 都从新目录读取，与在那里新建的会话相同（T363 实测，CC001 §3.1）。在非用户的一轮中，auto 模式只放行移到**本会话自己**用 `git worktree add` 或 `mkdir` 建出的目录，移到别人建的目录被拒（T363 实测；T360 E-C3）。所以派给任务时，由备用会话自己建任务的 worktree（仓库任务）或执行目录（其他任务），再移过去；tsw 给出要运行的命令与路径，不预先建这个目录。不需要改用户设置。
+- 生效时机：移动在这一轮结束、会话空闲（没有排队的消息）之后才生效，紧跟着排队的消息仍在原目录运行（T363 实测）。所以派给任务分两轮：第一轮建目录、移动并通知主会话；第二轮由主会话的“开始”消息开始，这时会话已在任务目录中，与新建的 worker 会话没有区别。
+- 执行目录照旧：执行目录（`work/<任务>/<attempt>`）、worktree 的分支与基线、任务书、报告草稿与可写路径都与新建会话时相同（CC006 §8.3）。
+- 不能用备用会话的情形：要进入的目录已经存在（接手原 attempt 的执行目录，§5.5；或主会话给出的 `workdir` 已存在），会话不能移到不是它自己建的目录（拒绝，`spare_dir_exists`）。这时任务留在“待启动”，等用户的 turn 新建会话，或主会话给出新的执行目录（不接手原现场）。
+- 作为对话时不移动：会话留在自己的空目录中；用户要它在某个仓库中工作时，它同样可以自己建 worktree 再移过去。
 
-- 理由：补充时还不知道它将来用于哪个任务，事后又不能移动（`change_directory` 在非用户的一轮中被拒，T360 E-C3），而每个任务的执行目录与 worktree 都在这个根之下。执行目录是会话工作目录的子目录：编辑文件不越出工作目录，`cd` 到子目录后保持；`work/` 在已信任的数据目录之下、本身不是 git 仓库，建会话时不弹信任确认（CC001 §3）。
-- 代价：仓库的项目设置（`.claude/settings.json` 中的 hooks、权限规则、`enabledPlugins`）、`.mcp.json` 与项目插件只从会话目录（及其上级）读取（CC006 §8.1），在备用会话中不生效；仓库的 `CLAUDE.md` 与项目 skill 在第一次读写其中文件时加载。tsw 的 MCP 与 hooks 来自用户级插件，照常可用。所以只在不能新建会话时用备用会话，用户的 turn 中照旧在 worktree 中新建会话。任务书为备用会话写明会话目录与 worktree 的路径，要求先 `cd` 到 worktree 再工作，并列出该仓库中存在、但在备用会话中不生效的项目设置文件（没有时不写）。
-- 执行目录照旧：认领时 `attempt_start` 照常准备执行目录与 worktree（CC006 §8.3，含接手原执行目录），任务书、报告草稿与可写路径都与新建会话时相同。执行目录不在根之下时（主会话给出了别处的 `workdir`）不能用备用会话（拒绝，`spare_dir_mismatch`）。
-
-其他做法（按仓库预建、认领时移动目录、计划任务启动器）见附录 E。
+其他做法（建在执行目录的根、按仓库预建、加允许规则、计划任务启动器）见附录 E。
 
 **认领后的身份与可写路径**
 
@@ -485,7 +486,7 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 | --- | --- | --- | --- |
 | 建立中 | `none`，`pending: true`，`pending_role: spare` | 无 | 不注入 |
 | 未认领 | `spare`（附编号） | 无：编辑类工具与命令被拒绝，只能 `whoami` 与只读 | SessionStart 提示“备用会话，等第一条消息” |
-| 派给任务 | `worker`（该 attempt） | 与新建会话的 worker 相同：执行目录（含 worktree）与 `work/<任务>/<attempt>` | 照常。会话目录是根而不是执行目录：会话目录等于这个备用会话的目录时也算一致（`cwd_consistent`），写入仍只限可写路径 |
+| 派给任务 | `worker`（该 attempt） | 与新建会话的 worker 相同：执行目录（含 worktree）与 `work/<任务>/<attempt>` | 照常。tsw 的 MCP server 不随移动重启，它的目录仍是 `spares/S<n>`（T363 实测）：身份按会话 ID 识别，不受影响；目录一致性（`cwd_consistent`）对这样的 attempt 也接受它的备用目录。移动之前的第一轮里会话还在备用目录，写入照样只限可写路径 |
 | 用户的对话 | `none`（附编号与 `claimed_as: chat`） | tsw 不限制（与用户自己打开的会话相同；`ledger/` 等 tsw 管理的目录照旧拒绝） | 不记录消息，不按角色注入 |
 
 一个备用会话只认领一次：派给任务后按 attempt 的规则（§5.5、§5.8）走到底；作为对话之后就是用户的普通会话，tsw 不再派它做任务，也不归档它。
@@ -494,8 +495,8 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 
 - 池的目标大小 `scheduling.spare.count`（默认 2）。`scheduling.spare.enabled`（默认 `true`）为 `false` 时不补充，可用的备用会话随即退役（见下文“过期与回收”）。
 - `attention` 的 `spares` 给出：目标大小、可用的备用会话（编号、会话、建立时间、是否在运行）、要补充的个数（`needs`）与要退役的会话（`retire`）。
-- 每个用户的 turn 结束前，主会话在预启动之后补到目标大小：`spare_start`（`user_turn: true`）记录 `spare.start_requested`（编号 `S<n>` 递增，会话名 `spare-s<n>`，目录，标题，prompt），再 `start_session`（`roles.worker` 的模型、强度与权限模式，`cwd` 为根，`use_worktree: false`，`name` 与 `title` 用返回值），之后 `spare_reconcile`（`created` 与会话 ID，或 `not_created`）。结果未知时按会话名对账，不再次创建（与 §5.4 相同）。主会话的 Stop hook 在用户的 turn 结束前 `needs` 不为 0 时提醒一次（与 `needs_prestart` 合在同一条提示里）；非用户的一轮不提醒。
-- 备用会话的 prompt 由 tsw 生成：它是 TaskSteward 的备用会话 S<n>；现在只回复“备用会话就绪”，然后结束这一轮；之后的第一条消息决定用途：主会话发来的、以 `[TaskSteward 派发]` 开头的消息派它做任务（先完整阅读数据目录的 `roles/worker.md`，再按消息执行）；其他消息就是用户要和它对话：先用 `set_session_title` 把本会话的标题改成这条消息的简短概括（至多 30 字），再照常回答。worker 说明不放进备用会话的 prompt（会话可能永远不当 worker）；派发后 worker 的 hook 发现会话没有附上说明，照常提示完整重读副本（CC001 §6）。
+- 每个用户的 turn 结束前，主会话在预启动之后补到目标大小：`spare_start`（`user_turn: true`）创建空目录 `spares/S<n>`，记录 `spare.start_requested`（编号 `S<n>` 递增，会话名 `spare-s<n>`，目录，标题，prompt），再 `start_session`（`roles.worker` 的模型、强度与权限模式，`cwd` 为该目录，`use_worktree: false`，`name` 与 `title` 用返回值），之后 `spare_reconcile`（`created` 与会话 ID，或 `not_created`）。结果未知时按会话名对账，不再次创建（与 §5.4 相同）。主会话的 Stop hook 在用户的 turn 结束前 `needs` 不为 0 时提醒一次（与 `needs_prestart` 合在同一条提示里）；非用户的一轮不提醒。
+- 备用会话的 prompt 由 tsw 生成：它是 TaskSteward 的备用会话 S<n>；现在只回复“备用会话就绪”，然后结束这一轮；之后的第一条消息决定用途：主会话发来的、以 `[TaskSteward 派发]` 开头的消息派它做任务，照消息做；其他消息就是用户要和它对话：先用 `set_session_title` 把本会话的标题改成这条消息的简短概括（至多 30 字），再照常回答（会话给自己改标题已实测可行）。worker 说明不放进备用会话的 prompt（会话可能永远不当 worker）；派发后 worker 的 hook 发现会话没有附上说明，照常提示完整重读副本（CC001 §6）。
 
 **何时使用：只在不能新建会话的一轮与 Dashboard**
 
@@ -509,10 +510,12 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 派给任务（主会话，在任何一轮都可以：不创建会话，所以不受 G-WINDOW 约束）：
 
 1. `task_dispatch` 照常（T07）。
-2. `attempt_start`（`purpose: dispatch`，`user_turn: false`，`spare: "auto"` 或指定编号）：tsw 选一个可用的备用会话（在运行的、最新建立的优先），照常准备执行目录与 worktree、写任务书，在同一批事件中记录 `attempt.start_requested`（带 `spare`，会话名为该会话的会话名）与 `spare.claimed`（`as: task`，任务与 attempt）。返回该会话的 ID、认领消息与基准标题。没有可用的备用会话时拒绝（`no_spare`），不记录事件。
-3. 主会话 `attempt_reconcile`（`outcome: created`，`session_ref` 为该会话，`brief_delivered: true`）完成绑定（T08），再用 `SendMessage` 发认领消息：“[TaskSteward 派发] 你是任务 <任务> 的 worker（attempt <attempt>）。先完整阅读 <数据目录>/roles/worker.md，再调用 whoami，按任务书 runs/<任务>/<attempt>/brief.md 执行。”先绑定再发消息，所以会话收到消息时 `whoami` 已是 worker。
-4. 发送失败（会话已不在）：按 §9“worker 子会话被归档或删除”处理（T15），同时记 `spare.lost`；再派发时可以认领下一个。
-5. 标题：`attempt.start_requested` 记下的创建时标题是备用会话的标题 `[备用] S<n>`，应有的标题是基准标题，§5.8 的 `attention.sessions` 随即列出改名，主会话同一轮执行（用户改过备用会话标题的照旧不动）。
+2. `attempt_start`（`purpose: dispatch`，`user_turn: false`，`spare: "auto"` 或指定编号）：tsw 选一个可用的备用会话（在运行的、最新建立的优先），核对要进入的目录还不存在，按 CC006 §8.3 算出 worktree 的路径、分支与基线（先 `git fetch`；不建 worktree，也不建执行目录），写任务书，在同一批事件中记录 `attempt.start_requested`（带 `spare`、会话名为该会话的会话名、要由会话建的目录与命令）与 `spare.claimed`（`as: task`，任务与 attempt）。返回该会话的 ID、认领消息与基准标题。没有可用的备用会话时拒绝（`no_spare`），不记录事件。
+3. 主会话 `attempt_reconcile`（`outcome: created`，`session_ref` 为该会话，`brief_delivered: true`）完成绑定（T08），再用 `SendMessage` 发认领消息（tsw 生成，原样发送）：“[TaskSteward 派发] 你是任务 <任务> 的 worker（attempt <attempt>）。这一轮只做三步：① 运行 `git -C <检出> worktree add <路径> -b <分支> <基线>`（其他任务为 `mkdir -p <执行目录>`）；② 调用 `change_directory` 移到 <路径>；③ 调用 tsw 的 `spare_moved`，按返回的 `wake` 给主会话发消息，然后结束这一轮。下一条消息开始时你已在任务目录中：先完整阅读 <数据目录>/roles/worker.md，再调用 whoami，按任务书 runs/<任务>/<attempt>/brief.md 执行。”先绑定再发消息，所以会话收到消息时 `whoami` 已是 worker。
+4. `spare_moved`（worker）核对目录已建好（仓库任务：是所配置仓库的 worktree、在给定的分支上），记录 `spare.moved`，返回唤醒主会话的 `wake`；第 ① 或 ② 步失败或被拒时带 `outcome: failed` 与原文，同样唤醒主会话。
+5. 主会话收到后发“开始”消息：“[TaskSteward] 开始：按任务书 runs/<任务>/<attempt>/brief.md 执行。”。这时会话已空闲、移动已生效。万一消息在移动生效之前到达（会话目录仍是备用目录），worker 的 UserPromptSubmit hook 提示“目录还没移过去：直接结束这一轮，再调用 `spare_moved`”，主会话收到后再发一次。
+6. 失败：第 ①、② 步失败或会话已不在（发送失败）时，按 §9“worker 子会话被归档或删除”处理（T15），同时记 `spare.lost`（会话不在时）；已建出的 worktree 留在执行目录中，之后的 attempt 按 §5.5 接手（由用户的 turn 新建会话）。
+7. 标题：`attempt.start_requested` 记下的创建时标题是备用会话的标题 `[备用] S<n>`，应有的标题是基准标题，§5.8 的 `attention.sessions` 随即列出改名，主会话同一轮执行（用户改过备用会话标题的照旧不动）。
 
 作为用户的对话（Dashboard「新建会话」，界面见 DN006 §8.10）：
 
@@ -526,6 +529,7 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 
 - 退役（`attention.spares.retire`）：可用的备用会话不在运行（宿主的会话登记中找不到它，例如 app 重启过，CC001 §5），或建立已超过 `scheduling.spare.max_age_hours`（默认 24：长时间空闲后能否投递只验证过约 30 分钟，T360；产品更新后旧会话仍运行旧版本的 tsw MCP），或超出目标大小、池已关闭。主会话在任何一轮归档它们（`archive_session` 不需要用户的 turn，§5.8），记 `spare.closed`（附工具回执）；下一个用户的 turn 再补充。
 - 宿主拒绝归档（例如会话正显示在屏幕上）时记 `spare.closed` 的失败回执（`outcome: failed`），不再提醒，之后不再认领它。
+- 退役后它的空目录 `spares/S<n>` 由 `spare_close` 删除（目录不空时保留并在结果中说明）；派给任务的会话移走后，空目录同样删除。
 - 未认领的备用会话被用户在侧栏归档或删除：退役检查发现它不在运行，归档时宿主报告不存在，记 `spare.closed`（原因 `missing`）。
 - 派给任务的会话按 attempt 的规则改名与归档（§5.8）；作为对话的会话由用户自己处置，tsw 不改名（会话自己按首条消息改）、不归档。
 
@@ -535,7 +539,7 @@ worker 在任务被用户验收之后不能再记录：hook 在 `accepted` / `ca
 - Dashboard：页头「新建会话」按钮带可用数，对话框列出池的状态（DN006 §8.10）。静态 `views/STATUS.html` 没有这个按钮。
 - workdeck 的会话标签（DN006 §8.10“会话标签端点”）：未认领的备用会话为 `spare S<n>`，作为对话的为 `chat S<n>`；派给任务的按 worker 标注。
 
-**事件**（不属于任何任务，不改变任务状态，与例行会话的事件一样记在账本中）：`spare.start_requested`、`spare.created`、`spare.not_created`、`spare.claimed`（`as: task | chat`，任务与 attempt，或来源）、`spare.lost`、`spare.closed`。派给任务时任务一侧照常是 `attempt.start_requested`（带 `spare`）与 `attempt.bound`。
+**事件**（不属于任何任务，不改变任务状态，与例行会话的事件一样记在账本中）：`spare.start_requested`、`spare.created`、`spare.not_created`、`spare.claimed`（`as: task | chat`，任务与 attempt，或来源）、`spare.moved`（派给任务的会话已移到任务目录，或移动失败）、`spare.lost`、`spare.closed`。派给任务时任务一侧照常是 `attempt.start_requested`（带 `spare`）与 `attempt.bound`。
 
 **与 T362、F-T360-2 的关系**
 
@@ -573,7 +577,7 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 | follow-up（§5.7） | `follow_up.recorded` `follow_up.updated` `follow_up.converted` `follow_up.dismissed`；不改变任务状态 |
 | 导入 | `import.started` `import.task_imported` `import.completed` `task.renumbered`（导入前给编号冲突的已结束本地任务改号，DN005 §4.4） |
 | 通知 | `notify.enqueued` `notify.sent` `notify.receipt` |
-| 备用会话（§5.9） | `spare.start_requested` `spare.created` `spare.not_created` `spare.claimed` `spare.lost` `spare.closed`；不属于任何任务，不改变任务状态 |
+| 备用会话（§5.9） | `spare.start_requested` `spare.created` `spare.not_created` `spare.claimed` `spare.moved` `spare.lost` `spare.closed`；不属于任何任务，不改变任务状态 |
 | 配置 / 维护 | `config.changed`（DN003 §7） `maintenance.performed`（DN006 §9.7）；不属于任何任务，不改变任务状态 |
 
 集成事件只记录 `verifying` 内部的进展，不改变任务状态；冲突交给 worker 时经 T17。
@@ -646,12 +650,12 @@ attempt 是一次执行尝试 `Txxx-aN`，绑定一个子会话和一个执行�
 
 ## 附录 E：备用会话目录的备选方案（T363，存档）
 
-§5.9 采用方案 A：备用会话建在执行目录的根 `work/`。
+§5.9 采用方案 A：备用会话在自己的空目录中等待，派给任务时自己建好任务目录再 `change_directory` 过去（用户 2026-11-26：“备用的时候在一个空的不用的folder下面，被assign taskid和repo以后再改”，T363 实测后采用）。
 
 | 方案 | 内容 | 未采用的原因 |
 | --- | --- | --- |
-| A（采用） | 建在执行目录的根；认领后执行目录是会话工作目录的子目录，worker 先 `cd` 到 worktree | — |
-| B | 按仓库预建：补充时为常用仓库各建一个 worktree 作为“槽”，会话建在槽中；认领时把槽改成该任务的执行目录（在槽中切到任务分支） | 仓库的项目设置能生效，但要事先知道哪些仓库会用到、每个仓库各备几个；执行目录不再是 `work/<任务>/<attempt>`，接手原执行目录（§5.5）与之冲突；不是仓库任务与用户的对话还要另一种槽 |
-| C | 建在任意目录，认领时 `change_directory` 到执行目录 | 非用户的一轮中被 auto 模式分类器拒绝（T360 E-C3），app 也只允许移动不在 worktree、不共享目录的会话；要为它加允许规则或用 bypass |
-| D | 不备会话，用计划任务启动器在需要时新建（T334） | 用户 2026-11-22 决定不采用（CC001 §7.1）：会话只能在建启动器时的目录中工作，不在普通会话列表中 |
-| E | 备用会话建在数据目录之外的固定池目录，认领后用绝对路径进入执行目录 | 执行目录不在会话的工作目录之下：`cd` 不保持，编辑执行目录中的文件越出工作目录 |
+| A（采用） | 在自己的空目录中等待；认领时会话自己 `git worktree add` / `mkdir` 出任务目录，再 `change_directory` 过去 | — |
+| B | 建在执行目录的根 `work/`，认领后 worker `cd` 到 worktree 工作，不移动（T363 设计初稿） | 会话目录不是 worktree：仓库的项目设置（hooks、权限规则）、`.mcp.json` 与项目插件不生效；方案 A 实测能移动后不再需要 |
+| C | 按仓库预建：补充时为常用仓库各建一个 worktree 作为“槽”，会话建在槽中；认领时在槽中切到任务分支 | 要事先知道哪些仓库会用到、各备几个；执行目录不再是 `work/<任务>/<attempt>`，与接手原执行目录（§5.5）冲突；不是仓库任务与用户的对话还要另一种槽 |
+| D | 移到 tsw 建好的目录，由用户在设置中给 `change_directory` 加允许规则 | 要改用户的权限设置（会话不能代改）；没有规则时被拒（T363 实测，T360 E-C3）。方案 A 不需要任何设置 |
+| E | 不备会话，用计划任务启动器在需要时新建（T334） | 用户 2026-11-22 决定不采用（CC001 §7.1）：会话只能在建启动器时的目录中工作，不在普通会话列表中 |

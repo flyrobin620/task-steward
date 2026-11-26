@@ -37,13 +37,26 @@
 
 备用会话池的规则见 DN002 §5.9。本宿主上的做法：
 
-- **建立**：主会话在用户的 turn 中 `spare_start` 后调用 `start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为返回的执行目录的根（默认数据目录的 `work/`，磁盘上的实际写法）、`use_worktree: false`、`name` 为 `spare-s<n>`、`title` 为 `[备用] S<n>`，`model` / `effort` / `permission_mode` 取 `roles.worker`（它可能被派去做任务），`prompt` 为返回的备用会话 prompt，`background` 写“TaskSteward 备用会话 S<n>，等待第一条消息”。再 `spare_reconcile`。
-- **认领为 worker**：主会话先 `attempt_reconcile` 绑定，再用 `mcp__ccd_session_mgmt__send_message` 发认领消息（任何一轮都可以，§4 第 2 条）。消息带 `<cross-session-message>` 包装，hook 不把它当作用户的话，也不因它认领为对话。
+- **建立**：主会话在用户的 turn 中 `spare_start`（创建空目录 `spares/S<n>`）后调用 `start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为返回的目录、`use_worktree: false`、`name` 为 `spare-s<n>`、`title` 为 `[备用] S<n>`，`model` / `effort` / `permission_mode` 取 `roles.worker`（它可能被派去做任务），`prompt` 为返回的备用会话 prompt，`background` 写“TaskSteward 备用会话 S<n>，等待第一条消息”。再 `spare_reconcile`。
+- **认领为 worker**：主会话先 `attempt_reconcile` 绑定，再用 `mcp__ccd_session_mgmt__send_message` 发认领消息（任何一轮都可以，§4 第 2 条）。会话在这一轮里运行 tsw 给出的 `git worktree add`（或 `mkdir`），调用 `mcp__ccd_directory__change_directory` 移过去，再 `spare_moved` 唤醒主会话；主会话随后发“开始”消息。认领消息带 `<cross-session-message>` 包装，hook 不把它当作用户的话，也不因它认领为对话。
 - **认领为对话**：Dashboard 把首条消息写进会话的 inbox（§6.1，发送者 `tsw-dashboard`）；用户在 workdeck 门户中直接发消息时由 workdeck 写入（发送者 `workdeck`），在 app 中直接输入的是用户的消息。这三种都不带包装，未认领的备用会话的 UserPromptSubmit hook 记 `spare.claimed`（`as: chat`）后放行。建立时的 prompt 也不带包装，hook 按 `spare.start_requested` 记下的 prompt 原文认出它，不认领。
 - **是否在运行**：与 Dashboard 答复问题相同，按会话登记（`~/.claude/sessions/<pid>.json` 的 `hostSessionId` 与 `messagingSocketPath`）判断。登记中找不到的备用会话列为退役；认领时跳过。
-- **改标题**：作为对话时由会话自己调用 `mcp__ccd_session_mgmt__set_session_title`（会话 ID 为自己的 `CLAUDE_CODE_HOST_SESSION_ID`，`whoami` 的 `session_id`）；派给任务时由主会话按 DN002 §5.8 改名。
+- **改标题**：作为对话时由会话自己调用 `mcp__ccd_session_mgmt__set_session_title`（会话 ID 为自己的 `CLAUDE_CODE_HOST_SESSION_ID`）；派给任务时由主会话按 DN002 §5.8 改名。
 - **权限模式**：worker 用 bypass 模式时，要从 workdeck 与 Dashboard 给备用会话发消息，用户须在 Claude Code 用户设置中设 `crossSessionInbound: "accept"`（§6.1），否则消息被扣留。默认 auto 模式不需要。
-- **待实测**（实现前在测试会话中验证，结果写回本节）：会话在执行目录的根中，认领后在由消息开始的一轮里编辑 `work/<任务>/<attempt>/<仓库>` 中的文件、在其中运行 git，不弹权限确认；会话在由 inbox 消息开始的一轮里能给自己改标题；空闲数小时后仍可投递。
+
+**实测**（T363，2026-11-26，桌面 app 3p、auto 模式，测试目录与测试会话，证据见 T363 报告）：三个测试会话在用户亲手输入的一轮中建在各自的空目录；之后每一轮都由另一个会话的消息开始（与 workdeck 消息同为“其他会话的消息”）。
+
+| 编号 | 做法 | 结果 |
+| --- | --- | --- |
+| B1 | 不加任何规则，`change_directory` 到别处建好的 worktree | 被 auto 模式分类器拒绝（Unauthorized Access），与 T360 E-C3 相同 |
+| A1 | 会话自己 `git worktree add`，再 `change_directory` 到它 | 放行（“Folder access granted”），本轮结束后移动 |
+| A1 续 | 移动后的下一轮 | Bash 的目录已是 worktree，会话 ID（`CLAUDE_CODE_HOST_SESSION_ID`）不变；移动时注入 worktree 的 `CLAUDE.md`（含 `@AGENTS.md`）；**tsw 的 MCP server 不重启**，`whoami` 的目录仍是原目录；会话给自己 `set_session_title` 成功 |
+| A2 | 从带标记提交的分支再 `git worktree add`，再移动（第二次移动） | 放行；移动后 `CLAUDE.local.md` 注入，skill 列表更新、出现该 worktree 的项目 skill |
+| A3 | `change_directory` 到不是本会话建的目录 | 被拒（Unauthorized Access）：放行只限本会话自己建的目录，与 app 内置分类器规则 “request_directory or change_directory on a folder made here with git worktree add, mkdir …” 一致 |
+| B2 | 会话自己 `mkdir`，再 `change_directory` | 放行 |
+| B3 | 移动请求之后紧接着排队第二条消息 | 第二条在原目录运行；它结束、会话空闲后才注入移动提示（“Project settings (permission rules, hooks), project MCP servers, and project skills now come from <新目录>; its CLAUDE.md, if any, follows below”）。所以“开始”消息要在移动生效后再发 |
+
+没有实测：仓库的项目 hooks 与权限设置在移动后生效（tsw 的护栏不允许在执行目录写 `.claude/settings*.json`；宿主的移动提示写明它们从新目录读取）；空闲数小时后仍可投递（实测会话已建好，结果补记在 T363 报告）。
 
 ## 4. 平台约束
 
