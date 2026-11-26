@@ -299,6 +299,9 @@
 
     /* The task flow: a card waiting on a question opens the same panel in a dialog. */
     let dialog = null;
+    // Puts the panel shown in the dialog back on its card; called by every way of closing (the
+    // close event alone was not always delivered in a headless browser, T363).
+    let restore = () => {};
     document.addEventListener("click", event => {
       const target = event.target instanceof Element ? event.target : null;
       const node = target ? target.closest('.fnode[data-flags~="asking"]') : null;
@@ -308,7 +311,7 @@
       event.preventDefault();
       if (!dialog) {
         dialog = el("dialog", "qa-dlg");
-        dialog.addEventListener("click", e => { if (e.target === dialog) dialog.close(); });
+        dialog.addEventListener("click", e => { if (e.target === dialog) { dialog.close(); restore(); } });
         dialog.addEventListener("close", () => { delete document.documentElement.dataset.docOpen; hold(); });
         document.body.append(dialog);
       }
@@ -319,7 +322,7 @@
       const close = button("✕", "close");
       close.className = "qa-x";
       close.setAttribute("aria-label", "关闭");
-      close.addEventListener("click", () => dialog.close());
+      close.addEventListener("click", () => { dialog.close(); restore(); });
       bar.append(link, el("b", "", title ? title.textContent : ""), close);
       const body = el("div", "qa-dlg-body");
       // The panel itself moves into the dialog and back when it closes: a copy would show its
@@ -327,7 +330,8 @@
       const place = document.createComment("qa");
       source.replaceWith(place);
       body.append(source);
-      dialog.addEventListener("close", () => { place.replaceWith(source); }, {once: true});
+      restore = () => { if (place.parentNode) place.replaceWith(source); };
+      dialog.addEventListener("close", restore, {once: true});
       dialog.replaceChildren(bar, body);
       document.documentElement.dataset.docOpen = "";
       hold();

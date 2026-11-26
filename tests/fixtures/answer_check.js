@@ -78,9 +78,9 @@
       check("flow: its buttons work there", shown(dialog.querySelector(".qa-ans")) && !shown(step));
       click(dialog.querySelector(".qa-x"));
       check("flow: ✕ closes the dialog", !dialog.open);
-      // The panel goes back in the dialog's close event, which comes after close() (review r2 F7);
-      // on a loaded CI runner that event can take more than a second (T363, PR #95).
-      const back = await until(() => card.querySelector(".qa") && !dialog.querySelector(".qa"), 5000);
+      // The panel goes back when the dialog closes (review r2 F7); ✕ puts it back at once, not
+      // only in the close event, which a headless browser did not always deliver (T363).
+      const back = await until(() => card.querySelector(".qa") && !dialog.querySelector(".qa"), 1000);
       check("flow: the panel is back on its card", back);
     }
     document.getElementById("view-status").click();
