@@ -1,6 +1,6 @@
 # CC001 Claude Code 上的会话与 hooks
 
-- 状态：设计草案（T242 r2 自 DN001 拆出；T243 增加例行会话；T251 仓库任务的会话目录为执行目录下的 worktree；T262 worker 会话中的用户消息都记录；T276 worker 会话的 prompt 以 worker 说明开头，SessionStart 只给会话特有信息；T272 主会话 Stop hook 提醒处置 worker 会话的标题与归档；T332 §6.1 注入消息的标记表与 workdeck 消息的识别；T334 §7.1 计划任务启动器的宿主探针，用户决定不采用；T338 §6.1 一轮结束时从 transcript 读出消息来源）
+- 状态：设计草案（T242 r2 自 DN001 拆出；T243 增加例行会话；T251 仓库任务的会话目录为执行目录下的 worktree；T262 worker 会话中的用户消息都记录；T276 worker 会话的 prompt 以 worker 说明开头，SessionStart 只给会话特有信息；T272 主会话 Stop hook 提醒处置 worker 会话的标题与归档；T332 §6.1 注入消息的标记表与 workdeck 消息的识别；T334 §7.1 计划任务启动器的宿主探针，用户决定不采用；T338 §6.1 一轮结束时从 transcript 读出消息来源；T363 §3.1 备用会话）
 - 日期：2026-11-08
 - 实现：[DN001 总体架构](../DN001-architecture.md)
 - 相关：[CC006 Claude Code 插件](CC006-plugins.md) · [CC008 Claude Code 上的护栏](CC008-guardrails.md)
@@ -33,6 +33,18 @@
 
 新目录第一次被用作会话目录时，app 可能要求用户确认信任该目录；信任确认只能在用户正看着主会话时弹出，否则创建直接失败。预启动发生在用户本人的 turn 中，正好满足这个条件。已信任的数据目录之下的执行目录不再单独要求信任，除非该目录带有自己的设置文件：桌面 app 对带 `.claude/settings.local.json` 的文件夹会再次要求信任，即使文件中只有 `env` 与 `hooks`（2026-11-09 live 实测，确认框写明 “Execution allowed by: .claude/settings.local.json”）。因此 tsw 不在执行目录中写任何设置（[CC008](CC008-guardrails.md) §6）；需要让会话使用另一个数据目录时（如 live 运行），用会话所在的数据目录声明 `claim_sessions`（DN006 §9.1），不用设置文件。数据目录之外的执行目录仍须用户确认一次。仓库任务的会话目录是执行目录下的仓库 worktree，它是嵌在数据目录中的 git 仓库，数据目录的信任不覆盖它，按其主检出的信任计算：主检出已信任时不弹确认（2026-11-09 用户实测，task-steward 的 worktree），从未信任过的仓库第一次可能弹出（[CC006 §8.1](CC006-plugins.md)）。
 
+### 3.1 备用会话（T363）
+
+备用会话池的规则见 DN002 §5.9。本宿主上的做法：
+
+- **建立**：主会话在用户的 turn 中 `spare_start` 后调用 `start_session`：`initiation: user_asked`、`context: fresh`、`cwd` 为返回的执行目录的根（默认数据目录的 `work/`，磁盘上的实际写法）、`use_worktree: false`、`name` 为 `spare-s<n>`、`title` 为 `[备用] S<n>`，`model` / `effort` / `permission_mode` 取 `roles.worker`（它可能被派去做任务），`prompt` 为返回的备用会话 prompt，`background` 写“TaskSteward 备用会话 S<n>，等待第一条消息”。再 `spare_reconcile`。
+- **认领为 worker**：主会话先 `attempt_reconcile` 绑定，再用 `mcp__ccd_session_mgmt__send_message` 发认领消息（任何一轮都可以，§4 第 2 条）。消息带 `<cross-session-message>` 包装，hook 不把它当作用户的话，也不因它认领为对话。
+- **认领为对话**：Dashboard 把首条消息写进会话的 inbox（§6.1，发送者 `tsw-dashboard`）；用户在 workdeck 门户中直接发消息时由 workdeck 写入（发送者 `workdeck`），在 app 中直接输入的是用户的消息。这三种都不带包装，未认领的备用会话的 UserPromptSubmit hook 记 `spare.claimed`（`as: chat`）后放行。建立时的 prompt 也不带包装，hook 按 `spare.start_requested` 记下的 prompt 原文认出它，不认领。
+- **是否在运行**：与 Dashboard 答复问题相同，按会话登记（`~/.claude/sessions/<pid>.json` 的 `hostSessionId` 与 `messagingSocketPath`）判断。登记中找不到的备用会话列为退役；认领时跳过。
+- **改标题**：作为对话时由会话自己调用 `mcp__ccd_session_mgmt__set_session_title`（会话 ID 为自己的 `CLAUDE_CODE_HOST_SESSION_ID`，`whoami` 的 `session_id`）；派给任务时由主会话按 DN002 §5.8 改名。
+- **权限模式**：worker 用 bypass 模式时，要从 workdeck 与 Dashboard 给备用会话发消息，用户须在 Claude Code 用户设置中设 `crossSessionInbound: "accept"`（§6.1），否则消息被扣留。默认 auto 模式不需要。
+- **待实测**（实现前在测试会话中验证，结果写回本节）：会话在执行目录的根中，认领后在由消息开始的一轮里编辑 `work/<任务>/<attempt>/<仓库>` 中的文件、在其中运行 git，不弹权限确认；会话在由 inbox 消息开始的一轮里能给自己改标题；空闲数小时后仍可投递。
+
 ## 4. 平台约束
 
 以下约束经 2026-11-05 的 PoC 实测（§7）：
@@ -50,6 +62,7 @@ tsw MCP server 由用户级插件安装，每个会话启动一个进程。PoC �
 - 新会话的 MCP server 在主会话绑定之前就已列出工具。实测 Claude Code 不会因 `notifications/tools/list_changed` 重新获取列表，所以待绑定会话的第一次列表就是 worker 的（DN001 §7.1）。
 - worker 绑定后 MCP server 发出 `notifications/tools/list_changed`（客户端空闲时也由后台每 2 秒检查一次），客户端据此刷新工具列表。
 - hooks 拿到同一个会话 ID（环境变量）以及 payload 中的内部会话 ID、cwd、权限模式。
+- 备用会话（DN002 §5.9）同样按会话 ID 解析：会话 ID 等于一个未认领的备用会话 → `spare` 角色；已认领为对话 → `none`（附编号）；派给任务后它是那个 attempt 的会话 → worker。尚未对账、会话目录是执行目录的根且有一个正在建立的备用会话时，`whoami` 为待绑定（`pending_role: spare`）。
 - 例行会话（DN006 §8.9）同样按会话 ID 解析：会话 ID 等于当前代次已绑定的例行会话 → 例行会话角色；等于旧代次的例行会话 → 已撤销。尚未绑定、但会话目录是数据目录下的 `routine/` 且有一个正在启动的代次时，与待绑定的 worker 一样，第一次工具列表就按例行会话列出，除 `whoami` 外的调用等绑定后才接受。
 
 ## 6. hooks

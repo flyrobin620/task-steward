@@ -99,6 +99,7 @@
     "max_workers": 5,
     "lease_minutes": 120,
     "prestart": {"enabled": true, "max_standby": 10},
+    "spare": {"enabled": true, "count": 2, "max_age_hours": 24},
     "wake": {"worker_message_parent": true, "reportable_events": ["worker.submitted", "worker.question", "input.handed_off", "channel.reply_seen", "task.paused", "report_back", "task.requirement_changed"]}
   },
   "sessions": {
@@ -106,6 +107,7 @@
     "archive_on_accept": false,
     "archive_on_archive": true,
     "title_on_standby": "[待命]",
+    "title_on_spare": "[备用]",
     "title_on_accept": "[已验收]",
     "title_on_cancel": "[已取消]"
   },
@@ -263,10 +265,12 @@
 
 - `max_workers`：活动任务上限（DN002 G-SLOT）。实际并发取它与平台可用额度的较小值。
 - `prestart.enabled` / `prestart.max_standby`：是否在用户 turn 中为已规划任务预启动 worker 会话，以及同时待命的会话上限（DN002 §5.6）。关闭预启动时，自动 turn 中变为可派发的任务都要等用户下一次发消息才能创建会话。
+- `spare.enabled` / `spare.count` / `spare.max_age_hours`：备用会话池（DN002 §5.9，T363）：是否在用户 turn 中预建不绑定任务的备用会话、池的目标大小（默认 2），以及建立多久之后退役（默认 24 小时）。池只在不能新建会话的一轮（workdeck 消息等开始的）派发任务、Dashboard「新建会话」与用户直接给备用会话发消息时使用；用户在 app 中亲手输入的一轮不用。`enabled` 为 `false` 时不补充，可用的备用会话退役。
 - `wake.worker_message_parent`：reportable 事件发生时，worker 是否同时用宿主的会话消息工具唤醒主会话（DN001 §6.3；Claude Code 见 CC001 §4）。键名沿用 parent，目标是当前持有调度租约的主会话，不是启动 worker 的会话。
 - `wake.reportable_events`：进入主会话 inbox、并让 worker 唤醒主会话的事件类型。`task.requirement_changed`（T262 起默认包含）只有 worker 登记的（DN002 §5.1a）才进入 inbox，主会话自己用 `task_update` 记录的不进入。
 - `sessions.archive_on_accept`：用户验收后是否归档 worker 会话。默认 `false`，保留以便用户回看；归档时须有工具回执。为 `true` 时，主会话在会话标题处理完后归档它（DN002 §5.8）。
 - `sessions.archive_on_archive`：任务归档（T24 自动归档、T26）后是否归档它仍保留的 worker 会话，以及取消任务时是否归档可控的待命会话（DN002 §5.6、§5.8）。默认 `true`；归档时须有工具回执，由主会话执行（T302）。
+- `sessions.title_on_spare`：备用会话的标题前缀，默认 `[备用]`，标题为“<前缀> S<n>”；空字符串时标题为“S<n>”（DN002 §5.9）。
 - `sessions.title_on_standby` / `sessions.title_on_accept` / `sessions.title_on_cancel`：预启动的会话待命时、任务被用户验收 / 取消后，worker 会话标题前加的前缀，默认 `[待命]` / `[已验收]` / `[已取消]`，与基准标题之间隔一个空格；空字符串表示不加。主会话按 DN002 §5.8 改名，用户手动改过标题的会话不改（T272；待命标记 T302 起由后缀“（待命）”改为前缀）。
 
 ### 3.4 `repositories` 与 `accounts`
