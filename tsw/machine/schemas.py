@@ -120,6 +120,11 @@ SCHEMAS: dict[str, dict[str, Any]] = {
             "description": "推荐读取集合：任务 ID；也可以是受理后才出现的适用偏好编号 P-…"
             "（DN007 §6.1，须现行并能到达本任务，写进任务书）",
         },
+        spare={
+            **B,
+            "description": "不能新建会话的一轮（user_turn: false）中派发给备用会话（DN002 §5.9）："
+            "随后 attempt_start 带 spare",
+        },
     ),
     "attempt_start": schema(
         ["task_id", "purpose", "user_turn"],

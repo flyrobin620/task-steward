@@ -724,6 +724,9 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
     given_workdir = workdir_input(inp)
     branch = opt_text(inp, "branch")
     user_turn = flag(inp, "user_turn")
+    # The session will be a spare one claimed by attempt_start (DN002 §5.9): no session is
+    # created, so a turn that is not the user's may dispatch.
+    spare = flag(inp, "spare")
     extra_reads = strings(items(inp, "read_set", required=False), "read_set")
 
     def build(ctx: CommitContext) -> list[EventDraft]:
@@ -764,7 +767,10 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         else:
             raise rejected("未知的 attempt 阶段", reason="invalid_attempt", phase=previous["phase"])
         if mode in ("new", "reuse_planned"):
-            guards.g_window(env.config, user_turn)
+            if spare:
+                _spare_dispatch(ctx.conn, env.config, user_turn)
+            else:
+                guards.g_window(env.config, user_turn)
         # Not given: the same attempt keeps the directory it recorded (standby, continued, a
         # planned one reused); a new attempt takes over the directory of the replaced or closed
         # one, with its worktree and branch as they are (DN002 §5.5, CC006 §8.3); the default
@@ -812,6 +818,17 @@ def task_dispatch(inp: Mapping[str, Any], env: ToolEnv) -> Command:
         ]
 
     return _cmd(env, "task_dispatch", inp, build)
+
+
+def _spare_dispatch(conn: sqlite3.Connection, config: EffectiveConfig, user_turn: bool) -> None:
+    """A dispatch to be given to a spare session (DN002 §5.9): only where no session can be
+    created, with the pool on and a spare session waiting."""
+    if user_turn:
+        raise rejected("用户本人的 turn 中直接新建会话，不用备用会话", reason="spare_in_user_turn")
+    if not config.get("scheduling.spare.enabled"):
+        raise rejected("配置关闭了备用会话池（scheduling.spare.enabled）", reason="spare_disabled")
+    if not _spares.available(conn):
+        raise rejected("没有可用的备用会话", reason="no_spare")
 
 
 def _require_current_brief(row: Mapping[str, Any], attempt_row: Mapping[str, Any]) -> None:
